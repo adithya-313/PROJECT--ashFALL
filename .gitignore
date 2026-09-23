@@ -1,0 +1,6 @@
+# Ignore environment files
+.env
+# Ignore Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
