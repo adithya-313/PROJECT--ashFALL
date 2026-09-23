@@ -1,0 +1,19 @@
+# File: docker-compose.yml
+# Purpose: Orchestrates the local development environment for the application.
+# Connects: Uses the Dockerfile to build the 'app' service and provides GPU access.
+version: '3.8'
+
+services:
+  app:
+    build: .
+    # We pass the environment file to load configuration variables
+    env_file:
+      - .env
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              # We request exactly one GPU, matching the constraint of a single RTX 4050
+              count: 1
+              capabilities: [gpu]

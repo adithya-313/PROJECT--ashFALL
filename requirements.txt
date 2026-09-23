@@ -1,0 +1,4 @@
+# pydantic-settings for configuration management
+pydantic-settings==2.5.2
+# structlog for structured JSON logging
+structlog==24.4.0
