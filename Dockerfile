@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY src/ src/
 
 # Set the Python path to include the src directory so modules can be resolved
-ENV PYTHONPATH=/app/src
+ENV PYTHONPATH=/app
 
 # Default command to run the main application script
 CMD ["python", "src/main.py"]
