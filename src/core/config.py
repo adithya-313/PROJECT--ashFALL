@@ -1,43 +1,75 @@
 """
 File: src/core/config.py
 Purpose: Defines the application configuration schema and loads variables from the environment.
-Connects: Used throughout the application whenever a configuration value is needed. It relies on pydantic-settings to validate the environment variables.
+Connects: Used throughout the application (src/main.py, src/core/logging.py) whenever a
+          configuration value is needed. Relies on pydantic-settings to validate types
+          and provide defaults.
+
+Note on GUNICORN_WORKERS:
+  The worker count is read directly in src/gunicorn_conf.py via os.environ.get()
+  rather than through this class. This is because gunicorn reads its config file
+  before the application is imported, so pydantic-settings has not run yet.
+  GUNICORN_WORKERS is documented in .env.example for visibility, but it does not
+  appear here to avoid creating two sources of truth for the same variable.
+
+Pydantic optimization note (Phase 1b review):
+  AppConfig is a flat, two-field model with plain string fields and no validators,
+  nested models, or computed fields. There is no meaningful Pydantic-level performance
+  optimization applicable to a model this simple. Pydantic v2 (which pydantic-settings
+  2.5.2 requires) already uses a Rust core (pydantic-core) for validation, so the
+  baseline performance is already near-optimal for flat models.
+  Flagged explicitly per task instructions: nothing to tune here without fabricating
+  complexity. This note will be updated when the model grows in later levels.
 """
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
 class AppConfig(BaseSettings):
     """
-    Defines the structured configuration for the application.
-    
+    Defines the typed configuration schema for the application.
+
+    pydantic-settings reads each attribute name as an environment variable name
+    (case-insensitive). If the variable is present in the environment or in the
+    .env file, its value overrides the default. If not, the default is used.
+
     Attributes:
-        environment: The deployment environment (e.g., development, production).
-        log_level: The verbosity of the logging output.
+        environment: The deployment context — affects log labelling and can be
+                     used to gate behaviour (e.g., more verbose errors in development).
+        log_level: Controls which log messages are emitted. Only messages at this
+                   severity or higher will appear in the log output.
     """
     environment: str = "development"
     log_level: str = "INFO"
 
-    # SettingsConfigDict configures how pydantic-settings behaves.
-    # We tell it to look for a '.env' file, and if an environment variable exists,
-    # it will override the file's value. Extra variables are ignored.
+    # SettingsConfigDict tells pydantic-settings where to look for values.
+    # env_file=".env" reads variables from a .env file if it exists.
+    # extra="ignore" means unknown variables in .env do not cause validation errors.
     model_config = SettingsConfigDict(
-        env_file=".env", 
-        env_file_encoding="utf-8", 
-        extra="ignore"
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
     )
+
 
 def get_config() -> AppConfig:
     """
-    Instantiates and returns the application configuration.
-    
+    Instantiates and validates the application configuration from the environment.
+
     Returns:
-        AppConfig: A validated configuration object containing all settings.
-    
-    Why this function exists:
-    This factory function allows us to potentially cache the configuration
-    or inject dependencies later without changing how consumers access it.
+        AppConfig: A fully-validated configuration object. pydantic-settings will
+                   raise a ValidationError at startup if a required variable is
+                   missing or has the wrong type — failing fast is intentional.
+
+    Why a factory function:
+        This factory is the single place where AppConfig is constructed. If we
+        later add caching (via functools.lru_cache) or dependency injection
+        (via FastAPI's Depends), we change only this function — all consumers
+        remain unchanged.
     """
     return AppConfig()
 
-# We create a single instance of the configuration to be imported by other modules.
+
+# Module-level singleton: imported by name in other modules.
+# Constructed once at import time, which happens once per gunicorn worker process.
 config = get_config()

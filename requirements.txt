@@ -8,6 +8,24 @@ structlog==24.4.0
 # Version 0.115.12: latest stable with full Pydantic v2 support and ORJSONResponse built-in
 fastapi==0.115.12
 
-# uvicorn — the ASGI server that runs the FastAPI application
-# "standard" extras pull in websockets support; we pin the base here
+# uvicorn — the ASGI server (used directly in Phase 1a; used as gunicorn worker class in Phase 1b+)
 uvicorn==0.32.1
+
+# gunicorn — production-grade process manager that spawns multiple uvicorn worker processes
+# Each worker is a full Python process — this allows true parallelism on multi-core systems
+# even with Python's Global Interpreter Lock (GIL) in place.
+# Version 23.0.0 is the latest stable, tested against Python 3.11.
+gunicorn==23.0.0
+
+# uvloop — a drop-in replacement for asyncio's default event loop, built on libuv (the same
+# C library that powers Node.js). It eliminates Python-level overhead on I/O wait operations,
+# reducing latency for async routes like /health.
+uvloop==0.21.0
+
+# orjson — a JSON encoder/decoder written in Rust. Faster than Python's stdlib json
+# and faster than ujson for small to mid-size payloads. FastAPI's ORJSONResponse uses it.
+orjson==3.10.18
+
+# httptools — a Cython-based HTTP/1.1 request parser. uvicorn switches to it automatically
+# when it's installed, replacing the pure-Python h11 parser used in Phase 1a.
+httptools==0.6.4
