@@ -1,19 +1,26 @@
 # File: docker-compose.yml
 # Purpose: Orchestrates the local development environment for the application.
-# Connects: Uses the Dockerfile to build the 'app' service and provides GPU access.
-version: '3.8'
+# Connects: Uses the Dockerfile to build the 'app' service, provides GPU access,
+#           and exposes port 8000 so the benchmark tool (wrk) and the host can
+#           reach the ASGI server running inside the container.
+#
+# GPU passthrough: requests exactly one NVIDIA GPU, matching the constraint of
+# a single RTX 4050 (6 GB VRAM). Do not change 'count: 1'.
 
 services:
   app:
     build: .
-    # We pass the environment file to load configuration variables
     env_file:
       - .env
+    # Map container port 8000 to host port 8000 so wrk can hit it from the host,
+    # and so /health is reachable at http://localhost:8000/health during development.
+    ports:
+      - "8000:8000"
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              # We request exactly one GPU, matching the constraint of a single RTX 4050
+              # Exactly one GPU — this matches the available RTX 4050 hardware.
               count: 1
               capabilities: [gpu]

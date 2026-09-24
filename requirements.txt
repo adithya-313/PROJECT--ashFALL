@@ -1,4 +1,13 @@
-# pydantic-settings for configuration management
+# pydantic-settings for configuration management — loads and validates .env variables
 pydantic-settings==2.5.2
-# structlog for structured JSON logging
+
+# structlog for structured JSON logging to stdout
 structlog==24.4.0
+
+# fastapi — the HTTP API framework
+# Version 0.115.12: latest stable with full Pydantic v2 support and ORJSONResponse built-in
+fastapi==0.115.12
+
+# uvicorn — the ASGI server that runs the FastAPI application
+# "standard" extras pull in websockets support; we pin the base here
+uvicorn==0.32.1
