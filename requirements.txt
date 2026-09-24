@@ -29,3 +29,18 @@ orjson==3.10.18
 # httptools — a Cython-based HTTP/1.1 request parser. uvicorn switches to it automatically
 # when it's installed, replacing the pure-Python h11 parser used in Phase 1a.
 httptools==0.6.4
+
+# --- Test dependencies ---
+
+# pytest — the test runner. Discovers and executes all test_*.py files.
+pytest==8.3.5
+
+# anyio with trio backend — provides the @pytest.mark.anyio decorator used in async tests.
+# The [trio] extra installs the trio event loop which anyio's pytest plugin can use.
+# httpx's ASGITransport requires an async test context.
+anyio[trio]==4.7.0
+
+# httpx — HTTP client for contract tests. Used with ASGITransport to call the
+# FastAPI ASGI app directly in-process (no server start needed).
+httpx==0.28.0
+
