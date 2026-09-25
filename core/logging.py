@@ -5,20 +5,15 @@ Connects: Any module in the application can import `get_logger` from this file t
           `request_id_ctx_var` is set by api/middleware/request_id.py to attach request tracing.
 """
 
-import queue
-import sys
 from contextvars import ContextVar
 import logging
-import logging.handlers
+import sys
 from typing import Any, Optional
 import structlog
 
 # Context variable holding the current request ID for the active async call stack.
 # Initialized with default=None when outside of an active HTTP request context.
 request_id_ctx_var: ContextVar[Optional[str]] = ContextVar("request_id", default=None)
-
-# Global reference to the log queue, ensuring all loggers can push to the same queue.
-_log_queue: queue.Queue = queue.Queue(-1)
 
 
 def inject_request_id(logger: Any, method_name: str, event_dict: dict) -> dict:
@@ -54,20 +49,14 @@ def configure_logging(log_level: str) -> None:
     # Parse the string log level into a standard Python logging integer level
     numeric_level = getattr(logging, log_level.upper(), logging.INFO)
     
-    # Set up the non-blocking logging pipeline.
-    # structlog will format the JSON string and hand it to the root logger.
-    # The root logger puts the string on the queue (taking ~1-2 microseconds).
-    # A background QueueListener thread will drain the queue and execute the blocking sys.stdout.write.
-    
-    root_logger = logging.getLogger()
-    root_logger.setLevel(numeric_level)
-    
-    # Clear existing handlers to prevent duplicate logs if called multiple times
-    root_logger.handlers.clear()
-    
-    # Attach the non-blocking QueueHandler to the root logger
-    queue_handler = logging.handlers.QueueHandler(_log_queue)
-    root_logger.addHandler(queue_handler)
+    # Set the root logger configuration so that all standard library logs go to stdout.
+    # force=True ensures the stdout handler is attached even when invoked under test runners.
+    logging.basicConfig(
+        format="%(message)s",
+        stream=sys.stdout,
+        level=numeric_level,
+        force=True,
+    )
     
     # Configure structlog processors to ensure timestamp, level, event, environment,
     # and request_id are present on every entry, then format as JSON.
@@ -97,38 +86,3 @@ def get_logger(name: str) -> structlog.BoundLogger:
         structlog.BoundLogger: A logger instance that emits structured JSON logs.
     """
     return structlog.get_logger(name)
-
-
-def start_log_listener() -> logging.handlers.QueueListener:
-    """
-    Creates and starts the background QueueListener thread for non-blocking I/O.
-    
-    This function should be called within the FastAPI lifespan context manager
-    to ensure the background thread is safely initialized AFTER the worker process
-    forks. Starting threads at the module level is unsafe if a pre-fork model
-    is ever introduced.
-    
-    Returns:
-        logging.handlers.QueueListener: The started listener, to be stored and stopped later.
-    """
-    stream_handler = logging.StreamHandler(sys.stdout)
-    # Since structlog has already formatted the message as a complete JSON string,
-    # the stdlib formatter just outputs the raw message.
-    stream_handler.setFormatter(logging.Formatter("%(message)s"))
-    
-    listener = logging.handlers.QueueListener(_log_queue, stream_handler)
-    listener.start()
-    return listener
-
-
-def stop_log_listener(listener: logging.handlers.QueueListener) -> None:
-    """
-    Cleanly stops the background QueueListener thread.
-    
-    This blocks until all pending log messages in the queue have been flushed
-    to stdout, preventing lost logs during graceful worker shutdown.
-    
-    Args:
-        listener: The QueueListener instance returned by start_log_listener.
-    """
-    listener.stop()
