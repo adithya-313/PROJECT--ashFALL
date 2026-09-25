@@ -25,7 +25,7 @@ from fastapi.responses import ORJSONResponse
 
 from api.middleware.request_id import RequestIDMiddleware
 from core.config import config
-from core.logging import configure_logging, get_logger
+from core.logging import configure_logging, get_logger, start_log_listener, stop_log_listener
 
 # Initialise logging before the application begins serving requests.
 # Module-level execution ensures logging is ready before any worker startup handlers execute.
@@ -46,6 +46,13 @@ async def lifespan(app: fastapi.FastAPI):
     Runs startup logic before the application begins accepting requests,
     and shutdown logic after it stops.
     """
+    # DECISION: Start the log listener BEFORE initializing the asyncpg pool.
+    # If pool initialization fails or emits logs, the background thread must
+    # already be running to drain the queue and ensure those critical startup
+    # logs are written to stdout without delay.
+    log_listener = start_log_listener()
+    app.state.log_listener = log_listener
+    
     logger.info(
         "Worker started",
         environment=config.environment,
@@ -66,7 +73,13 @@ async def lifespan(app: fastapi.FastAPI):
 
     # Cleanly close the pool on shutdown
     await pool.close()
+    
     logger.info("Worker stopped")
+    
+    # DECISION: Stop the log listener AFTER all other teardown (including pool.close()).
+    # This ensures the "Worker stopped" log line and any database disconnection logs 
+    # are successfully flushed from the queue to stdout before the thread dies.
+    stop_log_listener(app.state.log_listener)
 
 
 # The FastAPI application instance.
