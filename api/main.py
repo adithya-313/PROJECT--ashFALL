@@ -14,7 +14,10 @@ Current endpoints:
   GET /health — returns a minimal JSON payload confirming the service is alive.
 """
 
+import asyncio
+
 import fastapi
+import uvloop
 from fastapi.responses import ORJSONResponse
 
 from api.middleware.request_id import RequestIDMiddleware
@@ -26,6 +29,11 @@ from core.logging import configure_logging, get_logger
 configure_logging(config.log_level)
 
 logger = get_logger(__name__)
+
+# Explicitly set uvloop as the asyncio event loop policy.
+# While UvicornWorker implicitly uses uvloop, explicitly setting it removes any
+# ambiguity about which event loop is active.
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 # The FastAPI application instance.
 # default_response_class=ORJSONResponse uses orjson for JSON serialisation across all routes.
