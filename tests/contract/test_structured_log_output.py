@@ -36,8 +36,12 @@ async def test_structured_log_output_contains_required_fields(capsys: pytest.Cap
     ) as client:
         response = await client.get("/health", headers={"X-Request-ID": "test-trace-id-12345"})
 
-    assert response.status_code == 200
+        assert response.status_code == 200
 
+    # Read capsys AFTER the AsyncClient context manager exits.
+    # Exiting the context manager triggers the FastAPI shutdown lifespan,
+    # which calls stop_log_listener(), gracefully draining the background
+    # queue to sys.stdout before returning.
     captured = capsys.readouterr()
     stdout_lines = [line.strip() for line in captured.out.splitlines() if line.strip()]
     assert stdout_lines, "Expected at least one log line on stdout during health check request"
