@@ -1,0 +1,16 @@
+# File: infra/docker/prometheus.yml
+# Purpose: Minimal Prometheus scrape configuration for PROJECT-ashFALL.
+# Connects: Mounted into the Prometheus container at /etc/prometheus/prometheus.yml.
+#
+# NOTE: The scrape target api:8000/metrics does not exist yet — Level 2 adds it —
+# and that is expected and fine for now.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "ashfall-api"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["api:8000"]

@@ -1,26 +1,80 @@
 # File: docker-compose.yml
-# Purpose: Orchestrates the local development environment for the application.
-# Connects: Uses the Dockerfile to build the 'app' service, provides GPU access,
-#           and exposes port 8000 so the benchmark tool (wrk) and the host can
-#           reach the ASGI server running inside the container.
+# Purpose: Orchestrates the local development environment for PROJECT-ashFALL services:
+#           - api: FastAPI ASGI application with Gunicorn + uvloop
+#           - postgres: PostgreSQL 15 with logical replication (wal_level=logical)
+#           - redis: Redis 7 for high-speed feature caching and rate limiting
+#           - prometheus: Metrics collection server
+#           - grafana: Dashboards and observability visualization
 #
-# GPU passthrough: requests exactly one NVIDIA GPU, matching the constraint of
-# a single RTX 4050 (6 GB VRAM). Do not change 'count: 1'.
+# GPU passthrough: requests exactly 1 NVIDIA GPU for the API service, matching the RTX 4050.
 
 services:
-  app:
-    build: .
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
     env_file:
       - .env
-    # Map container port 8000 to host port 8000 so wrk can hit it from the host,
-    # and so /health is reachable at http://localhost:8000/health during development.
     ports:
       - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              # Exactly one GPU — this matches the available RTX 4050 hardware.
               count: 1
               capabilities: [gpu]
+
+  postgres:
+    image: postgres:15
+    command: ["postgres", "-c", "wal_level=logical"]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: ashfall
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./infra/grafana/provisioning/datasources/prometheus.yaml:/etc/grafana/provisioning/datasources/prometheus.yaml:ro
+    depends_on:
+      - prometheus
+
+volumes:
+  postgres_data:
