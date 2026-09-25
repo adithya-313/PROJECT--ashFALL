@@ -28,6 +28,21 @@ workers = int(os.environ.get("WORKER_COUNT", "2"))
 # Number of simultaneous connections per worker.
 worker_connections = 1000
 
+# The maximum number of pending connections.
+backlog = int(os.environ.get("BACKLOG", "2048"))
+
+# Workers silent for more than this many seconds are killed and restarted.
+timeout = int(os.environ.get("TIMEOUT", "30"))
+
+# The number of seconds to wait for requests on a Keep-Alive connection.
+keepalive = int(os.environ.get("KEEPALIVE", "2"))
+
+# The maximum number of requests a worker will process before restarting.
+max_requests = int(os.environ.get("MAX_REQUESTS", "0"))
+
+# The maximum jitter to add to the max_requests setting.
+max_requests_jitter = int(os.environ.get("MAX_REQUESTS_JITTER", "0"))
+
 # Bind address. 0.0.0.0 makes the service reachable from outside the container.
 bind = "0.0.0.0:8000"
 
