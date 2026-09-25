@@ -1,7 +1,41 @@
 # Level 1 Runtime Benchmark Results
 
-## Investigation: Back-to-Back Comparison
-To accurately investigate the performance changes and isolate environmental noise, `wrk` was executed twice back-to-back against Level 0 (commit `43dca96`) and twice against Level 1 (`main`), with the `--latency` flag, in identical container states.
+This report documents the performance optimizations introduced in Level 1 (moving from a naive Uvicorn baseline to a fully tuned Gunicorn + uvloop + orjson stack), as well as a focused investigation into the overhead introduced by the `asyncpg` connection pool.
+
+## Part 1: Architecture Upgrade (Plain Uvicorn vs. Full Level 1 Stack)
+To demonstrate the overarching performance gains from Level 1's optimizations (Gunicorn process management, `uvloop` event loop, `orjson` serialization), we ran a pure, naive FastAPI+Uvicorn app (Level 0 Phase 1a, commit `2e3788e`) and compared it against the current Level 1 full stack (`main`), which includes the `asyncpg` connection pool. Both were benchmarked back-to-back under identical container states.
+
+### Baseline: Plain Uvicorn (Phase 1a)
+Command: `docker compose exec app wrk -t4 -c100 -d30s --latency http://localhost:8000/health`
+
+**Run 1**:
+- Throughput: 3040.79 req/s
+- Latency (Avg / p50 / p99): 56.70ms / 29.47ms / 786.10ms
+
+**Run 2**:
+- Throughput: 2786.98 req/s
+- Latency (Avg / p50 / p99): 63.26ms / 31.64ms / 874.99ms
+
+*Baseline Averages*: ~2913 req/s, ~30.5ms p50 latency.
+
+### Current Full Stack (Level 1 with Pool)
+Command: `docker compose exec api wrk -t4 -c100 -d30s --latency http://localhost:8000/health`
+
+**Run 1**:
+- Throughput: 3375.34 req/s
+- Latency (Avg / p50 / p99): 57.21ms / 26.00ms / 777.68ms
+
+**Run 2**:
+- Throughput: 3576.73 req/s
+- Latency (Avg / p50 / p99): 52.85ms / 23.76ms / 793.03ms
+
+*Full Stack Averages*: ~3476 req/s, ~24.8ms p50 latency.
+
+**Conclusion**: Despite the addition of a background database connection pool in Level 1, the structural switch to Gunicorn + `uvloop` + `orjson` delivered a massive performance upgrade. **Throughput increased by ~19%**, and **p50 latency decreased by ~5.7ms (18% faster)** compared to the plain Uvicorn router.
+
+---
+
+## Part 2: Isolated Pool Regression (Level 0 Gunicorn vs. Level 1 Gunicorn + Pool)
 
 ### Level 0 (Baseline)
 Command: `docker compose exec api wrk -t4 -c100 -d30s --latency http://localhost:8000/health`
@@ -37,3 +71,11 @@ A verified slight regression exists in Level 1:
 **Actual Cause**: The regression is not caused by misconfigured tunables or the explicit `uvloop` policy, but rather by the **asyncpg connection pool lifecycle and background maintenance overhead**. 
 
 In Level 0, the ASGI application was a purely empty network router handling HTTP requests on a highly optimized event loop. In Level 1, the `lifespan` context initializes a live connection pool (maintaining 2-10 open TCP connections to PostgreSQL) which lives on `app.state.db_pool`. The asyncio event loop must now multiplex the synthetic `/health` endpoint requests *alongside* asyncpg's background tasks (TCP keepalives, health pings, and pool synchronization). For a trivial endpoint returning static JSON under extreme concurrency (100 parallel connections pushing maximum load), this connection management overhead manifests as a minor drop in theoretical maximum throughput and a 1.6ms p50 latency jitter. This is the expected and unavoidable cost of transitioning from a stateless mock container to an application connected to a live relational database.
+
+---
+
+## Part 3: Test Validity and Limitations
+
+### `test_pool_initialized_once`
+This test uses FastAPI's `TestClient` to assert that the `asyncpg` pool is initialized exactly once per worker lifespan. 
+**CRITICAL LIMITATION**: The test executes completely in-process within a single, unrepresentative testing thread. It **never touches the real multi-worker Gunicorn container deployment**. Therefore, it only validates the initialization logic conceptually for a single process, but does not definitively prove the behavior of Gunicorn's worker forking and pool initialization in the actual Docker environment. To definitively prove real-world behavior, a test would need to grep the running container's stdout logs and verify that the initialization log line appears exactly $N$ times (where $N$ is `WORKER_COUNT`).
