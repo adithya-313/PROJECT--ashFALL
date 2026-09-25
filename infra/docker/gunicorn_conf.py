@@ -2,7 +2,7 @@
 File: infra/docker/gunicorn_conf.py
 Purpose: Configuration file for the gunicorn process manager inside the Docker container.
 Connects: Gunicorn reads this file when launched via the Dockerfile CMD.
-          It pulls the worker count from the environment (GUNICORN_WORKERS).
+          It pulls the worker count from the environment (WORKER_COUNT).
           All other gunicorn settings are set here.
 
 DECISION:
@@ -23,7 +23,7 @@ worker_class = "uvicorn.workers.UvicornWorker"
 
 # Number of worker processes. Each worker is a separate OS process.
 # Read from the environment so it can be tuned without rebuilding.
-workers = int(os.environ.get("GUNICORN_WORKERS", "2"))
+workers = int(os.environ.get("WORKER_COUNT", "2"))
 
 # Number of simultaneous connections per worker.
 worker_connections = 1000

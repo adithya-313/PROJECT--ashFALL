@@ -9,11 +9,11 @@ Required Fields:
   - database_url: Connection string for PostgreSQL (no default; fails loudly if missing).
   - redis_url: Connection string for Redis (no default; fails loudly if missing).
 
-Note on GUNICORN_WORKERS:
+Note on WORKER_COUNT:
   The worker count is read directly in infra/docker/gunicorn_conf.py via os.environ.get()
   rather than through this class. This is because gunicorn reads its config file
   before the application is imported, so pydantic-settings has not run yet.
-  GUNICORN_WORKERS is documented in .env.example for visibility, but it does not
+  WORKER_COUNT is documented in .env.example for visibility, but it does not
   appear here to avoid creating two sources of truth for the same variable.
 """
 
