@@ -41,6 +41,8 @@ class AppConfig(BaseSettings):
     log_level: str = "INFO"
     database_url: str
     redis_url: str
+    db_pool_min_size: int = 2
+    db_pool_max_size: int = 10
 
     # SettingsConfigDict tells pydantic-settings where to look for values.
     # env_file=".env" reads variables from a .env file if it exists.

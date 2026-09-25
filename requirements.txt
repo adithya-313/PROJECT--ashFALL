@@ -26,6 +26,9 @@ uvloop==0.21.0
 # and faster than ujson for small to mid-size payloads. FastAPI's ORJSONResponse uses it.
 orjson==3.10.18
 
+# asyncpg — a fast, asynchronous PostgreSQL client library.
+asyncpg==0.30.0
+
 # httptools — a Cython-based HTTP/1.1 request parser. uvicorn switches to it automatically
 # when it's installed, replacing the pure-Python h11 parser used in Phase 1a.
 httptools==0.6.4

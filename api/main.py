@@ -15,6 +15,9 @@ Current endpoints:
 """
 
 import asyncio
+from contextlib import asynccontextmanager
+
+import asyncpg
 
 import fastapi
 import uvloop
@@ -35,30 +38,47 @@ logger = get_logger(__name__)
 # ambiguity about which event loop is active.
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
-# The FastAPI application instance.
-# default_response_class=ORJSONResponse uses orjson for JSON serialisation across all routes.
-app = fastapi.FastAPI(
-    title="PROJECT-ashFALL",
-    default_response_class=ORJSONResponse,
-)
 
-# Register request_id propagation middleware
-app.add_middleware(RequestIDMiddleware)
-
-
-@app.on_event("startup")
-async def on_startup() -> None:
+@asynccontextmanager
+async def lifespan(app: fastapi.FastAPI):
     """
-    Runs once when each ASGI worker starts, before any requests are handled.
-
-    Logs a startup line per worker process so that the active worker count
-    and startup configuration are visible in the structured log stream.
+    Lifespan context manager for the FastAPI application.
+    Runs startup logic before the application begins accepting requests,
+    and shutdown logic after it stops.
     """
     logger.info(
         "Worker started",
         environment=config.environment,
         log_level=config.log_level,
     )
+
+    # Create the asyncpg connection pool
+    pool = await asyncpg.create_pool(
+        dsn=config.database_url,
+        min_size=config.db_pool_min_size,
+        max_size=config.db_pool_max_size,
+    )
+    # Store pool on app.state for dependency injection
+    app.state.db_pool = pool
+    logger.info("Database pool initialized", min_size=config.db_pool_min_size, max_size=config.db_pool_max_size)
+
+    yield
+
+    # Cleanly close the pool on shutdown
+    await pool.close()
+    logger.info("Worker stopped")
+
+
+# The FastAPI application instance.
+# default_response_class=ORJSONResponse uses orjson for JSON serialisation across all routes.
+app = fastapi.FastAPI(
+    title="PROJECT-ashFALL",
+    default_response_class=ORJSONResponse,
+    lifespan=lifespan,
+)
+
+# Register request_id propagation middleware
+app.add_middleware(RequestIDMiddleware)
 
 
 @app.get("/health")
