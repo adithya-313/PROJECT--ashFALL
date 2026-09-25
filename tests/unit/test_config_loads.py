@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from core.config import AppConfig
 
 
-def test_config_loads_all_required_keys(tmp_path: pytest.TempPathFactory) -> None:
+def test_config_loads_all_required_keys(monkeypatch: pytest.MonkeyPatch, tmp_path: pytest.TempPathFactory) -> None:
     """
     Asserts that AppConfig correctly loads all four required fields from an environment file:
     environment, log_level, database_url, and redis_url.
@@ -23,6 +23,12 @@ def test_config_loads_all_required_keys(tmp_path: pytest.TempPathFactory) -> Non
     )
     test_env_file = tmp_path / ".test.env"
     test_env_file.write_text(env_content, encoding="utf-8")
+
+    # Prevent docker-compose environment vars from overriding the test file
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
+    monkeypatch.delenv("LOG_LEVEL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("REDIS_URL", raising=False)
 
     config = AppConfig(_env_file=str(test_env_file))
 
