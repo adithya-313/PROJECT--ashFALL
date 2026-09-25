@@ -1,24 +1,50 @@
 """
 File: core/logging.py
-Purpose: Configures the application-wide structured JSON logger.
+Purpose: Configures the application-wide structured JSON logger with context propagation.
 Connects: Any module in the application can import `get_logger` from this file to log events.
+          `request_id_ctx_var` is set by api/middleware/request_id.py to attach request tracing.
 """
 
+from contextvars import ContextVar
 import logging
 import sys
+from typing import Any, Optional
 import structlog
+
+# Context variable holding the current request ID for the active async call stack.
+# Initialized with default=None when outside of an active HTTP request context.
+request_id_ctx_var: ContextVar[Optional[str]] = ContextVar("request_id", default=None)
+
+
+def inject_request_id(logger: Any, method_name: str, event_dict: dict) -> dict:
+    """
+    Structlog processor that injects the current request_id from contextvars.
+    
+    Ensures every structured log line emitted within an HTTP request's call stack
+    carries the associated request_id, enabling end-to-end request tracing.
+    """
+    event_dict["request_id"] = request_id_ctx_var.get()
+    return event_dict
+
+
+def inject_environment(logger: Any, method_name: str, event_dict: dict) -> dict:
+    """
+    Structlog processor that injects the deployment environment name into every log entry.
+    """
+    if "environment" not in event_dict:
+        from core.config import config
+        event_dict["environment"] = config.environment
+    return event_dict
 
 
 def configure_logging(log_level: str) -> None:
     """
-    Sets up the structlog library to output JSON formatted logs.
+    Sets up structlog to output JSON formatted logs with standard contextual fields:
+    timestamp, level, event, environment, and request_id.
     
     Args:
         log_level: The verbosity level for standard logging (e.g., 'DEBUG', 'INFO').
                    Events with a severity lower than this will be ignored.
-                   
-    Returns:
-        None
     """
     # Parse the string log level into a standard Python logging integer level
     numeric_level = getattr(logging, log_level.upper(), logging.INFO)
@@ -30,13 +56,16 @@ def configure_logging(log_level: str) -> None:
         level=numeric_level,
     )
     
-    # Configure structlog processors to add timestamps, log levels, and format as JSON
+    # Configure structlog processors to ensure timestamp, level, event, environment,
+    # and request_id are present on every entry, then format as JSON.
     structlog.configure(
         processors=[
             structlog.stdlib.filter_by_level,
-            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.TimeStamper(fmt="iso", key="timestamp"),
             structlog.stdlib.add_log_level,
-            structlog.processors.JSONRenderer()
+            inject_environment,
+            inject_request_id,
+            structlog.processors.JSONRenderer(),
         ],
         logger_factory=structlog.stdlib.LoggerFactory(),
         wrapper_class=structlog.stdlib.BoundLogger,
@@ -52,6 +81,6 @@ def get_logger(name: str) -> structlog.BoundLogger:
         name: The name of the module or component requesting the logger (typically __name__).
         
     Returns:
-        structlog.BoundLogger: A logger instance that will emit JSON logs.
+        structlog.BoundLogger: A logger instance that emits structured JSON logs.
     """
     return structlog.get_logger(name)

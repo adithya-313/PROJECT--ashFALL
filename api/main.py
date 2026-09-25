@@ -17,6 +17,7 @@ Current endpoints:
 import fastapi
 from fastapi.responses import ORJSONResponse
 
+from api.middleware.request_id import RequestIDMiddleware
 from core.config import config
 from core.logging import configure_logging, get_logger
 
@@ -32,6 +33,9 @@ app = fastapi.FastAPI(
     title="PROJECT-ashFALL",
     default_response_class=ORJSONResponse,
 )
+
+# Register request_id propagation middleware
+app.add_middleware(RequestIDMiddleware)
 
 
 @app.on_event("startup")
@@ -55,7 +59,7 @@ async def health_check() -> dict:
     Returns a minimal JSON payload confirming the service is alive.
 
     Exercises the full HTTP stack (HTTP parser -> router -> response serialiser).
-    Logs one structured JSON line per request.
+    Logs one structured JSON line per request with request_id attached.
     """
     logger.info("health check requested", endpoint="/health")
     return {"status": "ok", "environment": config.environment}
