@@ -49,11 +49,13 @@ def configure_logging(log_level: str) -> None:
     # Parse the string log level into a standard Python logging integer level
     numeric_level = getattr(logging, log_level.upper(), logging.INFO)
     
-    # Set the root logger configuration so that all standard library logs go to stdout
+    # Set the root logger configuration so that all standard library logs go to stdout.
+    # force=True ensures the stdout handler is attached even when invoked under test runners.
     logging.basicConfig(
         format="%(message)s",
         stream=sys.stdout,
         level=numeric_level,
+        force=True,
     )
     
     # Configure structlog processors to ensure timestamp, level, event, environment,
