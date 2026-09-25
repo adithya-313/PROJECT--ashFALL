@@ -9,6 +9,12 @@ def test_pool_initialized_once(caplog):
     Nuance stated for the spec: The literal spec wording asks for "exactly once", but in a
     multi-worker Gunicorn setup, the lifespan runs once per worker process. Therefore, the 
     pool initializes N times globally (where N is the number of Gunicorn workers). 
+    
+    CRITICAL LIMITATION: This test is run via an in-process TestClient. It never touches 
+    the real multi-worker Gunicorn container. It only proves the lifecycle logic for a 
+    single, unrepresentative test process. To truly prove initialization behavior in 
+    the live multi-worker deployment, one would need to parse the stdout of the 
+    running Docker container and assert the initialization log line appears N times.
     This test verifies that within a single worker's lifespan (the test process), 
     the pool initializes exactly once, regardless of how many requests are handled.
     """
