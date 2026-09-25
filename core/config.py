@@ -1,25 +1,16 @@
 """
-File: src/core/config.py
+File: core/config.py
 Purpose: Defines the application configuration schema and loads variables from the environment.
-Connects: Used throughout the application (src/main.py, src/core/logging.py) whenever a
+Connects: Used throughout the application (api/main.py, core/logging.py) whenever a
           configuration value is needed. Relies on pydantic-settings to validate types
           and provide defaults.
 
 Note on GUNICORN_WORKERS:
-  The worker count is read directly in src/gunicorn_conf.py via os.environ.get()
+  The worker count is read directly in infra/docker/gunicorn_conf.py via os.environ.get()
   rather than through this class. This is because gunicorn reads its config file
   before the application is imported, so pydantic-settings has not run yet.
   GUNICORN_WORKERS is documented in .env.example for visibility, but it does not
   appear here to avoid creating two sources of truth for the same variable.
-
-Pydantic optimization note (Phase 1b review):
-  AppConfig is a flat, two-field model with plain string fields and no validators,
-  nested models, or computed fields. There is no meaningful Pydantic-level performance
-  optimization applicable to a model this simple. Pydantic v2 (which pydantic-settings
-  2.5.2 requires) already uses a Rust core (pydantic-core) for validation, so the
-  baseline performance is already near-optimal for flat models.
-  Flagged explicitly per task instructions: nothing to tune here without fabricating
-  complexity. This note will be updated when the model grows in later levels.
 """
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -57,15 +48,7 @@ def get_config() -> AppConfig:
     Instantiates and validates the application configuration from the environment.
 
     Returns:
-        AppConfig: A fully-validated configuration object. pydantic-settings will
-                   raise a ValidationError at startup if a required variable is
-                   missing or has the wrong type — failing fast is intentional.
-
-    Why a factory function:
-        This factory is the single place where AppConfig is constructed. If we
-        later add caching (via functools.lru_cache) or dependency injection
-        (via FastAPI's Depends), we change only this function — all consumers
-        remain unchanged.
+        AppConfig: A fully-validated configuration object.
     """
     return AppConfig()
 

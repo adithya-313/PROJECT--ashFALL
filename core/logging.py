@@ -1,5 +1,5 @@
 """
-File: src/core/logging.py
+File: core/logging.py
 Purpose: Configures the application-wide structured JSON logger.
 Connects: Any module in the application can import `get_logger` from this file to log events.
 """
@@ -7,6 +7,7 @@ Connects: Any module in the application can import `get_logger` from this file t
 import logging
 import sys
 import structlog
+
 
 def configure_logging(log_level: str) -> None:
     """
@@ -18,14 +19,8 @@ def configure_logging(log_level: str) -> None:
                    
     Returns:
         None
-        
-    Why this matters:
-    Structured JSON logs are essential for modern distributed systems because they
-    allow log aggregation tools to query by specific fields (like request_id or user_id)
-    instead of just text matching.
     """
-    
-    # We parse the string log level into a standard Python logging integer level
+    # Parse the string log level into a standard Python logging integer level
     numeric_level = getattr(logging, log_level.upper(), logging.INFO)
     
     # Set the root logger configuration so that all standard library logs go to stdout
@@ -38,19 +33,16 @@ def configure_logging(log_level: str) -> None:
     # Configure structlog processors to add timestamps, log levels, and format as JSON
     structlog.configure(
         processors=[
-            # If log level is too low, filter it out
             structlog.stdlib.filter_by_level,
-            # Add a timestamp to every log entry
             structlog.processors.TimeStamper(fmt="iso"),
-            # Add the log level name (e.g., info, warning) to the log entry
             structlog.stdlib.add_log_level,
-            # Render the final dictionary into a JSON string
             structlog.processors.JSONRenderer()
         ],
         logger_factory=structlog.stdlib.LoggerFactory(),
         wrapper_class=structlog.stdlib.BoundLogger,
         cache_logger_on_first_use=True,
     )
+
 
 def get_logger(name: str) -> structlog.BoundLogger:
     """

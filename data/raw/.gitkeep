@@ -1,0 +1,4 @@
+# File: data/raw/.gitkeep
+# Purpose: Preserves the raw data directory in version control.
+# Note: The PaySim dataset (paysim.csv) does not exist yet and is not tracked in git.
+# It must be sourced separately (e.g. from Kaggle) and placed in this directory.

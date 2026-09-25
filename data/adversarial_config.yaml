@@ -1,0 +1,7 @@
+# File: data/adversarial_config.yaml
+# Purpose: Configuration parameters for adversarial data synthesis and perturbation testing.
+# Connects: Evaluated during adversarial testing and robustness validation in later levels.
+
+adversarial_evaluation:
+  enabled: false
+  perturbation_types: []
