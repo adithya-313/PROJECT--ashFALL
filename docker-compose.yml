@@ -44,10 +44,14 @@ services:
   postgres:
     image: postgres:15
     command: ["postgres", "-c", "wal_level=logical"]
+    # Credentials are read from .env so they are never hardcoded here.
+    # The three POSTGRES_* variables must be present in .env.
+    env_file:
+      - .env
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgrespassword
-      POSTGRES_DB: ashfall
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5432:5432"
     volumes:
@@ -102,6 +106,20 @@ services:
     image: grafana/loki:3.2.0
     ports:
       - "3100:3100"
+
+  # STUB — Level 0 only. Triton will be fully wired (model repository, health checks,
+  # GPU passthrough, gRPC/HTTP ports) at Level 4. For now it just needs to boot without
+  # errors so the compose stack comes up cleanly.
+  triton:
+    image: nvcr.io/nvidia/tritonserver:24.01-py3
+    command: tritonserver --model-store=/models
+    ports:
+      - "8001:8001"
+      - "8002:8002"
+    volumes:
+      # Mount the local models/ directory so Triton has a valid (empty) model store.
+      # An empty store is fine at stub level; real models land here in Level 4.
+      - ./models:/models
 
 volumes:
   postgres_data:

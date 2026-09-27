@@ -4,3 +4,25 @@
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Model weight files — these can be hundreds of MB to several GB.
+# They must never be committed to git; use DVC or cloud storage instead.
+*.pt
+*.bin
+*.onnx
+*.safetensors
+*.pkl
+
+# Parquet data files — columnar data format used for processed feature sets.
+# Like model weights, these belong in DVC/S3, not in the git history.
+*.parquet
+
+# Model directory contents — ignore everything inside models/ subdirectories.
+# The subdirectories themselves are tracked via .gitkeep files (added in Task 8).
+# This pattern ignores any actual model artifacts that land inside those folders.
+models/**/*.pt
+models/**/*.bin
+models/**/*.onnx
+models/**/*.safetensors
+models/**/*.pkl
+models/**/*.parquet

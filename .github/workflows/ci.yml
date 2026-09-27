@@ -1,0 +1,38 @@
+# File: .github/workflows/ci.yml
+# Purpose: Intentionally minimal CI pipeline for Level 0.
+# Right now it only checks that the full Docker Compose stack boots cleanly.
+# Each subsequent level (1, 2, 3, ...) will add its own step (unit tests,
+# contract tests, benchmark gates, etc.) to this file.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  compose-boot:
+    name: Docker Compose boot check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      # CI has no .env file, so we create one from the example template.
+      # This gives docker compose the required variables (DATABASE_URL, REDIS_URL, etc.)
+      # without storing any secrets in the repo.
+      - name: Create .env from example
+        run: cp .env.example .env
+
+      # Boot every service defined in docker-compose.yml and wait for all
+      # healthchecks to pass (--wait). If any service fails to become healthy,
+      # this step exits non-zero and the job fails.
+      - name: Boot all services
+        run: docker compose up --wait
+
+      # Always tear down cleanly so the runner doesn't leave orphan containers.
+      - name: Tear down services
+        if: always()
+        run: docker compose down
