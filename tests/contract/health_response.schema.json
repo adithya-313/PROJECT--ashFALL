@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "Pinned contract for GET /health. Any change to the response shape is a breaking change and must be reflected here first.",
+  "type": "object",
+  "required": ["status", "environment"],
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string"
+    },
+    "environment": {
+      "type": "string"
+    }
+  }
+}

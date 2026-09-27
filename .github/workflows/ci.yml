@@ -34,6 +34,39 @@ jobs:
       - name: Boot all services
         run: docker compose up --wait
 
+      # Hit /health and assert it returns HTTP 200.
+      # curl -o /dev/null discards the body; -s silences progress output.
+      # -w "%{http_code}" prints only the status code so we can compare it.
+      - name: "Smoke test: /health returns 200"
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health)
+          if [ "$STATUS" != "200" ]; then
+            echo "Expected 200 but got $STATUS"
+            exit 1
+          fi
+          echo "Smoke test passed: /health returned 200"
+
+      # Fetch the /health response body, then validate it against the pinned JSON Schema.
+      # jsonschema is a standard Python library for JSON Schema validation.
+      - name: "Contract test: /health response schema"
+        run: |
+          pip install jsonschema --quiet
+          curl -s http://localhost:8000/health -o /tmp/health_response.json
+          python - <<'EOF'
+          import json, jsonschema, sys
+          # Load the response body and the pinned schema
+          with open("/tmp/health_response.json") as f:
+              body = json.load(f)
+          with open("tests/contract/health_response.schema.json") as f:
+              schema = json.load(f)
+          try:
+              jsonschema.validate(instance=body, schema=schema)
+              print("Contract test passed: response matches schema")
+          except jsonschema.ValidationError as e:
+              print(f"Contract test FAILED: {e.message}")
+              sys.exit(1)
+          EOF
+
       # Always tear down cleanly so the runner doesn't leave orphan containers.
       - name: Tear down services
         if: always()
