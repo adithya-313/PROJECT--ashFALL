@@ -1,0 +1,7 @@
+{
+  "description": "Full Level 1 stack: Gunicorn + uvloop + orjson + asyncpg pool",
+  "tool": "wrk",
+  "rps": 3476.04,
+  "latency_p50_ms": 24.88,
+  "latency_p99_ms": 785.36
+}
