@@ -25,6 +25,7 @@ from fastapi.responses import ORJSONResponse
 
 from api.middleware.request_id import RequestIDMiddleware
 from api.middleware.logging_middleware import RequestLoggingMiddleware
+from api.models.health import HealthResponse
 from core.config import config
 from core.logging import configure_logging, get_logger
 
@@ -88,8 +89,8 @@ app.add_middleware(RequestIDMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
 
 
-@app.get("/health")
-async def health_check() -> dict:
+@app.get("/health", response_model=HealthResponse)
+async def health_check() -> HealthResponse:
     """
     Returns a minimal JSON payload confirming the service is alive.
 
@@ -97,4 +98,4 @@ async def health_check() -> dict:
     Logs one structured JSON line per request with request_id attached.
     """
     logger.info("health check requested", endpoint="/health")
-    return {"status": "ok", "environment": config.environment}
+    return HealthResponse(status="ok", environment=config.environment)
