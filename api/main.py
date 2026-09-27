@@ -24,6 +24,7 @@ import uvloop
 from fastapi.responses import ORJSONResponse
 
 from api.middleware.request_id import RequestIDMiddleware
+from api.middleware.logging_middleware import RequestLoggingMiddleware
 from core.config import config
 from core.logging import configure_logging, get_logger
 
@@ -77,8 +78,14 @@ app = fastapi.FastAPI(
     lifespan=lifespan,
 )
 
-# Register request_id propagation middleware
+# Register request_id propagation middleware.
+# Must be added first so request_id is in the contextvar before logging middleware runs.
 app.add_middleware(RequestIDMiddleware)
+
+# Register per-request access logging (path + status_code on every request).
+# Added after RequestIDMiddleware so the request_id contextvar is already set when
+# RequestLoggingMiddleware calls the logger.
+app.add_middleware(RequestLoggingMiddleware)
 
 
 @app.get("/health")
