@@ -18,14 +18,13 @@ import asyncio
 from contextlib import asynccontextmanager
 
 import asyncpg
-
 import fastapi
 import uvloop
 from fastapi.responses import ORJSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 
-from api.middleware.request_id import RequestIDMiddleware
 from api.middleware.logging_middleware import RequestLoggingMiddleware
+from api.middleware.request_id import RequestIDMiddleware
 from api.models.health import HealthResponse
 from core.config import config
 from core.gpu_monitor import poll_gpu_metrics

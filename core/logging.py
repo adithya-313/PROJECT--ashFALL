@@ -5,10 +5,11 @@ Connects: Any module in the application can import `get_logger` from this file t
           `request_id_ctx_var` is set by api/middleware/request_id.py to attach request tracing.
 """
 
-from contextvars import ContextVar
 import logging
 import sys
+from contextvars import ContextVar
 from typing import Any, Optional
+
 import structlog
 
 # Context variable holding the current request ID for the active async call stack.
