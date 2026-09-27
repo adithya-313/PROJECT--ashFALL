@@ -76,5 +76,21 @@ services:
     depends_on:
       - prometheus
 
+  fluent-bit:
+    # Official Fluent Bit image (v3.1) which includes the Loki output plugin natively.
+    image: fluent/fluent-bit:3.1
+    ports:
+      - "24224:24224"
+    volumes:
+      - ./infra/docker/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+    depends_on:
+      - loki
+
+  loki:
+    # Official Grafana Loki image, version matching standard Grafana interoperability.
+    image: grafana/loki:3.2.0
+    ports:
+      - "3100:3100"
+
 volumes:
   postgres_data:
