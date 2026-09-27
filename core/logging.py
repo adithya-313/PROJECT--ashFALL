@@ -5,15 +5,27 @@ Connects: Any module in the application can import `get_logger` from this file t
           `request_id_ctx_var` is set by api/middleware/request_id.py to attach request tracing.
 """
 
-from contextvars import ContextVar
 import logging
 import sys
+from contextvars import ContextVar
 from typing import Any, Optional
+
 import structlog
 
 # Context variable holding the current request ID for the active async call stack.
 # Initialized with default=None when outside of an active HTTP request context.
 request_id_ctx_var: ContextVar[Optional[str]] = ContextVar("request_id", default=None)
+
+
+def inject_trace_id(logger: Any, method_name: str, event_dict: dict) -> dict:
+    """
+    Structlog processor that injects the active OpenTelemetry trace_id into every log line.
+    When a trace_id is present, log lines and traces in Grafana can be linked by this value.
+    """
+    # Import here to avoid a circular import at module load time.
+    from core.tracing import trace_id_ctx_var
+    event_dict["trace_id"] = trace_id_ctx_var.get()
+    return event_dict
 
 
 def inject_request_id(logger: Any, method_name: str, event_dict: dict) -> dict:
@@ -67,6 +79,7 @@ def configure_logging(log_level: str) -> None:
             structlog.stdlib.add_log_level,
             inject_environment,
             inject_request_id,
+            inject_trace_id,
             structlog.processors.JSONRenderer(),
         ],
         logger_factory=structlog.stdlib.LoggerFactory(),

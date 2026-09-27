@@ -8,6 +8,7 @@ from typing import AsyncGenerator
 import asyncpg
 import fastapi
 
+
 async def get_db_pool(request: fastapi.Request) -> AsyncGenerator[asyncpg.Pool, None]:
     """
     FastAPI dependency that yields the asyncpg connection pool from app.state.

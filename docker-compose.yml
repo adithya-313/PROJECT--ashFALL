@@ -84,6 +84,7 @@ services:
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - ./infra/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./infra/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
     depends_on:
       - prometheus
 
@@ -102,6 +103,18 @@ services:
     image: grafana/loki:3.2.0
     ports:
       - "3100:3100"
+
+  # Tempo is a trace storage backend — it receives traces from the API and stores
+  # them so Grafana can query and display the full request journey across services.
+  tempo:
+    image: grafana/tempo:2.4.0
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./infra/docker/tempo.yaml:/etc/tempo.yaml
+    ports:
+      - "3200:3200"   # Tempo HTTP API (Grafana reads traces from here)
+      - "4317:4317"   # OTLP gRPC (the API sends traces here)
+      - "4318:4318"   # OTLP HTTP (alternative trace ingestion)
 
   # STUB — Level 0 only. Triton will be fully wired (model repository, health checks,
   # GPU passthrough, gRPC/HTTP ports) at Level 4. For now it just needs to boot without

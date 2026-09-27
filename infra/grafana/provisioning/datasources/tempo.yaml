@@ -1,0 +1,17 @@
+apiVersion: 1
+datasources:
+  - name: Tempo
+    uid: tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+    isDefault: false
+    editable: false
+    jsonData:
+      httpMethod: GET
+      # This links a trace ID found in Loki logs directly to the trace in Tempo.
+      # When you click a trace ID in a log line, Grafana opens the full trace.
+      tracesToLogsV2:
+        datasourceUid: loki
+      serviceMap:
+        datasourceUid: prometheus
