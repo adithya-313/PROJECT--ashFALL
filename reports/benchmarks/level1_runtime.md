@@ -79,3 +79,22 @@ In Level 0, the ASGI application was a purely empty network router handling HTTP
 ### `test_pool_initialized_once`
 This test uses FastAPI's `TestClient` to assert that the `asyncpg` pool is initialized exactly once per worker lifespan. 
 **CRITICAL LIMITATION**: The test executes completely in-process within a single, unrepresentative testing thread. It **never touches the real multi-worker Gunicorn container deployment**. Therefore, it only validates the initialization logic conceptually for a single process, but does not definitively prove the behavior of Gunicorn's worker forking and pool initialization in the actual Docker environment. To definitively prove real-world behavior, a test would need to grep the running container's stdout logs and verify that the initialization log line appears exactly $N$ times (where $N$ is `WORKER_COUNT`).
+
+---
+
+## Part 4: Logging Architecture Investigation
+
+### Environmental Impact on Baselines
+This session's host measured ~10-15% slower overall than the earlier session that produced the ~4,840 req/s figure. This earlier number should not be used as a strict baseline for comparisons made in a different session — host performance itself varies session to session due to background I/O or CPU contention.
+
+### Log Driver Overhead & Socket Errors
+Within this session, the `fluentd` and `json-file` log drivers performed equivalently (~4,000-4,400 req/s for both, both showing the exact same `timeout 100` socket-error pattern). This confirms that the socket errors are a host-level artifact (e.g., Docker Desktop network jitter or Gunicorn worker starvation) unrelated to either logging driver, and importantly confirms that **Fluent Bit adds no measurable overhead of its own**.
+
+### Final Decision
+**Keep the Fluent Bit + Loki pipeline as the permanent logging architecture.**
+
+The app's own code stays on the plain synchronous `StreamHandler` baseline (unchanged since the revert). All four in-app performance optimization attempts were investigated and rejected for the historical record:
+1. **QueueListener Thread**: Rejected due to Python GIL contention causing severe throughput degradation under load.
+2. **multiprocessing.Queue**: Rejected due to IPC serialization (Pickle) overhead causing catastrophic throughput collapse.
+3. **run_in_executor**: Rejected due to instant ThreadPoolExecutor saturation choking the asyncio event loop.
+4. **Batched Writes (AsyncBatchHandler)**: Rejected due to the synchronous `sys.stdout.write` flush occasionally blocking the event loop long enough to cause Gunicorn worker heartbeat timeouts (crashes) and data loss risks.
