@@ -43,6 +43,14 @@ opentelemetry-sdk==1.24.0
 opentelemetry-instrumentation-fastapi==0.45b0
 opentelemetry-exporter-otlp-proto-http==1.24.0
 
+# --- Lint and type checking ---
+
+# ruff — a fast Python linter. Checks for style errors, unused imports, and formatting issues.
+ruff==0.4.4
+
+# mypy — static type checker. Catches type mismatches before the code runs.
+mypy==1.10.0
+
 # --- Test dependencies ---
 
 # pytest — the test runner. Discovers and executes all test_*.py files.

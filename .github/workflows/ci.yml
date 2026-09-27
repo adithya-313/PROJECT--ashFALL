@@ -26,6 +26,19 @@ jobs:
       - name: Create .env from example
         run: cp .env.example .env
 
+      # Install only the lint and type-check tools — not the full requirements —
+      # so this step is fast and fails early before we wait for Docker.
+      - name: Install dependencies
+        run: pip install ruff mypy
+
+      # ruff checks for style errors, unused imports, and formatting issues.
+      - name: Lint (ruff)
+        run: ruff check api/ core/
+
+      # mypy checks for type mismatches without running the code.
+      - name: Type check (mypy)
+        run: mypy api/ core/
+
       # Boot every service defined in docker-compose.yml and wait for all
       # healthchecks to pass (--wait). If any service fails to become healthy,
       # this step exits non-zero and the job fails.
