@@ -76,17 +76,27 @@ services:
       - ./infra/docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:10.4.2
     ports:
       - "3000:3000"
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: admin
-      GF_USERS_ALLOW_SIGN_UP: "false"
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
     volumes:
-      - ./infra/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
-      - ./infra/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - grafana_data:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning
     depends_on:
       - prometheus
+
+  # Jaeger is an all-in-one distributed tracing backend.
+  # It receives spans from the API via OTLP and provides a UI to explore traces.
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4317:4317"     # OTLP gRPC
+      - "4318:4318"     # OTLP HTTP
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
 
   fluent-bit:
     # Official Fluent Bit image (v3.1) which includes the Loki output plugin natively.
@@ -113,8 +123,6 @@ services:
       - ./infra/docker/tempo.yaml:/etc/tempo.yaml
     ports:
       - "3200:3200"   # Tempo HTTP API (Grafana reads traces from here)
-      - "4317:4317"   # OTLP gRPC (the API sends traces here)
-      - "4318:4318"   # OTLP HTTP (alternative trace ingestion)
 
   # STUB — Level 0 only. Triton will be fully wired (model repository, health checks,
   # GPU passthrough, gRPC/HTTP ports) at Level 4. For now it just needs to boot without
@@ -138,3 +146,4 @@ services:
 
 volumes:
   postgres_data:
+  grafana_data:

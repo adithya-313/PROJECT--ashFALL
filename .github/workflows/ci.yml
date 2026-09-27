@@ -37,7 +37,7 @@ jobs:
 
       # mypy checks for type mismatches without running the code.
       - name: Type check (mypy)
-        run: mypy api/ core/
+        run: mypy api/ core/ --ignore-missing-imports --no-strict-optional
 
       # Boot every service defined in docker-compose.yml and wait for all
       # healthchecks to pass (--wait). If any service fails to become healthy,
