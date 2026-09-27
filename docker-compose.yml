@@ -87,17 +87,6 @@ services:
     depends_on:
       - prometheus
 
-  # Jaeger is an all-in-one distributed tracing backend.
-  # It receives spans from the API via OTLP and provides a UI to explore traces.
-  jaeger:
-    image: jaegertracing/all-in-one:1.57
-    ports:
-      - "16686:16686"   # Jaeger UI
-      - "4317:4317"     # OTLP gRPC
-      - "4318:4318"     # OTLP HTTP
-    environment:
-      - COLLECTOR_OTLP_ENABLED=true
-
   fluent-bit:
     # Official Fluent Bit image (v3.1) which includes the Loki output plugin natively.
     image: fluent/fluent-bit:3.1
@@ -117,12 +106,14 @@ services:
   # Tempo is a trace storage backend — it receives traces from the API and stores
   # them so Grafana can query and display the full request journey across services.
   tempo:
-    image: grafana/tempo:2.4.0
+    image: grafana/tempo:2.4.1
     command: ["-config.file=/etc/tempo.yaml"]
     volumes:
       - ./infra/docker/tempo.yaml:/etc/tempo.yaml
     ports:
-      - "3200:3200"   # Tempo HTTP API (Grafana reads traces from here)
+      - "3200:3200"   # Tempo query API
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
 
   # STUB — Level 0 only. Triton will be fully wired (model repository, health checks,
   # GPU passthrough, gRPC/HTTP ports) at Level 4. For now it just needs to boot without

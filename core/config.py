@@ -43,8 +43,8 @@ class AppConfig(BaseSettings):
     redis_url: str
     db_pool_min_size: int = 2
     db_pool_max_size: int = 10
-    # OTLP endpoint for sending traces. Points to Jaeger in Docker; override for local dev.
-    otlp_endpoint: str = "http://jaeger:4318/v1/traces"
+    # OTLP endpoint for sending traces to Tempo. Override in .env for local dev outside Docker.
+    otlp_endpoint: str = "http://tempo:4318/v1/traces"
 
     # SettingsConfigDict tells pydantic-settings where to look for values.
     # env_file=".env" reads variables from a .env file if it exists.
