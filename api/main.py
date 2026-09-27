@@ -29,6 +29,7 @@ from api.middleware.logging_middleware import RequestLoggingMiddleware
 from api.models.health import HealthResponse
 from core.config import config
 from core.logging import configure_logging, get_logger
+from core.tracing import setup_tracing
 
 # Initialise logging before the application begins serving requests.
 # Module-level execution ensures logging is ready before any worker startup handlers execute.
@@ -88,6 +89,10 @@ app.add_middleware(RequestIDMiddleware)
 # Added after RequestIDMiddleware so the request_id contextvar is already set when
 # RequestLoggingMiddleware calls the logger.
 app.add_middleware(RequestLoggingMiddleware)
+
+# Wire up OpenTelemetry tracing. Must be called after app is created and before routes
+# are registered so the FastAPI instrumentor can patch the routing layer.
+setup_tracing(app)
 
 # Wire up Prometheus metrics collection.
 # instrument(app) hooks into every route so request count, duration, and
