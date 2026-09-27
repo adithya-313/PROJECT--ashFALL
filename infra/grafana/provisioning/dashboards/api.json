@@ -1,52 +1,49 @@
 {
-  "title": "AshFALL API",
-  "schemaVersion": 38,
-  "style": "dark",
-  "refresh": "5s",
-  "time": { "from": "now-15m", "to": "now" },
+  "__inputs": [],
+  "__requires": [],
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
   "panels": [
     {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0},
       "id": 1,
+      "options": {"legend": {"calcs": [], "displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single"}},
+      "targets": [{"datasource": {"type": "prometheus"}, "expr": "rate(http_requests_total[1m])", "legendFormat": "RPS", "refId": "A"}],
       "title": "Requests per Second",
-      "type": "timeseries",
-      "gridPos": { "x": 0, "y": 0, "w": 8, "h": 8 },
-      "datasource": { "uid": "prometheus" },
-      "targets": [
-        {
-          "expr": "rate(http_requests_total[1m])",
-          "legendFormat": "rps"
-        }
-      ]
+      "type": "timeseries"
     },
     {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0},
       "id": 2,
+      "options": {"legend": {"calcs": [], "displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single"}},
+      "targets": [{"datasource": {"type": "prometheus"}, "expr": "histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[1m]))", "legendFormat": "p99", "refId": "A"}],
       "title": "p99 Latency",
-      "type": "timeseries",
-      "gridPos": { "x": 8, "y": 0, "w": 8, "h": 8 },
-      "datasource": { "uid": "prometheus" },
-      "fieldConfig": { "defaults": { "unit": "s" } },
-      "targets": [
-        {
-          "expr": "histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[1m]))",
-          "legendFormat": "p99"
-        }
-      ]
+      "type": "timeseries"
     },
     {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0},
       "id": 3,
-      "title": "Error Rate (5xx)",
-      "type": "timeseries",
-      "gridPos": { "x": 16, "y": 0, "w": 8, "h": 8 },
-      "datasource": { "uid": "prometheus" },
-      "fieldConfig": {
-        "defaults": { "color": { "fixedColor": "red", "mode": "fixed" } }
-      },
-      "targets": [
-        {
-          "expr": "rate(http_requests_total{status=~\"5..\"}[1m])",
-          "legendFormat": "5xx/s"
-        }
-      ]
+      "options": {"legend": {"calcs": [], "displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single"}},
+      "targets": [{"datasource": {"type": "prometheus"}, "expr": "rate(http_requests_total{status=~\"5..\"}[1m])", "legendFormat": "Error Rate", "refId": "A"}],
+      "title": "Error Rate",
+      "type": "timeseries"
     }
-  ]
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "tags": [],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "API Overview",
+  "uid": "api-overview",
+  "version": 1
 }
