@@ -22,6 +22,7 @@ import asyncpg
 import fastapi
 import uvloop
 from fastapi.responses import ORJSONResponse
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from api.middleware.request_id import RequestIDMiddleware
 from api.middleware.logging_middleware import RequestLoggingMiddleware
@@ -87,6 +88,12 @@ app.add_middleware(RequestIDMiddleware)
 # Added after RequestIDMiddleware so the request_id contextvar is already set when
 # RequestLoggingMiddleware calls the logger.
 app.add_middleware(RequestLoggingMiddleware)
+
+# Wire up Prometheus metrics collection.
+# instrument(app) hooks into every route so request count, duration, and
+# error rate are tracked automatically — no per-route changes needed.
+# expose(app) adds a GET /metrics endpoint that Prometheus scrapes on a schedule.
+Instrumentator().instrument(app).expose(app)
 
 
 @app.get("/health", response_model=HealthResponse)

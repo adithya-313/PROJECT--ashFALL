@@ -33,6 +33,10 @@ asyncpg==0.30.0
 # when it's installed, replacing the pure-Python h11 parser used in Phase 1a.
 httptools==0.6.4
 
+# prometheus-fastapi-instrumentator — automatically adds a /metrics endpoint to the FastAPI app.
+# Prometheus scrapes this endpoint to collect request count, latency, and error rate.
+prometheus-fastapi-instrumentator==7.0.0
+
 # --- Test dependencies ---
 
 # pytest — the test runner. Discovers and executes all test_*.py files.
