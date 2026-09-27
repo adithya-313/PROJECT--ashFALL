@@ -33,13 +33,9 @@ services:
         fluentd-async: "true"
         # Tag logs with the service name for easy filtering in Loki
         tag: "api"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+    # GPU passthrough for the api service is handled at runtime via --gpus all
+    # when needed locally. It is not required for the service to boot and is
+    # intentionally omitted here so CI runners without a GPU can start the stack.
 
   postgres:
     image: postgres:15
