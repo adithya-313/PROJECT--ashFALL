@@ -110,12 +110,18 @@ services:
   # STUB — Level 0 only. Triton will be fully wired (model repository, health checks,
   # GPU passthrough, gRPC/HTTP ports) at Level 4. For now it just needs to boot without
   # errors so the compose stack comes up cleanly.
+  #
+  # Why this profile exists: the Triton image is ~10 GB from NVIDIA's registry.
+  # Pulling it blocks normal `docker compose up` and times out in CI.
+  # To start Triton intentionally, run: docker compose --profile gpu up
   triton:
     image: nvcr.io/nvidia/tritonserver:24.01-py3
     command: tritonserver --model-store=/models
     ports:
       - "8001:8001"
       - "8002:8002"
+    profiles:
+      - gpu
     volumes:
       # Mount the local models/ directory so Triton has a valid (empty) model store.
       # An empty store is fine at stub level; real models land here in Level 4.

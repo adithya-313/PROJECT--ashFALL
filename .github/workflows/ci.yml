@@ -29,6 +29,8 @@ jobs:
       # Boot every service defined in docker-compose.yml and wait for all
       # healthchecks to pass (--wait). If any service fails to become healthy,
       # this step exits non-zero and the job fails.
+      # The "gpu" profile (Triton) is excluded here — it pulls a ~10 GB image
+      # and needs a GPU runner. Run it locally: docker compose --profile gpu up
       - name: Boot all services
         run: docker compose up --wait
 
