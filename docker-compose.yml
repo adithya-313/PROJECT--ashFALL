@@ -22,6 +22,17 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      # Best-effort startup ordering. fluentd-async is the real safety net that prevents failures if fluent-bit isn't up.
+      fluent-bit:
+        condition: service_started
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: "localhost:24224"
+        # Prevents api container startup failure or blocking if the fluent-bit listener isn't fully ready
+        fluentd-async: "true"
+        # Tag logs with the service name for easy filtering in Loki
+        tag: "api"
     deploy:
       resources:
         reservations:
