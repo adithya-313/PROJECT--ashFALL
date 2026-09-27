@@ -28,6 +28,7 @@ from api.middleware.request_id import RequestIDMiddleware
 from api.middleware.logging_middleware import RequestLoggingMiddleware
 from api.models.health import HealthResponse
 from core.config import config
+from core.gpu_monitor import poll_gpu_metrics
 from core.logging import configure_logging, get_logger
 from core.tracing import setup_tracing
 
@@ -65,6 +66,10 @@ async def lifespan(app: fastapi.FastAPI):
     # Store pool on app.state for dependency injection
     app.state.db_pool = pool
     logger.info("Database pool initialized", min_size=config.db_pool_min_size, max_size=config.db_pool_max_size)
+
+    # Start the GPU metrics background task. asyncio.create_task schedules it to run
+    # concurrently alongside request handling. It exits on its own if nvidia-smi is absent.
+    asyncio.create_task(poll_gpu_metrics())
 
     yield
 
@@ -111,3 +116,16 @@ async def health_check() -> HealthResponse:
     """
     logger.info("health check requested", endpoint="/health")
     return HealthResponse(status="ok", environment=config.environment)
+
+
+# Debug route for verifying the observability pipeline end-to-end.
+# How to use: with ENVIRONMENT=development, call GET /debug/error.
+# You should see a structured log line with an exception, a trace in Grafana/Tempo,
+# and a 500 response. If the trace_id appears in both the log line and the Tempo trace,
+# the correlation pipeline is working correctly.
+# In any non-development environment this returns 403 so it is never exposed in staging/prod.
+@app.get("/debug/error")
+async def debug_error() -> None:
+    if config.environment != "development":
+        raise fastapi.HTTPException(status_code=403, detail="Not available outside development")
+    raise ValueError("Deliberate test error — verifying observability pipeline")
