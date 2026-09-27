@@ -11,7 +11,7 @@ reproduced is a result that cannot be trusted.
 ## Git Commit SHA
 
 ```
-PLACEHOLDER
+22cc89eb1102b754cc8a90cd585ba42535f84185
 ```
 
 <!-- The exact git commit hash (`git rev-parse HEAD`) of the code that produced the result.

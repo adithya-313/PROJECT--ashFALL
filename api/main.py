@@ -128,3 +128,14 @@ async def debug_error() -> None:
     if config.environment != "development":
         raise fastapi.HTTPException(status_code=403, detail="Not available outside development")
     raise ValueError("Deliberate test error — verifying observability pipeline")
+
+
+@app.get("/debug/exception-test", include_in_schema=False)
+async def exception_test() -> None:
+    # This endpoint exists only to verify the observability loop:
+    # the exception should appear in both the structured log (with request_id)
+    # and in the Jaeger trace (with the same trace_id).
+    # It is blocked in non-development environments.
+    if config.environment != "development":
+        raise fastapi.HTTPException(status_code=403, detail="Not available outside development")
+    raise RuntimeError("Deliberate test exception — observability loop verification")

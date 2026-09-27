@@ -43,6 +43,8 @@ class AppConfig(BaseSettings):
     redis_url: str
     db_pool_min_size: int = 2
     db_pool_max_size: int = 10
+    # OTLP endpoint for sending traces. Points to Jaeger in Docker; override for local dev.
+    otlp_endpoint: str = "http://jaeger:4318/v1/traces"
 
     # SettingsConfigDict tells pydantic-settings where to look for values.
     # env_file=".env" reads variables from a .env file if it exists.
@@ -69,7 +71,7 @@ def get_config() -> AppConfig:
         (via FastAPI's Depends), we change only this function — all consumers
         remain unchanged.
     """
-    return AppConfig()
+    return AppConfig()  # type: ignore[call-arg]  # pydantic-settings reads fields from env
 
 
 # Module-level singleton: imported by name in other modules.

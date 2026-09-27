@@ -6,7 +6,6 @@ Connects: Called from api/main.py after the FastAPI app is created.
           trace_id_ctx_var is read by core/logging.py to attach trace_id to every log line.
 """
 
-import os
 from contextvars import ContextVar
 from typing import Optional
 
@@ -35,12 +34,11 @@ def setup_tracing(app: fastapi.FastAPI) -> None:
     4. Registers a request hook that copies the active trace_id into a ContextVar
        so structlog can include it in every log line for that request.
     """
-    # Read the Tempo endpoint from the environment.
-    # Falls back to a local default if the variable is not set.
-    otlp_endpoint = os.environ.get(
-        "OTEL_EXPORTER_OTLP_ENDPOINT",
-        "http://localhost:4318/v1/traces",
-    )
+    # Read the OTLP endpoint from the validated app config.
+    # Defaults to Jaeger's address inside Docker; override OTLP_ENDPOINT in .env for local dev.
+    from core.config import config
+
+    otlp_endpoint = config.otlp_endpoint
 
     # A Resource labels every span with the name of the service that produced it.
     # Grafana uses this name to group spans in the trace view.

@@ -77,9 +77,9 @@ def configure_logging(log_level: str) -> None:
             structlog.stdlib.filter_by_level,
             structlog.processors.TimeStamper(fmt="iso", key="timestamp"),
             structlog.stdlib.add_log_level,
-            inject_environment,
-            inject_request_id,
-            inject_trace_id,
+            inject_environment,  # type: ignore[list-item]
+            inject_request_id,  # type: ignore[list-item]
+            inject_trace_id,  # type: ignore[list-item]
             structlog.processors.JSONRenderer(),
         ],
         logger_factory=structlog.stdlib.LoggerFactory(),
