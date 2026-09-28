@@ -29,6 +29,10 @@ orjson==3.10.18
 # asyncpg — a fast, asynchronous PostgreSQL client library.
 asyncpg==0.30.0
 
+# pandera — DataFrame schema validation library. Used to validate the shape and
+# types of ingested transaction data before it enters the feature pipeline.
+pandera==0.22.1
+
 # httptools — a Cython-based HTTP/1.1 request parser. uvicorn switches to it automatically
 # when it's installed, replacing the pure-Python h11 parser used in Phase 1a.
 httptools==0.6.4

@@ -26,6 +26,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from api.middleware.logging_middleware import RequestLoggingMiddleware
 from api.middleware.request_id import RequestIDMiddleware
 from api.models.health import HealthResponse
+from api.routers import scoring
 from core.config import config
 from core.gpu_monitor import poll_gpu_metrics
 from core.logging import configure_logging, get_logger
@@ -103,6 +104,9 @@ setup_tracing(app)
 # error rate are tracked automatically — no per-route changes needed.
 # expose(app) adds a GET /metrics endpoint that Prometheus scrapes on a schedule.
 Instrumentator().instrument(app).expose(app)
+
+# Register routers. Each router owns its own prefix (defined in the router file).
+app.include_router(scoring.router)
 
 
 @app.get("/health", response_model=HealthResponse)
