@@ -21,6 +21,7 @@ the full test suite installed.
 """
 
 import sys
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, ".")
@@ -62,9 +63,9 @@ def _make_valid_df() -> pd.DataFrame:
         # --- Label columns ---
         # is_adversarial must have exactly 2 unique values (True and False)
         "is_adversarial":           pd.array([False, True, False, False, True], dtype="bool"),
-        # Explicit object dtype required: newer pandas infers mixed None/string lists
-        # as StringDtype, but the schema contract is dtype('object').
-        "adversarial_pattern_type": pd.array(
+        # numpy object array bypasses pandas 3.x StringDtype inference entirely.
+        # The schema contract requires dtype('object') — numpy guarantees it.
+        "adversarial_pattern_type": np.array(
             [None, "account_takeover", None, None, "mule_account"], dtype=object
         ),
     })
