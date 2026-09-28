@@ -13,6 +13,9 @@ __pycache__/
 *.safetensors
 *.pkl
 
+# Raw PaySim CSV — too large for git, not DVC-tracked (source data, not a pipeline artifact)
+data/raw/paysim.csv
+
 # Parquet data files — columnar data format used for processed feature sets.
 # Like model weights, these belong in DVC/S3, not in the git history.
 *.parquet

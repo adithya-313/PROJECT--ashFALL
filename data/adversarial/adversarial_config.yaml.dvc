@@ -1,0 +1,5 @@
+outs:
+- md5: 96c1c93626785172c34d50e561d7c5f5
+  size: 498
+  hash: md5
+  path: adversarial_config.yaml
