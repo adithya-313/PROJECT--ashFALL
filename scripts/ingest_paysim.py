@@ -7,13 +7,10 @@
 
 import hashlib
 import logging
-import sys
 import numpy as np
 import pandas as pd
 import yaml
 from pathlib import Path
-
-from data.schemas.enriched_transactions import validate_enriched_parquet
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger(__name__)
@@ -264,18 +261,9 @@ def main() -> None:
 
     new_columns = ["geo_coordinates", "device_fingerprint", "merchant_risk_tier"]
     log.info(f"Done. Rows: {len(df):,}, Columns: {new_columns}")
-
-    # Validate the parquet that was actually written to disk — not the in-memory df.
-    # We reload from disk to catch any serialization differences between the
-    # in-memory DataFrame and the bytes written (e.g. dtype promotion by parquet).
-    log.info("Validating enriched parquet against schema...")
-    try:
-        saved_df = pd.read_parquet(ENRICHED_PATH)
-        validate_enriched_parquet(saved_df)
-        log.info("Schema validation passed.")
-    except ValueError as exc:
-        log.error(f"Schema validation FAILED:\n{exc}")
-        sys.exit(1)
+    # Full schema validation (all 21 columns including signal and label columns)
+    # runs at the end of inject_adversarial.py, after those columns are added.
+    # Validating here would fail because this script only produces 14 columns.
 
 
 if __name__ == "__main__":

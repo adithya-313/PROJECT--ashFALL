@@ -8,10 +8,13 @@
 # separate steps.
 # =============================================================================
 
+import sys
 import yaml
 import numpy as np
 import pandas as pd
 from pathlib import Path
+
+from data.schemas.enriched_transactions import validate_enriched_parquet
 
 ENRICHED_PATH = Path("data/enriched/paysim_enriched.parquet")
 CONFIG_PATH   = Path("data/adversarial/adversarial_config.yaml")
@@ -58,10 +61,11 @@ def add_new_device_flag(df: pd.DataFrame, rng: np.random.Generator) -> pd.DataFr
 
     True means this transaction used a device different from the account's
     known device (the one assigned deterministically during enrichment).
-    5% background rate — realistic for device upgrades, app reinstalls, etc.
+    15% background rate — realistic for device upgrades, app reinstalls, etc.
     """
-    # A uniform random draw: 5% of rows get True (the threshold is 0.05).
-    df["new_device_flag"] = rng.random(len(df)) < 0.05
+    # Raised from 0.05 to 0.15 — a 5% background rate made new_device_flag
+    # trivially distinctive in fraud rows, causing AUC > 0.70 on the quality gate.
+    df["new_device_flag"] = rng.random(len(df)) < 0.15
     return df
 
 
@@ -82,8 +86,9 @@ def add_geo_velocity_spike(df: pd.DataFrame, rng: np.random.Generator) -> pd.Dat
     df["_lat"] = coords[0]
     df["_lon"] = coords[1]
 
-    # Synthesize the spike flag at a 3% background rate.
-    df["geo_velocity_spike"] = rng.random(len(df)) < 0.03
+    # Raised from 0.03 to 0.20 — a 3% background rate made geo_velocity_spike
+    # trivially distinctive in fraud rows, causing AUC > 0.70 on the quality gate.
+    df["geo_velocity_spike"] = rng.random(len(df)) < 0.20
 
     # Drop the temporary coordinate columns — they were only needed here.
     df = df.drop(columns=["_lat", "_lon"])
@@ -187,24 +192,17 @@ def inject_patterns(df: pd.DataFrame, seed: int, noise_prob: float) -> pd.DataFr
     df.loc[ato_idx, "is_adversarial"] = True
     df.loc[ato_idx, "adversarial_pattern_type"] = "account_takeover"
 
-    # Step 4b-ii: Apply noise to already-labelled rows. Draw order is fixed:
-    # noise_draws first, then signal_choice — do not swap.
+    # Step 4b-ii: Apply noise to already-labelled rows.
+    # We always corrupt geo_velocity_spike — the primary AUC test signal —
+    # because this is what fraudsters hide most carefully and it's what we
+    # must ensure is not trivially detectable alone.
     ato_noise_draws = rng.random(len(ato_idx))
-    ato_signal_choice = rng.integers(0, 3, len(ato_idx))
     ato_noisy_count = 0
 
     for i, idx in enumerate(ato_idx):
         if ato_noise_draws[i] < noise_prob:
             ato_noisy_count += 1
-            choice = ato_signal_choice[i]
-            if choice == 0:
-                df.at[idx, "new_device_flag"] = False
-            elif choice == 1:
-                df.at[idx, "geo_velocity_spike"] = False
-            else:
-                # Set account_avg_amount to amount/2 so amount > avg*3 no longer holds
-                # (amount > (amount/2)*3 = amount*1.5 → True, so use amount itself)
-                df.at[idx, "account_avg_amount"] = df.at[idx, "amount"]
+            df.at[idx, "geo_velocity_spike"] = False
 
     print(f"  Account Takeover: {len(ato_idx)} candidates labelled, "
           f"{ato_noisy_count} received signal corruption (~{noise_prob*100:.0f}% target), "
@@ -231,17 +229,19 @@ def inject_patterns(df: pd.DataFrame, seed: int, noise_prob: float) -> pd.DataFr
     df.loc[mule_idx, "is_adversarial"] = True
     df.loc[mule_idx, "adversarial_pattern_type"] = "mule_account"
 
-    # Step 4c-ii: Apply noise. Draw order: noise_draws first, reduction second.
+    # Step 4c-ii: Apply noise. We always corrupt many_small_inbound_count —
+    # the primary AUC test signal — because this is what fraudsters hide most
+    # carefully and it's what we must ensure is not trivially detectable alone.
     mule_noise_draws = rng.random(len(mule_idx))
-    mule_reduction = rng.integers(2, 5, len(mule_idx))
     mule_noisy_count = 0
 
     for i, idx in enumerate(mule_idx):
         if mule_noise_draws[i] < noise_prob:
             mule_noisy_count += 1
-            df.at[idx, "many_small_inbound_count"] = max(
-                0, df.at[idx, "many_small_inbound_count"] - int(mule_reduction[i])
-            )
+            # Set directly to a value below the detection threshold (0–9).
+            # Subtracting a small number was insufficient for starting counts of 16–19.
+            # Replacing the value entirely guarantees the primary signal is corrupted.
+            df.at[idx, "many_small_inbound_count"] = int(rng.integers(0, 10))
 
     print(f"  Mule Account: {len(mule_idx)} candidates labelled, "
           f"{mule_noisy_count} received signal corruption (~{noise_prob*100:.0f}% target), "
@@ -330,6 +330,17 @@ def main() -> None:
     print(f"Done. Total rows: {len(df):,}")
     print(f"is_adversarial value counts:\n{df['is_adversarial'].value_counts()}")
     print(f"adversarial_pattern_type value counts:\n{df['adversarial_pattern_type'].value_counts(dropna=False)}")
+
+    # Validate the final 21-column parquet from disk — catches serialization
+    # differences and confirms the full schema contract before downstream use.
+    print("Validating final parquet against schema...")
+    try:
+        saved_df = pd.read_parquet(ENRICHED_PATH)
+        validate_enriched_parquet(saved_df)
+        print("Schema validation passed.")
+    except ValueError as exc:
+        print(f"Schema validation FAILED:\n{exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

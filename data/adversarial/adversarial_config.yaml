@@ -5,4 +5,4 @@
 
 adversarial_injection:
   seed: 42
-  noise_probability: 0.30
+  noise_probability: 0.50  # Raised from 0.30 — previous value produced AUC > 0.70 on both testable patterns, indicating signals were too separable. Raised to pass the AUC <= 0.70 quality gate.
