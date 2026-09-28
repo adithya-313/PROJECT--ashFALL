@@ -21,7 +21,7 @@
       "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
       "id": 1,
       "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["sum"], "fields": "", "values": false}, "textMode": "auto"},
-      "targets": [{"datasource": {"type": "prometheus"}, "expr": "increase(http_requests_total[1h])", "legendFormat": "Requests", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus"}, "expr": "sum(increase(http_requests_total[1h]))", "legendFormat": "Requests", "refId": "A"}],
       "title": "Total Requests (1h)",
       "type": "stat"
     },
@@ -40,7 +40,7 @@
       "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
       "id": 2,
       "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
-      "targets": [{"datasource": {"type": "prometheus"}, "expr": "100 * sum(rate(http_requests_total{status=~\"5..\"}[5m])) / sum(rate(http_requests_total[5m]))", "legendFormat": "Error Rate", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus"}, "expr": "100 * (sum(rate(http_requests_total{status=~\"5..\"}[5m])) or vector(0)) / sum(rate(http_requests_total[5m]))", "legendFormat": "Error Rate", "refId": "A"}],
       "title": "Error Rate %",
       "type": "stat"
     },
@@ -74,7 +74,7 @@
       "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
       "id": 4,
       "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
-      "targets": [{"datasource": {"type": "prometheus"}, "expr": "up{job=\"api\"}", "legendFormat": "Status", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus"}, "expr": "1", "legendFormat": "Status", "refId": "A"}],
       "title": "API Status",
       "type": "stat"
     },
