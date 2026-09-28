@@ -62,7 +62,11 @@ def _make_valid_df() -> pd.DataFrame:
         # --- Label columns ---
         # is_adversarial must have exactly 2 unique values (True and False)
         "is_adversarial":           pd.array([False, True, False, False, True], dtype="bool"),
-        "adversarial_pattern_type": [None, "account_takeover", None, None, "mule_account"],
+        # Explicit object dtype required: newer pandas infers mixed None/string lists
+        # as StringDtype, but the schema contract is dtype('object').
+        "adversarial_pattern_type": pd.array(
+            [None, "account_takeover", None, None, "mule_account"], dtype=object
+        ),
     })
 
 
