@@ -52,7 +52,7 @@ router = APIRouter(prefix="/score")
 # STUB: This endpoint returns a random fraud_score. It will be replaced with a
 # real model inference call in a later level. The request/response contract is
 # intentionally locked in now so clients can integrate before the model exists.
-@router.post("/", response_model=ScoreResponse)
+@router.post("", response_model=ScoreResponse)
 async def score_transaction(transaction: TransactionRequest) -> ScoreResponse:
     """
     Accept a transaction and return a fraud score.
