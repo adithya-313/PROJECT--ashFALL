@@ -102,7 +102,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install schema dependencies
-        run: pip install pandas pandera pyarrow pyyaml
+        run: pip install pandas "pandera==0.22.1" pyarrow pyyaml
 
       - name: Run schema gate
         run: python tests/schema/test_enriched_schema.py
