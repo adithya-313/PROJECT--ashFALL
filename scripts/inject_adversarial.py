@@ -141,18 +141,22 @@ def add_transaction_signals(df: pd.DataFrame, rng: np.random.Generator) -> pd.Da
 
 def inject_patterns(df: pd.DataFrame, seed: int, noise_prob: float) -> pd.DataFrame:
     """
-    Mark rows with adversarial fraud patterns and apply random noise suppression.
+    Mark rows with adversarial fraud patterns, then corrupt one signal on noise_prob
+    fraction of already-labelled rows. The fraud label is kept after corruption.
 
     Patterns injected:
       1. Account Takeover  — new device + impossible travel + large transaction
       2. Mule Account      — many small inbounds + large outbound
       3. Merchant Collusion — high-risk merchant + new device + amount near threshold
 
-    noise_prob = 0.30 means 30% of candidate rows have one signal flipped, causing
-    the row to NOT be labelled as adversarial. This makes the injected fraud harder
-    to detect and tests model robustness.
+    Noise order: find candidates → label ALL → corrupt signal on 30% → keep label.
+    This means ~30% of fraud rows will have one signal missing, making the pattern
+    harder to detect by a single-feature model and testing model robustness.
     """
-    # One RNG for ALL draws in this function — order matters for reproducibility.
+    # One RNG for ALL draws in this function — order is fixed for reproducibility.
+    # All random draws for all three patterns must come from this one RNG in
+    # the documented sequence below. Adding draws or reordering them changes
+    # all downstream results.
     rng = np.random.default_rng(seed)
 
     # --- Step 4a: Initialize output columns with clean defaults ---
@@ -164,6 +168,13 @@ def inject_patterns(df: pd.DataFrame, seed: int, noise_prob: float) -> pd.DataFr
     #
     # A fraudster who has stolen credentials uses a different device, is in a
     # different location, and makes a transaction much larger than usual.
+    #
+    # Noise: after labelling, ~30% of fraud rows get one signal corrupted.
+    # The fraud label is NOT removed — this simulates real-world imperfect fraud
+    # where one signal is masked but the fraud still happened. A junior dev note:
+    # we label first, corrupt second. If we did it the other way, every labelled
+    # fraud row would have all signals intact and a single-feature model would
+    # get perfect AUC — that defeats the purpose of noise.
     # -------------------------------------------------------------------------
     ato_mask = (
         (df["new_device_flag"] == True) &
@@ -172,70 +183,69 @@ def inject_patterns(df: pd.DataFrame, seed: int, noise_prob: float) -> pd.DataFr
     )
     ato_idx = df[ato_mask].index
 
-    # Apply noise: suppress one signal in 30% of candidate rows.
-    # We draw one random value per candidate and one signal-choice per candidate.
+    # Step 4b-i: Label ALL candidates as fraud immediately.
+    df.loc[ato_idx, "is_adversarial"] = True
+    df.loc[ato_idx, "adversarial_pattern_type"] = "account_takeover"
+
+    # Step 4b-ii: Apply noise to already-labelled rows. Draw order is fixed:
+    # noise_draws first, then signal_choice — do not swap.
     ato_noise_draws = rng.random(len(ato_idx))
     ato_signal_choice = rng.integers(0, 3, len(ato_idx))
+    ato_noisy_count = 0
 
     for i, idx in enumerate(ato_idx):
         if ato_noise_draws[i] < noise_prob:
+            ato_noisy_count += 1
             choice = ato_signal_choice[i]
             if choice == 0:
                 df.at[idx, "new_device_flag"] = False
             elif choice == 1:
                 df.at[idx, "geo_velocity_spike"] = False
             else:
-                # Make account_avg_amount equal to amount so amount > avg*3 fails
+                # Set account_avg_amount to amount/2 so amount > avg*3 no longer holds
+                # (amount > (amount/2)*3 = amount*1.5 → True, so use amount itself)
                 df.at[idx, "account_avg_amount"] = df.at[idx, "amount"]
 
-    # Re-check all three conditions after noise has been applied.
-    ato_still_mask = (
-        (df.loc[ato_idx, "new_device_flag"] == True) &
-        (df.loc[ato_idx, "geo_velocity_spike"] == True) &
-        (df.loc[ato_idx, "amount"] > df.loc[ato_idx, "account_avg_amount"] * 3)
-    )
-    final_ato_idx = ato_idx[ato_still_mask]
-    df.loc[final_ato_idx, "is_adversarial"] = True
-    df.loc[final_ato_idx, "adversarial_pattern_type"] = "account_takeover"
-    print(f"  Account Takeover: {len(ato_idx)} candidates → {len(final_ato_idx)} labelled after noise")
+    print(f"  Account Takeover: {len(ato_idx)} candidates labelled, "
+          f"{ato_noisy_count} received signal corruption (~{noise_prob*100:.0f}% target), "
+          f"{len(ato_idx)} fraud rows remain")
 
     # -------------------------------------------------------------------------
     # Step 4c — Pattern 2: Mule Account
     #
     # A mule account receives many small inbound transfers (from victims) then
     # makes one large outbound transfer (to the fraudster's account).
+    #
+    # Noise: reduce many_small_inbound_count by 2–4 on ~30% of fraud rows.
+    # The fraud label stays. This creates labelled mule rows with count <= 10,
+    # which a single-feature model on many_small_inbound_count cannot perfectly
+    # classify — exactly what we want for a non-trivial AUC gate.
     # -------------------------------------------------------------------------
-    # Condition: received more than 10 small inbounds AND made an outbound transfer
-    # larger than the account's own average transaction. The original spec threshold
-    # (count * avg * 0.80) is unreachable because large_outbound is synthesized as
-    # at most 0.5 * amount while the threshold grows proportionally to count (11+).
-    # Using "outbound > account_avg" keeps the semantic intent (outbound significantly
-    # exceeds the account's typical transaction) without the scaling mismatch.
     mule_mask = (
         (df["many_small_inbound_count"] > 10) &
         (df["large_outbound_amount"] > df["account_avg_amount"])
     )
     mule_idx = df[mule_mask].index
 
-    # Apply noise: reduce many_small_inbound_count by 2–4, making the condition fail.
+    # Step 4c-i: Label ALL candidates as fraud immediately.
+    df.loc[mule_idx, "is_adversarial"] = True
+    df.loc[mule_idx, "adversarial_pattern_type"] = "mule_account"
+
+    # Step 4c-ii: Apply noise. Draw order: noise_draws first, reduction second.
     mule_noise_draws = rng.random(len(mule_idx))
     mule_reduction = rng.integers(2, 5, len(mule_idx))
+    mule_noisy_count = 0
 
     for i, idx in enumerate(mule_idx):
         if mule_noise_draws[i] < noise_prob:
+            mule_noisy_count += 1
             df.at[idx, "many_small_inbound_count"] = max(
                 0, df.at[idx, "many_small_inbound_count"] - int(mule_reduction[i])
             )
 
-    # Re-check condition after noise.
-    mule_still_mask = (
-        (df.loc[mule_idx, "many_small_inbound_count"] > 10) &
-        (df.loc[mule_idx, "large_outbound_amount"] > df.loc[mule_idx, "account_avg_amount"])
-    )
-    final_mule_idx = mule_idx[mule_still_mask]
-    df.loc[final_mule_idx, "is_adversarial"] = True
-    df.loc[final_mule_idx, "adversarial_pattern_type"] = "mule_account"
-    print(f"  Mule Account:     {len(mule_idx)} candidates → {len(final_mule_idx)} labelled after noise")
+    print(f"  Mule Account: {len(mule_idx)} candidates labelled, "
+          f"{mule_noisy_count} received signal corruption (~{noise_prob*100:.0f}% target), "
+          f"{len(mule_idx)} fraud rows remain")
 
     # -------------------------------------------------------------------------
     # Step 4d — Pattern 3: Merchant Collusion
@@ -245,17 +255,17 @@ def inject_patterns(df: pd.DataFrame, seed: int, noise_prob: float) -> pd.DataFr
     #
     # Note: high-tier merchants in paysim are exclusively PAYMENT destinations
     # (M... prefix). Their amounts are far below the global 99th percentile
-    # (max ~94K vs global threshold 1.6M). We therefore compute the structuring
-    # threshold from the high-tier merchant amount distribution itself, not the
-    # global threshold. This keeps the pattern semantically correct: transactions
-    # just below the 99th percentile *for that merchant population*.
+    # (max ~94K vs global threshold 1.6M). We compute the structuring threshold
+    # from the high-tier merchant amount distribution itself.
+    #
+    # Noise: demote merchant_risk_tier to 'medium' on ~30% of fraud rows.
+    # The fraud label stays. This creates labelled MC rows where the merchant
+    # tier signal is missing — making the pattern harder to learn from tier alone.
     # -------------------------------------------------------------------------
     high_amounts = df.loc[df["merchant_risk_tier"] == "high", "amount"]
     mc_p99 = float(np.percentile(high_amounts, 99))
-    # Lower bound is 50% of the 99th percentile (not 85% as in the global-threshold
-    # spec) because the high-tier merchant amount range is much narrower than the
-    # global dataset. Using 85% would catch only ~1 row. 50% keeps the "just below
-    # threshold" structuring semantics while actually producing labelled rows.
+    # Lower bound 50% of p99 — 85% would catch only ~1 row given how narrow
+    # the high-tier merchant amount range is relative to the global dataset.
     mc_lower = mc_p99 * 0.50
 
     mc_mask = (
@@ -266,24 +276,22 @@ def inject_patterns(df: pd.DataFrame, seed: int, noise_prob: float) -> pd.DataFr
     )
     mc_idx = df[mc_mask].index
 
-    # Apply noise: demote the merchant from 'high' to 'medium' for 30% of candidates.
+    # Step 4d-i: Label ALL candidates as fraud immediately.
+    df.loc[mc_idx, "is_adversarial"] = True
+    df.loc[mc_idx, "adversarial_pattern_type"] = "merchant_collusion"
+
+    # Step 4d-ii: Apply noise — demote merchant tier for ~30% of fraud rows.
     mc_noise_draws = rng.random(len(mc_idx))
+    mc_noisy_count = 0
 
     for i, idx in enumerate(mc_idx):
         if mc_noise_draws[i] < noise_prob:
+            mc_noisy_count += 1
             df.at[idx, "merchant_risk_tier"] = "medium"
 
-    # Re-check using the same thresholds as mc_mask (mc_lower and mc_p99).
-    mc_still_mask = (
-        (df.loc[mc_idx, "merchant_risk_tier"] == "high") &
-        (df.loc[mc_idx, "new_device_flag"] == True) &
-        (df.loc[mc_idx, "amount"] >= mc_lower) &
-        (df.loc[mc_idx, "amount"] <= mc_p99 * 0.99)
-    )
-    final_mc_idx = mc_idx[mc_still_mask]
-    df.loc[final_mc_idx, "is_adversarial"] = True
-    df.loc[final_mc_idx, "adversarial_pattern_type"] = "merchant_collusion"
-    print(f"  Merchant Collusion: {len(mc_idx)} candidates → {len(final_mc_idx)} labelled after noise")
+    print(f"  Merchant Collusion: {len(mc_idx)} candidates labelled, "
+          f"{mc_noisy_count} received signal corruption (~{noise_prob*100:.0f}% target), "
+          f"{len(mc_idx)} fraud rows remain")
 
     return df
 
