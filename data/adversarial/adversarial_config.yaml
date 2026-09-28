@@ -1,0 +1,8 @@
+# data/adversarial/adversarial_config.yaml
+# Purpose: Fixed random seed for adversarial pattern injection.
+# The same seed must reproduce identical injection on every run.
+# Changing this seed invalidates the DVC hash — update REPRODUCIBILITY.md if you do.
+
+adversarial_injection:
+  seed: 42
+  noise_probability: 0.30
