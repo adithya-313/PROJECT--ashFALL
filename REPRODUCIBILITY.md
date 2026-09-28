@@ -11,7 +11,7 @@ reproduced is a result that cannot be trusted.
 ## Git Commit SHA
 
 ```
-22cc89eb1102b754cc8a90cd585ba42535f84185
+dd400cad150fd5da7c1f1882e64d604ad9b21182
 ```
 
 <!-- The exact git commit hash (`git rev-parse HEAD`) of the code that produced the result.
@@ -22,11 +22,11 @@ reproduced is a result that cannot be trusted.
 ## DVC Data Hash
 
 ```
-PLACEHOLDER
+8c5752ce47acc067fc5517e69ca4062f
 ```
 
-<!-- The DVC-tracked hash of the input dataset(s) used (`dvc status` or from dvc.lock).
-     Fill this in when DVC is wired up in Level 2+. Until then, note the data source manually. -->
+<!-- MD5 hash of data/enriched/paysim_enriched.parquet as tracked by DVC (from paysim_enriched.parquet.dvc).
+     Re-running ingest_paysim.py + inject_adversarial.py with seed=42 must reproduce this hash exactly. -->
 
 ---
 
@@ -61,3 +61,16 @@ PLACEHOLDER
 <!-- A hash or snapshot of the exact Python environment: run `pip freeze | sha256sum` and
      paste the hash, or attach the full `pip freeze` output as a file. Fill this in
      alongside every experiment so dependency drift is detectable. -->
+
+---
+
+## Adversarial Config Hash
+
+```
+96c1c93626785172c34d50e561d7c5f5
+```
+
+<!-- MD5 hash of data/adversarial/adversarial_config.yaml as tracked by DVC (from adversarial_config.yaml.dvc).
+     This config controls the random seed (42) and noise probability (0.50) used to inject adversarial
+     fraud patterns. A change to this hash means the injection parameters changed and the enriched parquet
+     must be regenerated to maintain reproducibility. -->
