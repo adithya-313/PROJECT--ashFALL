@@ -19,7 +19,6 @@ from contextlib import asynccontextmanager
 
 import asyncpg
 import fastapi
-import uvloop
 from fastapi.responses import ORJSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 
@@ -38,10 +37,14 @@ configure_logging(config.log_level)
 
 logger = get_logger(__name__)
 
-# Explicitly set uvloop as the asyncio event loop policy.
-# While UvicornWorker implicitly uses uvloop, explicitly setting it removes any
-# ambiguity about which event loop is active.
-asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+# uvloop is a performance-only optimisation (Linux/macOS). The app must also
+# start on Windows for local development, so the import is conditional.
+# On Linux (Docker, CI, production) uvloop loads and is used as normal.
+try:
+    import uvloop
+    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+except ModuleNotFoundError:
+    logger.info("uvloop not available — using standard asyncio event loop (Windows or no uvloop installed)")
 
 
 @asynccontextmanager
