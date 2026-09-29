@@ -1,0 +1,58 @@
+{
+  "generated_at": "2026-09-29T11:53:41Z",
+  "row_count": 6362620,
+  "column_count": 21,
+  "columns": [
+    "step",
+    "type",
+    "amount",
+    "nameOrig",
+    "oldbalanceOrg",
+    "newbalanceOrig",
+    "nameDest",
+    "oldbalanceDest",
+    "newbalanceDest",
+    "isFraud",
+    "isFlaggedFraud",
+    "geo_coordinates",
+    "device_fingerprint",
+    "merchant_risk_tier",
+    "new_device_flag",
+    "geo_velocity_spike",
+    "account_avg_amount",
+    "many_small_inbound_count",
+    "large_outbound_amount",
+    "is_adversarial",
+    "adversarial_pattern_type"
+  ],
+  "adversarial_pattern_counts": {
+    "account_takeover": 13516,
+    "mule_account": 286231,
+    "merchant_collusion": 38,
+    "none": 6062835
+  },
+  "noise_corruption_rates": {
+    "account_takeover": {
+      "signal": "geo_velocity_spike",
+      "description": "fraction of labelled ATO rows where geo_velocity_spike==False (signal corrupted)",
+      "rate": 0.4981
+    },
+    "mule_account": {
+      "signal": "many_small_inbound_count",
+      "description": "fraction of labelled mule rows where count<=10 (signal corrupted below threshold)",
+      "rate": 0.4998
+    },
+    "merchant_collusion": {
+      "signal": "merchant_risk_tier",
+      "description": "fraction of labelled MC rows where tier!=\"high\" (signal corrupted)",
+      "rate": 0.4474
+    }
+  },
+  "merchant_risk_tier_distribution": {
+    "medium": 4211142,
+    "low": 2149308,
+    "high": 2170
+  },
+  "dvc_hash": "265e328c7c7237f0c4c22ef61f648c9d",
+  "git_sha": "500f7d09ac42ed2be4f68e05c4fe467a786ec974"
+}
