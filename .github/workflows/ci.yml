@@ -84,3 +84,25 @@ jobs:
       - name: Tear down services
         if: always()
         run: docker compose down
+
+  # Validates the Pandera schema in data/schemas/enriched_transactions.py
+  # against synthetic in-memory data. Runs independently of compose-boot —
+  # no Docker, no services, no parquet file on disk required.
+  schema-validation:
+    name: Pandera schema gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install schema dependencies
+        run: pip install "pandas==2.3.3" "pandera==0.22.1" pyarrow pyyaml
+
+      - name: Run schema gate
+        run: python tests/schema/test_enriched_schema.py
