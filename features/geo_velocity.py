@@ -5,8 +5,15 @@
 # away, nobody could have travelled that fast, so one of the two transactions is probably not the real owner. We
 # measure this as geo-velocity: distance between the two locations divided by the time between them.
 import logging
+import os
 
 import numpy as np
+
+# The batch size above which we dispatch to the GPU kernel.
+# Below this threshold, the CPU NumPy path is faster due to GPU memory transfer overhead.
+# This value is set from the benchmark results in Level 4.5.
+# It is also written to .env as GEO_KERNEL_CROSSOVER_BATCH_SIZE.
+GEO_KERNEL_CROSSOVER_BATCH_SIZE = int(os.getenv("GEO_KERNEL_CROSSOVER_BATCH_SIZE", "500"))
 
 logger = logging.getLogger(__name__)
 
@@ -157,3 +164,52 @@ def compute_geo_velocity(current_geo: str, last_geo: str | None, elapsed_seconds
 
     # Speed = distance / time. The time is converted from seconds to hours first so the answer is in km per hour.
     return distance_km / (elapsed_seconds / SECONDS_PER_HOUR)
+
+
+def compute_geo_velocity_batch(
+    current_geos: list[str], last_geos: list[str | None], elapsed_seconds_list: list[float]
+) -> list[float | None]:
+    """
+    Compute geo-velocity (km/h) for many transactions at once, choosing the CPU or GPU path by batch size.
+
+    Returns None at positions with no previous location or with elapsed time of zero or less, exactly like
+    compute_geo_velocity does for a single transaction.
+    """
+    results: list[float | None] = [None] * len(current_geos)
+
+    # Keep only the rows that can have a speed. Rows with no previous location or non-positive elapsed time stay
+    # None in the output and never go through any compute path. We remember each kept row's original index so the
+    # results can be put back in the right order.
+    valid_indices = [
+        i
+        for i, (last_geo, elapsed) in enumerate(zip(last_geos, elapsed_seconds_list))
+        if last_geo is not None and elapsed > 0
+    ]
+    if not valid_indices:
+        return results
+
+    # Dispatch pattern: the GPU path is only faster above the crossover batch size. Below it, the GPU memory
+    # transfer overhead outweighs the parallelism gain.
+    if len(valid_indices) >= GEO_KERNEL_CROSSOVER_BATCH_SIZE:
+        # Lazy import: keeps this module importable when the OpenAI Triton kernel language package or a CUDA GPU
+        # is not available (the CPU-only case).
+        from features.gpu_geo_velocity import compute_geo_velocity_gpu
+
+        # Parse every valid "lat,lon" string into numbers, then send the whole batch to the GPU at once.
+        current = [parse_geo_coordinates(current_geos[i]) for i in valid_indices]
+        last = [parse_geo_coordinates(last_geos[i]) for i in valid_indices]  # type: ignore[arg-type]
+        gpu_values = compute_geo_velocity_gpu(
+            np.array([p[0] for p in last]),
+            np.array([p[1] for p in last]),
+            np.array([p[0] for p in current]),
+            np.array([p[1] for p in current]),
+            np.array([elapsed_seconds_list[i] for i in valid_indices]),
+        )
+        for i, value in zip(valid_indices, gpu_values):
+            results[i] = float(value)
+    else:
+        # Small batch: loop over the existing single-transaction CPU function.
+        for i in valid_indices:
+            results[i] = compute_geo_velocity(current_geos[i], last_geos[i], elapsed_seconds_list[i])
+
+    return results
