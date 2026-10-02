@@ -1,0 +1,5 @@
+outs:
+- md5: 8fef006b2da1456d46c6b265ad72bdf7
+  size: 1227
+  hash: md5
+  path: feature_cache_schema.yaml
