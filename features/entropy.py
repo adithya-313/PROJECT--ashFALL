@@ -37,7 +37,11 @@ def parse_device_id(device_fingerprint: str) -> str:
 
 
 def compute_device_ratio(device_fingerprints: list[str]) -> float:
-    """Return unique device IDs divided by transaction count, or 0.0 for an empty list."""
+    """Return unique device IDs divided by transaction count, or 0.0 for an empty list.
+
+    Skipped entries (unparseable fingerprints) are excluded from the unique-device count but still count toward the
+    total transaction denominator, because an unparseable fingerprint is still a transaction.
+    """
     if not device_fingerprints:
         return 0.0
 
