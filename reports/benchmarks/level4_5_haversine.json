@@ -1,0 +1,80 @@
+{
+  "generated_at": "2026-10-02T19:32:42.581969+00:00",
+  "batch_size": 10000,
+  "runs": 100,
+  "cpu": {
+    "p50_ms": 46.00435150132398,
+    "p95_ms": 61.47082044990383,
+    "p99_ms": 87.96156308591901,
+    "throughput_txn_per_sec": 217370.7415419649
+  },
+  "gpu": {
+    "p50_ms": 0.05738750041928142,
+    "p95_ms": 0.13317545053723726,
+    "p99_ms": 0.3214832243247665,
+    "throughput_txn_per_sec": 174253973.89568365
+  },
+  "crossover_batch_size": 100,
+  "crossover_detail": [
+    {
+      "batch_size": 1,
+      "cpu_median_ms": 0.004850000550504774,
+      "gpu_median_ms": 0.48335600513382815,
+      "faster": "cpu"
+    },
+    {
+      "batch_size": 10,
+      "cpu_median_ms": 0.04374099808046594,
+      "gpu_median_ms": 0.4134030023124069,
+      "faster": "cpu"
+    },
+    {
+      "batch_size": 50,
+      "cpu_median_ms": 0.22447999799624085,
+      "gpu_median_ms": 0.4210600018268451,
+      "faster": "cpu"
+    },
+    {
+      "batch_size": 100,
+      "cpu_median_ms": 0.43742999696405604,
+      "gpu_median_ms": 0.34628949651960284,
+      "faster": "gpu"
+    },
+    {
+      "batch_size": 250,
+      "cpu_median_ms": 1.1068429994338658,
+      "gpu_median_ms": 0.34387850246275775,
+      "faster": "gpu"
+    },
+    {
+      "batch_size": 500,
+      "cpu_median_ms": 2.239252997242147,
+      "gpu_median_ms": 0.4563430011330638,
+      "faster": "gpu"
+    },
+    {
+      "batch_size": 1000,
+      "cpu_median_ms": 4.429641499882564,
+      "gpu_median_ms": 0.38287549978122115,
+      "faster": "gpu"
+    },
+    {
+      "batch_size": 2500,
+      "cpu_median_ms": 11.238061997573823,
+      "gpu_median_ms": 0.3821050013357308,
+      "faster": "gpu"
+    },
+    {
+      "batch_size": 5000,
+      "cpu_median_ms": 22.658108002360677,
+      "gpu_median_ms": 0.6151180023152847,
+      "faster": "gpu"
+    },
+    {
+      "batch_size": 10000,
+      "cpu_median_ms": 46.87266850305605,
+      "gpu_median_ms": 1.2380725020193495,
+      "faster": "gpu"
+    }
+  ]
+}
