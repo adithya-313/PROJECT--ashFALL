@@ -41,7 +41,8 @@ def _make_valid_df() -> pd.DataFrame:
         "nameDest":          ["M2001", "C3001", "C3002", "M2002", "M2003"],
         "oldbalanceDest":    pd.array([0.0, 0.0, 0.0, 0.0, 0.0], dtype="float64"),
         "newbalanceDest":    pd.array([100.0, 250.5, 800.0, 1.0, 42.0], dtype="float64"),
-        "isFraud":           pd.array([0, 0, 1, 0, 0], dtype="int64"),
+        # Rows 1 and 4 are adversarial (see is_adversarial below), so they must be fraud (adversarial implies fraud).
+        "isFraud":           pd.array([0, 1, 1, 0, 1], dtype="int64"),
         "isFlaggedFraud":    pd.array([0, 0, 0, 0, 0], dtype="int64"),
         # --- Enriched columns ---
         "geo_coordinates":   ["12.9716,77.5946", "28.7041,77.1025",
