@@ -22,11 +22,13 @@ dd400cad150fd5da7c1f1882e64d604ad9b21182
 ## DVC Data Hash
 
 ```
-265e328c7c7237f0c4c22ef61f648c9d
+87c929358f0950a86aac62ce382795e8
 ```
 
 <!-- MD5 hash of data/enriched/paysim_enriched.parquet as tracked by DVC (from paysim_enriched.parquet.dvc).
-     Re-running ingest_paysim.py + inject_adversarial.py with seed=42 must reproduce this hash exactly.
+     Re-running ingest_paysim.py + inject_adversarial.py with seed=42 is intended to reproduce this hash exactly.
+     Updated at the Level 3 correction (see below): the previous hash (265e328c7c7237f0c4c22ef61f648c9d) is the
+     pre-correction dataset, kept recoverable in the DVC cache. The Level 3 acceptance history follows:
      Updated at Level 3 acceptance: the prior hash (8c5752ce47acc067fc5517e69ca4062f) was set from a
      parquet produced by an earlier pipeline version (before the final noise injection redesign and
      background rate changes). Two independent clean runs of the current code both produce this hash. -->
@@ -70,12 +72,14 @@ PLACEHOLDER
 ## Adversarial Config Hash
 
 ```
-96c1c93626785172c34d50e561d7c5f5
+92996dee8b0f19a561ff31b2f5de596e
 ```
 
 <!-- MD5 hash of data/adversarial/adversarial_config.yaml as tracked by DVC (from adversarial_config.yaml.dvc).
-     This config controls the random seed (42) and noise probability (0.50) used to inject adversarial
-     fraud patterns. A change to this hash means the injection parameters changed and the enriched parquet
+     This config controls the random seed (42), the per-pattern noise probabilities (account_takeover 0.45,
+     mule_account 0.30) and the injected fraud counts (11,800 each) used to inject adversarial fraud patterns.
+     (Previous hash 96c1c93626785172c34d50e561d7c5f5 was the single noise_probability=0.50 config.)
+     A change to this hash means the injection parameters changed and the enriched parquet
      must be regenerated to maintain reproducibility. -->
 
 ---
@@ -90,3 +94,23 @@ PLACEHOLDER
 - **Reproducibility:** two independent clean runs of `ingest_paysim.py` + `inject_adversarial.py` with seed=42 both produce MD5=`265e328c7c7237f0c4c22ef61f648c9d`; pipeline is deterministic
 - **E-commerce Store:** `scripts/ecommerce_store.py` generates transactions with `ecom_` prefix; schema validation (`data/schemas/ecommerce_transactions.py`) passes on valid batches; live POST /score blocked only by uvloop on Windows (works in Docker/Linux)
 - **Merchant Collusion:** deferred to e-commerce store — 38 PaySim labelled rows produce ~11 test-set rows, insufficient for meaningful AUC; architecturally correct deferral
+
+---
+
+## Level 3 Correction
+
+This section supersedes the Level 3 Acceptance figures above wherever they differ (data hash, AUC results,
+pattern list). The earlier acceptance text is kept as history.
+
+- **Bug fixed:** the adversarial patterns were not linked to `isFraud` (the old injection labelled rows but never
+  set `isFraud`). `scripts/inject_adversarial.py` was rewritten to set `isFraud=1` on injected rows (controlled
+  injection, modelled on the documented fraud research in `reports/data/fraud_pattern_research.md`).
+- **Prevalence:** total fraud is now ~0.500% (31,813 rows = 8,213 original PaySim + 23,600 injected: 11,800
+  `account_takeover` + 11,800 `mule_account`).
+- **merchant_collusion** is no longer injected into PaySim (moved to the e-commerce stream).
+- **Per-pattern injection noise:** `account_takeover` 0.45, `mule_account` 0.30.
+- **AUC gate** retargeted to `isFraud` with a 0.55-0.70 pass band; both signals pass (`account_takeover`
+  geo_velocity_spike AUC=0.6740, `mule_account` many_small_inbound_count AUC=0.6248).
+- **Schema** now enforces `is_adversarial=True` implies `isFraud=1`.
+- **Hashes:** enriched parquet `87c929358f0950a86aac62ce382795e8`; adversarial config
+  `92996dee8b0f19a561ff31b2f5de596e`.
