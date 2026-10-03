@@ -41,3 +41,6 @@ graphify-out/
 .claude/
 CLAUDE.md
 .gitattributes
+
+# MLflow local SQLite tracking database
+mlflow.db

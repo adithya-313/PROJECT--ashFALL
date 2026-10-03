@@ -1,9 +1,9 @@
-| Model | ROC-AUC | PR-AUC | Train time (s) |
+| Model | PR-AUC | ROC-AUC | Train seconds |
 |---|---|---|---|
-| xgboost | 0.9994 | 0.9377 | 5.1 |
-| random_forest | 0.9920 | 0.9365 | 90.6 |
-| catboost | 0.9993 | 0.9092 | 13.5 |
-| logreg | 0.9903 | 0.5627 | 8.4 |
-| lightgbm | 0.8514 | 0.0186 | 12.7 |
+| xgboost | 0.9933 | 0.9998 | 6.7 |
+| catboost | 0.9871 | 0.9998 | 13.6 |
+| random_forest | 0.9832 | 0.9985 | 107.4 |
+| logreg | 0.6051 | 0.9935 | 12.2 |
+| lightgbm | 0.1973 | 0.9793 | 25.2 |
 
-Baseline, default-ish params, no tuning yet. Winner selection happens after hyperparameter tuning.
+These results supersede the pre-correction baseline results (they were produced on the corrected dataset, DVC data hash `87c929358f0950a86aac62ce382795e8`). Baseline settings, no tuning; winner selection comes later.
