@@ -34,3 +34,10 @@ models/**/*.parquet
 catboost_info/
 mlruns/
 data/processed/
+data/enriched/*.bak
+graphify-out/
+
+# graphify (local code-graph tool — personal tooling, not part of the repo)
+.claude/
+CLAUDE.md
+.gitattributes

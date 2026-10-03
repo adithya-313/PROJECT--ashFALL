@@ -23,7 +23,9 @@ FRAUD_RATE_TOLERANCE_PP = 0.01
 # Columns that together identify one transaction. The PaySim data has no unique ID column.
 KEY_COLUMNS = ["nameOrig", "nameDest", "step", "amount"]
 
-ADVERSARIAL_PATTERNS = ["mule_account", "account_takeover", "merchant_collusion"]
+# merchant_collusion was moved to the e-commerce stream and is no longer injected into PaySim, so it is not
+# expected in these splits.
+ADVERSARIAL_PATTERNS = ["mule_account", "account_takeover"]
 
 
 def load_data() -> pd.DataFrame:

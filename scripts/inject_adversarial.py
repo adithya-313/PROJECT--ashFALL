@@ -33,7 +33,7 @@ PATTERNS = ["account_takeover", "mule_account"]
 # =============================================================================
 # Section 2 — Load config
 #
-# We read the seed, the noise probability and the per-pattern injected fraud
+# We read the seed, the per-pattern noise probabilities and the per-pattern injected fraud
 # counts from the YAML config so the injection is reproducible and configurable
 # without touching the code.
 # =============================================================================
@@ -45,15 +45,23 @@ def load_config(config_path: Path) -> dict:
     if "adversarial_injection" not in config:
         raise KeyError(
             f"Expected key 'adversarial_injection' not found in {config_path}. "
-            "Check that the file contains 'adversarial_injection: seed, noise_probability, injected_fraud_counts'."
+            "Check that the file contains 'adversarial_injection: seed, noise_probability (per pattern), "
+            "injected_fraud_counts'."
         )
     settings = config["adversarial_injection"]
     for key in ("seed", "noise_probability", "injected_fraud_counts"):
         if key not in settings:
             raise KeyError(f"Expected key '{key}' not found under 'adversarial_injection' in {config_path}.")
+    if not isinstance(settings["noise_probability"], dict):
+        raise KeyError(
+            f"noise_probability in {config_path} must be a mapping of pattern name to probability, "
+            f"e.g. 'account_takeover: 0.45', not a single number."
+        )
     for pattern in PATTERNS:
         if pattern not in settings["injected_fraud_counts"]:
             raise KeyError(f"injected_fraud_counts is missing an entry for '{pattern}' in {config_path}.")
+        if pattern not in settings["noise_probability"]:
+            raise KeyError(f"noise_probability is missing an entry for '{pattern}' in {config_path}.")
     return config
 
 
@@ -259,7 +267,7 @@ def apply_noise_mule(df: pd.DataFrame, rows: pd.Index, rng: np.random.Generator,
     return len(noisy_rows)
 
 
-def inject_patterns(df: pd.DataFrame, seed: int, noise_prob: float, counts: dict) -> pd.DataFrame:
+def inject_patterns(df: pd.DataFrame, seed: int, noise_probs: dict, counts: dict) -> pd.DataFrame:
     """Run the controlled injection for every pattern and print how many rows each one received."""
     # One RNG for ALL draws in this function — order is fixed for reproducibility.
     rng = np.random.default_rng(seed)
@@ -282,6 +290,8 @@ def inject_patterns(df: pd.DataFrame, seed: int, noise_prob: float, counts: dict
         df = label_as_fraud(df, rows, pattern)
         df = apply_balance_drain(df, rows, rng)
         df = stampers[pattern](df, rows, rng)
+        # Each pattern uses its own noise level (see the config for why they differ).
+        noise_prob = float(noise_probs[pattern])
         noisy = noisers[pattern](df, rows, rng, noise_prob)
         print(
             f"  {pattern}: {len(rows)} rows injected as fraud, "
@@ -326,7 +336,7 @@ def check_drain_realism(df: pd.DataFrame) -> None:
 def main() -> None:
     config = load_config(CONFIG_PATH)["adversarial_injection"]
     seed = config["seed"]
-    noise_prob = config["noise_probability"]
+    noise_probs = config["noise_probability"]
     counts = config["injected_fraud_counts"]
 
     # One global RNG for background signal synthesis. Pattern injection creates its own RNG from the same
@@ -343,7 +353,7 @@ def main() -> None:
     df = add_transaction_signals(df, rng)
 
     print("Injecting adversarial patterns...")
-    df = inject_patterns(df, seed, noise_prob, counts)
+    df = inject_patterns(df, seed, noise_probs, counts)
 
     # The key invariant: every adversarial row must be fraud. Checked before saving so a bad result never
     # overwrites the file on disk.
