@@ -29,3 +29,8 @@ models/**/*.onnx
 models/**/*.safetensors
 models/**/*.pkl
 models/**/*.parquet
+
+# Level 5 ML training artifacts
+catboost_info/
+mlruns/
+data/processed/
