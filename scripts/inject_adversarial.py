@@ -152,8 +152,8 @@ def add_transaction_signals(df: pd.DataFrame, rng: np.random.Generator) -> pd.Da
 # are never changed.
 #
 # All random draws come from ONE seeded RNG, in this fixed order:
-#   1. account_takeover: row selection, signal draws, noise draws
-#   2. mule_account:     row selection, signal draws, noise draws
+#   1. account_takeover: row selection, balance drain draws, signal draws, noise draws
+#   2. mule_account:     row selection, balance drain draws, signal draws, noise draws
 # Reordering or adding draws changes every downstream result.
 # =============================================================================
 
@@ -164,11 +164,26 @@ def init_labels(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def select_injection_rows(df: pd.DataFrame, rng: np.random.Generator, count: int, pattern: str) -> pd.Index:
-    """Randomly pick `count` rows that are not fraud and not already used by another pattern."""
+def eligible_pool(df: pd.DataFrame) -> pd.Index:
+    """Return the rows that may be turned into injected fraud."""
     # The pool excludes original fraud (so we never relabel real fraud) and rows already taken by an earlier
-    # pattern (so a row can never belong to two patterns).
-    pool = df.index[((df["isFraud"] == 0) & (~df["is_adversarial"])).to_numpy()]
+    # pattern (so a row can never belong to two patterns). It also excludes rows whose origin account was already
+    # empty (oldbalanceOrg == 0), because there is nothing to drain on those and the amount would come out as 0.
+    # Finally, only TRANSFER and CASH_OUT rows are allowed: injected fraud drains the origin account, which only
+    # makes physical sense for money-out transaction types. Real PaySim fraud occurs only in TRANSFER and
+    # CASH_OUT. A CASH_IN row that drains would be a data contradiction.
+    mask = (
+        (df["isFraud"] == 0)
+        & (~df["is_adversarial"])
+        & (df["oldbalanceOrg"] > 0)
+        & (df["type"].isin(["TRANSFER", "CASH_OUT"]))
+    )
+    return df.index[mask.to_numpy()]
+
+
+def select_injection_rows(df: pd.DataFrame, rng: np.random.Generator, count: int, pattern: str) -> pd.Index:
+    """Randomly pick `count` rows from the eligible pool."""
+    pool = eligible_pool(df)
     if count > len(pool):
         raise ValueError(f"Asked for {count} injected rows for {pattern} but only {len(pool)} are available.")
     return pd.Index(rng.choice(pool.to_numpy(), size=count, replace=False))
@@ -182,14 +197,33 @@ def label_as_fraud(df: pd.DataFrame, rows: pd.Index, pattern: str) -> pd.DataFra
     return df
 
 
+def apply_balance_drain(df: pd.DataFrame, rows: pd.Index, rng: np.random.Generator) -> pd.DataFrame:
+    """Make the chosen rows look like a fraudster emptying the origin account, with deliberate imperfection."""
+    old_balance = df.loc[rows, "oldbalanceOrg"].to_numpy()
+
+    # Leave a small non-zero residual (0–2% of the old balance) instead of exactly 0. PaySim's own fraud drains
+    # accounts to exactly 0, which is an easy giveaway; real fraud rarely empties an account to the last cent.
+    new_balance = np.round(old_balance * rng.uniform(0.0, 0.02, len(rows)), 2)
+
+    # The amount is roughly what left the account (old - new), times 0.97–1.03. Real fraud roughly empties the
+    # account, but fees and timing mean the arithmetic is not perfect — this deliberately breaks the 99.8%
+    # exact-math giveaway (oldbalanceOrg - amount == newbalanceOrig) found in PaySim-native fraud.
+    amount = np.round((old_balance - new_balance) * rng.uniform(0.97, 1.03, len(rows)), 2)
+
+    df.loc[rows, "newbalanceOrig"] = new_balance
+    df.loc[rows, "amount"] = amount
+    # Destination balances (oldbalanceDest, newbalanceDest) are left as they were.
+    return df
+
+
 def stamp_account_takeover_signals(df: pd.DataFrame, rows: pd.Index, rng: np.random.Generator) -> pd.DataFrame:
     """Give the chosen rows the account-takeover signature: new device, location spike, unusually large amount."""
     df.loc[rows, "new_device_flag"] = True
     df.loc[rows, "geo_velocity_spike"] = True
 
-    # "Unusually large amount" means amount is well above the account's usual amount. We leave amount alone,
-    # because it is real PaySim data, and instead set account_avg_amount to amount * U(0.1, 0.3). That makes
-    # amount 3.3x–10x the average, so the old condition (amount > 3 * account_avg_amount) is always met.
+    # "Unusually large amount" means amount is well above the account's usual amount. By now apply_balance_drain
+    # has already set amount, so we set account_avg_amount to amount * U(0.1, 0.3) AFTER that. This makes amount
+    # 3.3x–10x the average, so the old condition (amount > 3 * account_avg_amount) is always met.
     amounts = df.loc[rows, "amount"].to_numpy()
     df.loc[rows, "account_avg_amount"] = amounts * rng.uniform(0.1, 0.3, len(rows))
     return df
@@ -232,12 +266,21 @@ def inject_patterns(df: pd.DataFrame, seed: int, noise_prob: float, counts: dict
     df = init_labels(df)
     fraud_before = int(df["isFraud"].sum())
 
+    # Before injecting anything, make sure the eligible pool can cover the whole injection budget. Checked up
+    # front so a too-small pool fails with a clear message instead of partway through.
+    total_budget = sum(int(counts[p]) for p in PATTERNS)
+    pool_size = len(eligible_pool(df))
+    assert pool_size >= total_budget, (
+        f"Eligible pool has {pool_size} rows but the injection budget is {total_budget}"
+    )
+
     # account_takeover first, then mule_account (order matters: see the Section 4 comment).
     stampers = {"account_takeover": stamp_account_takeover_signals, "mule_account": stamp_mule_signals}
     noisers = {"account_takeover": apply_noise_account_takeover, "mule_account": apply_noise_mule}
     for pattern in PATTERNS:
         rows = select_injection_rows(df, rng, int(counts[pattern]), pattern)
         df = label_as_fraud(df, rows, pattern)
+        df = apply_balance_drain(df, rows, rng)
         df = stampers[pattern](df, rows, rng)
         noisy = noisers[pattern](df, rows, rng, noise_prob)
         print(
@@ -245,8 +288,7 @@ def inject_patterns(df: pd.DataFrame, seed: int, noise_prob: float, counts: dict
             f"{noisy} had their primary signal hidden (~{noise_prob * 100:.0f}% target)"
         )
 
-    injected_total = sum(int(counts[p]) for p in PATTERNS)
-    assert int(df["isFraud"].sum()) == fraud_before + injected_total, "Fraud count did not grow by the injected total"
+    assert int(df["isFraud"].sum()) == fraud_before + total_budget, "Fraud count did not grow by the injected total"
     return df
 
 
@@ -254,6 +296,23 @@ def check_adversarial_implies_fraud(df: pd.DataFrame) -> None:
     """Fail loudly if any adversarial row is not marked as fraud (the rule the whole dataset relies on)."""
     broken = int((df["is_adversarial"] & (df["isFraud"] != 1)).sum())
     assert broken == 0, f"{broken} rows have is_adversarial=True but isFraud != 1"
+
+
+def check_drain_realism(df: pd.DataFrame) -> None:
+    """Fail loudly if the injected balances are impossible or still show the exact-arithmetic giveaway."""
+    injected = df[df["is_adversarial"]]
+
+    # A drain can leave the account at zero or above, never below.
+    negative = int((injected["newbalanceOrig"] < 0).sum())
+    assert negative == 0, f"{negative} injected rows have a negative newbalanceOrig"
+
+    # Sanity check that the noise worked: PaySim-native fraud satisfies oldbalanceOrg - amount == newbalanceOrig
+    # about 99.8% of the time. If the injected rows did the same, models could learn that shortcut. Require that
+    # fewer than half of them match it (within 0.01).
+    gap = (injected["oldbalanceOrg"] - injected["amount"] - injected["newbalanceOrig"]).abs()
+    identity_holds = (gap <= 0.01).mean()
+    assert identity_holds < 0.5, f"Exact arithmetic identity holds for {identity_holds:.1%} of injected rows"
+    print(f"  Drain check: no negative balances; exact identity holds for {identity_holds:.1%} of injected rows")
 
 
 # =============================================================================
@@ -289,6 +348,7 @@ def main() -> None:
     # The key invariant: every adversarial row must be fraud. Checked before saving so a bad result never
     # overwrites the file on disk.
     check_adversarial_implies_fraud(df)
+    check_drain_realism(df)
 
     print("Saving enriched parquet with adversarial columns...")
     df.to_parquet(ENRICHED_PATH, compression="snappy", index=False)
