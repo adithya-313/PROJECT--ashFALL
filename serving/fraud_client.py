@@ -16,7 +16,7 @@ TRITON_URL = "localhost:8001"  # Triton's gRPC port on this machine (see docker-
 MODEL_NAME = "fraud_xgboost"
 INPUT_NAME = "input"
 PROBABILITY_OUTPUT = "probabilities"  # two columns per row: [P(not fraud), P(fraud)]
-MAX_BATCH = 8  # the model's max_batch_size in config.pbtxt
+MAX_BATCH = 128  # the model's max_batch_size in config.pbtxt (raised from 8 in Level 6 for the batch-size sweep)
 
 # The canonical calibrator. This pickle is the source of truth (later levels load it too); this file only READS it.
 CALIBRATOR_PATH = REPO_ROOT / "models" / "calibration" / "isotonic_calibrator.pkl"

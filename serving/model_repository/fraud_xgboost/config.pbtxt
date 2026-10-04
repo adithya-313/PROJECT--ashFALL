@@ -10,12 +10,17 @@ name: "fraud_xgboost"
 # Which engine runs the file. "onnxruntime" is Triton's ONNX backend (it runs tree models like this one on the CPU).
 backend: "onnxruntime"
 
-# The largest batch of rows Triton accepts in one request. This matches TRITON_MAX_BATCH=8 in .env.example.
+# The largest batch of rows Triton accepts in one request. This matches TRITON_MAX_BATCH in .env.example and
+# MAX_BATCH in serving/fraud_client.py (keep all three the same).
+#
+# Why 128 (Level 6): the batch-size sweep sends batches of 1, 8, 32 and 128 rows, and 128 also leaves headroom for
+# the Level 10 concurrency test. It was 8 before, and no document records why 8 was chosen. The ONNX file does not
+# need re-exporting for this: its batch dimension is not fixed (ONNX Runtime accepted 500 rows in a quick check).
 #
 # Why the shapes below look different from the ONNX file: the ONNX model declares its input as [None, 15], where
 # the first number is the batch size. When max_batch_size is greater than 0, Triton ADDS the batch dimension itself,
 # so this file lists only the per-row shape: 15 features in, not [batch, 15].
-max_batch_size: 8
+max_batch_size: 128
 
 # What goes in: one row = 15 float32 features, in the contract order (amount, oldbalanceOrg, newbalanceOrig,
 # oldbalanceDest, newbalanceDest, account_avg_amount, many_small_inbound_count, large_outbound_amount,

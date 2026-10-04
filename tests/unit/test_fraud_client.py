@@ -26,10 +26,10 @@ def test_row_must_be_finite():
         fraud_client.check_rows(np.full(15, np.nan))
 
 
-def test_at_most_8_rows_per_request():
-    assert fraud_client.check_rows(np.zeros((8, 15))).shape == (8, 15)
+def test_at_most_128_rows_per_request():
+    assert fraud_client.check_rows(np.zeros((128, 15))).shape == (128, 15)
     with pytest.raises(ValueError):
-        fraud_client.check_rows(np.zeros((9, 15)))
+        fraud_client.check_rows(np.zeros((129, 15)))
 
 
 def test_single_row_becomes_a_one_row_float32_table():
@@ -58,4 +58,4 @@ def test_numpy_calibration_matches_the_canonical_pickle():
 def test_constants_match_the_served_contract():
     assert fraud_client.MODEL_NAME == "fraud_xgboost"
     assert fraud_client.TRITON_URL.endswith(":8001")
-    assert len(fraud_client.FEATURE_ORDER) == 15 and fraud_client.MAX_BATCH == 8
+    assert len(fraud_client.FEATURE_ORDER) == 15 and fraud_client.MAX_BATCH == 128
