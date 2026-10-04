@@ -1,0 +1,32 @@
+{
+  "vectorization": {
+    "generated_at": "2026-10-04T23:20:45.129301+00:00",
+    "what": "compute_geo_velocity_batch CPU path: old per-row loop vs vectorized NumPy (parsing included in both)",
+    "timed_runs_per_size": 20,
+    "headline_batch_size": 10000,
+    "note": "In-process micro-benchmark on the dev laptop; no Triton or network. Text parsing is still a Python loop in the new path, so the speedup comes from vectorizing the maths only.",
+    "results": [
+      {
+        "batch_size": 100,
+        "old_loop_median_ms": 0.945,
+        "vectorized_median_ms": 0.168,
+        "speedup_x": 5.63,
+        "outputs_bit_identical": true
+      },
+      {
+        "batch_size": 1000,
+        "old_loop_median_ms": 9.536,
+        "vectorized_median_ms": 1.64,
+        "speedup_x": 5.82,
+        "outputs_bit_identical": true
+      },
+      {
+        "batch_size": 10000,
+        "old_loop_median_ms": 97.239,
+        "vectorized_median_ms": 20.186,
+        "speedup_x": 4.82,
+        "outputs_bit_identical": true
+      }
+    ]
+  }
+}
