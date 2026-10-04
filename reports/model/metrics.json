@@ -1,0 +1,12 @@
+{
+  "model_name": "xgboost",
+  "split": "test",
+  "test_rows": 1272524,
+  "test_fraud_rows": 6362,
+  "pr_auc": 0.9946638128997987,
+  "roc_auc": 0.999856475333007,
+  "dvc_data_md5": "87c929358f0950a86aac62ce382795e8",
+  "dvc_model_ubj_md5": "c5d82437c5bf278eba6e32daa93465dd",
+  "dvc_model_onnx_md5": "bbe3570958207ae2f981b07fcfd4ebf3",
+  "mlflow_evaluation_run_id": "780831d8c7be4feabff20d894a1abd62"
+}

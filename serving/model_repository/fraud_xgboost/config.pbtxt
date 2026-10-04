@@ -1,0 +1,60 @@
+# File: serving/model_repository/fraud_xgboost/config.pbtxt
+# Purpose: Tells Triton Inference Server how to serve the winning fraud XGBoost model (exported to ONNX in 5.6).
+#
+# The model file itself lives next to this file at fraud_xgboost/1/model.onnx ("1" is the model version). That file
+# is a copy of models/xgboost/model.onnx and is not committed to git (*.onnx is ignored; DVC tracks it in 5.10).
+
+# The name clients use to ask for this model. It must match the folder name (fraud_xgboost).
+name: "fraud_xgboost"
+
+# Which engine runs the file. "onnxruntime" is Triton's ONNX backend (it runs tree models like this one on the CPU).
+backend: "onnxruntime"
+
+# The largest batch of rows Triton accepts in one request. This matches TRITON_MAX_BATCH=8 in .env.example.
+#
+# Why the shapes below look different from the ONNX file: the ONNX model declares its input as [None, 15], where
+# the first number is the batch size. When max_batch_size is greater than 0, Triton ADDS the batch dimension itself,
+# so this file lists only the per-row shape: 15 features in, not [batch, 15].
+max_batch_size: 8
+
+# What goes in: one row = 15 float32 features, in the contract order (amount, oldbalanceOrg, newbalanceOrig,
+# oldbalanceDest, newbalanceDest, account_avg_amount, many_small_inbound_count, large_outbound_amount,
+# new_device_flag, geo_velocity_spike, type_CASH_IN, type_CASH_OUT, type_DEBIT, type_PAYMENT, type_TRANSFER).
+# The name must match the ONNX input name exactly.
+input [
+  {
+    name: "input"
+    data_type: TYPE_FP32
+    dims: [ 15 ]
+  }
+]
+
+# What comes out. Names and types must match the ONNX outputs exactly.
+#   label         - the predicted class per row (0 = not fraud, 1 = fraud), a 64-bit integer.
+#   probabilities - two numbers per row: [P(not fraud), P(fraud)]. Column 1 is the RAW (uncalibrated) fraud
+#                   probability; the isotonic calibrator is applied later, in the client.
+output [
+  {
+    name: "label"
+    data_type: TYPE_INT64
+    dims: [ 1 ]
+    # The ONNX model returns the label as a flat list (one number per row, with no extra dimension), but with
+    # batching Triton wants every per-row output to have at least one dimension. reshape tells Triton that the
+    # model's own per-row shape is "scalar" and that clients should see it as [1].
+    reshape { shape: [ ] }
+  },
+  {
+    name: "probabilities"
+    data_type: TYPE_FP32
+    dims: [ 2 ]
+  }
+]
+
+# Where to run: one copy of the model on the CPU. A GPU would not help here (a tree ensemble is not GPU work in
+# ONNX Runtime) and this laptop has little spare memory.
+instance_group [
+  {
+    count: 1
+    kind: KIND_CPU
+  }
+]

@@ -115,25 +115,28 @@ services:
       - "4317:4317"   # OTLP gRPC
       - "4318:4318"   # OTLP HTTP
 
-  # STUB — Level 0 only. Triton will be fully wired (model repository, health checks,
-  # GPU passthrough, gRPC/HTTP ports) at Level 4. For now it just needs to boot without
-  # errors so the compose stack comes up cleanly.
+  # Triton Inference Server — serves the winning fraud XGBoost model (ONNX) over gRPC (Level 5, sub-phase 5.7).
   #
   # Why this profile exists: the Triton image is ~10 GB from NVIDIA's registry.
-  # Pulling it blocks normal `docker compose up` and times out in CI.
-  # To start Triton intentionally, run: docker compose --profile gpu up
+  # Pulling it blocks normal `docker compose up` and times out in CI, so it only starts when asked for.
+  # To start ONLY Triton, run: docker compose --profile serving up triton
+  # (The older profile name "gpu" still works too. Triton runs on the CPU here, so "serving" is the accurate name.)
   triton:
     image: nvcr.io/nvidia/tritonserver:24.01-py3
-    command: tritonserver --model-store=/models
+    # --model-repository points at the folder holding fraud_xgboost/<version>/model.onnx and its config.pbtxt.
+    # (Earlier this mounted the whole models/ folder, but Triton would have treated every sub-folder there as a model.)
+    command: tritonserver --model-repository=/models
     ports:
+      # gRPC (inference requests) and Prometheus metrics. The HTTP port (8000 inside the container) is
+      # deliberately NOT published: host port 8000 already belongs to the FastAPI service.
       - "8001:8001"
       - "8002:8002"
     profiles:
+      - serving
       - gpu
     volumes:
-      # Mount the local models/ directory so Triton has a valid (empty) model store.
-      # An empty store is fine at stub level; real models land here in Level 4.
-      - ./models:/models
+      # Read-only: Triton only needs to read the model files. The folder is a dedicated model repository under serving/.
+      - ./serving/model_repository:/models:ro
 
 volumes:
   postgres_data:

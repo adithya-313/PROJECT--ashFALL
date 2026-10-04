@@ -2,6 +2,9 @@
 # Purpose: Sub-phase 5.4 - retrain the three tuned models on the full train split, score them once on the test
 #          split, pick the winner by PR-AUC, and produce per-segment metrics, a confusion matrix, feature
 #          importance and a SHAP explainer (saved to the frozen path models/xgboost/shap_model.pkl).
+#          Sub-phase 5.9 adds a fairness table (false-positive rate by segment): run with --fairness.
+#          Sub-phase 5.11 adds --metrics: writes reports/model/metrics.json, the file the CI quality gate reads.
+import argparse
 import json
 import sys
 import time
@@ -15,6 +18,8 @@ import mlflow
 import numpy as np
 import pandas as pd
 import shap
+import xgboost
+import yaml
 from sklearn.metrics import average_precision_score, confusion_matrix, roc_auc_score
 from sklearn.model_selection import train_test_split
 
@@ -53,6 +58,22 @@ SHAP_PLOT_PATH = REPORT_DIR / "fraud_shap_summary.png"
 # The frozen path. Its name says "xgboost", but it holds the explainer of whichever model actually wins.
 SHAP_PICKLE_PATH = REPO_ROOT / "models" / "xgboost" / "shap_model.pkl"
 SHAP_NOTE_PATH = REPO_ROOT / "models" / "xgboost" / "shap_model_NOTE.md"
+
+# Sub-phase 5.9 (fairness). The saved winner is RELOADED, not retrained, so the fairness numbers describe exactly the
+# model that was calibrated and exported.
+SAVED_MODEL_PATH = REPO_ROOT / "models" / "xgboost" / "model.ubj"
+CALIBRATOR_PATH = REPO_ROOT / "models" / "calibration" / "isotonic_calibrator.pkl"
+FAIRNESS_PATH = REPORT_DIR / "fairness_table.md"
+
+# The three decision thresholds the fairness table reports. They are on TWO DIFFERENT SCALES and are labelled so:
+# "raw" is the model's own score (what the 5.4 confusion matrix used); "calibrated" is the score after isotonic
+# calibration (the scale the 5.5 operating points were chosen on). A raw 0.5 is NOT the same decision as 0.5 calibrated.
+FAIRNESS_THRESHOLDS = [
+    {"key": "raw_0.5", "scale": "raw", "value": 0.5, "label": "raw score >= 0.5 (as in the confusion matrix)"},
+    {"key": "cal_0.42", "scale": "calibrated", "value": 0.42, "label": "calibrated >= 0.42 (F1-optimal)"},
+    {"key": "cal_0.03", "scale": "calibrated", "value": 0.03, "label": "calibrated >= 0.03 (high-recall)"},
+]
+MERCHANT_TIERS = ["high", "medium", "low"]
 
 TUNING_EXPERIMENT = "level5_fraud_tuning"
 EVALUATION_EXPERIMENT = "level5_fraud_evaluation"
@@ -394,6 +415,272 @@ def log_to_mlflow(context: dict) -> str:
         return run.info.run_id
 
 
+# --- Sub-phase 5.9: fairness (false-positive rate by segment) -----------------------------------------------
+def wilson_interval(events: int, total: int, z: float = 1.96) -> tuple[float, float]:
+    """95% Wilson confidence interval for a rate of `events` out of `total` (works even when events is 0)."""
+    if total == 0:
+        return float("nan"), float("nan")
+    rate = events / total
+    denominator = 1 + z * z / total
+    centre = (rate + z * z / (2 * total)) / denominator
+    half_width = z * np.sqrt(rate * (1 - rate) / total + z * z / (4 * total * total)) / denominator
+    # A rate cannot go below 0 or above 1; tiny floating-point rounding must not show up as '-0.00%'.
+    return float(max(0.0, centre - half_width)), float(min(1.0, centre + half_width))
+
+
+def load_saved_winner() -> xgboost.XGBClassifier:
+    """Reload the saved winning XGBoost from disk (never retrain it here)."""
+    model = xgboost.XGBClassifier()
+    model.load_model(str(SAVED_MODEL_PATH))
+    return model
+
+
+def score_raw_and_calibrated(model: xgboost.XGBClassifier, X_test: pd.DataFrame) -> dict:
+    """Raw fraud probability from the model, and the calibrated probability from the saved isotonic calibrator."""
+    raw = model.predict_proba(X_test)[:, 1]
+    calibrator = joblib.load(CALIBRATOR_PATH)
+    return {"raw": raw, "calibrated": calibrator.predict(raw)}
+
+
+def fairness_segments(y: pd.Series, segments: pd.DataFrame) -> tuple[list[tuple[str, str, pd.Series]], dict]:
+    """The segments to compare: transaction type, amount tier and (confounded, see the note) merchant risk tier."""
+    groups = []
+    for transaction_type in ALL_TYPES:
+        groups.append(("Transaction type", transaction_type, segments["type"] == transaction_type))
+
+    # Amount tiers use the test split's own quartile cut points, exactly as in the performance table.
+    q1, q3 = segments["amount"].quantile([0.25, 0.75])
+    groups.append(("Amount tier", "bottom quartile", segments["amount"] <= q1))
+    groups.append(("Amount tier", "middle two quartiles", (segments["amount"] > q1) & (segments["amount"] < q3)))
+    groups.append(("Amount tier", "top quartile", segments["amount"] >= q3))
+
+    for tier in MERCHANT_TIERS:
+        groups.append(("Merchant risk tier (confounded)", tier, segments["merchant_risk_tier"] == tier))
+    groups.append(("All rows", "all", pd.Series(True, index=y.index)))
+    return groups, {"q1": float(q1), "q3": float(q3)}
+
+
+def rate_row(y: pd.Series, scores: dict, mask: pd.Series, group: str, label: str) -> dict:
+    """Row counts plus, at every threshold: false positives, FPR (FP / non-fraud) and recall (TP / fraud)."""
+    actual_fraud = (y == 1) & mask
+    actual_clean = (y == 0) & mask
+    row = {"group": group, "segment": label, "rows": int(mask.sum()), "fraud": int(actual_fraud.sum()),
+           "non_fraud": int(actual_clean.sum()), "thresholds": {}}
+    for threshold in FAIRNESS_THRESHOLDS:
+        flagged = pd.Series(scores[threshold["scale"]] >= threshold["value"], index=y.index)
+        false_positives = int((flagged & actual_clean).sum())
+        true_positives = int((flagged & actual_fraud).sum())
+        row["thresholds"][threshold["key"]] = {
+            "fp": false_positives,
+            "fpr": false_positives / row["non_fraud"] if row["non_fraud"] else None,
+            "recall": true_positives / row["fraud"] if row["fraud"] else None,
+        }
+    # The uncertainty of the FPR at the first (raw 0.5) threshold, since small segments give shaky rates.
+    fp_first = row["thresholds"][FAIRNESS_THRESHOLDS[0]["key"]]["fp"]
+    row["fpr_interval"] = wilson_interval(fp_first, row["non_fraud"])
+    return row
+
+
+def compute_fairness_rows(y: pd.Series, scores: dict, segments: pd.DataFrame) -> tuple[list[dict], dict, dict]:
+    """Compute the fairness rows for every segment; also return the amount cut points and the merchant-tier facts."""
+    groups, cuts = fairness_segments(y, segments)
+    rows = [rate_row(y, scores, mask, group, label) for group, label, mask in groups]
+
+    # Facts about the merchant-tier confound, measured from the data (used to write the caveat in plain words).
+    confound = {}
+    for tier in MERCHANT_TIERS:
+        in_tier = segments["merchant_risk_tier"] == tier
+        confound[tier] = {"types": sorted(segments.loc[in_tier, "type"].unique().tolist()),
+                          "fraud": int(((y == 1) & in_tier).sum()), "rows": int(in_tier.sum())}
+    return rows, cuts, confound
+
+
+def percent(value, digits: int = 3) -> str:
+    """Format a rate as a percentage, or a dash if it does not exist."""
+    return "-" if value is None else f"{value * 100:.{digits}f}%"
+
+
+def merchant_caveat(rows: list[dict], confound: dict) -> list[str]:
+    """The plain-words caveat about the merchant-tier rows, built from the measured facts."""
+    first_key = FAIRNESS_THRESHOLDS[0]["key"]
+    high = next(r for r in rows if r["segment"] == "high" and r["group"].startswith("Merchant"))
+    low_bound, upper_bound = high["fpr_interval"]
+    only_payment = all(confound[tier]["types"] == ["PAYMENT"] for tier in ("high", "low"))
+    fraud_outside_medium = sum(confound[tier]["fraud"] for tier in ("high", "low"))
+    lines = ["## Note on the merchant risk tier rows (read before using them)", ""]
+    if only_payment and fraud_outside_medium == 0:
+        lines.append(
+            "Merchant risk tier is confounded with transaction type. The `high` and `low` tiers exist only on PAYMENT "
+            "rows (payments to merchant accounts), and PAYMENT rows contain no fraud at all. Every other transaction "
+            f"type is assigned `medium`, and all {confound['medium']['fraud']:,} test fraud rows are in `medium`. "
+            "So the 0.000% false-positive rates for `high` and `low` are NOT evidence of fair treatment: they only "
+            "show that the model correctly treats PAYMENT rows as non-fraud. The real driver is transaction type, "
+            "which is why that is the fairness axis to read here."
+        )
+    else:
+        lines.append("Merchant risk tier overlaps with transaction type; read these rows with that in mind.")
+    lines += [
+        "",
+        f"The `high` tier has only {high['rows']:,} rows ({high['fraud']} fraud, {high['non_fraud']:,} non-fraud). Its "
+        f"false-positive count at the first threshold is {high['thresholds'][first_key]['fp']} of "
+        f"{high['non_fraud']:,}, with a 95% interval of {percent(low_bound, 2)} to {percent(upper_bound, 2)}. "
+        "That supports no conclusion about the `high` tier.",
+        "",
+    ]
+    return lines
+
+
+def fairness_markdown(rows: list[dict], cuts: dict, confound: dict) -> str:
+    """Build the full text of reports/model/fairness_table.md."""
+    first_label = FAIRNESS_THRESHOLDS[0]["label"]
+    threshold_headers = " | ".join(f"FPR, {t['label']}" for t in FAIRNESS_THRESHOLDS)
+    recall_headers = " | ".join(f"Recall, {t['label']}" for t in FAIRNESS_THRESHOLDS)
+    lines = [
+        "# Fairness table: false-positive rate by segment (winner: XGBoost, test split)",
+        "",
+        "False-positive rate (FPR) = false positives / actual non-fraud rows in the segment. A false positive is a "
+        "legitimate transaction the model flags as fraud. FPR depends on the decision threshold, so it is reported at "
+        "three thresholds. **They are on two different scales**: `raw` is the model's own score (the scale the "
+        "confusion matrix in `evaluation.md` used), `calibrated` is the score after isotonic calibration. A raw 0.5 is "
+        "not the same decision as a calibrated 0.5. No threshold is recommended here; the operating point is a "
+        "business decision.",
+        "",
+        "Each cell shows FPR (number of false positives). The interval column is the 95% Wilson confidence interval of "
+        f"the FPR at `{first_label}`; wide intervals mean a small sample.",
+        "",
+        f"| Group | Segment | Rows | Non-fraud | {threshold_headers} | 95% interval (first threshold) |",
+        "|---|---|---|---|" + "---|" * (len(FAIRNESS_THRESHOLDS) + 1),
+    ]
+    for row in rows:
+        cells = " | ".join(f"{percent(row['thresholds'][t['key']]['fpr'])} ({row['thresholds'][t['key']]['fp']:,})"
+                           for t in FAIRNESS_THRESHOLDS)
+        low_bound, upper_bound = row["fpr_interval"]
+        lines.append(f"| {row['group']} | {row['segment']} | {row['rows']:,} | {row['non_fraud']:,} | {cells} | "
+                     f"{percent(low_bound, 2)} to {percent(upper_bound, 2)} |")
+    lines += [
+        "",
+        f"Amount tiers use the test split's own quartile cut points: {cuts['q1']:,.2f} and {cuts['q3']:,.2f}.",
+        "",
+        "## Recall (share of actual fraud caught) at the same thresholds",
+        "",
+        "FPR alone can hide missed fraud, so recall is shown for segments that contain fraud (undefined otherwise).",
+        "",
+        f"| Group | Segment | Fraud rows | {recall_headers} |",
+        "|---|---|---|" + "---|" * len(FAIRNESS_THRESHOLDS),
+    ]
+    for row in rows:
+        if row["fraud"] == 0:
+            continue
+        cells = " | ".join(percent(row["thresholds"][t["key"]]["recall"], 2) for t in FAIRNESS_THRESHOLDS)
+        lines.append(f"| {row['group']} | {row['segment']} | {row['fraud']:,} | {cells} |")
+    lines += ["", *merchant_caveat(rows, confound)]
+    return "\n".join(lines) + "\n"
+
+
+def write_fairness_table(rows: list[dict], cuts: dict, confound: dict) -> None:
+    """Write the fairness table file."""
+    FAIRNESS_PATH.write_text(fairness_markdown(rows, cuts, confound))
+
+
+def run_fairness() -> int:
+    """5.9: reload the saved winner, compute FPR by segment at three thresholds, and write the fairness table."""
+    X_test, y_test, segments = load_test_with_segments()
+    scores = score_raw_and_calibrated(load_saved_winner(), X_test)
+    rows, cuts, confound = compute_fairness_rows(y_test, scores, segments)
+
+    # Consistency check against the 5.4 confusion matrix: the overall raw-0.5 numbers must be the same.
+    first_key = FAIRNESS_THRESHOLDS[0]["key"]
+    overall = next(r for r in rows if r["group"] == "All rows")
+    matrix = confusion_counts(y_test, scores["raw"], FAIRNESS_THRESHOLDS[0]["value"])
+    assert overall["thresholds"][first_key]["fp"] == matrix["fp"], "FPR disagrees with the confusion matrix"
+
+    write_fairness_table(rows, cuts, confound)
+    print(f"Wrote {FAIRNESS_PATH.relative_to(REPO_ROOT).as_posix()} (overall raw>=0.5 false positives "
+          f"{matrix['fp']:,}, matches the confusion matrix)")
+    return 0
+
+
+# --- 5.11: the committed metrics file that CI reads ------------------------------------------------------------
+# CI runs on a blank cloud machine. It cannot reach the local MLflow store, the DVC-local data or the GPU-trained
+# model, so it cannot work out the model's score itself. This file holds the score instead, and the CI gate
+# (scripts/ci_quality_gate.py) reads it. The DVC hashes inside let the gate notice a STALE file (artifacts changed,
+# metrics not refreshed). Run it AFTER the model artifacts are final and DVC-tracked:
+#     python scripts/fraud_evaluation.py --metrics
+METRICS_PATH = REPORT_DIR / "metrics.json"
+METRICS_DVC_FILES = {
+    "dvc_data_md5": REPO_ROOT / "data" / "enriched" / "paysim_enriched.parquet.dvc",
+    "dvc_model_ubj_md5": REPO_ROOT / "models" / "xgboost" / "model.ubj.dvc",
+    "dvc_model_onnx_md5": REPO_ROOT / "models" / "xgboost" / "model.onnx.dvc",
+}
+
+
+def read_dvc_md5(dvc_file: Path) -> str:
+    """Read the md5 that DVC recorded in a .dvc pointer file."""
+    with open(dvc_file) as pointer_file:
+        return yaml.safe_load(pointer_file)["outs"][0]["md5"]
+
+
+def find_evaluation_run_id() -> str | None:
+    """Look up the MLflow run that holds the 5.4 evaluation of the winner (None if the store has no such run)."""
+    setup_mlflow(EVALUATION_EXPERIMENT)
+    client = mlflow.MlflowClient()
+    experiment = client.get_experiment_by_name(EVALUATION_EXPERIMENT)
+    runs = client.search_runs([experiment.experiment_id], filter_string="tags.mlflow.runName = 'evaluation_xgboost'")
+    return runs[0].info.run_id if runs else None
+
+
+def train_on_shuffled_labels() -> xgboost.XGBClassifier:
+    """Throwaway demo model: the tuned XGBoost trained on RANDOMLY SHUFFLED labels, so it cannot have learned fraud.
+
+    It exists only to prove the CI gate rejects a bad model (its PR-AUC should land near the fraud rate, ~0.005).
+    """
+    X_train, y_train = load_train_features()
+    shuffled = pd.Series(np.random.default_rng(RANDOM_SEED).permutation(y_train.to_numpy()), index=y_train.index)
+    print(f"Training on {len(X_train):,} rows with shuffled labels...")
+    return fit_full_train("xgboost", load_best_params()["xgboost"], X_train, shuffled)["model"]
+
+
+def build_metrics(model: xgboost.XGBClassifier, shuffled: bool) -> dict:
+    """Score a model on the test split and return the dictionary that becomes metrics.json."""
+    X_test, y_test, _ = load_test_with_segments()
+    probability = model.predict_proba(X_test)[:, 1]
+    metrics = {
+        "model_name": "xgboost_shuffled_labels_DEMO" if shuffled else "xgboost",
+        "split": "test",
+        "test_rows": int(len(y_test)),
+        "test_fraud_rows": int(y_test.sum()),
+        "pr_auc": float(average_precision_score(y_test, probability)),
+        "roc_auc": float(roc_auc_score(y_test, probability)),
+    }
+    if shuffled:
+        # A demo file must not claim to describe the real artifacts, so it carries no hashes.
+        metrics.update({key: None for key in METRICS_DVC_FILES})
+        metrics["mlflow_evaluation_run_id"] = None
+    else:
+        metrics.update({key: read_dvc_md5(path) for key, path in METRICS_DVC_FILES.items()})
+        metrics["mlflow_evaluation_run_id"] = find_evaluation_run_id()
+    return metrics
+
+
+def run_metrics(argv: list[str]) -> int:
+    """5.11: reload the saved winner (no retrain), score the test split, and write metrics.json for the CI gate."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--metrics", action="store_true")
+    parser.add_argument("--shuffle-labels", action="store_true", help="train a deliberately bad demo model instead")
+    parser.add_argument("--output", type=Path, default=METRICS_PATH)
+    args = parser.parse_args(argv)
+    if args.shuffle_labels and args.output.resolve() == METRICS_PATH.resolve():
+        print("Refusing to write a shuffled-label demo over the real metrics.json; pass a different --output.")
+        return 2
+
+    model = train_on_shuffled_labels() if args.shuffle_labels else load_saved_winner()
+    metrics = build_metrics(model, args.shuffle_labels)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(metrics, indent=2) + "\n")
+    print(f"Wrote {args.output}\n{json.dumps(metrics, indent=2)}")
+    return 0
+
+
 # --- Acceptance checks --------------------------------------------------------------------------------------
 def check_results(context: dict) -> bool:
     """Acceptance: winner follows the rule, every segment has a real number or 'undefined', SHAP pickle reloads."""
@@ -486,4 +773,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Default: the full 5.4 evaluation (retrains the tuned models). With --fairness: only the 5.9 fairness table.
+    # With --metrics: only the 5.11 metrics.json for the CI gate. The last two reload the saved winner, no retrain.
+    if "--metrics" in sys.argv[1:]:
+        sys.exit(run_metrics(sys.argv[1:]))
+    sys.exit(run_fairness() if "--fairness" in sys.argv[1:] else main())

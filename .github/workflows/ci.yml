@@ -106,3 +106,41 @@ jobs:
 
       - name: Run schema gate
         run: python tests/schema/test_enriched_schema.py
+
+  # Sub-phase 5.11: model-quality gate. CI has no data, GPU or MLflow store, so it cannot re-score the model.
+  # It reads the committed reports/model/metrics.json and reports/calibration/calibration_bins.json instead and
+  # fails the build if PR-AUC is below MODEL_AUC_THRESHOLD or any calibration bin is off by more than 10 points.
+  # Runs independently of the other jobs. Standard library only, so there is nothing to pip install.
+  model-quality-gate:
+    name: Model quality gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Same pattern as compose-boot: the threshold lives in .env.example, CI copies it to .env.
+      - name: Create .env from example
+        run: cp .env.example .env
+
+      - name: Run quality gate on the committed metrics
+        run: python scripts/ci_quality_gate.py
+
+      # Proof the gate really blocks a bad model: feed it a fixture with PR-AUC 0.5 and require that it fails
+      # with exit code 1 AND the PR-AUC failure message (so a crash or typo cannot pass this step by accident).
+      - name: "Proof: gate rejects a degraded model"
+        run: |
+          code=0
+          output=$(python scripts/ci_quality_gate.py --metrics tests/fixtures/metrics_degraded.json 2>&1) || code=$?
+          echo "$output"
+          if [ "$code" = "1" ] && echo "$output" | grep -q "FAIL PR-AUC"; then
+            echo "Gate correctly failed the degraded model"
+          else
+            echo "Expected the gate to fail on PR-AUC (exit 1), got exit $code"
+            exit 1
+          fi
