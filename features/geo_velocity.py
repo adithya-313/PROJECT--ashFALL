@@ -203,6 +203,8 @@ def compute_geo_velocity_cpu_vectorized(
     The caller has already removed rows that cannot have a speed (no previous location, or elapsed time of zero or
     less), so every row here is a real calculation. Returns one speed per entry of valid_indices, in the same order.
     """
+    # NOTE: this text parsing is still per-row. See 'future_improvement' in reports/benchmarks/level6_batch.json;
+    #       storing coordinates as numbers would remove it.
     # Step 1: turn the text into numbers. Text parsing cannot be done by NumPy, so this stays a small per-row loop.
     # It follows the same order as compute_geo_velocity (current location, then last location), so a bad value
     # raises the same ValueError for the same row as before.

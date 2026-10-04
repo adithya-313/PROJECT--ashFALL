@@ -27,6 +27,12 @@
         "speedup_x": 4.82,
         "outputs_bit_identical": true
       }
-    ]
+    ],
+    "future_improvement": {
+      "idea": "Store geo coordinates as numeric latitude/longitude instead of a 'lat,lon' text string, so no per-row text parsing is needed and the whole operation vectorizes.",
+      "why_it_helps": "Parsing text is still a per-row Python loop and is the main reason the current speedup is about 5x rather than larger.",
+      "why_deferred": "compute_geo_velocity_batch has no live caller yet; changing the data representation touches wherever these strings are produced or consumed, and the transactions schema locks at Level 7 and the shadow-log schema at Level 9.",
+      "right_time": "Level 10.5, when the agent's get_geo_velocity tool makes this feature live. Design the numeric representation once, then."
+    }
   }
 }
