@@ -29,3 +29,18 @@ models/**/*.onnx
 models/**/*.safetensors
 models/**/*.pkl
 models/**/*.parquet
+
+# Level 5 ML training artifacts
+catboost_info/
+mlruns/
+data/processed/
+data/enriched/*.bak
+graphify-out/
+
+# graphify (local code-graph tool — personal tooling, not part of the repo)
+.claude/
+CLAUDE.md
+.gitattributes
+
+# MLflow local SQLite tracking database
+mlflow.db

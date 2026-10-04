@@ -19,6 +19,9 @@ Why each assertion exists:
   - is_adversarial cardinality == 2: only True and False are valid. A third value
     (e.g. None, 'maybe', NaN) would silently corrupt the binary fraud label used
     in model training.
+  - is_adversarial implies isFraud == 1: injected patterns represent fraud by design, so a row labelled
+    adversarial but not fraud means the patterns have come unlinked from the fraud label (the original
+    injection bug). This whole-frame rule makes that bug impossible to reintroduce unnoticed.
   - adversarial_pattern_type allowed values: any value outside the known set means
     a new pattern was injected without updating the schema — a breaking change that
     must be caught immediately.
@@ -130,6 +133,15 @@ ENRICHED_SCHEMA = pa.DataFrameSchema(
             nullable=True,
         ),
     },
+    # Whole-frame rule: for every row, either it is not adversarial, or it is fraud. The lambda receives the
+    # whole DataFrame and returns one True/False per row; any False row is reported as a failure.
+    checks=[
+        pa.Check(
+            lambda df: (~df["is_adversarial"]) | (df["isFraud"] == 1),
+            element_wise=False,
+            error="is_adversarial=True rows must have isFraud=1",
+        ),
+    ],
     strict=False,   # extra columns are allowed (future-proofing)
     coerce=False,   # never silently cast types — fail loudly on dtype mismatch
 )

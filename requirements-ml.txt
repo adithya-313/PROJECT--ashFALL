@@ -1,0 +1,39 @@
+# ML training pipeline dependencies (Level 5). Kept separate from requirements.txt, which serves the API layer.
+
+# === Core ML libraries ===
+scikit-learn==1.8.0
+xgboost==3.2.0
+lightgbm==4.7.0
+catboost==1.2.10
+
+# === Hyperparameter tuning ===
+optuna==4.7.0
+
+# === Model export ===
+onnx==1.20.1
+onnxruntime==1.24.2
+# skl2onnx: converts scikit-learn models/pipelines to ONNX
+skl2onnx==1.20.0
+# onnxmltools: converts boosted-tree models to ONNX
+onnxmltools==1.16.0
+
+# === Experiment tracking ===
+mlflow==3.15.1
+
+# === Explainability ===
+shap==0.51.0
+
+# === Data ===
+pandas==2.3.3
+pyarrow==23.0.1
+numpy==1.26.4
+
+# === Visualization ===
+matplotlib==3.10.8
+seaborn==0.13.2
+
+# === Serving client ===
+tritonclient==2.68.0
+
+# === Calibration (uses scikit-learn, no extra dep) ===
+# isotonic regression is in sklearn — no separate package needed
