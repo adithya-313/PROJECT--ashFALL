@@ -1,0 +1,6 @@
+{
+  "model_name": "deliberately_degraded_fixture",
+  "split": "test",
+  "pr_auc": 0.5,
+  "roc_auc": 0.5
+}

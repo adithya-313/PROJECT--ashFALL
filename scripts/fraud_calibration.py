@@ -1,6 +1,9 @@
 # File: scripts/fraud_calibration.py
 # Purpose: Sub-phase 5.5 - retrain and SAVE the winning XGBoost, calibrate its scores with isotonic regression on
 #          the calibration split, check reliability (10 bins within 10 percentage points), and analyse thresholds.
+#          Sub-phase 5.11 also writes the calibration-split bin table to reports/calibration/calibration_bins.json
+#          (the file the CI gate checks); run with --bins-only to rewrite just that file from the saved model.
+import json
 import sys
 import time
 from pathlib import Path
@@ -44,6 +47,8 @@ REPORT_DIR = REPO_ROOT / "reports" / "calibration"
 RELIABILITY_PLOT_PATH = REPORT_DIR / "reliability_diagram.png"
 THRESHOLD_PLOT_PATH = REPORT_DIR / "threshold_analysis.png"
 SUMMARY_PATH = REPORT_DIR / "calibration_summary.md"
+# CI cannot reach the data or the model, so the CI gate checks this committed table instead (see ci_quality_gate.py).
+BINS_PATH = REPORT_DIR / "calibration_bins.json"
 
 EXPERIMENT_NAME = "level5_fraud_calibration"
 RANDOM_SEED = 42
@@ -116,6 +121,24 @@ def reliability_table(y: pd.Series, probability: np.ndarray, n_bins: int = N_BIN
 def check_bins(rows: list[dict], tolerance: float = BIN_TOLERANCE) -> bool:
     """True when every non-empty bin is within `tolerance` of the diagonal; empty bins cannot be checked."""
     return all(row["deviation"] <= tolerance for row in rows if row["deviation"] is not None)
+
+
+def write_bins_json(rows: list[dict], row_count: int) -> None:
+    """Save the CALIBRATION-split reliability table for the CI gate. (The test-split table is not enforced: its
+    sparse middle bins swing too easily, see calibration_summary.md.)"""
+    payload = {"split": "calibration", "rows": row_count, "n_bins": N_BINS, "data_dvc_md5": read_dvc_data_hash(),
+               "bins": rows}
+    BINS_PATH.write_text(json.dumps(payload, indent=2) + "\n")
+
+
+def run_bins_only() -> int:
+    """Rewrite calibration_bins.json from the SAVED model and calibrator (no retraining)."""
+    X_cal, y_cal = load_features(CALIBRATION_PATH)
+    raw_scores = load_saved_model().predict_proba(X_cal)[:, 1]
+    rows = reliability_table(y_cal, joblib.load(CALIBRATOR_PATH).predict(raw_scores))
+    write_bins_json(rows, len(y_cal))
+    print(f"Wrote {BINS_PATH.relative_to(REPO_ROOT).as_posix()}; all non-empty bins within 10pp: {check_bins(rows)}")
+    return 0 if check_bins(rows) else 1
 
 
 def check_calibrated_probabilities(calibrator: IsotonicRegression, raw_scores: np.ndarray) -> dict:
@@ -337,6 +360,7 @@ def main() -> int:
     test_bins = reliability_table(y_test, prob_test)
     checks = check_calibrated_probabilities(calibrator, raw_cal)
     save_reliability_plot(calibration_bins, test_bins)
+    write_bins_json(calibration_bins, len(y_cal))
 
     # Step 4: thresholds are CHOSEN on the calibration split and only CONFIRMED on the test split.
     sweep = sweep_thresholds(y_cal, prob_cal)
@@ -371,6 +395,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if "--bins-only" in sys.argv[1:]:
+        sys.exit(run_bins_only())
     start = time.perf_counter()
     exit_code = main()
     print(f"Total {time.perf_counter() - start:.0f}s")

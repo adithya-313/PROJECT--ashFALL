@@ -3,6 +3,8 @@
 #          split, pick the winner by PR-AUC, and produce per-segment metrics, a confusion matrix, feature
 #          importance and a SHAP explainer (saved to the frozen path models/xgboost/shap_model.pkl).
 #          Sub-phase 5.9 adds a fairness table (false-positive rate by segment): run with --fairness.
+#          Sub-phase 5.11 adds --metrics: writes reports/model/metrics.json, the file the CI quality gate reads.
+import argparse
 import json
 import sys
 import time
@@ -17,6 +19,7 @@ import numpy as np
 import pandas as pd
 import shap
 import xgboost
+import yaml
 from sklearn.metrics import average_precision_score, confusion_matrix, roc_auc_score
 from sklearn.model_selection import train_test_split
 
@@ -597,6 +600,87 @@ def run_fairness() -> int:
     return 0
 
 
+# --- 5.11: the committed metrics file that CI reads ------------------------------------------------------------
+# CI runs on a blank cloud machine. It cannot reach the local MLflow store, the DVC-local data or the GPU-trained
+# model, so it cannot work out the model's score itself. This file holds the score instead, and the CI gate
+# (scripts/ci_quality_gate.py) reads it. The DVC hashes inside let the gate notice a STALE file (artifacts changed,
+# metrics not refreshed). Run it AFTER the model artifacts are final and DVC-tracked:
+#     python scripts/fraud_evaluation.py --metrics
+METRICS_PATH = REPORT_DIR / "metrics.json"
+METRICS_DVC_FILES = {
+    "dvc_data_md5": REPO_ROOT / "data" / "enriched" / "paysim_enriched.parquet.dvc",
+    "dvc_model_ubj_md5": REPO_ROOT / "models" / "xgboost" / "model.ubj.dvc",
+    "dvc_model_onnx_md5": REPO_ROOT / "models" / "xgboost" / "model.onnx.dvc",
+}
+
+
+def read_dvc_md5(dvc_file: Path) -> str:
+    """Read the md5 that DVC recorded in a .dvc pointer file."""
+    with open(dvc_file) as pointer_file:
+        return yaml.safe_load(pointer_file)["outs"][0]["md5"]
+
+
+def find_evaluation_run_id() -> str | None:
+    """Look up the MLflow run that holds the 5.4 evaluation of the winner (None if the store has no such run)."""
+    setup_mlflow(EVALUATION_EXPERIMENT)
+    client = mlflow.MlflowClient()
+    experiment = client.get_experiment_by_name(EVALUATION_EXPERIMENT)
+    runs = client.search_runs([experiment.experiment_id], filter_string="tags.mlflow.runName = 'evaluation_xgboost'")
+    return runs[0].info.run_id if runs else None
+
+
+def train_on_shuffled_labels() -> xgboost.XGBClassifier:
+    """Throwaway demo model: the tuned XGBoost trained on RANDOMLY SHUFFLED labels, so it cannot have learned fraud.
+
+    It exists only to prove the CI gate rejects a bad model (its PR-AUC should land near the fraud rate, ~0.005).
+    """
+    X_train, y_train = load_train_features()
+    shuffled = pd.Series(np.random.default_rng(RANDOM_SEED).permutation(y_train.to_numpy()), index=y_train.index)
+    print(f"Training on {len(X_train):,} rows with shuffled labels...")
+    return fit_full_train("xgboost", load_best_params()["xgboost"], X_train, shuffled)["model"]
+
+
+def build_metrics(model: xgboost.XGBClassifier, shuffled: bool) -> dict:
+    """Score a model on the test split and return the dictionary that becomes metrics.json."""
+    X_test, y_test, _ = load_test_with_segments()
+    probability = model.predict_proba(X_test)[:, 1]
+    metrics = {
+        "model_name": "xgboost_shuffled_labels_DEMO" if shuffled else "xgboost",
+        "split": "test",
+        "test_rows": int(len(y_test)),
+        "test_fraud_rows": int(y_test.sum()),
+        "pr_auc": float(average_precision_score(y_test, probability)),
+        "roc_auc": float(roc_auc_score(y_test, probability)),
+    }
+    if shuffled:
+        # A demo file must not claim to describe the real artifacts, so it carries no hashes.
+        metrics.update({key: None for key in METRICS_DVC_FILES})
+        metrics["mlflow_evaluation_run_id"] = None
+    else:
+        metrics.update({key: read_dvc_md5(path) for key, path in METRICS_DVC_FILES.items()})
+        metrics["mlflow_evaluation_run_id"] = find_evaluation_run_id()
+    return metrics
+
+
+def run_metrics(argv: list[str]) -> int:
+    """5.11: reload the saved winner (no retrain), score the test split, and write metrics.json for the CI gate."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--metrics", action="store_true")
+    parser.add_argument("--shuffle-labels", action="store_true", help="train a deliberately bad demo model instead")
+    parser.add_argument("--output", type=Path, default=METRICS_PATH)
+    args = parser.parse_args(argv)
+    if args.shuffle_labels and args.output.resolve() == METRICS_PATH.resolve():
+        print("Refusing to write a shuffled-label demo over the real metrics.json; pass a different --output.")
+        return 2
+
+    model = train_on_shuffled_labels() if args.shuffle_labels else load_saved_winner()
+    metrics = build_metrics(model, args.shuffle_labels)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(metrics, indent=2) + "\n")
+    print(f"Wrote {args.output}\n{json.dumps(metrics, indent=2)}")
+    return 0
+
+
 # --- Acceptance checks --------------------------------------------------------------------------------------
 def check_results(context: dict) -> bool:
     """Acceptance: winner follows the rule, every segment has a real number or 'undefined', SHAP pickle reloads."""
@@ -689,6 +773,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    # Default: the full 5.4 evaluation (retrains the tuned models). With --fairness: only the 5.9 fairness table,
-    # which reloads the saved winner instead of retraining.
+    # Default: the full 5.4 evaluation (retrains the tuned models). With --fairness: only the 5.9 fairness table.
+    # With --metrics: only the 5.11 metrics.json for the CI gate. The last two reload the saved winner, no retrain.
+    if "--metrics" in sys.argv[1:]:
+        sys.exit(run_metrics(sys.argv[1:]))
     sys.exit(run_fairness() if "--fairness" in sys.argv[1:] else main())
