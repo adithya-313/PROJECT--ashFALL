@@ -1,0 +1,8 @@
+outs:
+- md5: 4830d819c1cf65fe17e1dc83b62cb245
+  size: 2731968
+  hash: md5
+  path: shap_model.pkl
+meta:
+  mlflow_link_run_id: 5b508c7e19df4bb2b3d08e5042ee3161
+  mlflow_experiment: level5_reproducibility

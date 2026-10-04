@@ -1,0 +1,8 @@
+outs:
+- md5: bbe3570958207ae2f981b07fcfd4ebf3
+  size: 623309
+  hash: md5
+  path: model.onnx
+meta:
+  mlflow_link_run_id: 5b508c7e19df4bb2b3d08e5042ee3161
+  mlflow_experiment: level5_reproducibility

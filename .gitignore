@@ -44,3 +44,4 @@ CLAUDE.md
 
 # MLflow local SQLite tracking database
 mlflow.db
+models/**/*.ubj

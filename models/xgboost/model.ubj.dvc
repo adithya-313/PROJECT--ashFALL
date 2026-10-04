@@ -1,0 +1,8 @@
+outs:
+- md5: c5d82437c5bf278eba6e32daa93465dd
+  size: 893382
+  hash: md5
+  path: model.ubj
+meta:
+  mlflow_link_run_id: 5b508c7e19df4bb2b3d08e5042ee3161
+  mlflow_experiment: level5_reproducibility

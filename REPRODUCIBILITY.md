@@ -11,11 +11,12 @@ reproduced is a result that cannot be trusted.
 ## Git Commit SHA
 
 ```
-dd400cad150fd5da7c1f1882e64d604ad9b21182
+6d7650b68ed5b22144e25e50f23845f3d63a002b
 ```
 
-<!-- The exact git commit hash (`git rev-parse HEAD`) of the code that produced the result.
-     Fill this in immediately after running an experiment or generating a report. -->
+The commit this document was produced from (branch `feature/level5-serving-and-ops`, the 5.9 model card commit).
+The commit that contains this file has a later SHA (a file cannot contain its own commit hash). The previous
+value (`dd400cad...`) was the PR #7 merge and predated all Level 3 fix and Level 5 work.
 
 ---
 
@@ -38,34 +39,52 @@ dd400cad150fd5da7c1f1882e64d604ad9b21182
 ## MLflow Run ID
 
 ```
-PLACEHOLDER
+evaluation_xgboost     780831d8c7be4feabff20d894a1abd62  (level5_fraud_evaluation)
+calibration_xgboost    cfd6628cc7fc4001a49f4009a3bd4d19  (level5_fraud_calibration)
+onnx_export_xgboost    3ba14af13d31406ea8b613936d337fb5  (level5_fraud_onnx)
+model_card_xgboost     409ef8299fce413e9c86cf37521be633  (level5_fraud_evaluation)
+dvc_artifact_link      5b508c7e19df4bb2b3d08e5042ee3161  (level5_reproducibility, the 5.10 link run)
 ```
 
-<!-- The MLflow run ID from the tracking server for the experiment that produced these results.
-     Fill this in when MLflow logging is added in Level 3+. -->
+Store: `mlflow.db` (SQLite) and `mlruns/` in the repo root. Both are gitignored and are NOT backed up (see
+"Backup gap" below). The serving benchmark runs are `72638a5a66334e418855da439d2cab9b` (concurrency) and
+`1edf4646da47405e8e663e3d80bc13ad` (micro-benchmark), both in `level5_fraud_serving`.
 
 ---
 
 ## Docker Image Tag
 
 ```
-PLACEHOLDER
+nvcr.io/nvidia/tritonserver:24.01-py3@sha256:3380720761045fc16ba3bcb96cfa54034531fc302df54ecac6b2a4deeab07bbd
 ```
 
-<!-- The fully-qualified Docker image tag (e.g. ghcr.io/org/repo:sha-abc1234) used for
-     inference or evaluation. Fill this in when image publishing is set up in Level 4+. -->
+This is the Triton Inference Server image that serves the model (see `docker-compose.yml`). The API image
+(`project-ashfall-api:latest`) is built locally from `python:3.11-slim` and has no registry tag, so it has no
+fully-qualified tag to record. It cannot be pulled from anywhere; rebuild it from the project Dockerfile instead.
 
 ---
 
 ## Python Environment Hash
 
 ```
-PLACEHOLDER
+b54e87f5ed7fdc3ead74326d60645f29bcb8ccea8fb9fa9a4166640636259cc1
 ```
 
-<!-- A hash or snapshot of the exact Python environment: run `pip freeze | sha256sum` and
-     paste the hash, or attach the full `pip freeze` output as a file. Fill this in
-     alongside every experiment so dependency drift is detectable. -->
+**Recipe** (so anyone can recompute it): sha256 of the lines of `envs/training_env.txt`, sorted by plain
+character order, joined with a newline, with one trailing newline, encoded as UTF-8 (608 lines):
+
+```python
+import hashlib
+lines = sorted(open('envs/training_env.txt', encoding='utf-8').read().splitlines())
+print(hashlib.sha256(('\n'.join(lines) + '\n').encode()).hexdigest())
+```
+
+**Caveat (read this):** `envs/training_env.txt` is a `pip freeze` of the whole global Windows Python install on
+the training machine, NOT a clean virtual environment. It includes packages unrelated to this project (for
+example `cohere`, `darts`, `langchain-core`, `openai`, `djangorestframework`) and one editable install from another
+repository. It was taken on Python 3.12.10, while the project targets Python 3.11 (`pyproject.toml`, CI). So the
+hash shows which packages were present, not the minimal set needed. The ML libraries that matter are pinned in
+`requirements-ml.txt`. A clean-venv freeze on Python 3.11 is a documented follow-up.
 
 ---
 
@@ -84,23 +103,25 @@ PLACEHOLDER
 
 ---
 
-## Level 3 Acceptance
+## Level 3 Acceptance (history, partly superseded)
 
-- **Enriched Parquet:** 6,362,620 rows; `is_adversarial` (bool, cardinality 2) and `adversarial_pattern_type` (object, 4 values: None/account_takeover/mule_account/merchant_collusion) present
-- **AUC Gate:** account_takeover AUC=0.6546 PASS, mule_account AUC=0.5246 PASS, both ≤ 0.70 threshold
-- **Pandera Schema:** passes on enriched parquet (21 columns, all dtype and constraint checks green)
-- **CI Schema Gate:** `schema-validation` job exists in ci.yml; latest three CI runs on main are `success` (most recent: 2026-09-29)
-- **DVC Hash:** `265e328c7c7237f0c4c22ef61f648c9d` re-tracked and committed (prior hash was from earlier pipeline version)
-- **Reproducibility:** two independent clean runs of `ingest_paysim.py` + `inject_adversarial.py` with seed=42 both produce MD5=`265e328c7c7237f0c4c22ef61f648c9d`; pipeline is deterministic
-- **E-commerce Store:** `scripts/ecommerce_store.py` generates transactions with `ecom_` prefix; schema validation (`data/schemas/ecommerce_transactions.py`) passes on valid batches; live POST /score blocked only by uvloop on Windows (works in Docker/Linux)
-- **Merchant Collusion:** deferred to e-commerce store — 38 PaySim labelled rows produce ~11 test-set rows, insufficient for meaningful AUC; architecturally correct deferral
+**Superseded:** the first Level 3 acceptance used a dataset where the injected patterns were not linked to
+`isFraud`. Its data hash, AUC figures, reproducibility hash and pattern list were replaced at the Level 3
+Correction below, and the old numbers have been removed from this file. The items that still hold:
+
+- **Schema:** the Pandera schema passes on the enriched parquet (re-checked at the correction).
+- **CI Schema Gate:** a `schema-validation` job exists in `ci.yml`.
+- **E-commerce Store:** `scripts/ecommerce_store.py` generates transactions with an `ecom_` prefix; schema validation
+  (`data/schemas/ecommerce_transactions.py`) passes on valid batches; live POST /score is blocked only by uvloop
+  on Windows (works in Docker/Linux).
+- **Merchant collusion:** deferred to the e-commerce store (see the correction below).
 
 ---
 
 ## Level 3 Correction
 
-This section supersedes the Level 3 Acceptance figures above wherever they differ (data hash, AUC results,
-pattern list). The earlier acceptance text is kept as history.
+This section supersedes the earlier Level 3 acceptance figures (data hash, AUC results, pattern list), which
+have been removed from the Acceptance section above.
 
 - **Bug fixed:** the adversarial patterns were not linked to `isFraud` (the old injection labelled rows but never
   set `isFraud`). `scripts/inject_adversarial.py` was rewritten to set `isFraud=1` on injected rows (controlled
@@ -114,3 +135,52 @@ pattern list). The earlier acceptance text is kept as history.
 - **Schema** now enforces `is_adversarial=True` implies `isFraud=1`.
 - **Hashes:** enriched parquet `87c929358f0950a86aac62ce382795e8`; adversarial config
   `92996dee8b0f19a561ff31b2f5de596e`.
+
+---
+
+## Level 5: Trained Model and DVC-Tracked Artifacts
+
+**Model:** XGBoost, the winner of the bake-off (XGBoost vs random forest vs CatBoost), tuned with Optuna and then
+calibrated with isotonic regression. Trained on 15 features (see the model card).
+
+**The four artifacts** (all DVC-tracked; the `.dvc` pointer files are committed to git, the binaries are not):
+
+| Artifact | DVC pointer | md5 |
+|---|---|---|
+| `models/xgboost/model.ubj` | `models/xgboost/model.ubj.dvc` | `c5d82437c5bf278eba6e32daa93465dd` |
+| `models/xgboost/model.onnx` | `models/xgboost/model.onnx.dvc` | `bbe3570958207ae2f981b07fcfd4ebf3` |
+| `models/calibration/isotonic_calibrator.pkl` | `models/calibration/isotonic_calibrator.pkl.dvc` | `df29a6a22de56134961032ad38b483d7` |
+| `models/xgboost/shap_model.pkl` | `models/xgboost/shap_model.pkl.dvc` | `4830d819c1cf65fe17e1dc83b62cb245` |
+
+All four describe one model (the SHAP booster and `model.ubj` agree to about 1.2e-07 on 100,000 test rows).
+Each `.dvc` file carries a `meta:` entry with the link run ID above, and the link run logs the same hashes as
+params (`dvc_md5_<name>`), so the link works in both directions. Link script: `scripts/fraud_dvc_link.py`.
+
+**Key results** (test split): PR-AUC 0.9947, ROC-AUC 0.9999. The model is much better on injected fraud (PR-AUC
+about 0.9985 for account takeover and 0.9988 for mule account) than on the original PaySim fraud (0.9444), so the
+headline number is flattered by the injected patterns. Details and limits:
+`reports/model/model_card.md`; fairness table: `reports/model/fairness_table.md`.
+
+**Complete triplet for this model:** git commit (above) + DVC hashes (this table, plus the data hash above) + MLflow
+run IDs (above).
+
+### Backup gap (important)
+
+DVC here is **local-only**: no DVC remote is configured (`.dvc/config` is empty). `dvc add` hashes the files and
+copies them into the local cache `.dvc/cache` on this machine. The artifacts are version-tracked and recoverable
+from that cache **on this machine only**. They are NOT backed up off-machine, and `dvc push` / `dvc pull` do not
+work. The same is true of `mlflow.db` and `mlruns/`. Losing this disk loses the model binaries and the MLflow
+history. Configuring a DVC remote is a documented follow-up.
+
+### Branch-switch hazard for `model.ubj`
+
+`model.ubj` was committed to git earlier (commit `69c73ac`, now in `main`). From the 5.10 commit onward it is
+DVC-tracked and no longer git-tracked. Old commits and `main` still contain the old file, so switching branches can
+change it on disk:
+
+- Checking out a branch that still tracks it (for example `main`) puts that branch's old copy over your file.
+  A newer retrained model would be overwritten.
+- Checking out this branch from one that tracks it can delete the file from disk.
+- Fix: run `dvc checkout`, which restores the file recorded in the `.dvc` pointer from the local cache. With no
+  remote, this only works on a machine that has the cache (`.dvc/cache`); a fresh clone cannot fetch the file.
+- Habit: after any branch switch or pull, run `dvc status` and `dvc checkout` before using the model.
