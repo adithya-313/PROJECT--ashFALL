@@ -600,5 +600,93 @@
       ],
       "p99_limit_ms": 27.589508751552742
     }
+  },
+  "serialization_profiling": {
+    "generated_at": "2026-10-05T07:35:52.686649+00:00",
+    "what": "Client-side serialization cost of a Triton gRPC request versus the whole round trip",
+    "wire_format": {
+      "raw_input_contents_entries": 1,
+      "raw_input_contents_bytes": 480,
+      "protobuf_fp32_contents_values": 0,
+      "verdict": "raw binary bytes"
+    },
+    "how_wire_format_was_confirmed": "Built a real request with the client's own helpers and inspected it: the tensor sits in raw_input_contents as bytes (set_data_from_numpy stores numpy tobytes()) and the protobuf fp32_contents field is empty.",
+    "method": {
+      "timed_iterations_per_step": 20000,
+      "roundtrip_requests": 2000,
+      "roundtrip_warmup": 100,
+      "input_seed": 42,
+      "roundtrip_measured_now": true,
+      "server_config_during_roundtrip": {
+        "dynamic_batching": true,
+        "max_queue_delay_microseconds": 1000
+      },
+      "client": "host python via localhost:8001 (Docker Desktop port forward)"
+    },
+    "definitions": {
+      "packing_ms": "client only: InferInput + set_data_from_numpy",
+      "request_build_ms": "client only: put the packed tensor into the gRPC request message (private helper)",
+      "wire_encode_ms": "client only: SerializeToString of the request",
+      "roundtrip_p50_ms": "whole fraud_client.raw_fraud_probability call: checks, packing, message, network hop, Triton queue + model compute, reading the answer",
+      "packing_fraction_of_roundtrip": "packing_ms / roundtrip_p50_ms"
+    },
+    "results": [
+      {
+        "batch_size": 1,
+        "packing_ms": 0.0066,
+        "request_build_ms": 0.0025,
+        "wire_encode_ms": 0.0003,
+        "client_encode_total_ms": 0.0094,
+        "roundtrip_p50_ms": 2.2,
+        "packing_fraction_of_roundtrip": 0.003,
+        "client_encode_total_fraction_of_roundtrip": 0.00427,
+        "raw_tensor_bytes": 60,
+        "serialized_request_bytes": 96,
+        "raw_input_contents_bytes": 60,
+        "alternative_protobuf_floats": {
+          "build_plus_encode_ms": 0.0032,
+          "serialized_request_bytes": 98
+        }
+      },
+      {
+        "batch_size": 8,
+        "packing_ms": 0.0049,
+        "request_build_ms": 0.0019,
+        "wire_encode_ms": 0.0004,
+        "client_encode_total_ms": 0.0072,
+        "roundtrip_p50_ms": 1.187,
+        "packing_fraction_of_roundtrip": 0.00413,
+        "client_encode_total_fraction_of_roundtrip": 0.00606,
+        "raw_tensor_bytes": 480,
+        "serialized_request_bytes": 517,
+        "raw_input_contents_bytes": 480,
+        "alternative_protobuf_floats": {
+          "build_plus_encode_ms": 0.006,
+          "serialized_request_bytes": 521
+        }
+      },
+      {
+        "batch_size": 32,
+        "packing_ms": 0.005,
+        "request_build_ms": 0.002,
+        "wire_encode_ms": 0.0004,
+        "client_encode_total_ms": 0.0074,
+        "roundtrip_p50_ms": 1.628,
+        "packing_fraction_of_roundtrip": 0.00307,
+        "client_encode_total_fraction_of_roundtrip": 0.00455,
+        "raw_tensor_bytes": 1920,
+        "serialized_request_bytes": 1957,
+        "raw_input_contents_bytes": 1920,
+        "alternative_protobuf_floats": {
+          "build_plus_encode_ms": 0.0179,
+          "serialized_request_bytes": 1961
+        }
+      }
+    ],
+    "not_measured": [
+      "shared memory (system or CUDA)",
+      "server-side deserialization on its own",
+      "sending the protobuf-float alternative to Triton (only its client-side encode time and size were measured)"
+    ]
   }
 }
