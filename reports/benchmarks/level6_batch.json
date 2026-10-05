@@ -708,13 +708,11 @@
     "results": [
       {
         "rows": 10000,
-        "kernel_time_ms": 0.00414,
         "kernel_time_ms_min_max": [
           0.00411,
           0.00509
         ],
         "kernel_launches_in_trace": 21,
-        "inferences_per_sec": 2416626390,
         "sm_occupancy_pct": 8.29,
         "theoretical_occupancy_pct": 66.67,
         "hbm_bandwidth_util_pct": 23.49,
@@ -723,17 +721,21 @@
         "ncu_duration_us_reference_only": 6.69,
         "bytes_moved": 240000,
         "implied_data_rate_gb_per_s_from_nsys": 58.0,
-        "dram_peak_gb_per_s_from_ncu": 166.6
+        "dram_peak_gb_per_s_from_ncu": 166.6,
+        "inferences_per_sec_warmcache_optimistic": 2416626390,
+        "kernel_time_ms_warmcache_optimistic": 0.00414,
+        "kernel_time_ms_cold_estimate": 0.00669,
+        "inferences_per_sec_cold_estimate": 1494768311,
+        "cold_estimate_derived_as": "rows / ncu_duration_us_reference_only (Nsight Compute, caches flushed)",
+        "note": "Truth most likely sits between inferences_per_sec_cold_estimate (conservative, Nsight Compute duration, caches flushed) and inferences_per_sec_warmcache_optimistic (Nsight Systems median, same input reused so L2 is probably warm). ESTIMATE; neither was measured with fresh data per batch."
       },
       {
         "rows": 100000,
-        "kernel_time_ms": 0.00793,
         "kernel_time_ms_min_max": [
           0.00787,
           0.01619
         ],
         "kernel_launches_in_trace": 21,
-        "inferences_per_sec": 12603982859,
         "sm_occupancy_pct": 34.05,
         "theoretical_occupancy_pct": 66.67,
         "hbm_bandwidth_util_pct": 69.24,
@@ -742,17 +744,21 @@
         "ncu_duration_us_reference_only": 17.82,
         "bytes_moved": 2400000,
         "implied_data_rate_gb_per_s_from_nsys": 302.5,
-        "dram_peak_gb_per_s_from_ncu": 167.1
+        "dram_peak_gb_per_s_from_ncu": 167.1,
+        "inferences_per_sec_warmcache_optimistic": 12603982859,
+        "kernel_time_ms_warmcache_optimistic": 0.00793,
+        "kernel_time_ms_cold_estimate": 0.01782,
+        "inferences_per_sec_cold_estimate": 5611672278,
+        "cold_estimate_derived_as": "rows / ncu_duration_us_reference_only (Nsight Compute, caches flushed)",
+        "note": "Truth most likely sits between inferences_per_sec_cold_estimate (conservative, Nsight Compute duration, caches flushed) and inferences_per_sec_warmcache_optimistic (Nsight Systems median, same input reused so L2 is probably warm). ESTIMATE; neither was measured with fresh data per batch."
       },
       {
         "rows": 1000000,
-        "kernel_time_ms": 0.05036,
         "kernel_time_ms_min_max": [
           0.0501,
           0.29592
         ],
         "kernel_launches_in_trace": 21,
-        "inferences_per_sec": 19858606720,
         "sm_occupancy_pct": 57.99,
         "theoretical_occupancy_pct": 66.67,
         "hbm_bandwidth_util_pct": 93.41,
@@ -761,12 +767,19 @@
         "ncu_duration_us_reference_only": 131.26,
         "bytes_moved": 24000000,
         "implied_data_rate_gb_per_s_from_nsys": 476.6,
-        "dram_peak_gb_per_s_from_ncu": 167.8
+        "dram_peak_gb_per_s_from_ncu": 167.8,
+        "inferences_per_sec_warmcache_optimistic": 19858606720,
+        "kernel_time_ms_warmcache_optimistic": 0.05036,
+        "kernel_time_ms_cold_estimate": 0.13126,
+        "inferences_per_sec_cold_estimate": 7618467164,
+        "cold_estimate_derived_as": "rows / ncu_duration_us_reference_only (Nsight Compute, caches flushed)",
+        "note": "Truth most likely sits between inferences_per_sec_cold_estimate (conservative, Nsight Compute duration, caches flushed) and inferences_per_sec_warmcache_optimistic (Nsight Systems median, same input reused so L2 is probably warm). ESTIMATE; neither was measured with fresh data per batch."
       }
     ],
     "verdict": "Memory-bound, and more so as the batch grows, when the data comes cold from DRAM (Nsight Compute, caches flushed): DRAM throughput rises 23.5% -> 69.2% -> 93.4% of peak from 10k to 1M rows while SM (compute) throughput only rises 6.2% -> 22.8% -> 31.3%. At 10k and 100k the GPU is also under-filled (achieved occupancy 8.3% and 34.1%, against a theoretical 66.7%); at 1M occupancy reaches 58.0% and memory bandwidth is the limit, not compute.",
     "caveat_cache": "The Nsight Systems timeline repeats the SAME inputs, so later launches probably read from the GPU's large L2 cache instead of DRAM (ESTIMATE). Evidence: at 100k and 1M rows the data rate implied by the nsys kernel time (see implied_data_rate_gb_per_s_from_nsys) is higher than the DRAM peak Nsight Compute reports (dram_peak_gb_per_s_from_ncu), which DRAM alone cannot deliver. So the nsys inferences_per_sec is a warm-cache figure; with fresh data for every batch the kernel would be slower, closer to the Nsight Compute duration. Not measured separately.",
-    "nsys_note": "The older Nsight Systems 2022.4 from the Ubuntu package recorded no CUDA kernel events for this CUDA 12.4 setup (its traces had no kernel tables), so it was replaced by 2026.1.3 from NVIDIA's CUDA repo for WSL."
+    "nsys_note": "The older Nsight Systems 2022.4 from the Ubuntu package recorded no CUDA kernel events for this CUDA 12.4 setup (its traces had no kernel tables), so it was replaced by 2026.1.3 from NVIDIA's CUDA repo for WSL.",
+    "how_to_read": "Every speed and cost here comes in two flavours. *_warmcache_optimistic reuses the same input, so the GPU's L2 cache is probably warm (ESTIMATE). *_cold_estimate comes from Nsight Compute, which flushes caches and may lock clocks, so it is a conservative bound. The realistic value for fresh data every batch most likely lies between the two (ESTIMATE). Neither includes host-to-GPU data copies."
   },
   "triton_gpu_metrics": {
     "note": "The Triton fraud model (fraud_xgboost, ONNX Runtime) runs on the CPU: instance_group kind is KIND_CPU and the model is a tree ensemble. SM occupancy, memory-bandwidth utilization and inferences-per-second-per-GPU are therefore N/A for it. GPU profiling here applies only to the Haversine kernel above. No GPU numbers are recorded for the Triton model.",
@@ -795,45 +808,61 @@
         "rows": 10000,
         "loop_seconds": 15.0,
         "launches": 730600,
-        "sustained_inferences_per_sec": 486941262,
         "avg_power_w": 15.37,
         "power_readings_used": 50,
         "power_w_min_max": [
           13.27,
           18.26
         ],
-        "seconds_per_inference": 2.0536357826443957e-09,
-        "cost_per_inference_usd": 1.0524472658895999e-15
+        "cost_per_inference_usd_warmcache_optimistic": 1.0524472658895999e-15,
+        "sustained_inferences_per_sec_warmcache_optimistic": 486941262,
+        "seconds_per_inference_warmcache_optimistic": 2.0536357826443957e-09,
+        "seconds_per_inference_cold_estimate": 6.69e-10,
+        "cost_per_inference_usd_cold_estimate": 3.4275099999999997e-16,
+        "cold_estimate_derived_as": "cost_per_inference_usd(avg_power_w from the warm loop, ncu_duration / rows, price_per_kwh_usd)",
+        "note": "NOT a bracket at this size. The warm sustained loop is limited by Python kernel-launch time (the GPU sits idle between launches), so its cost per inference is HIGHER than the kernel-only cold estimate. Read cost_per_inference_usd_warmcache_optimistic as the cost of this launch-limited loop, and cost_per_inference_usd_cold_estimate as a kernel-only figure that assumes the loop's average power (ESTIMATE, not measured for a cold run).",
+        "warm_and_cold_bracket_the_truth": false
       },
       {
         "rows": 100000,
         "loop_seconds": 15.0,
         "launches": 746800,
-        "sustained_inferences_per_sec": 4978126077,
         "avg_power_w": 37.25,
         "power_readings_used": 50,
         "power_w_min_max": [
           13.19,
           41.13
         ],
-        "seconds_per_inference": 2.0087880149973295e-10,
-        "cost_per_inference_usd": 2.494419213582984e-16
+        "cost_per_inference_usd_warmcache_optimistic": 2.494419213582984e-16,
+        "sustained_inferences_per_sec_warmcache_optimistic": 4978126077,
+        "seconds_per_inference_warmcache_optimistic": 2.0087880149973295e-10,
+        "seconds_per_inference_cold_estimate": 1.782e-10,
+        "cost_per_inference_usd_cold_estimate": 2.2126499999999996e-16,
+        "cold_estimate_derived_as": "cost_per_inference_usd(avg_power_w from the warm loop, ncu_duration / rows, price_per_kwh_usd)",
+        "note": "NOT a bracket at this size. The warm sustained loop is limited by Python kernel-launch time (the GPU sits idle between launches), so its cost per inference is HIGHER than the kernel-only cold estimate. Read cost_per_inference_usd_warmcache_optimistic as the cost of this launch-limited loop, and cost_per_inference_usd_cold_estimate as a kernel-only figure that assumes the loop's average power (ESTIMATE, not measured for a cold run).",
+        "warm_and_cold_bracket_the_truth": false
       },
       {
         "rows": 1000000,
         "loop_seconds": 15.0,
         "launches": 373200,
-        "sustained_inferences_per_sec": 24876699643,
         "avg_power_w": 104.53,
         "power_readings_used": 50,
         "power_w_min_max": [
           18.11,
           113.58
         ],
-        "seconds_per_inference": 4.0198258384244404e-11,
-        "cost_per_inference_usd": 1.400678834676181e-16
+        "cost_per_inference_usd_warmcache_optimistic": 1.400678834676181e-16,
+        "sustained_inferences_per_sec_warmcache_optimistic": 24876699643,
+        "seconds_per_inference_warmcache_optimistic": 4.0198258384244404e-11,
+        "seconds_per_inference_cold_estimate": 1.3126e-10,
+        "cost_per_inference_usd_cold_estimate": 4.573535933333333e-16,
+        "cold_estimate_derived_as": "cost_per_inference_usd(avg_power_w from the warm loop, ncu_duration / rows, price_per_kwh_usd)",
+        "note": "Truth most likely sits between cost_per_inference_usd_warmcache_optimistic (lowest cost, warm-loop speed) and cost_per_inference_usd_cold_estimate (highest cost). The cold figure ASSUMES the same average board power as the warm loop, which was not measured for a cold run (ESTIMATE).",
+        "warm_and_cold_bracket_the_truth": true
       }
-    ]
+    ],
+    "how_to_read": "Every speed and cost here comes in two flavours. *_warmcache_optimistic reuses the same input, so the GPU's L2 cache is probably warm (ESTIMATE). *_cold_estimate comes from Nsight Compute, which flushes caches and may lock clocks, so it is a conservative bound. The realistic value for fresh data every batch most likely lies between the two (ESTIMATE). Neither includes host-to-GPU data copies."
   },
   "mlflow": {
     "experiment": "level6_benchmarking",
