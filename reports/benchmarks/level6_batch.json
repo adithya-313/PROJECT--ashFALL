@@ -771,5 +771,76 @@
   "triton_gpu_metrics": {
     "note": "The Triton fraud model (fraud_xgboost, ONNX Runtime) runs on the CPU: instance_group kind is KIND_CPU and the model is a tree ensemble. SM occupancy, memory-bandwidth utilization and inferences-per-second-per-GPU are therefore N/A for it. GPU profiling here applies only to the Haversine kernel above. No GPU numbers are recorded for the Triton model.",
     "triton_model_gpu_metrics": "N/A"
+  },
+  "gpu_cost_per_inference": {
+    "generated_at": "2026-10-05T09:02:03.248418+00:00",
+    "what": "Electricity cost per inference of the Haversine GPU kernel (not Triton inference)",
+    "formula": "cost_per_inference_usd = avg_power_kW * seconds_per_inference / 3600 * price_per_kWh (core/energy_cost.py; the same formula Level 10.5 reuses)",
+    "price_per_kwh_usd": 0.12,
+    "price_is": "an ASSUMPTION (editable default), not a measured value; set your real tariff to get your cost",
+    "measured": "avg_power_w from nvidia-smi during a sustained loop, and throughput from the same loop",
+    "method": {
+      "loop_seconds_target": 15.0,
+      "power_sample_ms": 300,
+      "idle_gpu_power_w": 3.69,
+      "same_input_every_launch": true
+    },
+    "caveats": [
+      "Warm cache: the loop reuses the same input, so later launches probably read from the GPU's L2 cache instead of DRAM (ESTIMATE). With fresh data per batch the kernel is slower and the cost per inference higher.",
+      "Sustained throughput is limited by Python kernel-launch time at small sizes, so it is lower than the kernel-only rows/sec in the Nsight Systems trace.",
+      "Power is the whole GPU board power reported by nvidia-smi (including idle draw), not the kernel's share."
+    ],
+    "results": [
+      {
+        "rows": 10000,
+        "loop_seconds": 15.0,
+        "launches": 730600,
+        "sustained_inferences_per_sec": 486941262,
+        "avg_power_w": 15.37,
+        "power_readings_used": 50,
+        "power_w_min_max": [
+          13.27,
+          18.26
+        ],
+        "seconds_per_inference": 2.0536357826443957e-09,
+        "cost_per_inference_usd": 1.0524472658895999e-15
+      },
+      {
+        "rows": 100000,
+        "loop_seconds": 15.0,
+        "launches": 746800,
+        "sustained_inferences_per_sec": 4978126077,
+        "avg_power_w": 37.25,
+        "power_readings_used": 50,
+        "power_w_min_max": [
+          13.19,
+          41.13
+        ],
+        "seconds_per_inference": 2.0087880149973295e-10,
+        "cost_per_inference_usd": 2.494419213582984e-16
+      },
+      {
+        "rows": 1000000,
+        "loop_seconds": 15.0,
+        "launches": 373200,
+        "sustained_inferences_per_sec": 24876699643,
+        "avg_power_w": 104.53,
+        "power_readings_used": 50,
+        "power_w_min_max": [
+          18.11,
+          113.58
+        ],
+        "seconds_per_inference": 4.0198258384244404e-11,
+        "cost_per_inference_usd": 1.400678834676181e-16
+      }
+    ]
+  },
+  "mlflow": {
+    "experiment": "level6_benchmarking",
+    "run_id": "eb93f1a6f01b410d9b748d1ebba4cad4",
+    "run_name": "level6_batch_optimization",
+    "tracking_uri": "sqlite:///mlflow.db (local, gitignored, not backed up)",
+    "logged_by": "benchmarks/log_level6_to_mlflow.py",
+    "note": "every metric in the run is read from this file, none are typed in"
   }
 }
