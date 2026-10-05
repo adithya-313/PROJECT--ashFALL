@@ -866,7 +866,7 @@
   },
   "mlflow": {
     "experiment": "level6_benchmarking",
-    "run_id": "eb93f1a6f01b410d9b748d1ebba4cad4",
+    "run_id": "1791b6a45e5747c3899d7cda8d194f30",
     "run_name": "level6_batch_optimization",
     "tracking_uri": "sqlite:///mlflow.db (local, gitignored, not backed up)",
     "logged_by": "benchmarks/log_level6_to_mlflow.py",
