@@ -688,5 +688,88 @@
       "server-side deserialization on its own",
       "sending the protobuf-float alternative to Triton (only its client-side encode time and size were measured)"
     ]
+  },
+  "gpu_kernel_profiling": {
+    "generated_at": "2026-10-05T08:55:02.275529+00:00",
+    "what": "GPU profile of the Level 4.5 HAVERSINE geo-velocity kernel (features/gpu_geo_velocity.py). These numbers describe that kernel only, NOT Triton inference.",
+    "hardware": "NVIDIA GeForce RTX 4050 Laptop GPU (6 GB GDDR6), run in WSL2",
+    "tools": {
+      "kernel_time": "Nsight Systems 2026.1.3, --trace=cuda --sample=none --cpuctxsw=none",
+      "counters": "Nsight Compute 2026.3.1, one launch per size, sections SpeedOfLight, Occupancy, MemoryWorkloadAnalysis"
+    },
+    "files": "reports/benchmarks/level6_nsight/ (.nsys-rep traces, .ncu-repz reports, _ncu.csv tables)",
+    "how_numbers_are_derived": {
+      "kernel_time_ms": "median GPU time of the kernel across the launches in the Nsight Systems trace",
+      "inferences_per_sec": "rows / kernel_time; one row = one inference; kernel only, no host-device copies",
+      "sm_occupancy_pct": "Nsight Compute achieved occupancy (separate profiling run from the nsys trace)",
+      "hbm_bandwidth_util_pct": "Nsight Compute DRAM throughput as a percent of peak (the GPU uses GDDR6, not HBM)",
+      "ncu_duration_us_reference_only": "kept for reference, not used for throughput: Nsight Compute runs the kernel under its own measurement settings (it normally locks clocks and flushes caches, ESTIMATE from its documented defaults), so its duration is not the free-running time"
+    },
+    "results": [
+      {
+        "rows": 10000,
+        "kernel_time_ms": 0.00414,
+        "kernel_time_ms_min_max": [
+          0.00411,
+          0.00509
+        ],
+        "kernel_launches_in_trace": 21,
+        "inferences_per_sec": 2416626390,
+        "sm_occupancy_pct": 8.29,
+        "theoretical_occupancy_pct": 66.67,
+        "hbm_bandwidth_util_pct": 23.49,
+        "dram_gb_per_s": 39.14,
+        "sm_throughput_pct": 6.24,
+        "ncu_duration_us_reference_only": 6.69,
+        "bytes_moved": 240000,
+        "implied_data_rate_gb_per_s_from_nsys": 58.0,
+        "dram_peak_gb_per_s_from_ncu": 166.6
+      },
+      {
+        "rows": 100000,
+        "kernel_time_ms": 0.00793,
+        "kernel_time_ms_min_max": [
+          0.00787,
+          0.01619
+        ],
+        "kernel_launches_in_trace": 21,
+        "inferences_per_sec": 12603982859,
+        "sm_occupancy_pct": 34.05,
+        "theoretical_occupancy_pct": 66.67,
+        "hbm_bandwidth_util_pct": 69.24,
+        "dram_gb_per_s": 115.68,
+        "sm_throughput_pct": 22.79,
+        "ncu_duration_us_reference_only": 17.82,
+        "bytes_moved": 2400000,
+        "implied_data_rate_gb_per_s_from_nsys": 302.5,
+        "dram_peak_gb_per_s_from_ncu": 167.1
+      },
+      {
+        "rows": 1000000,
+        "kernel_time_ms": 0.05036,
+        "kernel_time_ms_min_max": [
+          0.0501,
+          0.29592
+        ],
+        "kernel_launches_in_trace": 21,
+        "inferences_per_sec": 19858606720,
+        "sm_occupancy_pct": 57.99,
+        "theoretical_occupancy_pct": 66.67,
+        "hbm_bandwidth_util_pct": 93.41,
+        "dram_gb_per_s": 156.76,
+        "sm_throughput_pct": 31.34,
+        "ncu_duration_us_reference_only": 131.26,
+        "bytes_moved": 24000000,
+        "implied_data_rate_gb_per_s_from_nsys": 476.6,
+        "dram_peak_gb_per_s_from_ncu": 167.8
+      }
+    ],
+    "verdict": "Memory-bound, and more so as the batch grows, when the data comes cold from DRAM (Nsight Compute, caches flushed): DRAM throughput rises 23.5% -> 69.2% -> 93.4% of peak from 10k to 1M rows while SM (compute) throughput only rises 6.2% -> 22.8% -> 31.3%. At 10k and 100k the GPU is also under-filled (achieved occupancy 8.3% and 34.1%, against a theoretical 66.7%); at 1M occupancy reaches 58.0% and memory bandwidth is the limit, not compute.",
+    "caveat_cache": "The Nsight Systems timeline repeats the SAME inputs, so later launches probably read from the GPU's large L2 cache instead of DRAM (ESTIMATE). Evidence: at 100k and 1M rows the data rate implied by the nsys kernel time (see implied_data_rate_gb_per_s_from_nsys) is higher than the DRAM peak Nsight Compute reports (dram_peak_gb_per_s_from_ncu), which DRAM alone cannot deliver. So the nsys inferences_per_sec is a warm-cache figure; with fresh data for every batch the kernel would be slower, closer to the Nsight Compute duration. Not measured separately.",
+    "nsys_note": "The older Nsight Systems 2022.4 from the Ubuntu package recorded no CUDA kernel events for this CUDA 12.4 setup (its traces had no kernel tables), so it was replaced by 2026.1.3 from NVIDIA's CUDA repo for WSL."
+  },
+  "triton_gpu_metrics": {
+    "note": "The Triton fraud model (fraud_xgboost, ONNX Runtime) runs on the CPU: instance_group kind is KIND_CPU and the model is a tree ensemble. SM occupancy, memory-bandwidth utilization and inferences-per-second-per-GPU are therefore N/A for it. GPU profiling here applies only to the Haversine kernel above. No GPU numbers are recorded for the Triton model.",
+    "triton_model_gpu_metrics": "N/A"
   }
 }
