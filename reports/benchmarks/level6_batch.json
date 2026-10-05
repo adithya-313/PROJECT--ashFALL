@@ -308,5 +308,297 @@
         }
       ]
     ]
+  },
+  "dynamic_batching_tuning": {
+    "what": "Choosing Triton dynamic_batching values from concurrent single-row gRPC load (fraud_xgboost, ONNX Runtime on CPU, one model instance)",
+    "generated_at": "2026-10-05T01:02:21.219473+00:00",
+    "load": {
+      "pattern": "many separate single-row requests in flight at once (closed loop, several client processes), from a container on the compose network",
+      "concurrency_levels_measured": [
+        10,
+        50
+      ],
+      "decision_level": 50,
+      "repeats_per_level": 3,
+      "numbers": "median of 3 repeats; 20,000 timed requests per repeat",
+      "inputs": "1,000 real test-split rows (50 fraud), seed 42, one row per request"
+    },
+    "decision_rule": "keep configs with p99 <= 1.5x the OFF p99 at concurrency 50; among those pick the highest throughput that beats OFF; throughputs within 3% are a tie, then prefer the smaller delay, then the smaller preferred size",
+    "off_baseline": {
+      "10": {
+        "throughput_rps": 3042.3963053111174,
+        "p50_ms": 2.8025844985677395,
+        "p95_ms": 6.948253750670118,
+        "p99_ms": 9.997180740392645,
+        "mean_ms": 3.257770056436857,
+        "errors": 0,
+        "completed_per_repeat": 20000,
+        "p99_ms_each_repeat": [
+          9.324,
+          9.997,
+          10.137
+        ],
+        "throughput_each_repeat": [
+          3182.0,
+          3042.4,
+          2828.7
+        ]
+      },
+      "50": {
+        "throughput_rps": 5900.797550020843,
+        "p50_ms": 7.953125001222361,
+        "p95_ms": 13.937179297136025,
+        "p99_ms": 18.393005834368495,
+        "mean_ms": 8.374374875290595,
+        "errors": 0,
+        "completed_per_repeat": 20000,
+        "p99_ms_each_repeat": [
+          18.393,
+          19.083,
+          14.519
+        ],
+        "throughput_each_repeat": [
+          5285.2,
+          5900.8,
+          6157.8
+        ]
+      }
+    },
+    "candidates": {
+      "delay250us_pref8-32": {
+        "config": {
+          "label": "delay250us_pref8-32",
+          "delay_us": 250,
+          "sizes": [
+            8,
+            32
+          ]
+        },
+        "levels": {
+          "10": {
+            "throughput_rps": 3655.0423742157336,
+            "p50_ms": 2.0176354992145207,
+            "p95_ms": 7.021273803547956,
+            "p99_ms": 10.320032223171438,
+            "mean_ms": 2.728209894309839,
+            "errors": 0,
+            "completed_per_repeat": 20000,
+            "p99_ms_each_repeat": [
+              9.122,
+              10.32,
+              11.243
+            ],
+            "throughput_each_repeat": [
+              3812.4,
+              3584.7,
+              3655.0
+            ]
+          },
+          "50": {
+            "throughput_rps": 12054.293674206663,
+            "p50_ms": 3.4209950026706792,
+            "p95_ms": 9.17867280586506,
+            "p99_ms": 12.984349197358808,
+            "mean_ms": 4.075379982153026,
+            "errors": 0,
+            "completed_per_repeat": 20000,
+            "p99_ms_each_repeat": [
+              11.751,
+              18.292,
+              12.984
+            ],
+            "throughput_each_repeat": [
+              12942.4,
+              10948.5,
+              12054.3
+            ]
+          }
+        }
+      },
+      "delay500us_pref8-32": {
+        "config": {
+          "label": "delay500us_pref8-32",
+          "delay_us": 500,
+          "sizes": [
+            8,
+            32
+          ]
+        },
+        "levels": {
+          "10": {
+            "throughput_rps": 5047.455227652906,
+            "p50_ms": 1.5355994983110577,
+            "p95_ms": 4.720094303775111,
+            "p99_ms": 10.220261079812188,
+            "mean_ms": 1.9757817263576727,
+            "errors": 0,
+            "completed_per_repeat": 20000,
+            "p99_ms_each_repeat": [
+              10.22,
+              10.534,
+              8.794
+            ],
+            "throughput_each_repeat": [
+              5047.5,
+              4728.1,
+              5651.6
+            ]
+          },
+          "50": {
+            "throughput_rps": 13229.741388975903,
+            "p50_ms": 3.336912501254119,
+            "p95_ms": 6.374239350770949,
+            "p99_ms": 11.360338276717787,
+            "mean_ms": 3.6950647715228113,
+            "errors": 0,
+            "completed_per_repeat": 20000,
+            "p99_ms_each_repeat": [
+              11.36,
+              14.177,
+              11.267
+            ],
+            "throughput_each_repeat": [
+              13695.6,
+              12765.5,
+              13229.7
+            ]
+          }
+        }
+      },
+      "delay1000us_pref8-32": {
+        "config": {
+          "label": "delay1000us_pref8-32",
+          "delay_us": 1000,
+          "sizes": [
+            8,
+            32
+          ]
+        },
+        "levels": {
+          "10": {
+            "throughput_rps": 5728.504930662144,
+            "p50_ms": 1.6696940001565963,
+            "p95_ms": 2.4580562003393425,
+            "p99_ms": 3.5147690806479637,
+            "mean_ms": 1.7328661543953785,
+            "errors": 0,
+            "completed_per_repeat": 20000,
+            "p99_ms_each_repeat": [
+              3.515,
+              3.183,
+              3.554
+            ],
+            "throughput_each_repeat": [
+              5722.1,
+              5791.7,
+              5728.5
+            ]
+          },
+          "50": {
+            "throughput_rps": 14164.192404747833,
+            "p50_ms": 3.3129464973171707,
+            "p95_ms": 5.317809902408044,
+            "p99_ms": 8.600931551263775,
+            "mean_ms": 3.4940032197289836,
+            "errors": 0,
+            "completed_per_repeat": 20000,
+            "p99_ms_each_repeat": [
+              8.601,
+              8.775,
+              8.451
+            ],
+            "throughput_each_repeat": [
+              14177.1,
+              14164.2,
+              13749.7
+            ]
+          }
+        }
+      },
+      "delay2000us_pref8-32": {
+        "config": {
+          "label": "delay2000us_pref8-32",
+          "delay_us": 2000,
+          "sizes": [
+            8,
+            32
+          ]
+        },
+        "levels": {
+          "10": {
+            "throughput_rps": 5751.002873828014,
+            "p50_ms": 1.614396500372095,
+            "p95_ms": 2.5764075951883565,
+            "p99_ms": 3.192430583439998,
+            "mean_ms": 1.7315383969311369,
+            "errors": 0,
+            "completed_per_repeat": 20000,
+            "p99_ms_each_repeat": [
+              3.192,
+              3.94,
+              3.176
+            ],
+            "throughput_each_repeat": [
+              5771.5,
+              4858.3,
+              5751.0
+            ]
+          },
+          "50": {
+            "throughput_rps": 14022.65048448303,
+            "p50_ms": 3.320085503219161,
+            "p95_ms": 5.024124999908961,
+            "p99_ms": 6.6705904308037125,
+            "mean_ms": 3.4708146190103433,
+            "errors": 0,
+            "completed_per_repeat": 20000,
+            "p99_ms_each_repeat": [
+              6.671,
+              7.874,
+              5.799
+            ],
+            "throughput_each_repeat": [
+              14022.7,
+              13397.4,
+              14729.6
+            ]
+          }
+        }
+      }
+    },
+    "decision": {
+      "winner": "delay1000us_pref8-32",
+      "winner_candidate": {
+        "label": "delay1000us_pref8-32",
+        "delay_us": 1000,
+        "sizes": [
+          8,
+          32
+        ]
+      },
+      "verdicts": [
+        {
+          "label": "delay250us_pref8-32",
+          "kept": true,
+          "rejected_because": []
+        },
+        {
+          "label": "delay500us_pref8-32",
+          "kept": true,
+          "rejected_because": []
+        },
+        {
+          "label": "delay1000us_pref8-32",
+          "kept": true,
+          "rejected_because": []
+        },
+        {
+          "label": "delay2000us_pref8-32",
+          "kept": true,
+          "rejected_because": []
+        }
+      ],
+      "p99_limit_ms": 27.589508751552742
+    }
   }
 }

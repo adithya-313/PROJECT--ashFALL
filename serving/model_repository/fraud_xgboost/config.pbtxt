@@ -22,6 +22,24 @@ backend: "onnxruntime"
 # so this file lists only the per-row shape: 15 features in, not [batch, 15].
 max_batch_size: 128
 
+# Dynamic batching (Level 6): Triton may hold single-row requests for a very short time and run them together as one
+# batch, which is cheaper per row than running them one by one.
+#
+# Where these two values come from: a concurrency test with 50 single-row gRPC requests in flight at once (10 also
+# measured), from a container on the compose network, 1,000 real test rows, median of 3 repeats of 20,000 requests
+# (benchmarks/tune_dynamic_batching.py; full results in reports/benchmarks/level6_batch.json,
+# section "dynamic_batching_tuning").
+#   Batching OFF:                          5,901 requests/s, p99 18.4 ms (at 50 in flight)
+#   This setting (1000 us, sizes 8 and 32): 14,164 requests/s, p99  8.6 ms (at 50 in flight)
+# Why these values: every delay from 250 to 2000 microseconds beat OFF on throughput and stayed far inside the
+# p99 limit (1.5x the OFF p99 = 27.6 ms). Throughput kept rising up to 1000 us and was flat after that
+# (2000 us gave 14,023 requests/s, within 3 percent, a tie), so the smaller delay wins: it adds less waiting. The
+# sizes 8 and 32 were the tested pair; a larger pair was not tried because throughput had stopped rising with delay.
+dynamic_batching {
+  preferred_batch_size: [ 8, 32 ]
+  max_queue_delay_microseconds: 1000
+}
+
 # What goes in: one row = 15 float32 features, in the contract order (amount, oldbalanceOrg, newbalanceOrig,
 # oldbalanceDest, newbalanceDest, account_avg_amount, many_small_inbound_count, large_outbound_amount,
 # new_device_flag, geo_velocity_spike, type_CASH_IN, type_CASH_OUT, type_DEBIT, type_PAYMENT, type_TRANSFER).
