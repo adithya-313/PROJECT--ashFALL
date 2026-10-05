@@ -45,6 +45,10 @@ class AppConfig(BaseSettings):
     db_pool_max_size: int = 10
     # OTLP endpoint for sending traces to Tempo. Override in .env for local dev outside Docker.
     otlp_endpoint: str = "http://tempo:4318/v1/traces"
+    # Address of the Kafka-compatible broker (Redpanda). The default works for scripts run on the host machine, where
+    # docker-compose publishes the broker on localhost:19092. Containers on the compose network should set
+    # KAFKA_BOOTSTRAP_SERVERS=redpanda:9092 instead.
+    kafka_bootstrap_servers: str = "localhost:19092"
 
     # SettingsConfigDict tells pydantic-settings where to look for values.
     # env_file=".env" reads variables from a .env file if it exists.

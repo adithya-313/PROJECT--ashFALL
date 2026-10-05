@@ -69,3 +69,6 @@ anyio[trio]==4.7.0
 # FastAPI ASGI app directly in-process (no server start needed).
 httpx==0.28.0
 
+# aiokafka - an asyncio Kafka client. Level 7 uses it to publish outbox events to Redpanda (a Kafka-compatible
+# broker). Version resolved and installed with pip; pinned here so everyone gets the same one.
+aiokafka==0.13.0
