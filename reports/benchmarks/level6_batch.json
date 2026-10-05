@@ -34,5 +34,279 @@
       "why_deferred": "compute_geo_velocity_batch has no live caller yet; changing the data representation touches wherever these strings are produced or consumed, and the transactions schema locks at Level 7 and the shadow-log schema at Level 9.",
       "right_time": "Level 10.5, when the agent's get_geo_velocity tool makes this feature live. Design the numeric representation once, then."
     }
+  },
+  "triton_batch_sweep": {
+    "what": "Triton fraud_xgboost over gRPC: throughput and latency per request at different batch sizes, one request in flight, production client path (serving/fraud_client.py)",
+    "method": {
+      "warmup_requests_per_size": 100,
+      "timed_requests_per_size": 1000,
+      "repeats": 3,
+      "input_seed": 42,
+      "input": "random float32 rows in [0, 1), 15 features, all finite; a different batch each request",
+      "headline_numbers": "median across repeats, taken separately for each metric",
+      "throughput_definition": "total rows sent / total timed wall seconds"
+    },
+    "environment": {
+      "timestamp_utc": "2026-10-05T00:45:47.627427+00:00",
+      "triton_server_version": "2.42.0",
+      "model_backend": "onnxruntime",
+      "model_runs_on": "CPU (instance_group kind: KIND_CPU), so this sweep is CPU-bound, not GPU",
+      "max_batch_size_in_config": 128,
+      "dynamic_batching_in_config": false,
+      "client": "host python 3.12.10, tritonclient 2.68.0, url localhost:8001 (Docker Desktop port forward, not a container on the compose network)",
+      "other_containers_running": [
+        "project-ashfall-triton-1",
+        "project-ashfall-api-1",
+        "project-ashfall-postgres-1",
+        "project-ashfall-fluent-bit-1",
+        "project-ashfall-grafana-1",
+        "project-ashfall-loki-1",
+        "project-ashfall-prometheus-1",
+        "project-ashfall-redis-1",
+        "project-ashfall-tempo-1"
+      ]
+    },
+    "results": [
+      {
+        "batch_size": 1,
+        "requests_timed": 1000,
+        "rows_total": 1000,
+        "wall_time_s": 1.0758,
+        "throughput_infers_per_s": 929.6,
+        "latency_ms": {
+          "p50": 0.818,
+          "p99": 4.007,
+          "mean": 1.075
+        },
+        "p99_ms_each_repeat": [
+          4.007,
+          3.315,
+          6.592
+        ],
+        "throughput_each_repeat": [
+          929.6,
+          998.3,
+          817.7
+        ]
+      },
+      {
+        "batch_size": 8,
+        "requests_timed": 1000,
+        "rows_total": 8000,
+        "wall_time_s": 1.0373,
+        "throughput_infers_per_s": 7712.5,
+        "latency_ms": {
+          "p50": 0.965,
+          "p99": 1.601,
+          "mean": 1.037
+        },
+        "p99_ms_each_repeat": [
+          1.601,
+          1.594,
+          1.906
+        ],
+        "throughput_each_repeat": [
+          8818.5,
+          7613.0,
+          7712.5
+        ]
+      },
+      {
+        "batch_size": 32,
+        "requests_timed": 1000,
+        "rows_total": 32000,
+        "wall_time_s": 1.086,
+        "throughput_infers_per_s": 29466.6,
+        "latency_ms": {
+          "p50": 0.981,
+          "p99": 2.005,
+          "mean": 1.085
+        },
+        "p99_ms_each_repeat": [
+          1.637,
+          2.005,
+          2.802
+        ],
+        "throughput_each_repeat": [
+          31621.0,
+          29466.6,
+          26747.7
+        ]
+      },
+      {
+        "batch_size": 128,
+        "requests_timed": 1000,
+        "rows_total": 128000,
+        "wall_time_s": 1.2044,
+        "throughput_infers_per_s": 106274.9,
+        "latency_ms": {
+          "p50": 0.971,
+          "p99": 4.949,
+          "mean": 1.204
+        },
+        "p99_ms_each_repeat": [
+          5.672,
+          2.298,
+          4.949
+        ],
+        "throughput_each_repeat": [
+          100353.9,
+          126239.5,
+          106274.9
+        ]
+      }
+    ],
+    "all_repeats": [
+      [
+        {
+          "batch_size": 1,
+          "requests_timed": 1000,
+          "rows_total": 1000,
+          "wall_time_s": 1.0758,
+          "throughput_infers_per_s": 929.6,
+          "latency_ms": {
+            "p50": 0.794,
+            "p99": 4.007,
+            "mean": 1.075
+          }
+        },
+        {
+          "batch_size": 8,
+          "requests_timed": 1000,
+          "rows_total": 8000,
+          "wall_time_s": 0.9072,
+          "throughput_infers_per_s": 8818.5,
+          "latency_ms": {
+            "p50": 0.858,
+            "p99": 1.601,
+            "mean": 0.907
+          }
+        },
+        {
+          "batch_size": 32,
+          "requests_timed": 1000,
+          "rows_total": 32000,
+          "wall_time_s": 1.012,
+          "throughput_infers_per_s": 31621.0,
+          "latency_ms": {
+            "p50": 0.959,
+            "p99": 1.637,
+            "mean": 1.011
+          }
+        },
+        {
+          "batch_size": 128,
+          "requests_timed": 1000,
+          "rows_total": 128000,
+          "wall_time_s": 1.2755,
+          "throughput_infers_per_s": 100353.9,
+          "latency_ms": {
+            "p50": 1.023,
+            "p99": 5.672,
+            "mean": 1.275
+          }
+        }
+      ],
+      [
+        {
+          "batch_size": 1,
+          "requests_timed": 1000,
+          "rows_total": 1000,
+          "wall_time_s": 1.0017,
+          "throughput_infers_per_s": 998.3,
+          "latency_ms": {
+            "p50": 0.818,
+            "p99": 3.315,
+            "mean": 1.001
+          }
+        },
+        {
+          "batch_size": 8,
+          "requests_timed": 1000,
+          "rows_total": 8000,
+          "wall_time_s": 1.0508,
+          "throughput_infers_per_s": 7613.0,
+          "latency_ms": {
+            "p50": 0.965,
+            "p99": 1.594,
+            "mean": 1.05
+          }
+        },
+        {
+          "batch_size": 32,
+          "requests_timed": 1000,
+          "rows_total": 32000,
+          "wall_time_s": 1.086,
+          "throughput_infers_per_s": 29466.6,
+          "latency_ms": {
+            "p50": 0.981,
+            "p99": 2.005,
+            "mean": 1.085
+          }
+        },
+        {
+          "batch_size": 128,
+          "requests_timed": 1000,
+          "rows_total": 128000,
+          "wall_time_s": 1.0139,
+          "throughput_infers_per_s": 126239.5,
+          "latency_ms": {
+            "p50": 0.945,
+            "p99": 2.298,
+            "mean": 1.013
+          }
+        }
+      ],
+      [
+        {
+          "batch_size": 1,
+          "requests_timed": 1000,
+          "rows_total": 1000,
+          "wall_time_s": 1.223,
+          "throughput_infers_per_s": 817.7,
+          "latency_ms": {
+            "p50": 0.844,
+            "p99": 6.592,
+            "mean": 1.222
+          }
+        },
+        {
+          "batch_size": 8,
+          "requests_timed": 1000,
+          "rows_total": 8000,
+          "wall_time_s": 1.0373,
+          "throughput_infers_per_s": 7712.5,
+          "latency_ms": {
+            "p50": 0.966,
+            "p99": 1.906,
+            "mean": 1.037
+          }
+        },
+        {
+          "batch_size": 32,
+          "requests_timed": 1000,
+          "rows_total": 32000,
+          "wall_time_s": 1.1964,
+          "throughput_infers_per_s": 26747.7,
+          "latency_ms": {
+            "p50": 1.034,
+            "p99": 2.802,
+            "mean": 1.196
+          }
+        },
+        {
+          "batch_size": 128,
+          "requests_timed": 1000,
+          "rows_total": 128000,
+          "wall_time_s": 1.2044,
+          "throughput_infers_per_s": 106274.9,
+          "latency_ms": {
+            "p50": 0.971,
+            "p99": 4.949,
+            "mean": 1.204
+          }
+        }
+      ]
+    ]
   }
 }
