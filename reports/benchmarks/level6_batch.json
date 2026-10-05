@@ -1,0 +1,875 @@
+{
+  "vectorization": {
+    "generated_at": "2026-10-04T23:20:45.129301+00:00",
+    "what": "compute_geo_velocity_batch CPU path: old per-row loop vs vectorized NumPy (parsing included in both)",
+    "timed_runs_per_size": 20,
+    "headline_batch_size": 10000,
+    "note": "In-process micro-benchmark on the dev laptop; no Triton or network. Text parsing is still a Python loop in the new path, so the speedup comes from vectorizing the maths only.",
+    "results": [
+      {
+        "batch_size": 100,
+        "old_loop_median_ms": 0.945,
+        "vectorized_median_ms": 0.168,
+        "speedup_x": 5.63,
+        "outputs_bit_identical": true
+      },
+      {
+        "batch_size": 1000,
+        "old_loop_median_ms": 9.536,
+        "vectorized_median_ms": 1.64,
+        "speedup_x": 5.82,
+        "outputs_bit_identical": true
+      },
+      {
+        "batch_size": 10000,
+        "old_loop_median_ms": 97.239,
+        "vectorized_median_ms": 20.186,
+        "speedup_x": 4.82,
+        "outputs_bit_identical": true
+      }
+    ],
+    "future_improvement": {
+      "idea": "Store geo coordinates as numeric latitude/longitude instead of a 'lat,lon' text string, so no per-row text parsing is needed and the whole operation vectorizes.",
+      "why_it_helps": "Parsing text is still a per-row Python loop and is the main reason the current speedup is about 5x rather than larger.",
+      "why_deferred": "compute_geo_velocity_batch has no live caller yet; changing the data representation touches wherever these strings are produced or consumed, and the transactions schema locks at Level 7 and the shadow-log schema at Level 9.",
+      "right_time": "Level 10.5, when the agent's get_geo_velocity tool makes this feature live. Design the numeric representation once, then."
+    }
+  },
+  "triton_batch_sweep": {
+    "what": "Triton fraud_xgboost over gRPC: throughput and latency per request at different batch sizes, one request in flight, production client path (serving/fraud_client.py)",
+    "method": {
+      "warmup_requests_per_size": 100,
+      "timed_requests_per_size": 1000,
+      "repeats": 3,
+      "input_seed": 42,
+      "input": "random float32 rows in [0, 1), 15 features, all finite; a different batch each request",
+      "headline_numbers": "median across repeats, taken separately for each metric",
+      "throughput_definition": "total rows sent / total timed wall seconds"
+    },
+    "environment": {
+      "timestamp_utc": "2026-10-05T00:45:47.627427+00:00",
+      "triton_server_version": "2.42.0",
+      "model_backend": "onnxruntime",
+      "model_runs_on": "CPU (instance_group kind: KIND_CPU), so this sweep is CPU-bound, not GPU",
+      "max_batch_size_in_config": 128,
+      "dynamic_batching_in_config": false,
+      "client": "host python 3.12.10, tritonclient 2.68.0, url localhost:8001 (Docker Desktop port forward, not a container on the compose network)",
+      "other_containers_running": [
+        "project-ashfall-triton-1",
+        "project-ashfall-api-1",
+        "project-ashfall-postgres-1",
+        "project-ashfall-fluent-bit-1",
+        "project-ashfall-grafana-1",
+        "project-ashfall-loki-1",
+        "project-ashfall-prometheus-1",
+        "project-ashfall-redis-1",
+        "project-ashfall-tempo-1"
+      ]
+    },
+    "results": [
+      {
+        "batch_size": 1,
+        "requests_timed": 1000,
+        "rows_total": 1000,
+        "wall_time_s": 1.0758,
+        "throughput_infers_per_s": 929.6,
+        "latency_ms": {
+          "p50": 0.818,
+          "p99": 4.007,
+          "mean": 1.075
+        },
+        "p99_ms_each_repeat": [
+          4.007,
+          3.315,
+          6.592
+        ],
+        "throughput_each_repeat": [
+          929.6,
+          998.3,
+          817.7
+        ]
+      },
+      {
+        "batch_size": 8,
+        "requests_timed": 1000,
+        "rows_total": 8000,
+        "wall_time_s": 1.0373,
+        "throughput_infers_per_s": 7712.5,
+        "latency_ms": {
+          "p50": 0.965,
+          "p99": 1.601,
+          "mean": 1.037
+        },
+        "p99_ms_each_repeat": [
+          1.601,
+          1.594,
+          1.906
+        ],
+        "throughput_each_repeat": [
+          8818.5,
+          7613.0,
+          7712.5
+        ]
+      },
+      {
+        "batch_size": 32,
+        "requests_timed": 1000,
+        "rows_total": 32000,
+        "wall_time_s": 1.086,
+        "throughput_infers_per_s": 29466.6,
+        "latency_ms": {
+          "p50": 0.981,
+          "p99": 2.005,
+          "mean": 1.085
+        },
+        "p99_ms_each_repeat": [
+          1.637,
+          2.005,
+          2.802
+        ],
+        "throughput_each_repeat": [
+          31621.0,
+          29466.6,
+          26747.7
+        ]
+      },
+      {
+        "batch_size": 128,
+        "requests_timed": 1000,
+        "rows_total": 128000,
+        "wall_time_s": 1.2044,
+        "throughput_infers_per_s": 106274.9,
+        "latency_ms": {
+          "p50": 0.971,
+          "p99": 4.949,
+          "mean": 1.204
+        },
+        "p99_ms_each_repeat": [
+          5.672,
+          2.298,
+          4.949
+        ],
+        "throughput_each_repeat": [
+          100353.9,
+          126239.5,
+          106274.9
+        ]
+      }
+    ],
+    "all_repeats": [
+      [
+        {
+          "batch_size": 1,
+          "requests_timed": 1000,
+          "rows_total": 1000,
+          "wall_time_s": 1.0758,
+          "throughput_infers_per_s": 929.6,
+          "latency_ms": {
+            "p50": 0.794,
+            "p99": 4.007,
+            "mean": 1.075
+          }
+        },
+        {
+          "batch_size": 8,
+          "requests_timed": 1000,
+          "rows_total": 8000,
+          "wall_time_s": 0.9072,
+          "throughput_infers_per_s": 8818.5,
+          "latency_ms": {
+            "p50": 0.858,
+            "p99": 1.601,
+            "mean": 0.907
+          }
+        },
+        {
+          "batch_size": 32,
+          "requests_timed": 1000,
+          "rows_total": 32000,
+          "wall_time_s": 1.012,
+          "throughput_infers_per_s": 31621.0,
+          "latency_ms": {
+            "p50": 0.959,
+            "p99": 1.637,
+            "mean": 1.011
+          }
+        },
+        {
+          "batch_size": 128,
+          "requests_timed": 1000,
+          "rows_total": 128000,
+          "wall_time_s": 1.2755,
+          "throughput_infers_per_s": 100353.9,
+          "latency_ms": {
+            "p50": 1.023,
+            "p99": 5.672,
+            "mean": 1.275
+          }
+        }
+      ],
+      [
+        {
+          "batch_size": 1,
+          "requests_timed": 1000,
+          "rows_total": 1000,
+          "wall_time_s": 1.0017,
+          "throughput_infers_per_s": 998.3,
+          "latency_ms": {
+            "p50": 0.818,
+            "p99": 3.315,
+            "mean": 1.001
+          }
+        },
+        {
+          "batch_size": 8,
+          "requests_timed": 1000,
+          "rows_total": 8000,
+          "wall_time_s": 1.0508,
+          "throughput_infers_per_s": 7613.0,
+          "latency_ms": {
+            "p50": 0.965,
+            "p99": 1.594,
+            "mean": 1.05
+          }
+        },
+        {
+          "batch_size": 32,
+          "requests_timed": 1000,
+          "rows_total": 32000,
+          "wall_time_s": 1.086,
+          "throughput_infers_per_s": 29466.6,
+          "latency_ms": {
+            "p50": 0.981,
+            "p99": 2.005,
+            "mean": 1.085
+          }
+        },
+        {
+          "batch_size": 128,
+          "requests_timed": 1000,
+          "rows_total": 128000,
+          "wall_time_s": 1.0139,
+          "throughput_infers_per_s": 126239.5,
+          "latency_ms": {
+            "p50": 0.945,
+            "p99": 2.298,
+            "mean": 1.013
+          }
+        }
+      ],
+      [
+        {
+          "batch_size": 1,
+          "requests_timed": 1000,
+          "rows_total": 1000,
+          "wall_time_s": 1.223,
+          "throughput_infers_per_s": 817.7,
+          "latency_ms": {
+            "p50": 0.844,
+            "p99": 6.592,
+            "mean": 1.222
+          }
+        },
+        {
+          "batch_size": 8,
+          "requests_timed": 1000,
+          "rows_total": 8000,
+          "wall_time_s": 1.0373,
+          "throughput_infers_per_s": 7712.5,
+          "latency_ms": {
+            "p50": 0.966,
+            "p99": 1.906,
+            "mean": 1.037
+          }
+        },
+        {
+          "batch_size": 32,
+          "requests_timed": 1000,
+          "rows_total": 32000,
+          "wall_time_s": 1.1964,
+          "throughput_infers_per_s": 26747.7,
+          "latency_ms": {
+            "p50": 1.034,
+            "p99": 2.802,
+            "mean": 1.196
+          }
+        },
+        {
+          "batch_size": 128,
+          "requests_timed": 1000,
+          "rows_total": 128000,
+          "wall_time_s": 1.2044,
+          "throughput_infers_per_s": 106274.9,
+          "latency_ms": {
+            "p50": 0.971,
+            "p99": 4.949,
+            "mean": 1.204
+          }
+        }
+      ]
+    ]
+  },
+  "dynamic_batching_tuning": {
+    "what": "Choosing Triton dynamic_batching values from concurrent single-row gRPC load (fraud_xgboost, ONNX Runtime on CPU, one model instance)",
+    "generated_at": "2026-10-05T01:02:21.219473+00:00",
+    "load": {
+      "pattern": "many separate single-row requests in flight at once (closed loop, several client processes), from a container on the compose network",
+      "concurrency_levels_measured": [
+        10,
+        50
+      ],
+      "decision_level": 50,
+      "repeats_per_level": 3,
+      "numbers": "median of 3 repeats; 20,000 timed requests per repeat",
+      "inputs": "1,000 real test-split rows (50 fraud), seed 42, one row per request"
+    },
+    "decision_rule": "keep configs with p99 <= 1.5x the OFF p99 at concurrency 50; among those pick the highest throughput that beats OFF; throughputs within 3% are a tie, then prefer the smaller delay, then the smaller preferred size",
+    "off_baseline": {
+      "10": {
+        "throughput_rps": 3042.3963053111174,
+        "p50_ms": 2.8025844985677395,
+        "p95_ms": 6.948253750670118,
+        "p99_ms": 9.997180740392645,
+        "mean_ms": 3.257770056436857,
+        "errors": 0,
+        "completed_per_repeat": 20000,
+        "p99_ms_each_repeat": [
+          9.324,
+          9.997,
+          10.137
+        ],
+        "throughput_each_repeat": [
+          3182.0,
+          3042.4,
+          2828.7
+        ]
+      },
+      "50": {
+        "throughput_rps": 5900.797550020843,
+        "p50_ms": 7.953125001222361,
+        "p95_ms": 13.937179297136025,
+        "p99_ms": 18.393005834368495,
+        "mean_ms": 8.374374875290595,
+        "errors": 0,
+        "completed_per_repeat": 20000,
+        "p99_ms_each_repeat": [
+          18.393,
+          19.083,
+          14.519
+        ],
+        "throughput_each_repeat": [
+          5285.2,
+          5900.8,
+          6157.8
+        ]
+      }
+    },
+    "candidates": {
+      "delay250us_pref8-32": {
+        "config": {
+          "label": "delay250us_pref8-32",
+          "delay_us": 250,
+          "sizes": [
+            8,
+            32
+          ]
+        },
+        "levels": {
+          "10": {
+            "throughput_rps": 3655.0423742157336,
+            "p50_ms": 2.0176354992145207,
+            "p95_ms": 7.021273803547956,
+            "p99_ms": 10.320032223171438,
+            "mean_ms": 2.728209894309839,
+            "errors": 0,
+            "completed_per_repeat": 20000,
+            "p99_ms_each_repeat": [
+              9.122,
+              10.32,
+              11.243
+            ],
+            "throughput_each_repeat": [
+              3812.4,
+              3584.7,
+              3655.0
+            ]
+          },
+          "50": {
+            "throughput_rps": 12054.293674206663,
+            "p50_ms": 3.4209950026706792,
+            "p95_ms": 9.17867280586506,
+            "p99_ms": 12.984349197358808,
+            "mean_ms": 4.075379982153026,
+            "errors": 0,
+            "completed_per_repeat": 20000,
+            "p99_ms_each_repeat": [
+              11.751,
+              18.292,
+              12.984
+            ],
+            "throughput_each_repeat": [
+              12942.4,
+              10948.5,
+              12054.3
+            ]
+          }
+        }
+      },
+      "delay500us_pref8-32": {
+        "config": {
+          "label": "delay500us_pref8-32",
+          "delay_us": 500,
+          "sizes": [
+            8,
+            32
+          ]
+        },
+        "levels": {
+          "10": {
+            "throughput_rps": 5047.455227652906,
+            "p50_ms": 1.5355994983110577,
+            "p95_ms": 4.720094303775111,
+            "p99_ms": 10.220261079812188,
+            "mean_ms": 1.9757817263576727,
+            "errors": 0,
+            "completed_per_repeat": 20000,
+            "p99_ms_each_repeat": [
+              10.22,
+              10.534,
+              8.794
+            ],
+            "throughput_each_repeat": [
+              5047.5,
+              4728.1,
+              5651.6
+            ]
+          },
+          "50": {
+            "throughput_rps": 13229.741388975903,
+            "p50_ms": 3.336912501254119,
+            "p95_ms": 6.374239350770949,
+            "p99_ms": 11.360338276717787,
+            "mean_ms": 3.6950647715228113,
+            "errors": 0,
+            "completed_per_repeat": 20000,
+            "p99_ms_each_repeat": [
+              11.36,
+              14.177,
+              11.267
+            ],
+            "throughput_each_repeat": [
+              13695.6,
+              12765.5,
+              13229.7
+            ]
+          }
+        }
+      },
+      "delay1000us_pref8-32": {
+        "config": {
+          "label": "delay1000us_pref8-32",
+          "delay_us": 1000,
+          "sizes": [
+            8,
+            32
+          ]
+        },
+        "levels": {
+          "10": {
+            "throughput_rps": 5728.504930662144,
+            "p50_ms": 1.6696940001565963,
+            "p95_ms": 2.4580562003393425,
+            "p99_ms": 3.5147690806479637,
+            "mean_ms": 1.7328661543953785,
+            "errors": 0,
+            "completed_per_repeat": 20000,
+            "p99_ms_each_repeat": [
+              3.515,
+              3.183,
+              3.554
+            ],
+            "throughput_each_repeat": [
+              5722.1,
+              5791.7,
+              5728.5
+            ]
+          },
+          "50": {
+            "throughput_rps": 14164.192404747833,
+            "p50_ms": 3.3129464973171707,
+            "p95_ms": 5.317809902408044,
+            "p99_ms": 8.600931551263775,
+            "mean_ms": 3.4940032197289836,
+            "errors": 0,
+            "completed_per_repeat": 20000,
+            "p99_ms_each_repeat": [
+              8.601,
+              8.775,
+              8.451
+            ],
+            "throughput_each_repeat": [
+              14177.1,
+              14164.2,
+              13749.7
+            ]
+          }
+        }
+      },
+      "delay2000us_pref8-32": {
+        "config": {
+          "label": "delay2000us_pref8-32",
+          "delay_us": 2000,
+          "sizes": [
+            8,
+            32
+          ]
+        },
+        "levels": {
+          "10": {
+            "throughput_rps": 5751.002873828014,
+            "p50_ms": 1.614396500372095,
+            "p95_ms": 2.5764075951883565,
+            "p99_ms": 3.192430583439998,
+            "mean_ms": 1.7315383969311369,
+            "errors": 0,
+            "completed_per_repeat": 20000,
+            "p99_ms_each_repeat": [
+              3.192,
+              3.94,
+              3.176
+            ],
+            "throughput_each_repeat": [
+              5771.5,
+              4858.3,
+              5751.0
+            ]
+          },
+          "50": {
+            "throughput_rps": 14022.65048448303,
+            "p50_ms": 3.320085503219161,
+            "p95_ms": 5.024124999908961,
+            "p99_ms": 6.6705904308037125,
+            "mean_ms": 3.4708146190103433,
+            "errors": 0,
+            "completed_per_repeat": 20000,
+            "p99_ms_each_repeat": [
+              6.671,
+              7.874,
+              5.799
+            ],
+            "throughput_each_repeat": [
+              14022.7,
+              13397.4,
+              14729.6
+            ]
+          }
+        }
+      }
+    },
+    "decision": {
+      "winner": "delay1000us_pref8-32",
+      "winner_candidate": {
+        "label": "delay1000us_pref8-32",
+        "delay_us": 1000,
+        "sizes": [
+          8,
+          32
+        ]
+      },
+      "verdicts": [
+        {
+          "label": "delay250us_pref8-32",
+          "kept": true,
+          "rejected_because": []
+        },
+        {
+          "label": "delay500us_pref8-32",
+          "kept": true,
+          "rejected_because": []
+        },
+        {
+          "label": "delay1000us_pref8-32",
+          "kept": true,
+          "rejected_because": []
+        },
+        {
+          "label": "delay2000us_pref8-32",
+          "kept": true,
+          "rejected_because": []
+        }
+      ],
+      "p99_limit_ms": 27.589508751552742
+    }
+  },
+  "serialization_profiling": {
+    "generated_at": "2026-10-05T07:35:52.686649+00:00",
+    "what": "Client-side serialization cost of a Triton gRPC request versus the whole round trip",
+    "wire_format": {
+      "raw_input_contents_entries": 1,
+      "raw_input_contents_bytes": 480,
+      "protobuf_fp32_contents_values": 0,
+      "verdict": "raw binary bytes"
+    },
+    "how_wire_format_was_confirmed": "Built a real request with the client's own helpers and inspected it: the tensor sits in raw_input_contents as bytes (set_data_from_numpy stores numpy tobytes()) and the protobuf fp32_contents field is empty.",
+    "method": {
+      "timed_iterations_per_step": 20000,
+      "roundtrip_requests": 2000,
+      "roundtrip_warmup": 100,
+      "input_seed": 42,
+      "roundtrip_measured_now": true,
+      "server_config_during_roundtrip": {
+        "dynamic_batching": true,
+        "max_queue_delay_microseconds": 1000
+      },
+      "client": "host python via localhost:8001 (Docker Desktop port forward)"
+    },
+    "definitions": {
+      "packing_ms": "client only: InferInput + set_data_from_numpy",
+      "request_build_ms": "client only: put the packed tensor into the gRPC request message (private helper)",
+      "wire_encode_ms": "client only: SerializeToString of the request",
+      "roundtrip_p50_ms": "whole fraud_client.raw_fraud_probability call: checks, packing, message, network hop, Triton queue + model compute, reading the answer",
+      "packing_fraction_of_roundtrip": "packing_ms / roundtrip_p50_ms"
+    },
+    "results": [
+      {
+        "batch_size": 1,
+        "packing_ms": 0.0066,
+        "request_build_ms": 0.0025,
+        "wire_encode_ms": 0.0003,
+        "client_encode_total_ms": 0.0094,
+        "roundtrip_p50_ms": 2.2,
+        "packing_fraction_of_roundtrip": 0.003,
+        "client_encode_total_fraction_of_roundtrip": 0.00427,
+        "raw_tensor_bytes": 60,
+        "serialized_request_bytes": 96,
+        "raw_input_contents_bytes": 60,
+        "alternative_protobuf_floats": {
+          "build_plus_encode_ms": 0.0032,
+          "serialized_request_bytes": 98
+        }
+      },
+      {
+        "batch_size": 8,
+        "packing_ms": 0.0049,
+        "request_build_ms": 0.0019,
+        "wire_encode_ms": 0.0004,
+        "client_encode_total_ms": 0.0072,
+        "roundtrip_p50_ms": 1.187,
+        "packing_fraction_of_roundtrip": 0.00413,
+        "client_encode_total_fraction_of_roundtrip": 0.00606,
+        "raw_tensor_bytes": 480,
+        "serialized_request_bytes": 517,
+        "raw_input_contents_bytes": 480,
+        "alternative_protobuf_floats": {
+          "build_plus_encode_ms": 0.006,
+          "serialized_request_bytes": 521
+        }
+      },
+      {
+        "batch_size": 32,
+        "packing_ms": 0.005,
+        "request_build_ms": 0.002,
+        "wire_encode_ms": 0.0004,
+        "client_encode_total_ms": 0.0074,
+        "roundtrip_p50_ms": 1.628,
+        "packing_fraction_of_roundtrip": 0.00307,
+        "client_encode_total_fraction_of_roundtrip": 0.00455,
+        "raw_tensor_bytes": 1920,
+        "serialized_request_bytes": 1957,
+        "raw_input_contents_bytes": 1920,
+        "alternative_protobuf_floats": {
+          "build_plus_encode_ms": 0.0179,
+          "serialized_request_bytes": 1961
+        }
+      }
+    ],
+    "not_measured": [
+      "shared memory (system or CUDA)",
+      "server-side deserialization on its own",
+      "sending the protobuf-float alternative to Triton (only its client-side encode time and size were measured)"
+    ]
+  },
+  "gpu_kernel_profiling": {
+    "generated_at": "2026-10-05T08:55:02.275529+00:00",
+    "what": "GPU profile of the Level 4.5 HAVERSINE geo-velocity kernel (features/gpu_geo_velocity.py). These numbers describe that kernel only, NOT Triton inference.",
+    "hardware": "NVIDIA GeForce RTX 4050 Laptop GPU (6 GB GDDR6), run in WSL2",
+    "tools": {
+      "kernel_time": "Nsight Systems 2026.1.3, --trace=cuda --sample=none --cpuctxsw=none",
+      "counters": "Nsight Compute 2026.3.1, one launch per size, sections SpeedOfLight, Occupancy, MemoryWorkloadAnalysis"
+    },
+    "files": "reports/benchmarks/level6_nsight/ (.nsys-rep traces, .ncu-repz reports, _ncu.csv tables)",
+    "how_numbers_are_derived": {
+      "kernel_time_ms": "median GPU time of the kernel across the launches in the Nsight Systems trace",
+      "inferences_per_sec": "rows / kernel_time; one row = one inference; kernel only, no host-device copies",
+      "sm_occupancy_pct": "Nsight Compute achieved occupancy (separate profiling run from the nsys trace)",
+      "hbm_bandwidth_util_pct": "Nsight Compute DRAM throughput as a percent of peak (the GPU uses GDDR6, not HBM)",
+      "ncu_duration_us_reference_only": "kept for reference, not used for throughput: Nsight Compute runs the kernel under its own measurement settings (it normally locks clocks and flushes caches, ESTIMATE from its documented defaults), so its duration is not the free-running time"
+    },
+    "results": [
+      {
+        "rows": 10000,
+        "kernel_time_ms_min_max": [
+          0.00411,
+          0.00509
+        ],
+        "kernel_launches_in_trace": 21,
+        "sm_occupancy_pct": 8.29,
+        "theoretical_occupancy_pct": 66.67,
+        "hbm_bandwidth_util_pct": 23.49,
+        "dram_gb_per_s": 39.14,
+        "sm_throughput_pct": 6.24,
+        "ncu_duration_us_reference_only": 6.69,
+        "bytes_moved": 240000,
+        "implied_data_rate_gb_per_s_from_nsys": 58.0,
+        "dram_peak_gb_per_s_from_ncu": 166.6,
+        "inferences_per_sec_warmcache_optimistic": 2416626390,
+        "kernel_time_ms_warmcache_optimistic": 0.00414,
+        "kernel_time_ms_cold_estimate": 0.00669,
+        "inferences_per_sec_cold_estimate": 1494768311,
+        "cold_estimate_derived_as": "rows / ncu_duration_us_reference_only (Nsight Compute, caches flushed)",
+        "note": "Truth most likely sits between inferences_per_sec_cold_estimate (conservative, Nsight Compute duration, caches flushed) and inferences_per_sec_warmcache_optimistic (Nsight Systems median, same input reused so L2 is probably warm). ESTIMATE; neither was measured with fresh data per batch."
+      },
+      {
+        "rows": 100000,
+        "kernel_time_ms_min_max": [
+          0.00787,
+          0.01619
+        ],
+        "kernel_launches_in_trace": 21,
+        "sm_occupancy_pct": 34.05,
+        "theoretical_occupancy_pct": 66.67,
+        "hbm_bandwidth_util_pct": 69.24,
+        "dram_gb_per_s": 115.68,
+        "sm_throughput_pct": 22.79,
+        "ncu_duration_us_reference_only": 17.82,
+        "bytes_moved": 2400000,
+        "implied_data_rate_gb_per_s_from_nsys": 302.5,
+        "dram_peak_gb_per_s_from_ncu": 167.1,
+        "inferences_per_sec_warmcache_optimistic": 12603982859,
+        "kernel_time_ms_warmcache_optimistic": 0.00793,
+        "kernel_time_ms_cold_estimate": 0.01782,
+        "inferences_per_sec_cold_estimate": 5611672278,
+        "cold_estimate_derived_as": "rows / ncu_duration_us_reference_only (Nsight Compute, caches flushed)",
+        "note": "Truth most likely sits between inferences_per_sec_cold_estimate (conservative, Nsight Compute duration, caches flushed) and inferences_per_sec_warmcache_optimistic (Nsight Systems median, same input reused so L2 is probably warm). ESTIMATE; neither was measured with fresh data per batch."
+      },
+      {
+        "rows": 1000000,
+        "kernel_time_ms_min_max": [
+          0.0501,
+          0.29592
+        ],
+        "kernel_launches_in_trace": 21,
+        "sm_occupancy_pct": 57.99,
+        "theoretical_occupancy_pct": 66.67,
+        "hbm_bandwidth_util_pct": 93.41,
+        "dram_gb_per_s": 156.76,
+        "sm_throughput_pct": 31.34,
+        "ncu_duration_us_reference_only": 131.26,
+        "bytes_moved": 24000000,
+        "implied_data_rate_gb_per_s_from_nsys": 476.6,
+        "dram_peak_gb_per_s_from_ncu": 167.8,
+        "inferences_per_sec_warmcache_optimistic": 19858606720,
+        "kernel_time_ms_warmcache_optimistic": 0.05036,
+        "kernel_time_ms_cold_estimate": 0.13126,
+        "inferences_per_sec_cold_estimate": 7618467164,
+        "cold_estimate_derived_as": "rows / ncu_duration_us_reference_only (Nsight Compute, caches flushed)",
+        "note": "Truth most likely sits between inferences_per_sec_cold_estimate (conservative, Nsight Compute duration, caches flushed) and inferences_per_sec_warmcache_optimistic (Nsight Systems median, same input reused so L2 is probably warm). ESTIMATE; neither was measured with fresh data per batch."
+      }
+    ],
+    "verdict": "Memory-bound, and more so as the batch grows, when the data comes cold from DRAM (Nsight Compute, caches flushed): DRAM throughput rises 23.5% -> 69.2% -> 93.4% of peak from 10k to 1M rows while SM (compute) throughput only rises 6.2% -> 22.8% -> 31.3%. At 10k and 100k the GPU is also under-filled (achieved occupancy 8.3% and 34.1%, against a theoretical 66.7%); at 1M occupancy reaches 58.0% and memory bandwidth is the limit, not compute.",
+    "caveat_cache": "The Nsight Systems timeline repeats the SAME inputs, so later launches probably read from the GPU's large L2 cache instead of DRAM (ESTIMATE). Evidence: at 100k and 1M rows the data rate implied by the nsys kernel time (see implied_data_rate_gb_per_s_from_nsys) is higher than the DRAM peak Nsight Compute reports (dram_peak_gb_per_s_from_ncu), which DRAM alone cannot deliver. So the nsys inferences_per_sec is a warm-cache figure; with fresh data for every batch the kernel would be slower, closer to the Nsight Compute duration. Not measured separately.",
+    "nsys_note": "The older Nsight Systems 2022.4 from the Ubuntu package recorded no CUDA kernel events for this CUDA 12.4 setup (its traces had no kernel tables), so it was replaced by 2026.1.3 from NVIDIA's CUDA repo for WSL.",
+    "how_to_read": "Every speed and cost here comes in two flavours. *_warmcache_optimistic reuses the same input, so the GPU's L2 cache is probably warm (ESTIMATE). *_cold_estimate comes from Nsight Compute, which flushes caches and may lock clocks, so it is a conservative bound. The realistic value for fresh data every batch most likely lies between the two (ESTIMATE). Neither includes host-to-GPU data copies."
+  },
+  "triton_gpu_metrics": {
+    "note": "The Triton fraud model (fraud_xgboost, ONNX Runtime) runs on the CPU: instance_group kind is KIND_CPU and the model is a tree ensemble. SM occupancy, memory-bandwidth utilization and inferences-per-second-per-GPU are therefore N/A for it. GPU profiling here applies only to the Haversine kernel above. No GPU numbers are recorded for the Triton model.",
+    "triton_model_gpu_metrics": "N/A"
+  },
+  "gpu_cost_per_inference": {
+    "generated_at": "2026-10-05T09:02:03.248418+00:00",
+    "what": "Electricity cost per inference of the Haversine GPU kernel (not Triton inference)",
+    "formula": "cost_per_inference_usd = avg_power_kW * seconds_per_inference / 3600 * price_per_kWh (core/energy_cost.py; the same formula Level 10.5 reuses)",
+    "price_per_kwh_usd": 0.12,
+    "price_is": "an ASSUMPTION (editable default), not a measured value; set your real tariff to get your cost",
+    "measured": "avg_power_w from nvidia-smi during a sustained loop, and throughput from the same loop",
+    "method": {
+      "loop_seconds_target": 15.0,
+      "power_sample_ms": 300,
+      "idle_gpu_power_w": 3.69,
+      "same_input_every_launch": true
+    },
+    "caveats": [
+      "Warm cache: the loop reuses the same input, so later launches probably read from the GPU's L2 cache instead of DRAM (ESTIMATE). With fresh data per batch the kernel is slower and the cost per inference higher.",
+      "Sustained throughput is limited by Python kernel-launch time at small sizes, so it is lower than the kernel-only rows/sec in the Nsight Systems trace.",
+      "Power is the whole GPU board power reported by nvidia-smi (including idle draw), not the kernel's share."
+    ],
+    "results": [
+      {
+        "rows": 10000,
+        "loop_seconds": 15.0,
+        "launches": 730600,
+        "avg_power_w": 15.37,
+        "power_readings_used": 50,
+        "power_w_min_max": [
+          13.27,
+          18.26
+        ],
+        "cost_per_inference_usd_warmcache_optimistic": 1.0524472658895999e-15,
+        "sustained_inferences_per_sec_warmcache_optimistic": 486941262,
+        "seconds_per_inference_warmcache_optimistic": 2.0536357826443957e-09,
+        "seconds_per_inference_cold_estimate": 6.69e-10,
+        "cost_per_inference_usd_cold_estimate": 3.4275099999999997e-16,
+        "cold_estimate_derived_as": "cost_per_inference_usd(avg_power_w from the warm loop, ncu_duration / rows, price_per_kwh_usd)",
+        "note": "NOT a bracket at this size. The warm sustained loop is limited by Python kernel-launch time (the GPU sits idle between launches), so its cost per inference is HIGHER than the kernel-only cold estimate. Read cost_per_inference_usd_warmcache_optimistic as the cost of this launch-limited loop, and cost_per_inference_usd_cold_estimate as a kernel-only figure that assumes the loop's average power (ESTIMATE, not measured for a cold run).",
+        "warm_and_cold_bracket_the_truth": false
+      },
+      {
+        "rows": 100000,
+        "loop_seconds": 15.0,
+        "launches": 746800,
+        "avg_power_w": 37.25,
+        "power_readings_used": 50,
+        "power_w_min_max": [
+          13.19,
+          41.13
+        ],
+        "cost_per_inference_usd_warmcache_optimistic": 2.494419213582984e-16,
+        "sustained_inferences_per_sec_warmcache_optimistic": 4978126077,
+        "seconds_per_inference_warmcache_optimistic": 2.0087880149973295e-10,
+        "seconds_per_inference_cold_estimate": 1.782e-10,
+        "cost_per_inference_usd_cold_estimate": 2.2126499999999996e-16,
+        "cold_estimate_derived_as": "cost_per_inference_usd(avg_power_w from the warm loop, ncu_duration / rows, price_per_kwh_usd)",
+        "note": "NOT a bracket at this size. The warm sustained loop is limited by Python kernel-launch time (the GPU sits idle between launches), so its cost per inference is HIGHER than the kernel-only cold estimate. Read cost_per_inference_usd_warmcache_optimistic as the cost of this launch-limited loop, and cost_per_inference_usd_cold_estimate as a kernel-only figure that assumes the loop's average power (ESTIMATE, not measured for a cold run).",
+        "warm_and_cold_bracket_the_truth": false
+      },
+      {
+        "rows": 1000000,
+        "loop_seconds": 15.0,
+        "launches": 373200,
+        "avg_power_w": 104.53,
+        "power_readings_used": 50,
+        "power_w_min_max": [
+          18.11,
+          113.58
+        ],
+        "cost_per_inference_usd_warmcache_optimistic": 1.400678834676181e-16,
+        "sustained_inferences_per_sec_warmcache_optimistic": 24876699643,
+        "seconds_per_inference_warmcache_optimistic": 4.0198258384244404e-11,
+        "seconds_per_inference_cold_estimate": 1.3126e-10,
+        "cost_per_inference_usd_cold_estimate": 4.573535933333333e-16,
+        "cold_estimate_derived_as": "cost_per_inference_usd(avg_power_w from the warm loop, ncu_duration / rows, price_per_kwh_usd)",
+        "note": "Truth most likely sits between cost_per_inference_usd_warmcache_optimistic (lowest cost, warm-loop speed) and cost_per_inference_usd_cold_estimate (highest cost). The cold figure ASSUMES the same average board power as the warm loop, which was not measured for a cold run (ESTIMATE).",
+        "warm_and_cold_bracket_the_truth": true
+      }
+    ],
+    "how_to_read": "Every speed and cost here comes in two flavours. *_warmcache_optimistic reuses the same input, so the GPU's L2 cache is probably warm (ESTIMATE). *_cold_estimate comes from Nsight Compute, which flushes caches and may lock clocks, so it is a conservative bound. The realistic value for fresh data every batch most likely lies between the two (ESTIMATE). Neither includes host-to-GPU data copies."
+  },
+  "mlflow": {
+    "experiment": "level6_benchmarking",
+    "run_id": "1791b6a45e5747c3899d7cda8d194f30",
+    "run_name": "level6_batch_optimization",
+    "tracking_uri": "sqlite:///mlflow.db (local, gitignored, not backed up)",
+    "logged_by": "benchmarks/log_level6_to_mlflow.py",
+    "note": "every metric in the run is read from this file, none are typed in"
+  }
+}

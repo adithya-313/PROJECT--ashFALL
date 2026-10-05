@@ -10,12 +10,35 @@ name: "fraud_xgboost"
 # Which engine runs the file. "onnxruntime" is Triton's ONNX backend (it runs tree models like this one on the CPU).
 backend: "onnxruntime"
 
-# The largest batch of rows Triton accepts in one request. This matches TRITON_MAX_BATCH=8 in .env.example.
+# The largest batch of rows Triton accepts in one request. This matches TRITON_MAX_BATCH in .env.example and
+# MAX_BATCH in serving/fraud_client.py (keep all three the same).
+#
+# Why 128 (Level 6): the batch-size sweep sends batches of 1, 8, 32 and 128 rows, and 128 also leaves headroom for
+# the Level 10 concurrency test. It was 8 before, and no document records why 8 was chosen. The ONNX file does not
+# need re-exporting for this: its batch dimension is not fixed (ONNX Runtime accepted 500 rows in a quick check).
 #
 # Why the shapes below look different from the ONNX file: the ONNX model declares its input as [None, 15], where
 # the first number is the batch size. When max_batch_size is greater than 0, Triton ADDS the batch dimension itself,
 # so this file lists only the per-row shape: 15 features in, not [batch, 15].
-max_batch_size: 8
+max_batch_size: 128
+
+# Dynamic batching (Level 6): Triton may hold single-row requests for a very short time and run them together as one
+# batch, which is cheaper per row than running them one by one.
+#
+# Where these two values come from: a concurrency test with 50 single-row gRPC requests in flight at once (10 also
+# measured), from a container on the compose network, 1,000 real test rows, median of 3 repeats of 20,000 requests
+# (benchmarks/tune_dynamic_batching.py; full results in reports/benchmarks/level6_batch.json,
+# section "dynamic_batching_tuning").
+#   Batching OFF:                          5,901 requests/s, p99 18.4 ms (at 50 in flight)
+#   This setting (1000 us, sizes 8 and 32): 14,164 requests/s, p99  8.6 ms (at 50 in flight)
+# Why these values: every delay from 250 to 2000 microseconds beat OFF on throughput and stayed far inside the
+# p99 limit (1.5x the OFF p99 = 27.6 ms). Throughput kept rising up to 1000 us and was flat after that
+# (2000 us gave 14,023 requests/s, within 3 percent, a tie), so the smaller delay wins: it adds less waiting. The
+# sizes 8 and 32 were the tested pair; a larger pair was not tried because throughput had stopped rising with delay.
+dynamic_batching {
+  preferred_batch_size: [ 8, 32 ]
+  max_queue_delay_microseconds: 1000
+}
 
 # What goes in: one row = 15 float32 features, in the contract order (amount, oldbalanceOrg, newbalanceOrig,
 # oldbalanceDest, newbalanceDest, account_avg_amount, many_small_inbound_count, large_outbound_amount,

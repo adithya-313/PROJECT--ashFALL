@@ -16,7 +16,7 @@ TRITON_URL = "localhost:8001"  # Triton's gRPC port on this machine (see docker-
 MODEL_NAME = "fraud_xgboost"
 INPUT_NAME = "input"
 PROBABILITY_OUTPUT = "probabilities"  # two columns per row: [P(not fraud), P(fraud)]
-MAX_BATCH = 8  # the model's max_batch_size in config.pbtxt
+MAX_BATCH = 128  # the model's max_batch_size in config.pbtxt (raised from 8 in Level 6 for the batch-size sweep)
 
 # The canonical calibrator. This pickle is the source of truth (later levels load it too); this file only READS it.
 CALIBRATOR_PATH = REPO_ROOT / "models" / "calibration" / "isotonic_calibrator.pkl"
@@ -69,6 +69,14 @@ def raw_fraud_probability(client: grpc_client.InferenceServerClient, rows: np.nd
     """Send rows to Triton over gRPC and return the RAW (uncalibrated) fraud probability for each row."""
     table = check_rows(rows)
     request = grpc_client.InferInput(INPUT_NAME, list(table.shape), "FP32")
+    # Serialization is NOT a measurable part of the latency here (Level 6, benchmarks/profile_serialization.py).
+    # Measured on this machine: this packing step takes about 0.005 ms per call at 1, 8 and 32 rows, which is
+    # 0.3 to 0.4 percent of the 1.2 to 2.2 ms round trip. The whole client-side encoding (packing, building the gRPC
+    # message, turning it into bytes) is under 0.01 ms, under 1 percent. The tensor already travels as raw bytes
+    # (raw_input_contents; checked by inspecting a real request), so putting floats in the protobuf field instead
+    # would not help: the size is the same (about 4 bytes per float) and encoding it was slower at 32 rows. Shared
+    # memory would only remove a copy of at most 1,920 bytes, which is not worth the setup for a Triton running in
+    # a container on one laptop. So this line is left alone.
     request.set_data_from_numpy(table)
     response = client.infer(MODEL_NAME, [request], outputs=[grpc_client.InferRequestedOutput(PROBABILITY_OUTPUT)])
     # Column 1 is the fraud class (the model's classes are ordered [0, 1]).

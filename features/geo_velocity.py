@@ -166,6 +166,72 @@ def compute_geo_velocity(current_geo: str, last_geo: str | None, elapsed_seconds
     return distance_km / (elapsed_seconds / SECONDS_PER_HOUR)
 
 
+def haversine_distance_km_array(lat1: np.ndarray, lon1: np.ndarray, lat2: np.ndarray, lon2: np.ndarray) -> np.ndarray:
+    """
+    Haversine distance in kilometres for many point pairs at once (the same five steps as haversine_distance_km).
+
+    Why a second copy of the formula: haversine_distance_km works on one pair and returns a Python float. This one
+    takes four arrays of equal length and does each step on all pairs together, which is much faster than a Python
+    loop. The steps, the order and the constants are kept exactly the same as the single-pair version, so both give
+    the same numbers. If you change one, change the other (tests/unit/test_geo_velocity.py compares them).
+    """
+    # Degrees to radians, and the north-south / east-west gaps between each pair of points.
+    phi1, phi2 = np.radians(lat1), np.radians(lat2)
+    delta_phi = np.radians(lat2 - lat1)
+    delta_lambda = np.radians(lon2 - lon1)
+
+    # The haversine term "a", kept inside [0, 1] so the square roots below never see a tiny negative number.
+    # Squaring is written as np.power(x, 2.0) on purpose. The single-pair version squares a lone NumPy number with
+    # "** 2", which uses the C library's pow(); on a whole array "** 2" is silently turned into x * x, and that can
+    # differ in the very last binary digit. np.power(x, 2.0) uses pow() too, so the results match bit for bit.
+    sin_half_phi = np.sin(delta_phi / 2)
+    sin_half_lambda = np.sin(delta_lambda / 2)
+    a = np.power(sin_half_phi, 2.0) + np.cos(phi1) * np.cos(phi2) * np.power(sin_half_lambda, 2.0)
+    a = np.clip(a, 0.0, 1.0)
+
+    # Central angle, then angle x Earth radius = kilometres on the ground.
+    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
+    return EARTH_RADIUS_KM * c
+
+
+def compute_geo_velocity_cpu_vectorized(
+    current_geos: list[str], last_geos: list[str | None], elapsed_seconds_list: list[float], valid_indices: list[int]
+) -> np.ndarray:
+    """
+    Speed in km/h for the rows listed in valid_indices, computed with NumPy instead of a per-row function call.
+
+    The caller has already removed rows that cannot have a speed (no previous location, or elapsed time of zero or
+    less), so every row here is a real calculation. Returns one speed per entry of valid_indices, in the same order.
+    """
+    # NOTE: this text parsing is still per-row. See 'future_improvement' in reports/benchmarks/level6_batch.json;
+    #       storing coordinates as numbers would remove it.
+    # Step 1: turn the text into numbers. Text parsing cannot be done by NumPy, so this stays a small per-row loop.
+    # It follows the same order as compute_geo_velocity (current location, then last location), so a bad value
+    # raises the same ValueError for the same row as before.
+    current_lats, current_lons, last_lats, last_lons, hours = [], [], [], [], []
+    for i in valid_indices:
+        current_lat, current_lon = parse_geo_coordinates(current_geos[i])
+        last_lat, last_lon = parse_geo_coordinates(last_geos[i])  # type: ignore[arg-type]
+        elapsed_hours = elapsed_seconds_list[i] / SECONDS_PER_HOUR
+        # A positive but absurdly small elapsed time (below about 1e-320 seconds) rounds to 0.0 hours. The old
+        # per-row code then failed with ZeroDivisionError, and plain NumPy would quietly return infinity instead.
+        # Raise the same error so the behaviour does not change.
+        if elapsed_hours == 0.0:
+            raise ZeroDivisionError("float division by zero")
+        current_lats.append(current_lat)
+        current_lons.append(current_lon)
+        last_lats.append(last_lat)
+        last_lons.append(last_lon)
+        hours.append(elapsed_hours)
+
+    # Step 2: distance between the last and the current location of every row (last location is the first point,
+    # exactly as in compute_geo_velocity), then speed = distance / hours, all rows at once.
+    distances_km = haversine_distance_km_array(
+        np.array(last_lats), np.array(last_lons), np.array(current_lats), np.array(current_lons)
+    )
+    return distances_km / np.array(hours)
+
+
 def compute_geo_velocity_batch(
     current_geos: list[str], last_geos: list[str | None], elapsed_seconds_list: list[float]
 ) -> list[float | None]:
@@ -208,8 +274,10 @@ def compute_geo_velocity_batch(
         for i, value in zip(valid_indices, gpu_values):
             results[i] = float(value)
     else:
-        # Small batch: loop over the existing single-transaction CPU function.
-        for i in valid_indices:
-            results[i] = compute_geo_velocity(current_geos[i], last_geos[i], elapsed_seconds_list[i])
+        # Small batch: compute every speed in one go with NumPy instead of calling the single-row function once per
+        # row. The numbers it gives are identical to that single-row function (a unit test checks this).
+        speeds = compute_geo_velocity_cpu_vectorized(current_geos, last_geos, elapsed_seconds_list, valid_indices)
+        for i, speed in zip(valid_indices, speeds.tolist()):
+            results[i] = speed
 
     return results
