@@ -49,6 +49,13 @@ class AppConfig(BaseSettings):
     # docker-compose publishes the broker on localhost:19092. Containers on the compose network should set
     # KAFKA_BOOTSTRAP_SERVERS=redpanda:9092 instead.
     kafka_bootstrap_servers: str = "localhost:19092"
+    # The Kafka topic the outbox relay publishes transaction events to.
+    kafka_outbox_topic: str = "transactions.created"
+    # Outbox relay tuning: how long to wait between checks when there is nothing to send, how many events to send
+    # per round, and the longest wait between retries after a Kafka failure (the wait doubles up to this cap).
+    relay_poll_interval_seconds: float = 1.0
+    relay_batch_size: int = 100
+    relay_max_backoff_seconds: float = 30.0
 
     # SettingsConfigDict tells pydantic-settings where to look for values.
     # env_file=".env" reads variables from a .env file if it exists.

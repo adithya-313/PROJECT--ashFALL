@@ -177,6 +177,29 @@ services:
       retries: 10
       start_period: 15s
 
+  # Outbox relay (Level 7): reads unpublished rows from the outbox table and sends them to Kafka (Redpanda).
+  # It is its own service so the API never waits on Kafka, and so it can be stopped, restarted or scaled alone.
+  # It is built from the same Dockerfile as the api (same code and libraries), so the build is almost entirely cached;
+  # only the command differs. The code is api/services/outbox_relay.py.
+  #
+  # DATABASE_URL and the other settings come from .env, exactly like the api. KAFKA_BOOTSTRAP_SERVERS is set here
+  # to the INTERNAL listener (redpanda:9092): the host-side address localhost:19092 does not exist inside a container.
+  outbox-relay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "api.services.outbox_relay"]
+    env_file:
+      - .env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   grafana_data:
