@@ -69,16 +69,19 @@ async def fetch_unprocessed_batch(conn: asyncpg.Connection, batch_size: int) -> 
     )
 
 
-async def publish_event(producer: AIOKafkaProducer, row: asyncpg.Record) -> None:
+async def publish_event(producer: AIOKafkaProducer, row: asyncpg.Record, topic: str | None = None) -> None:
     """
     Send one event to Kafka and wait for the broker's confirmation.
+
+    topic is optional: by default the event goes to config.kafka_outbox_topic. A different topic can be given, for
+    example by the showcases, which publish to a throwaway topic.
 
     The message key is the event_id (so a consumer can spot repeats), and the value is the stored JSON payload exactly
     as the API wrote it. send_and_wait returns only after the broker acknowledged the message (acks="all"), and raises
     an error if it could not.
     """
     await producer.send_and_wait(
-        config.kafka_outbox_topic,
+        topic or config.kafka_outbox_topic,
         value=row["payload"].encode("utf-8"),  # asyncpg hands jsonb back as JSON text
         key=str(row["event_id"]).encode("utf-8"),
     )
@@ -94,9 +97,12 @@ async def count_waiting(conn: asyncpg.Connection) -> int:
     return await conn.fetchval("SELECT count(*) FROM outbox WHERE processed_at IS NULL")
 
 
-async def relay_one_batch(conn: asyncpg.Connection, producer: AIOKafkaProducer, batch_size: int) -> BatchResult:
+async def relay_one_batch(conn: asyncpg.Connection, producer: AIOKafkaProducer, batch_size: int,
+                          topic: str | None = None) -> BatchResult:
     """
     Publish one batch in order and mark each row right after its own confirmation.
+
+    topic is optional and is passed to publish_event (None means the configured topic).
 
     If a publish fails partway, we STOP the batch: the rows already confirmed stay marked, the failed row and every row
     after it stay unprocessed, and the database transaction still commits the marks for the confirmed rows (we do not
@@ -108,7 +114,7 @@ async def relay_one_batch(conn: asyncpg.Connection, producer: AIOKafkaProducer, 
         rows = await fetch_unprocessed_batch(conn, batch_size)
         for row in rows:
             try:
-                await publish_event(producer, row)
+                await publish_event(producer, row, topic)
             except Exception as publish_error:  # noqa: BLE001 - any Kafka problem stops the batch, never skips a row
                 error = publish_error
                 break
