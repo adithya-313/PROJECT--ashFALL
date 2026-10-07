@@ -45,3 +45,6 @@ CLAUDE.md
 # MLflow local SQLite tracking database
 mlflow.db
 models/**/*.ubj
+
+# Generated showcase reports: they change on every run and contain timestamps.
+reports/showcase/
