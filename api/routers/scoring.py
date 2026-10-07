@@ -25,6 +25,8 @@ logger = get_logger(__name__)
 # Request and response models
 # These five request fields are frozen API-boundary fields. Their names and
 # types must not be changed without updating all downstream consumers.
+# idempotency_key is an OPTIONAL extra (Level 7): callers that retry a request send the same key, and the service
+# then treats the retry as the same event instead of storing a second transaction.
 # ---------------------------------------------------------------------------
 
 
@@ -36,11 +38,13 @@ class TransactionRequest(BaseModel):
     merchant_id: str
     device_fingerprint: str
     geo_coordinates: str
+    idempotency_key: str | None = None
 
 
 class ScoreResponse(BaseModel):
     """Fraud score result returned to the caller."""
 
+    transaction_id: str  # the stored transaction's ID; a replayed idempotency_key returns the ORIGINAL one
     account_id: str
     fraud_score: float  # value between 0.0 (clean) and 1.0 (high fraud risk)
     model_version: str
@@ -80,11 +84,13 @@ async def score_transaction(
     model_version = "stub-v0"
 
     # Save the transaction and its outbox event together (one database transaction, see api/services/outbox.py).
+    # If this request is a replay of an earlier one (same idempotency_key), nothing new is stored and we get the
+    # ORIGINAL transaction back, including its original score.
     # If saving fails we do NOT return a score: a payment that was not durably stored must not look accepted, so the
     # caller gets a 500 and can retry. The failure is logged first so it is visible in the structured logs.
     try:
         async with pool.acquire() as connection:
-            await record_transaction_with_outbox(connection, transaction, fraud_score, model_version)
+            stored = await record_transaction_with_outbox(connection, transaction, fraud_score, model_version)
     except Exception as error:
         logger.error(
             "failed to store transaction and outbox event",
@@ -95,7 +101,8 @@ async def score_transaction(
         raise HTTPException(status_code=500, detail="Transaction could not be stored") from error
 
     return ScoreResponse(
+        transaction_id=stored.transaction_id,
         account_id=transaction.account_id,
-        fraud_score=fraud_score,
-        model_version=model_version,
+        fraud_score=stored.fraud_score,
+        model_version=stored.model_version,
     )
