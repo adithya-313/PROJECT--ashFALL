@@ -12,17 +12,21 @@ from api.services.demo_counter_consumer import count_one_event
 from api.services.idempotent_consumer import parse_event, process_message
 from api.services.outbox import make_event_id, record_transaction_with_outbox
 from core.config import config
-from showcase.framework import FIXED_SEED, CheckDefinition, CheckOutcome
+from showcase.docker_control import docker_available
+from showcase.framework import FIXED_SEED, CheckDefinition, CheckOutcome, NotRun
 from showcase.isolation import Workspace, get_showcase_database_url
 from showcase.kafka_tools import read_events
 from showcase.level07_helpers import (
     FRAUD_SCORE,
     MODEL_VERSION,
+    OutageResult,
+    build_outage_chart,
     check_order_rules_agree,
     clear_workspace_tables,
     drain_with_new_producer,
     fetch_outbox_event_ids,
     make_request,
+    run_outage_scenario,
     throwaway_topic,
     write_transactions,
 )
@@ -220,14 +224,83 @@ async def run_determinism_check(workspace: Workspace) -> CheckOutcome:
     )
 
 
+# ---------------------------------------------------------------------------
+# Checks 2 and 6: the broker is stopped (once, then repeatedly)
+# ---------------------------------------------------------------------------
+
+def assert_nothing_lost(result: OutageResult, total_writes: int) -> None:
+    """Fail unless every committed transaction was delivered (as a set of event ids) and nothing is left waiting."""
+    assert result.committed == total_writes, f"{result.committed} transactions committed, expected {total_writes}"
+    assert result.outbox_rows == total_writes, f"{result.outbox_rows} outbox rows, expected {total_writes}"
+    assert result.unprocessed == 0, f"{result.unprocessed} outbox rows were never delivered"
+    missing = result.outbox_ids - result.kafka_ids
+    extra = result.kafka_ids - result.outbox_ids
+    assert not missing and not extra, f"Kafka differs from the outbox: {len(missing)} missing, {len(extra)} unexpected"
+
+
+def make_outage_evidence(result: OutageResult) -> dict[str, Any]:
+    """Timing and count facts. They change on every run, so they live in the evidence file, never in the key number."""
+    return {
+        "seconds_broker_was_down_per_kill": [round(value, 2) for value in result.kills.down_seconds],
+        "seconds_until_broker_ready_per_kill": [round(value, 2) for value in result.kills.ready_seconds],
+        "raw_messages_in_kafka": result.raw_count,
+        "distinct_event_ids_in_kafka": len(result.kafka_ids),
+    }
+
+
+async def run_broker_stopped_check(workspace: Workspace) -> CheckOutcome:
+    """Stop the broker once while writing and prove every transaction is still delivered afterwards."""
+    problem = docker_available()
+    if problem is not None:
+        raise NotRun(problem)
+    print("NOTE: this check stops the shared Redpanda broker for a few seconds; "
+          "the dev outbox-relay will back off and recover on its own.")
+    async with throwaway_topic() as topic:
+        result = await run_outage_scenario(workspace, topic, EVENT_COUNT, 1)
+    assert_nothing_lost(result, EVENT_COUNT)
+    return CheckOutcome(
+        key_number=f"{EVENT_COUNT} of {EVENT_COUNT} events delivered after outage",
+        evidence=make_outage_evidence(result),
+        chart=build_outage_chart(result.timeline, result.kills.bands),
+    )
+
+
+def make_repeated_kills_check(quick: bool) -> Any:
+    """Build the repeated-kills check function for quick (2 kills) or full (5 kills) mode."""
+    kill_count = 2 if quick else 5
+
+    async def run_repeated_kills_check(workspace: Workspace) -> CheckOutcome:
+        """Kill the broker several times during continuous writes and prove nothing is lost."""
+        problem = docker_available()
+        if problem is not None:
+            raise NotRun(problem)
+        print(f"NOTE: this check stops the shared Redpanda broker {kill_count} times for a few seconds each; "
+              "the dev outbox-relay will back off and recover on its own.")
+        async with throwaway_topic() as topic:
+            result = await run_outage_scenario(workspace, topic, EVENT_COUNT, kill_count)
+        assert_nothing_lost(result, EVENT_COUNT)
+        return CheckOutcome(
+            key_number=f"{kill_count} kills: {result.committed} committed, {len(result.kafka_ids)} delivered",
+            evidence=make_outage_evidence(result),
+            chart=build_outage_chart(result.timeline, result.kills.bands),
+        )
+
+    return run_repeated_kills_check
+
+
 def get_checks(quick: bool) -> list[CheckDefinition]:
-    """The Level 7 checks, in the order they are shown. Quick and full mode currently use the same checks."""
+    """The Level 7 checks, in the order they are shown. Quick mode only uses fewer broker kills in the last check."""
     return [
         CheckDefinition(
             "100 transactions produce 100 ordered events", "normal",
             "Every saved transaction is delivered to Kafka exactly once, in the order it was written.",
             run_normal_check, "The relay skipped, reordered or lost an event.",
             "api/services/outbox_relay.py (relay_one_batch)"),
+        CheckDefinition(
+            "Broker stopped mid-run", "edge",
+            "If Kafka is stopped while transactions keep arriving, every event is still delivered once it is back.",
+            run_broker_stopped_check, "The relay gave up, lost rows, or marked rows done before Kafka confirmed them.",
+            "api/services/outbox_relay.py (relay_one_batch, mark_processed)"),
         CheckDefinition(
             "Duplicate delivery counted once", "edge",
             "If the same event is delivered twice, the consumer counts it only once.",
@@ -243,4 +316,9 @@ def get_checks(quick: bool) -> list[CheckDefinition]:
             "Sending the same idempotency key again always produces the same event ID.",
             run_determinism_check, "make_event_id or its namespace changed.",
             "api/services/outbox.py (make_event_id)"),
+        CheckDefinition(
+            "Repeated broker kills lose nothing", "edge",
+            "Even when Kafka is killed several times during continuous writes, no transaction is lost.",
+            make_repeated_kills_check(quick), "The relay does not recover after repeated broker failures.",
+            "api/services/outbox_relay.py (run_relay backoff and recovery)"),
     ]

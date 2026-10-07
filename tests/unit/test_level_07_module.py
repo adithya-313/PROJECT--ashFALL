@@ -4,13 +4,18 @@
 import asyncio
 
 from showcase import level_07
+from showcase.framework import validate_checks
+from showcase.level07_helpers import build_outage_chart, choose_kill_points, compress_timeline
 
 EXPECTED_NAMES = [
     "100 transactions produce 100 ordered events",
+    "Broker stopped mid-run",
     "Duplicate delivery counted once",
     "Forced database error leaves nothing",
     "Same input gives same event IDs",
+    "Repeated broker kills lose nothing",
 ]
+EXPECTED_KINDS = ["normal", "edge", "edge", "negative", "consistency", "edge"]
 
 
 def test_module_has_the_contract_attributes():
@@ -42,3 +47,34 @@ def test_missing_services_are_reported_with_a_fix(monkeypatch):
     problems = asyncio.run(level_07.find_missing_preconditions())
     assert len(problems) == 1
     assert "docker compose up -d redpanda" in problems[0]
+
+
+def test_checks_meet_the_framework_coverage_rules_and_kinds():
+    """Both modes pass the framework's coverage rules and list the kinds in the documented order."""
+    for quick in (False, True):
+        checks = level_07.get_checks(quick)
+        validate_checks(checks)
+        assert [check.kind for check in checks] == EXPECTED_KINDS
+
+
+def test_choose_kill_points_spreads_kills_across_the_writes():
+    """One kill lands about a third in; five kills are spread evenly and strictly increasing."""
+    assert choose_kill_points(100, 1) == [33]
+    five = choose_kill_points(100, 5)
+    assert five == [14, 29, 43, 57, 71]
+    assert five == sorted(set(five))
+
+
+def test_compress_timeline_keeps_changes_first_and_last():
+    """Repeated delivered counts are dropped, while the first point, every change and the last point stay."""
+    points = [(0.0, 0), (0.2, 0), (0.4, 5), (0.6, 5), (0.8, 5), (1.0, 9), (1.2, 9)]
+    assert compress_timeline(points) == [(0.0, 0), (0.4, 5), (1.0, 9), (1.2, 9)]
+
+
+def test_outage_chart_has_the_timeline_format():
+    """The chart dict has the keys the report writer expects, including the 'broker down' band."""
+    chart = build_outage_chart([(0.0, 0), (1.0, 3)], [(0.2, 0.8, "broker down")])
+    assert chart["type"] == "timeline"
+    assert chart["shaded"] == [(0.2, 0.8, "broker down")]
+    assert chart["points"] == [(0.0, 0), (1.0, 3)]
+    assert chart["x_label"] and chart["y_label"] and chart["title"]
