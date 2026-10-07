@@ -23,9 +23,9 @@ from core.config import config  # noqa: E402  (the same config object api/main.p
 MIGRATIONS_DIR = REPO_ROOT / "migrations"
 
 
-def find_migration_files() -> list[Path]:
-    """List every .sql file in migrations/, sorted by name. The 0001_, 0002_ prefixes make this the right order."""
-    return sorted(MIGRATIONS_DIR.glob("*.sql"))
+def find_migration_files(migrations_dir: Path = MIGRATIONS_DIR) -> list[Path]:
+    """List every .sql file in the migrations folder, sorted by name. The 0001_, 0002_ prefixes make this the right order."""
+    return sorted(migrations_dir.glob("*.sql"))
 
 
 async def ensure_tracking_table(connection: asyncpg.Connection) -> None:
@@ -60,22 +60,33 @@ async def apply_one_file(connection: asyncpg.Connection, path: Path) -> None:
         await connection.execute("INSERT INTO schema_migrations (filename) VALUES ($1)", path.name)
 
 
+async def apply_pending_migrations(connection: asyncpg.Connection, migrations_dir: Path = MIGRATIONS_DIR) -> int:
+    """
+    Apply every migration file that has not been applied yet, using a connection the caller already opened.
+    Returns how many files were applied.
+
+    Taking the connection as a parameter (instead of opening one here) lets tests point the runner at any database
+    or schema, for example a throwaway one.
+    """
+    await ensure_tracking_table(connection)
+    already_applied = await get_applied_filenames(connection)
+
+    applied_count = 0
+    for path in find_migration_files(migrations_dir):
+        if path.name in already_applied:
+            print(f"skip   {path.name} (already applied)")
+            continue
+        await apply_one_file(connection, path)
+        print(f"apply  {path.name}")
+        applied_count += 1
+    return applied_count
+
+
 async def run_migrations() -> int:
-    """Apply every migration file that has not been applied yet. Returns how many files were applied."""
+    """Connect to the configured database and apply every pending migration. Returns how many were applied."""
     connection = await asyncpg.connect(dsn=config.database_url)
     try:
-        await ensure_tracking_table(connection)
-        already_applied = await get_applied_filenames(connection)
-
-        applied_count = 0
-        for path in find_migration_files():
-            if path.name in already_applied:
-                print(f"skip   {path.name} (already applied)")
-                continue
-            await apply_one_file(connection, path)
-            print(f"apply  {path.name}")
-            applied_count += 1
-        return applied_count
+        return await apply_pending_migrations(connection)
     finally:
         await connection.close()
 
