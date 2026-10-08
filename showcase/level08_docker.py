@@ -32,12 +32,13 @@ UP_TIMEOUT = 330
 OPEN_NETWORK = f"{OBJECT_PREFIX}-open"
 
 # What the sniffer sidecar runs. It reads the kernel's counters before and after, and runs two tcpdump captures at once:
-# (1) packets that leave the container's own network (outside the internal subnet and not loopback; IPv6 multicast
-# housekeeping such as neighbour discovery is ignored), (2) DNS traffic on the loopback interface (Docker's own DNS).
+# (1) packets with an end outside the internal subnet (not loopback; IPv6 multicast housekeeping such as neighbour
+# discovery is ignored), (2) DNS traffic on the loopback interface (Docker's own DNS).
 SNIFF_SCRIPT = (
     "cat /proc/net/snmp > /tmp/before; "
     "timeout {seconds} tcpdump -i any -nn -l "
-    "'(ip and not net {subnet} and not net 127.0.0.0/8) or (ip6 and not ip6 multicast)' > /tmp/outside.txt 2>&1 & "
+    "'(ip and not (src net {subnet} and dst net {subnet}) and not net 127.0.0.0/8) or (ip6 and not ip6 multicast)' "
+    "> /tmp/outside.txt 2>&1 & "
     "timeout {seconds} tcpdump -i lo -nn -l 'udp port 53' > /tmp/dns.txt 2>&1 & "
     "wait; cat /proc/net/snmp > /tmp/after; "
     "echo '=== BEFORE'; cat /tmp/before; echo '=== OUTSIDE'; cat /tmp/outside.txt; echo '=== DNS'; cat /tmp/dns.txt; "
