@@ -1,6 +1,21 @@
 import pytest
 from fastapi.testclient import TestClient
+
 from api.main import app
+from core.config import config
+from tests.db_skip import host_side_database_url
+
+# This test starts the whole app in-process, and the app connects to Postgres. The configured address uses the
+# Docker-only host name "postgres", which does not exist on a laptop or a CI runner, so we point the app at localhost
+# for this test only (monkeypatch undoes the change afterwards). It still needs a running Postgres, hence the
+# needs_stack marker.
+pytestmark = pytest.mark.needs_stack
+
+
+@pytest.fixture(autouse=True)
+def use_host_side_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point the app's database setting at localhost for this test."""
+    monkeypatch.setattr(config, "database_url", host_side_database_url())
 
 def test_pool_initialized_once(caplog):
     """
