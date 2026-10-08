@@ -205,6 +205,15 @@ jobs:
       - name: Start Postgres and Redpanda
         run: docker compose up --wait postgres redpanda
 
+      # CI's database starts empty. The isolation test needs the real tables in the public schema, to prove that
+      # the showcase never changes them. The migration runner can be run again safely (it skips files it already
+      # applied), so running it here is harmless. DATABASE_URL comes from .env, but the Docker host name "postgres"
+      # does not exist on the runner itself, so it is replaced by "localhost" for this one command only. The URL
+      # is never printed.
+      - name: Apply database migrations
+        run: |
+          DATABASE_URL=$(grep '^DATABASE_URL=' .env | cut -d= -f2- | sed 's/@postgres:/@localhost:/')             python scripts/run_migrations.py
+
       # Integration tests against the real services. A SKIPPED test here means a service was unreachable. In CI that
       # must fail, never pass quietly. The pytest exit code is captured explicitly so that piping through tee can
       # never hide a failure.
