@@ -7,6 +7,6 @@ fakeredis==2.39.0
 hypothesis==6.168.3
 # PyYAML: the compose-health baseline test reads docker-compose.yml.
 PyYAML==6.0.3
-# numpy: requirements.txt does not pin it, so a fresh install gets numpy 2.x, which makes two geo-velocity tests fail
-# (numpy 2.x prints floats as np.float64(...)). 1.26.4 is the version the project already uses in requirements-ml.txt.
-numpy==1.26.4
+# pandas: a fresh install would get pandas 3.x, whose text columns make the pandera schema test fail. 2.3.3 is
+# the version the existing schema-validation CI job already uses.
+pandas==2.3.3
