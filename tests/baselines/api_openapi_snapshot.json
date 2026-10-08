@@ -1,0 +1,218 @@
+{
+  "component_schemas": {
+    "HTTPValidationError": {
+      "properties": {
+        "detail": {
+          "items": {
+            "$ref": "#/components/schemas/ValidationError"
+          },
+          "title": "Detail",
+          "type": "array"
+        }
+      },
+      "title": "HTTPValidationError",
+      "type": "object"
+    },
+    "HealthResponse": {
+      "properties": {
+        "environment": {
+          "title": "Environment",
+          "type": "string"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "environment"
+      ],
+      "title": "HealthResponse",
+      "type": "object"
+    },
+    "ScoreResponse": {
+      "description": "Fraud score result returned to the caller.",
+      "properties": {
+        "account_id": {
+          "title": "Account Id",
+          "type": "string"
+        },
+        "fraud_score": {
+          "title": "Fraud Score",
+          "type": "number"
+        },
+        "model_version": {
+          "title": "Model Version",
+          "type": "string"
+        },
+        "transaction_id": {
+          "title": "Transaction Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "transaction_id",
+        "account_id",
+        "fraud_score",
+        "model_version"
+      ],
+      "title": "ScoreResponse",
+      "type": "object"
+    },
+    "TransactionRequest": {
+      "description": "Incoming transaction to be scored for fraud risk.",
+      "properties": {
+        "account_id": {
+          "title": "Account Id",
+          "type": "string"
+        },
+        "amount": {
+          "title": "Amount",
+          "type": "number"
+        },
+        "device_fingerprint": {
+          "title": "Device Fingerprint",
+          "type": "string"
+        },
+        "geo_coordinates": {
+          "title": "Geo Coordinates",
+          "type": "string"
+        },
+        "idempotency_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Idempotency Key"
+        },
+        "merchant_id": {
+          "title": "Merchant Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "amount",
+        "account_id",
+        "merchant_id",
+        "device_fingerprint",
+        "geo_coordinates"
+      ],
+      "title": "TransactionRequest",
+      "type": "object"
+    },
+    "ValidationError": {
+      "properties": {
+        "loc": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "title": "Location",
+          "type": "array"
+        },
+        "msg": {
+          "title": "Message",
+          "type": "string"
+        },
+        "type": {
+          "title": "Error Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "loc",
+        "msg",
+        "type"
+      ],
+      "title": "ValidationError",
+      "type": "object"
+    }
+  },
+  "metrics_endpoint_present": true,
+  "routes": {
+    "/debug/error": {
+      "methods": [
+        "get"
+      ]
+    },
+    "/health": {
+      "details": {
+        "get": {
+          "request_body": null,
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HealthResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          }
+        }
+      },
+      "methods": [
+        "get"
+      ]
+    },
+    "/metrics": {
+      "methods": [
+        "get"
+      ]
+    },
+    "/score": {
+      "details": {
+        "post": {
+          "request_body": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ScoreResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          }
+        }
+      },
+      "methods": [
+        "post"
+      ]
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "api": false,
+  "fluent-bit": false,
+  "grafana": false,
+  "loki": false,
+  "outbox-relay": false,
+  "postgres": true,
+  "prometheus": false,
+  "redis": true,
+  "redpanda": true,
+  "tempo": false,
+  "triton": false
+}
