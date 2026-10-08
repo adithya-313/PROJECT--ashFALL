@@ -41,14 +41,16 @@ async def test_fresh_schema_applies_all_migrations_in_order(empty_schema):
 
     applied_count = await apply_pending_migrations(connection)
 
-    # All files applied (we expect 3 today), and the tracking table lists exactly those names.
-    assert applied_count == len(real_filenames) == 3
+    # All files applied (we expect 4 today), and the tracking table lists exactly those names.
+    assert applied_count == len(real_filenames) == 4
     assert await applied_filenames(connection) == real_filenames
     assert real_filenames == sorted(real_filenames)
 
     # The tables were created inside THIS schema, not in public.
     tables = await table_names_in_schema(connection, schema_name)
-    assert {"transactions", "outbox", "processed_events", "demo_event_counts", "schema_migrations"} <= tables
+    expected_tables = {"transactions", "outbox", "processed_events", "demo_event_counts", "outbox_dead_letter",
+                       "schema_migrations"}
+    assert expected_tables <= tables
 
 
 async def test_second_run_applies_nothing(empty_schema):
@@ -58,9 +60,9 @@ async def test_second_run_applies_nothing(empty_schema):
     first_count = await apply_pending_migrations(connection)
     second_count = await apply_pending_migrations(connection)
 
-    assert first_count == 3
+    assert first_count == len(find_migration_files()) == 4
     assert second_count == 0
-    assert len(await applied_filenames(connection)) == 3
+    assert len(await applied_filenames(connection)) == 4
 
 
 async def test_failed_migration_is_not_recorded(empty_schema, tmp_path):
@@ -99,3 +101,32 @@ async def test_transactions_table_column_count_is_locked(isolated_schema):
 
     assert len(column_names) == 17
     assert column_names == EXPECTED_TRANSACTION_COLUMNS
+
+
+async def column_names_of(connection: asyncpg.Connection, schema_name: str, table_name: str) -> list[str]:
+    """The column names of one table in the test schema, in table order."""
+    rows = await connection.fetch(
+        """
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = $1 AND table_name = $2
+        ORDER BY ordinal_position
+        """,
+        schema_name, table_name,
+    )
+    return [row["column_name"] for row in rows]
+
+
+async def test_outbox_and_dead_letter_columns_are_locked(isolated_schema):
+    """The outbox has the four dead-letter tracking columns, and outbox_dead_letter has exactly its listed columns."""
+    connection, schema_name = isolated_schema
+
+    # Any future change to these tables must break this test on purpose, so it is a deliberate decision.
+    outbox_columns = await column_names_of(connection, schema_name, "outbox")
+    for new_column in ("attempt_count", "last_error", "first_failed_at", "dead_lettered_at"):
+        assert new_column in outbox_columns
+
+    dead_letter_columns = await column_names_of(connection, schema_name, "outbox_dead_letter")
+    assert dead_letter_columns == [
+        "id", "outbox_id", "event_id", "transaction_id", "payload", "error_type", "error_message",
+        "attempt_count", "first_failed_at", "dead_lettered_at",
+    ]

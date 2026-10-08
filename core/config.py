@@ -17,6 +17,7 @@ Note on WORKER_COUNT:
   appear here to avoid creating two sources of truth for the same variable.
 """
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -56,6 +57,11 @@ class AppConfig(BaseSettings):
     relay_poll_interval_seconds: float = 1.0
     relay_batch_size: int = 100
     relay_max_backoff_seconds: float = 30.0
+    # How many times a message that Kafka rejects for its own sake (for example because it is too large) is tried
+    # before the relay parks it in the outbox_dead_letter table. Connection problems never count. Minimum 1.
+    relay_max_attempts: int = Field(default=5, ge=1)
+    # The port on which the relay serves its metrics (for Prometheus) inside the compose network.
+    relay_metrics_port: int = 9108
 
     # SettingsConfigDict tells pydantic-settings where to look for values.
     # env_file=".env" reads variables from a .env file if it exists.

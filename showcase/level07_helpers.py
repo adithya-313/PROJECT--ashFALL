@@ -68,7 +68,7 @@ async def open_second_connection(workspace: Workspace) -> asyncpg.Connection:
 
 async def clear_workspace_tables(conn: asyncpg.Connection) -> None:
     """Empty every table in the workspace in one statement, so each check starts from nothing."""
-    await conn.execute("TRUNCATE transactions, outbox, processed_events, demo_event_counts")
+    await conn.execute("TRUNCATE transactions, outbox, outbox_dead_letter, processed_events, demo_event_counts")
 
 
 async def write_transactions(
@@ -85,7 +85,10 @@ async def drain_relay(
     conn: asyncpg.Connection, producer: Any, topic: str, batch_size: int = RELAY_BATCH_SIZE,
 ) -> int:
     """
-    Run the real relay batch by batch until nothing is waiting, or until a batch reports an error.
+    Run the real relay batch by batch until nothing is waiting.
+
+    A poison message that is still being retried is just another round (the relay parks it after a few rounds). Any
+    other error (for example the broker is down) stops the draining. MAX_DRAIN_ROUNDS is a safety cap.
 
     Returns how many events were published in total.
     """
@@ -93,7 +96,8 @@ async def drain_relay(
     for _ in range(MAX_DRAIN_ROUNDS):
         result = await relay_one_batch(conn, producer, batch_size, topic)
         total_published += result.published
-        if result.error is not None or result.waiting == 0:
+        broker_problem = result.error is not None and not result.poison_pending
+        if broker_problem or result.waiting == 0:
             break
     return total_published
 
@@ -168,6 +172,8 @@ class OutageResult:
     outbox_rows: int
     unprocessed: int
     raw_count: int
+    dead_letter_rows: int
+    attempts_total: int
     kafka_ids: set[str]
     outbox_ids: set[str]
     kills: KillTimes
@@ -330,6 +336,8 @@ async def collect_outage_result(
         outbox_rows=await conn.fetchval("SELECT count(*) FROM outbox"),
         unprocessed=await conn.fetchval("SELECT count(*) FROM outbox WHERE processed_at IS NULL"),
         raw_count=len(events),
+        dead_letter_rows=await conn.fetchval("SELECT count(*) FROM outbox_dead_letter"),
+        attempts_total=await conn.fetchval("SELECT coalesce(sum(attempt_count), 0) FROM outbox"),
         kafka_ids={key for _, key, _ in events},
         outbox_ids=outbox_ids,
         kills=kills,

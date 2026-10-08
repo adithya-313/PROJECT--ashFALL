@@ -12,10 +12,11 @@ EXPECTED_NAMES = [
     "Broker stopped mid-run",
     "Duplicate delivery counted once",
     "Forced database error leaves nothing",
+    "Poison message is parked and the rest still delivered",
     "Same input gives same event IDs",
     "Repeated broker kills lose nothing",
 ]
-EXPECTED_KINDS = ["normal", "edge", "edge", "negative", "consistency", "edge"]
+EXPECTED_KINDS = ["normal", "edge", "edge", "negative", "edge", "consistency", "edge"]
 
 
 def test_module_has_the_contract_attributes():
@@ -26,6 +27,11 @@ def test_module_has_the_contract_attributes():
     assert level_07.NEEDS_DATABASE is True
     assert callable(level_07.find_missing_preconditions)
     assert callable(level_07.get_checks)
+
+
+def test_there_are_seven_checks_in_both_modes():
+    """Quick and full mode both list seven checks."""
+    assert len(level_07.get_checks(False)) == len(level_07.get_checks(True)) == 7
 
 
 def test_checks_have_the_exact_names_in_order():

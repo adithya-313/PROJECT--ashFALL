@@ -40,6 +40,9 @@ httptools==0.6.4
 # prometheus-fastapi-instrumentator — automatically adds a /metrics endpoint to the FastAPI app.
 # Prometheus scrapes this endpoint to collect request count, latency, and error rate.
 prometheus-fastapi-instrumentator==7.0.0
+# prometheus-client is the library that defines counters and serves them. The instrumentator above installs it
+# too, but the outbox relay now imports it directly, so it is pinned explicitly.
+prometheus-client==0.24.1
 
 # OpenTelemetry — distributed tracing SDK and FastAPI auto-instrumentation.
 # Traces are exported to Tempo via OTLP HTTP (see OTEL_EXPORTER_OTLP_ENDPOINT in .env.example).

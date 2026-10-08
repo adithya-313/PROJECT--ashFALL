@@ -14,3 +14,9 @@ scrape_configs:
     metrics_path: "/metrics"
     static_configs:
       - targets: ["api:8000"]
+
+  # The outbox relay: counts messages it had to park in the dead-letter table (outbox_dead_lettered_total).
+  - job_name: "outbox-relay"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["outbox-relay:9108"]
