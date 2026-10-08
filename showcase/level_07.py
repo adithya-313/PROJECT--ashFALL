@@ -7,6 +7,7 @@ import uuid
 from typing import Any
 
 import asyncpg
+from prometheus_client import REGISTRY
 
 from api.services.demo_counter_consumer import count_one_event
 from api.services.idempotent_consumer import parse_event, process_message
@@ -39,7 +40,9 @@ WHAT_YOU_SAW = (
     "Every transaction was saved together with a small message about it (the outbox), in one all-or-nothing "
     "database step. A separate relay then delivered those messages to Kafka in the order they were written. "
     "When the Kafka broker was stopped, nothing was lost: the messages waited in the database and were delivered "
-    "once the broker came back. When the same message arrived twice, the consumer counted it only once. When a "
+    "once the broker came back. When one message was too large for Kafka to accept, the relay tried it a few "
+    "times, then parked it in a separate table and kept delivering the messages behind it. When the same message "
+    "arrived twice, the consumer counted it only once. When a "
     "write failed halfway, nothing was left behind, neither the transaction nor its message. And sending the same "
     "input again produced the same event IDs, so a retry can always be recognised."
 )
@@ -233,6 +236,9 @@ def assert_nothing_lost(result: OutageResult, total_writes: int) -> None:
     assert result.committed == total_writes, f"{result.committed} transactions committed, expected {total_writes}"
     assert result.outbox_rows == total_writes, f"{result.outbox_rows} outbox rows, expected {total_writes}"
     assert result.unprocessed == 0, f"{result.unprocessed} outbox rows were never delivered"
+    # A broker outage must never park a message or count an attempt.
+    assert result.dead_letter_rows == 0, f"{result.dead_letter_rows} messages were parked during an outage"
+    assert result.attempts_total == 0, f"{result.attempts_total} attempts were counted during an outage"
     missing = result.outbox_ids - result.kafka_ids
     extra = result.kafka_ids - result.outbox_ids
     assert not missing and not extra, f"Kafka differs from the outbox: {len(missing)} missing, {len(extra)} unexpected"
@@ -288,6 +294,70 @@ def make_repeated_kills_check(quick: bool) -> Any:
     return run_repeated_kills_check
 
 
+# ---------------------------------------------------------------------------
+# Check 5: a poison message is parked and the rest is still delivered
+# ---------------------------------------------------------------------------
+
+# About 2 MB of padding: more than the 1 MB the Kafka client accepts, so the real producer rejects the message.
+POISON_PADDING_BYTES = 2_000_000
+POISON_ROW_POSITION = 1  # the 2nd outbox row (counting from 0)
+DEAD_LETTER_METRIC = "outbox_dead_lettered_total"
+
+
+async def make_second_row_too_large(conn: asyncpg.Connection) -> str:
+    """Pad the payload of the 2nd outbox row to about 2 MB and return its event_id as text."""
+    event_id = await conn.fetchval(
+        """
+        UPDATE outbox
+        SET payload = payload || jsonb_build_object('padding', repeat('x', $1::integer))
+        WHERE id = (SELECT id FROM outbox ORDER BY created_at, id OFFSET $2 LIMIT 1)
+        RETURNING event_id
+        """,
+        POISON_PADDING_BYTES, POISON_ROW_POSITION,
+    )
+    return str(event_id)
+
+
+async def run_poison_check(workspace: Workspace) -> CheckOutcome:
+    """Make one message too large for Kafka and prove it is parked while the other four are still delivered."""
+    conn = workspace.connection
+    await clear_workspace_tables(conn)
+    max_attempts = config.relay_max_attempts
+    async with throwaway_topic() as topic:
+        # Write 5 transactions, then make the 2nd message too large for the real Kafka client to send.
+        rng = random.Random(FIXED_SEED)
+        await write_transactions(conn, [make_request(i, rng, f"showcase-l07-poison-{i}") for i in range(5)])
+        all_ids = [str(event_id) for event_id in await fetch_outbox_event_ids(conn)]
+        poison_id = await make_second_row_too_large(conn)
+        counter_before = REGISTRY.get_sample_value(DEAD_LETTER_METRIC) or 0.0
+
+        # Run the real relay until nothing waits. The poison message is retried, then parked.
+        await drain_with_new_producer(conn, topic)
+        counter_delta = (REGISTRY.get_sample_value(DEAD_LETTER_METRIC) or 0.0) - counter_before
+        events = await read_events(topic, 4, READ_IDLE_SECONDS)
+        parked = await conn.fetch("SELECT event_id, error_type, error_message, attempt_count FROM outbox_dead_letter")
+        rows = await conn.fetch("SELECT event_id, processed_at, dead_lettered_at FROM outbox ORDER BY created_at, id")
+
+    delivered_ids = [key for _, key, _ in events]
+    expected_ids = [event_id for event_id in all_ids if event_id != poison_id]
+    assert delivered_ids == expected_ids, "the 4 other messages were not delivered in order"
+    assert len(parked) == 1 and str(parked[0]["event_id"]) == poison_id, f"{len(parked)} messages were parked"
+    assert parked[0]["attempt_count"] == max_attempts, f"attempt count was {parked[0]['attempt_count']}"
+    assert parked[0]["error_type"] == "MessageSizeTooLargeError", f"error type was {parked[0]['error_type']}"
+    for row in rows:
+        is_poison = str(row["event_id"]) == poison_id
+        assert (row["dead_lettered_at"] is not None) == is_poison, "wrong row marked as parked"
+        assert (row["processed_at"] is None) == is_poison, "wrong row marked as processed"
+    assert counter_delta == 1, f"the dead-letter counter rose by {counter_delta}, expected 1"
+    return CheckOutcome(
+        key_number="1 parked, 4 of 4 others delivered",
+        evidence={"poison_event_id": poison_id, "delivered_event_ids": delivered_ids,
+                  "attempt_count": parked[0]["attempt_count"], "error_type": parked[0]["error_type"],
+                  "error_text": parked[0]["error_message"][:200], "counter_delta": counter_delta},
+    )
+
+
+
 def get_checks(quick: bool) -> list[CheckDefinition]:
     """The Level 7 checks, in the order they are shown. Quick mode only uses fewer broker kills in the last check."""
     return [
@@ -311,6 +381,11 @@ def get_checks(quick: bool) -> list[CheckDefinition]:
             "If saving the message fails, the transaction is not saved either.",
             run_rollback_check, "The two inserts are no longer in one database transaction.",
             "api/services/outbox.py (insert_transaction_and_event)"),
+        CheckDefinition(
+            "Poison message is parked and the rest still delivered", "edge",
+            "A message Kafka refuses for its own sake is parked after a few tries and does not block the others.",
+            run_poison_check, "The relay does not park poison messages, or counts outages as failed attempts.",
+            "api/services/outbox_relay.py (handle_publish_failure, move_to_dead_letter)"),
         CheckDefinition(
             "Same input gives same event IDs", "consistency",
             "Sending the same idempotency key again always produces the same event ID.",
