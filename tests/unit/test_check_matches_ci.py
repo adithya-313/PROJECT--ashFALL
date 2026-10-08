@@ -6,9 +6,13 @@ Purpose: Drift guard. Proves scripts/check.py (what `make check` runs) covers ev
 
 from pathlib import Path
 
-import yaml
+import pytest
 
-from scripts.check import build_steps
+# PyYAML is installed by requirements-test.txt (the pytest-fast job) but not by requirements.txt alone, which is all the
+# level-showcase job installs. Without it these tests are skipped instead of breaking the whole test run.
+yaml = pytest.importorskip("yaml", reason="PyYAML is only installed in the pytest-fast job")
+
+from scripts.check import build_steps  # noqa: E402
 
 CI_FILE = Path(__file__).resolve().parent.parent.parent / ".github" / "workflows" / "ci.yml"
 
