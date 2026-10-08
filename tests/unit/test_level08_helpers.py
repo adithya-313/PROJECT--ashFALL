@@ -75,12 +75,8 @@ def test_dns_failures_are_counted() -> None:
 def test_outside_packets_are_counted_by_their_timestamp_lines() -> None:
     """Only lines that start with a time count as packets; warnings and blank lines do not."""
     text = (
-        "tcpdump: listening on any
-12:00:00.123456 eth0 Out IP 1.2.3.4 > 5.6.7.8: Flags [S]
-
-"
-        "12:00:01.5 eth0 In IP6 x
-"
+        "tcpdump: listening on any\n12:00:00.123456 eth0 Out IP 1.2.3.4 > 5.6.7.8: Flags [S]\n\n"
+        "12:00:01.5 eth0 In IP6 x\n"
     )
     assert count_outside_packets(text) == 2
     assert count_outside_packets("") == 0
