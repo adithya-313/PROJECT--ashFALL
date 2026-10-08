@@ -181,6 +181,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # The Level 8 showcase (run by `make show-all QUICK=1` below) needs the dvc command and the test packages.
+      # They are kept out of requirements.txt, which feeds the Docker image.
+      - name: Install showcase-only packages
+        run: pip install -r requirements-test.txt -r requirements-showcase.txt
+
       # Style check on the Level 7 code and the code it uses.
       - name: Lint (ruff)
         run: ruff check showcase api core
