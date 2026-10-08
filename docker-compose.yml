@@ -138,6 +138,69 @@ services:
       # Read-only: Triton only needs to read the model files. The folder is a dedicated model repository under serving/.
       - ./serving/model_repository:/models:ro
 
+  # Redpanda: a single-node Kafka-compatible message broker (Level 7, transactional outbox).
+  # The outbox relay publishes transaction events here. It speaks the Kafka protocol, so normal Kafka client
+  # libraries (aiokafka) work with it. One broker is enough for a laptop; there is no replication.
+  #
+  # Two listeners, because the same broker is reached from two different places:
+  #   - "internal" (redpanda:9092): for other containers on the compose network (for example the api service).
+  #   - "external" (localhost:19092): for scripts run on your own machine, through the published port below.
+  # A Kafka broker tells every client "connect to me at THIS address" (the advertised address), so each listener
+  # must advertise the name that works from where its clients are. Flags follow the official Redpanda Docker Compose
+  # quickstart: https://docs.redpanda.com/redpanda-labs/docker-compose/single-broker/
+  #
+  # Memory: --smp 1 (one CPU core) and --memory 1G keep the footprint small for a laptop. --mode dev-container is
+  # Redpanda's setting for local development (it relaxes production checks). No Redpanda Console (web UI) is added
+  # here to save RAM; it can be added later if you want to browse topics.
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v26.2.2
+    command:
+      - redpanda
+      - start
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --rpc-addr redpanda:33145
+      - --advertise-rpc-addr redpanda:33145
+      - --mode dev-container
+      - --smp 1
+      - --memory 1G
+      - --default-log-level=info
+    ports:
+      - "19092:19092"
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+    # "rpk cluster health" prints "Healthy: true" once the broker has joined and is serving requests.
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  # Outbox relay (Level 7): reads unpublished rows from the outbox table and sends them to Kafka (Redpanda).
+  # It is its own service so the API never waits on Kafka, and so it can be stopped, restarted or scaled alone.
+  # It is built from the same Dockerfile as the api (same code and libraries), so the build is almost entirely cached;
+  # only the command differs. The code is api/services/outbox_relay.py.
+  #
+  # DATABASE_URL and the other settings come from .env, exactly like the api. KAFKA_BOOTSTRAP_SERVERS is set here
+  # to the INTERNAL listener (redpanda:9092): the host-side address localhost:19092 does not exist inside a container.
+  outbox-relay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "api.services.outbox_relay"]
+    env_file:
+      - .env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   grafana_data:
+  redpanda_data:
