@@ -115,8 +115,10 @@ def test_vectorized_batch_equals_old_loop_on_many_random_rows():
     rng = np.random.default_rng(7)
     rows = 5_000
     lats, lons = rng.uniform(-90, 90, (2, rows)), rng.uniform(-180, 180, (2, rows))
-    current = [f"{a!r},{b!r}" for a, b in zip(lats[0], lons[0])]
-    last = [f"{a!r},{b!r}" for a, b in zip(lats[1], lons[1])]
+    # tolist() turns numpy numbers into plain Python floats. Without it, numpy 2.x would write the text
+    # "np.float64(22.5)" instead of "22.5", and the coordinate parser could not read it.
+    current = [f"{a!r},{b!r}" for a, b in zip(lats[0].tolist(), lons[0].tolist())]
+    last = [f"{a!r},{b!r}" for a, b in zip(lats[1].tolist(), lons[1].tolist())]
     last[10] = None  # sprinkle some rows that must stay None
     elapsed = rng.uniform(1e-3, 1e6, rows).tolist()
     elapsed[20] = 0.0
