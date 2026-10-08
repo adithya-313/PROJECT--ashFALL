@@ -6,7 +6,7 @@ This page explains what is backed up, how to back it up, and how to rebuild ever
 
 | What | How | Where |
 |---|---|---|
-| Seven DVC-tracked files (the enriched PaySim parquet, model files, calibrator, two small config files) | `dvc push` | a DVC remote named `backup`, a folder (default in this project: `C:\Users\<you>\ashfall-backup\dvc-remote`) |
+| Seven DVC-tracked files (the enriched PaySim parquet, model files, calibrator, two small config files) | `dvc push` | a DVC remote named `backup`, which is a folder outside the project |
 | MLflow data (`mlflow.db` and `mlruns/`) | `python scripts/backup_mlflow.py --backup-dir <folder>` | a new folder `mlflow-backup-<UTC time>` inside the folder you give |
 
 The remote's address is stored in `.dvc/config.local`, which Git ignores. It is never committed, because it is specific to your machine.
