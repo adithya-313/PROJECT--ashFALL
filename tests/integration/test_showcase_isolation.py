@@ -4,9 +4,8 @@
 #
 # Real Postgres (same address rule as the other integration tests). If it is not reachable the tests are SKIPPED.
 import asyncio
-from collections.abc import Awaitable
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 import asyncpg
 import pytest
@@ -19,17 +18,9 @@ from showcase.isolation import (
     create_workspace,
     get_showcase_database_url,
 )
+from tests.db_skip import run_or_skip
 
-T = TypeVar("T")
 EXPECTED_TABLES = {"transactions", "outbox", "processed_events", "demo_event_counts"}
-
-
-def run_or_skip(coroutine: Awaitable[T]) -> T:
-    """Run a coroutine, or skip the test with a clear message if Postgres is not reachable."""
-    try:
-        return asyncio.run(coroutine)  # type: ignore[arg-type]
-    except (OSError, asyncpg.PostgresError, asyncio.TimeoutError) as error:
-        pytest.skip(f"Postgres not reachable at the showcase database address: {type(error).__name__}")
 
 
 async def fetch_value(query: str, *args: Any) -> Any:
