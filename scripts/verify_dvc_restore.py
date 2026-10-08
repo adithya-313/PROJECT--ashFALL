@@ -13,6 +13,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -46,6 +47,8 @@ def tracked_paths(repo: Path) -> list[Path]:
     """Read the output path out of every *.dvc file (not hard-coded), as paths relative to the repo."""
     paths = []
     for dvc_file in sorted(repo.rglob("*.dvc")):
+        if not dvc_file.is_file():
+            continue  # the folder named ".dvc" also matches "*.dvc"; only real files count
         if ".dvc" in dvc_file.relative_to(repo).parts[:-1]:
             continue  # skip anything inside the .dvc folder itself
         match = re.search(r"^\s*path:\s*(.+?)\s*$", dvc_file.read_text(encoding="utf-8"), re.MULTILINE)
@@ -91,8 +94,16 @@ def remove_read_only(function, path, _error) -> None:  # type: ignore[no-untyped
 def delete_temp_dir(temp_dir: Path) -> None:
     """Delete the temporary folder, but only if it is one this script made under the system temp folder."""
     system_temp = Path(tempfile.gettempdir()).resolve()
-    if temp_dir.name.startswith(TEMP_PREFIX) and system_temp in temp_dir.resolve().parents:
-        shutil.rmtree(temp_dir, onerror=remove_read_only)
+    if not (temp_dir.name.startswith(TEMP_PREFIX) and system_temp in temp_dir.resolve().parents):
+        return
+    # Windows may keep a file open for a moment after a program ends, so try a few times before giving up.
+    for attempt in range(5):
+        try:
+            shutil.rmtree(temp_dir, onerror=remove_read_only)
+            return
+        except OSError:
+            time.sleep(2)
+    print(f"Could not delete the temporary folder {temp_dir}. It is safe to delete by hand.")
 
 
 def verify(clone_dir: Path) -> bool:
