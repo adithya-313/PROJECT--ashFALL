@@ -30,3 +30,7 @@ The application and supporting infrastructure run via Docker Compose:
 ```bash
 docker compose up -d
 ```
+
+### Running the checks
+
+Run the same checks as the CI jobs on your machine with `make check` (or `python scripts/check.py`; add `--no-docker` to skip the steps that need the running stack).
