@@ -315,6 +315,4 @@ jobs:
       - name: Fast tests
         run: >-
           pytest -q -rs -p no:cacheprovider -m "not needs_stack"
-          --deselect tests/unit/test_geo_velocity.py::test_vectorized_batch_equals_old_loop_on_many_random_rows
-          --deselect tests/unit/test_geo_velocity.py::test_array_haversine_matches_single_pair_haversine_bit_for_bit
           tests/unit tests/contract tests/property tests/schema tests/baselines

@@ -63,6 +63,14 @@ class AppConfig(BaseSettings):
     # The port on which the relay serves its metrics (for Prometheus) inside the compose network.
     relay_metrics_port: int = 9108
 
+    # Feature switches for later levels. They are only DECLARED here: nothing reads them yet. False means today's
+    # behaviour, so leaving them unset changes nothing. Each is set by the environment variable with the same name in
+    # upper case (for example ENABLE_MODEL_V2=true).
+    enable_bank_integration_api: bool = False
+    enable_model_v2: bool = False
+    enable_gnn_ensemble: bool = False
+    enable_research_agent_internet: bool = False
+
     # SettingsConfigDict tells pydantic-settings where to look for values.
     # env_file=".env" reads variables from a .env file if it exists.
     # extra="ignore" means unknown variables in .env do not cause validation errors.

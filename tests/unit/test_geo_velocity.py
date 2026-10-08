@@ -111,16 +111,41 @@ def test_vectorized_batch_equals_old_loop_on_edge_cases():
     assert new[3] == 0.0 and new[8] == 0.0 and new[0] > 1000
 
 
+# How close the vectorized and one-by-one distances must be, as a fraction of the distance. This is a deliberate
+# loosening of an exact-bit check: vectorized and one-by-one maths can differ in the very last binary digit across
+# numpy versions and CPUs (here about 2e-16 relative). 1e-12 relative is still far below anything that matters for
+# distances (a millimetre per 1000 km), so it catches real mistakes without failing on rounding.
+HAVERSINE_RELATIVE_TOLERANCE = 1e-12
+
+
+def largest_relative_difference(left, right):
+    """The biggest |left - right| / |right| over two equally long lists (None entries are skipped; 0.0 if none left)."""
+    pairs = [(a, b) for a, b in zip(left, right) if a is not None and b is not None]
+    differences = [abs(a - b) / abs(b) if b != 0 else abs(a - b) for a, b in pairs]
+    return max(differences, default=0.0)
+
+
+def assert_close_results(new, old):
+    """Same None positions, and every number within HAVERSINE_RELATIVE_TOLERANCE of its partner."""
+    assert [v is None for v in new] == [v is None for v in old], "the lists have None in different places"
+    worst = largest_relative_difference(new, old)
+    assert worst <= HAVERSINE_RELATIVE_TOLERANCE, (
+        f"largest relative difference {worst:.3e} is above the allowed {HAVERSINE_RELATIVE_TOLERANCE:.0e}"
+    )
+
+
 def test_vectorized_batch_equals_old_loop_on_many_random_rows():
     rng = np.random.default_rng(7)
     rows = 5_000
     lats, lons = rng.uniform(-90, 90, (2, rows)), rng.uniform(-180, 180, (2, rows))
-    current = [f"{a!r},{b!r}" for a, b in zip(lats[0], lons[0])]
-    last = [f"{a!r},{b!r}" for a, b in zip(lats[1], lons[1])]
+    # tolist() turns numpy numbers into plain Python floats. Without it, numpy 2.x would write the text
+    # "np.float64(22.5)" instead of "22.5", and the coordinate parser could not read it.
+    current = [f"{a!r},{b!r}" for a, b in zip(lats[0].tolist(), lons[0].tolist())]
+    last = [f"{a!r},{b!r}" for a, b in zip(lats[1].tolist(), lons[1].tolist())]
     last[10] = None  # sprinkle some rows that must stay None
     elapsed = rng.uniform(1e-3, 1e6, rows).tolist()
     elapsed[20] = 0.0
-    assert same_bits(compute_geo_velocity_batch(current, last, elapsed), old_loop_batch(current, last, elapsed))
+    assert_close_results(compute_geo_velocity_batch(current, last, elapsed), old_loop_batch(current, last, elapsed))
 
 
 def test_vectorized_batch_with_no_valid_rows_returns_all_none():
@@ -147,9 +172,11 @@ def test_vectorized_batch_raises_zero_division_like_the_old_loop_for_a_denormal_
 
 
 def test_array_haversine_matches_single_pair_haversine_bit_for_bit():
+    # The name is kept from the old exact-bit version; the comparison now uses a relative tolerance (see above).
     rng = np.random.default_rng(3)
     lat1, lon1 = rng.uniform(-90, 90, 2_000), rng.uniform(-180, 180, 2_000)
     lat2, lon2 = rng.uniform(-90, 90, 2_000), rng.uniform(-180, 180, 2_000)
     from_array = geo_velocity.haversine_distance_km_array(lat1, lon1, lat2, lon2).tolist()
     one_by_one = [haversine_distance_km(*pair) for pair in zip(lat1, lon1, lat2, lon2)]
-    assert same_bits(from_array, one_by_one)
+    assert len(from_array) == len(one_by_one)
+    assert_close_results(from_array, one_by_one)
