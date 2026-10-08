@@ -141,6 +141,12 @@ def imported_api_path(folder: Path) -> str:
     return run_command(command, folder, 60, {"PYTHONPATH": str(folder)})[1].strip().splitlines()[-1]
 
 
+def failure_message(output: str) -> str:
+    """The lines of a pytest failure that say what went wrong (the ones starting with 'E ')."""
+    lines = [line.strip() for line in output.splitlines() if line.startswith("E ")]
+    return " | ".join(lines)[:900]
+
+
 async def run_check_two(workspace: Any) -> CheckOutcome:
     """Rename a response field in a temporary copy: the baseline test must fail, and pass again after the undo."""
     folder = Path(tempfile.mkdtemp(prefix="ashfall-level8-"))
@@ -163,7 +169,7 @@ async def run_check_two(workspace: Any) -> CheckOutcome:
         return CheckOutcome(
             key_number=f"{differences} differences reported, then 0 after the undo",
             evidence={"api_imported_from_copy": True, "red_exit_code": red_code, "green_exit_code": green_code,
-                      "red_output_tail": last_lines(red_output, 12)},
+                      "red_message": failure_message(red_output)},
         )
     finally:
         remove_tree(folder)
