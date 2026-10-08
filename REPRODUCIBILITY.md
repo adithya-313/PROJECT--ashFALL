@@ -26,6 +26,8 @@ value (`dd400cad...`) was the PR #7 merge and predated all Level 3 fix and Level
 87c929358f0950a86aac62ce382795e8
 ```
 
+Backing up and restoring the DVC files and MLflow data: see `docs/backup-and-restore.md`.
+
 <!-- MD5 hash of data/enriched/paysim_enriched.parquet as tracked by DVC (from paysim_enriched.parquet.dvc).
      Re-running ingest_paysim.py + inject_adversarial.py with seed=42 is intended to reproduce this hash exactly.
      Updated at the Level 3 correction (see below): the previous hash (265e328c7c7237f0c4c22ef61f648c9d) is the
