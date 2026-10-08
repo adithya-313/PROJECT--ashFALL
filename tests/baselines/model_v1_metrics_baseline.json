@@ -1,0 +1,11 @@
+{
+  "dvc_data_md5": "87c929358f0950a86aac62ce382795e8",
+  "dvc_model_onnx_md5": "bbe3570958207ae2f981b07fcfd4ebf3",
+  "dvc_model_ubj_md5": "c5d82437c5bf278eba6e32daa93465dd",
+  "model_name": "xgboost",
+  "pr_auc": 0.9946638128997987,
+  "roc_auc": 0.999856475333007,
+  "split": "test",
+  "test_fraud_rows": 6362,
+  "test_rows": 1272524
+}

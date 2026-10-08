@@ -1,0 +1,12 @@
+# Extra packages that only the fast CI test job (pytest-fast) needs. They are kept out of requirements.txt on purpose:
+# that file feeds the Docker image, and the image has no use for test-only tools.
+#
+# fakeredis: tests/unit/test_velocity_features.py uses an in-memory fake Redis.
+fakeredis==2.39.0
+# hypothesis: tests/property/test_haversine_property.py is a property-based test.
+hypothesis==6.168.3
+# PyYAML: the compose-health baseline test reads docker-compose.yml.
+PyYAML==6.0.3
+# pandas: a fresh install would get pandas 3.x, whose text columns make the pandera schema test fail. 2.3.3 is
+# the version the existing schema-validation CI job already uses.
+pandas==2.3.3

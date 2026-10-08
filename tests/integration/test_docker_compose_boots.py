@@ -18,9 +18,12 @@ import json
 import shutil
 import subprocess
 import time
+
 import pytest
 
 
+# Starts the whole Docker Compose stack, so it needs Docker and is left to the compose-boot CI job.
+@pytest.mark.needs_stack
 def test_docker_compose_boots_all_services() -> None:
     """
     Executes 'docker compose up -d', waits 10 seconds for initial container health checks,
