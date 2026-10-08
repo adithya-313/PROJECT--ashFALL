@@ -33,6 +33,7 @@ from aiokafka.errors import (
     MessageSizeTooLargeError,
     RecordTooLargeError,
 )
+from prometheus_client import Counter, start_http_server
 
 from core.config import config
 from core.logging import configure_logging, get_logger
@@ -50,6 +51,10 @@ KAFKA_REQUEST_TIMEOUT_MS = 10_000
 # attempts towards the dead-letter limit. Everything else (broker down, timeouts, leader changes, unknown errors) is
 # treated as "try again later" and never counts, so an outage can never park a healthy message.
 POISON_ERRORS = (MessageSizeTooLargeError, RecordTooLargeError, InvalidTopicError, CorruptRecordException)
+
+# A counter that only ever goes up: how many messages this relay process has parked. Prometheus reads it from the
+# metrics port (see main), and a rate or increase over time shows when poison messages appear.
+DEAD_LETTERED_TOTAL = Counter("outbox_dead_lettered_total", "Messages parked in outbox_dead_letter")
 
 # Longest error text stored in the database, so one huge error message cannot bloat a row.
 MAX_ERROR_TEXT_LENGTH = 1000
@@ -119,8 +124,8 @@ def is_poison_error(error: Exception) -> bool:
 
 
 def note_dead_lettered(count: int) -> None:
-    """Tell the metrics that `count` messages were parked. (The counter itself is added in a later step.)"""
-    return None
+    """Add `count` to the metric that counts parked messages (call it only after the database commit)."""
+    DEAD_LETTERED_TOTAL.inc(count)
 
 
 async def record_failed_attempt(conn: asyncpg.Connection, row_id: int, error: Exception) -> int:
@@ -313,9 +318,22 @@ async def run_relay(stop_event: asyncio.Event) -> None:
     logger.info("outbox relay stopped")
 
 
+def start_metrics_server() -> None:
+    """
+    Serve the metrics on config.relay_metrics_port. If the port cannot be used, only log a warning: metrics are
+    nice to have, and they must never stop messages from being delivered.
+    """
+    try:
+        start_http_server(config.relay_metrics_port)
+        logger.info("relay metrics server started", port=config.relay_metrics_port)
+    except OSError as error:
+        logger.warning("relay metrics server could not start, continuing without metrics", error=str(error))
+
+
 async def main() -> None:
     """Set up logging and signal handling, then run until asked to stop (SIGTERM from Docker, or Ctrl-C)."""
     configure_logging(config.log_level)
+    start_metrics_server()
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
     for signal_number in (signal.SIGTERM, signal.SIGINT):

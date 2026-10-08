@@ -9,6 +9,7 @@ from typing import Any
 import asyncpg
 import pytest
 from aiokafka.errors import KafkaConnectionError, MessageSizeTooLargeError
+from prometheus_client import REGISTRY
 
 from api.routers.scoring import TransactionRequest
 from api.services.outbox import StoredTransaction, record_transaction_with_outbox
@@ -69,8 +70,12 @@ async def test_poison_message_is_parked_and_does_not_block_the_rest(isolated_sch
     event_ids = await outbox_event_ids(conn)
     producer = FakeProducer()
     producer.poison_event_ids = {event_ids[1]}
+    counter_before = REGISTRY.get_sample_value("outbox_dead_lettered_total") or 0.0
 
     await run_rounds(conn, producer, MAX_ATTEMPTS + 2)
+
+    # The metric rose by exactly the number of parked rows.
+    assert REGISTRY.get_sample_value("outbox_dead_lettered_total") == counter_before + 1
 
     # The four good messages arrived, in the same order as in the outbox.
     assert producer.sent_event_ids == [event_ids[0], event_ids[2], event_ids[3], event_ids[4]]

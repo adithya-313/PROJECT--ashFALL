@@ -189,6 +189,9 @@ services:
       context: .
       dockerfile: Dockerfile
     command: ["python", "-m", "api.services.outbox_relay"]
+    # Metrics for Prometheus (job outbox-relay). Only reachable inside the compose network, not published to the host.
+    expose:
+      - "9108"
     env_file:
       - .env
     environment:

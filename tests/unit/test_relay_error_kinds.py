@@ -12,8 +12,9 @@ from aiokafka.errors import (
     RecordTooLargeError,
     UnknownError,
 )
+from prometheus_client import REGISTRY
 
-from api.services.outbox_relay import is_poison_error
+from api.services.outbox_relay import is_poison_error, note_dead_lettered
 
 
 @pytest.mark.parametrize("error", [
@@ -37,3 +38,11 @@ def test_message_specific_errors_are_poison(error):
 def test_outages_and_unknown_errors_are_never_poison(error):
     """Outages, timeouts, unknown errors and plain exceptions never count as poison, so they never park a message."""
     assert is_poison_error(error) is False
+
+
+def test_note_dead_lettered_raises_the_counter():
+    """note_dead_lettered(2) raises the Prometheus counter by exactly 2."""
+    name = "outbox_dead_lettered_total"
+    before = REGISTRY.get_sample_value(name) or 0.0
+    note_dead_lettered(2)
+    assert REGISTRY.get_sample_value(name) == before + 2
