@@ -1,7 +1,8 @@
 # File: tests/baselines/test_offline_settings.py
-# Purpose: Guards the settings that stop Grafana from calling the internet. Level 8 found (with the stack on a network that
-#          has no outside access) that Grafana looked up grafana.com at start-up; these settings turned that off. If one of
-#          them is removed from docker-compose.yml by accident, this test fails with an explanation.
+# Purpose: Guards the settings that stop Grafana from calling the internet. Level 8 found (with the stack on a
+#          network that has no outside access) that Grafana looked up grafana.com at start-up; these settings turned
+#          that off. If one of them is removed from docker-compose.yml by accident, this test fails with an
+#          explanation.
 from pathlib import Path
 
 import pytest
