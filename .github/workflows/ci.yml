@@ -226,6 +226,7 @@ jobs:
             tests/integration/test_migration_runner.py \
             tests/integration/test_showcase_isolation.py \
             tests/integration/test_showcase_kafka_tools.py \
+            tests/contract/test_orjson_in_response.py tests/integration/test_pool_initialization.py \
             -q -rs -p no:cacheprovider 2>&1 | tee "$RUNNER_TEMP/integration.log"
           code=${PIPESTATUS[0]}
           if [ "$code" -ne 0 ]; then
