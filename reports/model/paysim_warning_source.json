@@ -1,0 +1,7 @@
+{
+  "source_url": "https://www.kaggle.com/datasets/ealaxi/paysim1",
+  "retrieved_on": "2026-10-09",
+  "exact_sentence": "NOTE: Transactions which are detected as fraud are cancelled, so for fraud detection these columns (oldbalanceOrg, newbalanceOrig, oldbalanceDest, newbalanceDest ) must not be used.",
+  "verified": true,
+  "provided_by": "copied by the repository owner from the Kaggle page (not fetched by the tooling)"
+}
