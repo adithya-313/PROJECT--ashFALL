@@ -1,0 +1,87 @@
+# Pre-registered evaluation rules for the Level 10 engine.
+#
+# This file is pre-registered: it must be committed BEFORE any new-engine
+# model is trained. The git commit date of this file is the proof.
+# The reasoning behind each value is in docs/decisions/level-10-evaluation-decisions.md.
+#
+# Each decision block has a "label" (assumption or policy) and a "reason".
+#   assumption = no public source exists, this is our best guess.
+#   policy     = our own choice about how results are judged.
+
+meta:
+  level: 10
+  author: adithya-313
+  status: pre-registered
+
+capacity:
+  label: assumption
+  sweep_min_pct_active_accounts_per_day: 0.05
+  sweep_max_pct_active_accounts_per_day: 1.0
+  headline_pct_active_accounts_per_day: 0.25
+  report_full_curve: true
+  reason: Real review capacity is not public, so the whole curve is reported and 0.25 is only the headline.
+
+fair_comparison:
+  label: policy
+  method: match_operating_points
+  tuned_on: validation_worlds
+  main_genuine_restriction_rate_pct: 0.5
+  extra_genuine_restriction_rate_pct: [0.25, 1.0]
+  report_full_tradeoff_curve: true
+  reason: Matching the genuine-restriction rate removes unequal harm from the comparison, and tuning on validation worlds, never test worlds, avoids peeking.
+
+ml_beats_rules:
+  label: policy
+  all_conditions_must_hold: true
+  min_median_recall_difference_points: 5
+  min_share_of_test_worlds_ml_wins_pct: 70
+  confidence_level_pct: 95
+  confidence_interval_method: bootstrap_across_worlds
+  interval_must_exclude_zero: true
+  reason: Each condition blocks a different way of fooling ourselves - a small gap, a gap concentrated in a few worlds, and a gap due to luck.
+  min_test_worlds:
+    value: 20
+    label: assumption
+    reason: This is a suggestion needed for the 70% and bootstrap rules to be meaningful, and it may be changed ONLY before any new-engine model is trained.
+
+latency:
+  label: assumption
+  endpoint: "POST /v1/decisions"
+  percentile: 99
+  max_ms: 100
+  measured: server_side
+  world_for_payment_rate: small
+  warm_up_required: true
+  hardware: author_laptop
+  feature_computation_max_ms: 50
+  reason: No public or legal limit exists, and the "30-60 seconds" figure was only a conference comment, so a stricter number is chosen on purpose.
+
+held_out_tactics:
+  label: policy
+  used_only_in: [test_worlds, stress_worlds]
+  tactics: [slow_drip, device_rotation, pseudo_merchant_camouflage, fake_routine_life]
+  kept_in_training: [basic_merchant_mule]
+  reason: Each held-out tactic attacks one signal family, so a failure shows which signal is fragile.
+
+world_splits:
+  - name: training
+    purpose: The model learns here.
+  - name: validation
+    purpose: Thresholds are tuned here.
+  - name: test
+    purpose: Final judgement.
+  - name: stress
+    purpose: Extreme conditions.
+
+earlier_work_note: >-
+  The v1 PaySim model, its data split and its thresholds (0.5, 0.42, 0.03)
+  existed before this file. They are EXCLUDED from the pre-registered
+  comparisons, which apply to the new engine and its worlds only.
+
+not_decided_here:
+  - exact world counts for training, validation and stress
+  - rules-baseline details
+  - thresholds for the other metrics
+  - success criteria for tracing
+  - success criteria for least-harm actions
+  - success criteria for shared intelligence
