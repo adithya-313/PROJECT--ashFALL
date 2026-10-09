@@ -27,13 +27,18 @@ REQUIRED_FILES = [level10_check.EVALUATION_PATH, level10_check.WORLD_RANGES_PATH
 
 async def find_missing_preconditions() -> list[str]:
     """What is missing, in plain English (empty means we can run)."""
-    return [f"{path.name} is missing - it is part of the Level 10 files" for path in REQUIRED_FILES if not path.exists()]
+    return [f"{path.name} is missing - it is part of the Level 10 files"
+            for path in REQUIRED_FILES if not path.exists()]
 
 
 def need_git_history() -> None:
-    """The proof needs git history. Say plainly if it is not there."""
-    if not level10_check.run_git(["rev-parse", "--git-dir"]):
-        raise NotRun("this folder is not a git repository, so the commit order cannot be checked")
+    """The proof needs the full git history. If it is missing, the check is NOT RUN, which fails the level.
+
+    The showcase framework counts NOT RUN as a failure unless the explicit --allow-not-run flag is given.
+    """
+    problem = level10_check.git_history_problem()
+    if problem:
+        raise NotRun(problem)
 
 
 def date_text(date: Any) -> str:
@@ -124,14 +129,16 @@ def get_checks(quick: bool) -> list[CheckDefinition]:
             "1. every config file validates", "normal",
             "The evaluation rules, world ranges and legal actions all pass the shared validator.",
             run_configs_check, "A label, reason or source was removed or edited in a config file.",
-            "python -m core.config_validator config/evaluation.yaml config/world_ranges.yaml config/legal_actions.yaml"),
+            "python -m core.config_validator config/evaluation.yaml config/world_ranges.yaml "
+            "config/legal_actions.yaml"),
         CheckDefinition(
             "2. research status table counts", "edge",
             "The table of research claims shows its status counts, how many were hand checked and tool re-checked.",
             run_status_check, "config/research_status.yaml is missing or empty.", "config/research_status.yaml"),
         CheckDefinition(
             "3. broken config copies are rejected", "negative",
-            "A block without its reason, a sourced block without its source and a range outside its test range are refused.",
+            "A block without its reason, a sourced block without its source and a range outside its test range "
+            "are refused.",
             run_broken_copy_check, "The validator no longer enforces reasons, sources or nested ranges.",
             "core/config_validator.py"),
         CheckDefinition(
