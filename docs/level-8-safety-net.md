@@ -60,17 +60,22 @@ check fails because the counter cannot be trusted.
 - The name in an outside lookup is not shown; only that a lookup failed.
 - Traffic before the sidecar attaches is not seen.
 - Only 20 seconds (quick) or 60 seconds (full) are watched. A tool that phones home once a day would not be seen. Settings that
-  switch such calls off are therefore also guarded by a test (`tests/baselines/test_offline_settings.py`).
+  switch such calls off (Grafana, Loki and Tempo) are therefore also guarded by a test
+  (`tests/baselines/test_offline_settings.py`).
 
 ### What it found: Grafana
 
 With its defaults, Grafana looked up grafana.com at start-up (it downloads a plugin signature key). Four settings in
 `docker-compose.yml` now turn that off: `GF_ANALYTICS_REPORTING_ENABLED`, `GF_ANALYTICS_CHECK_FOR_UPDATES`,
-`GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES` and `GF_PLUGINS_PUBLIC_KEY_RETRIEVAL_DISABLED`. Loki and Tempo have a
-`-reporting.enabled` option that defaults to true; no attempt was seen in the 60 seconds, so they were not changed.
+`GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES` and `GF_PLUGINS_PUBLIC_KEY_RETRIEVAL_DISABLED`.
 
-Running containers keep their old settings until they are recreated: run `docker compose up -d` to apply the Grafana settings
-to your real stack.
+Loki and Tempo have a `-reporting.enabled` option whose default is true (shown by their `-help`). No attempt was seen in the
+60-second window, but a usage report on a timer could not have shown up in 60 seconds anyway. So both are now started with
+`-reporting.enabled=false` in `docker-compose.yml`, and the config test is the guard, not the observation window. Loki had no
+`command` before, so it now lists the image's default argument (`-config.file=/etc/loki/local-config.yaml`) next to the new flag.
+
+Running containers keep their old settings until they are recreated: run `docker compose up -d` to apply the Grafana, Loki and
+Tempo settings to your real stack.
 
 ## Limits
 
