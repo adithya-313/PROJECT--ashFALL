@@ -1,0 +1,125 @@
+# Ranges for the simulated worlds.
+#
+# Every parameter is either:
+#   sourced    = a public page was opened and a short quote is recorded,
+#   reported   = seen in a secondary source or not yet link-checked by the author,
+#   assumption = registered as an assumption (the rule PixSim uses).
+# "reported" becomes "sourced" after the author opens the link and sees the quote.
+#
+# Training, test and stress ranges are nested: training sits inside test, test sits inside stress.
+# The widths around any centre value are the author's choices, not findings.
+# Format of every range: [min, max].
+# Checked by: python -m core.config_validator config/world_ranges.yaml
+
+parameters:
+  hops_to_cash_out:
+    label: sourced
+    unit: position in the chain of mule accounts
+    training: [2, 5]
+    test: [1, 7]
+    stress: [1, 10]
+    source:
+      url: https://www.fca.org.uk/publications/multi-firm-reviews/money-mules-activity-cashing-out-findings
+      date: "2026-09-23"
+      quote: "cashing out activity was mainly concentrated between the second and fifth mule accounts, with the highest concentration at the second mule account."
+    reason: UK evidence, not India; test and stress widths are our choices.
+
+  share_offboarded_within_first_year:
+    label: sourced
+    unit: fraction
+    training: [0.40, 0.55]
+    test: [0.25, 0.70]
+    stress: [0.10, 0.90]
+    source:
+      url: https://www.fca.org.uk/publications/multi-firm-reviews/money-mules-activity-cashing-out-findings
+      date: "2026-09-23"
+      quote: "In 2025, 114,984 accounts were offboarded within the first year of opening, representing 47.1% of the account tenure figures."
+    reason: UK; it measures account age at offboarding, not at first illicit use; centre 0.471.
+
+  share_reported_to_shared_database:
+    label: sourced
+    unit: fraction
+    training: [0.25, 0.50]
+    test: [0.10, 0.70]
+    stress: [0.05, 0.90]
+    source:
+      url: https://www.fca.org.uk/publications/multi-firm-reviews/firms-use-national-fraud-database-money-mule-account-detection-tools
+      date: "2025-01-23"
+      quote: "Of these offboarded money mules, only 37% were reported to the National Fraud Database (NFD)."
+    reason: UK proxy for India (no Indian figure found); covers Jan 2022 to Sep 2023.
+
+  minutes_money_stays_in_mule_account:
+    label: sourced
+    unit: minutes
+    training: [5, 60]
+    test: [2, 240]
+    stress: [1, 1440]
+    source:
+      url: https://www.cloudsek.com/blog/shadow-banking-in-your-pocket-exposing-android-app-used-by-money-mules
+      date: "2024-03-05"
+      quote: "Money mules are incentivized to complete payout orders within a strictly enforced 10-minute window."
+    reason: "CloudSEK's own page says mules must finish payout orders within a 10-minute window. This is a required payout window for one operation, not a measured average. UK secondary sources describe holds beyond 24 hours, so stress goes to 1440. Author checked the page by hand on 2026-10-10."
+
+  mule_transfer_amount_inr:
+    label: assumption
+    unit: rupees
+    training: [2000, 50000]
+    test: [500, 200000]
+    stress: [100, 1000000]
+    reason: No Indian figure found; press reports of about 270 US dollars average for one operation conflict and are context only.
+
+  genuine_payments_up_to_2000_inr_share:
+    label: sourced
+    unit: fraction
+    training: [0.90, 0.97]
+    test: [0.85, 0.98]
+    stress: [0.70, 0.99]
+    source:
+      url: https://www.npci.org.in/uploads/FA_Qs_Merchant_Discount_Rate_MDR_on_Select_UPI_P2_M_Transactions_58dba1d39e.pdf
+      date: "2026-09-15"
+      quote: "small-value UPI transactions up to ₹ 2,000, which comprise more than 95% of the total volume of UPI (P2M) transactions"
+    reason: "NPCI's own FAQ says transactions up to 2,000 rupees are more than 95% of UPI P2M volume. P2M only, not all UPI. Author checked the page by hand on 2026-10-10."
+
+  victim_report_delay_minutes:
+    label: assumption
+    unit: minutes
+    training: [5, 120]
+    test: [1, 1440]
+    stress: [1, 10080]
+    reason: No published delay found.
+
+  mules_per_gang:
+    label: assumption
+    unit: count
+    training: [5, 50]
+    test: [3, 200]
+    stress: [2, 2000]
+    reason: Not found; press figures for one large operation conflict (16,000 to hundreds of thousands) and only justify the stress end.
+
+  share_of_mules_who_are_witting:
+    label: assumption
+    unit: fraction
+    training: [0.20, 0.60]
+    test: [0.10, 0.80]
+    stress: [0.0, 1.0]
+    reason: Regulators recognise both kinds but publish no split.
+
+  share_of_mules_on_current_or_merchant_accounts:
+    label: assumption
+    unit: fraction
+    training: [0.05, 0.30]
+    test: [0.02, 0.50]
+    stress: [0.0, 0.80]
+    reason: One report says current/corporate accounts were preferred; no share published.
+
+# Things that were searched for and not found. No numbers and no labels on purpose.
+searched_but_not_found:
+  - mule account type shares for India
+  - dormant or new account share
+  - mule-specific false positive rates
+  - shared-device and emulator shares
+  - absence-of-routine-activity share
+  - analyst review capacity
+  - share of accounts reviewed daily
+  - published fraud-check latency budgets
+  - Indian share of mules not reported to a registry

@@ -1,0 +1,21 @@
+# Paths that belong to the NEW engine (the simulator, the new features, the new model and the v1 API).
+#
+# The Level 10 showcase compares the first commit that touched any of these paths with the commit of
+# config/evaluation.yaml. Nothing here may be older than the evaluation rules (pre-registration).
+# When a later level adds a new folder for the new engine, add its path here BEFORE adding any code to it.
+# A path ending in "/" is a folder. A path with "*" matches by pattern (git pathspec).
+# The v1 PaySim code (models/xgboost, scripts/data_split.py and so on) is NOT listed on purpose: it is older than
+# the rules by design (see earlier_work_note in config/evaluation.yaml).
+
+new_engine_paths:
+  label: policy
+  reason: A fixed list is needed so the order check cannot miss new code, and the list is committed before any of it exists.
+  paths:
+    - sim/
+    - world/
+    - worlds/
+    - engine/
+    - decisions/
+    - features_m1/
+    - models/mule_*
+    - api/v1/

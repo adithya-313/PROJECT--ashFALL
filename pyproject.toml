@@ -23,4 +23,7 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 markers = [
     "needs_stack: test needs the Docker Compose stack (database, Kafka) running",
+    "gpu: test needs a CUDA GPU with torch and Triton; CI leaves it out, run it with `make test-gpu`",
+    "ml: test needs the requirements-ml.txt libraries (mlflow, xgboost and so on); the CI ml job runs it, the fast jobs leave it out",
+    "needs_dvc: test needs files from `dvc pull` (model v1 files); local only, run it with `make test-dvc`",
 ]

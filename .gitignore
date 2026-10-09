@@ -40,7 +40,6 @@ graphify-out/
 # graphify (local code-graph tool — personal tooling, not part of the repo)
 .claude/
 CLAUDE.md
-.gitattributes
 
 # MLflow local SQLite tracking database
 mlflow.db

@@ -33,7 +33,7 @@ matplotlib==3.10.8
 seaborn==0.13.2
 
 # === Serving client ===
-tritonclient==2.68.0
+tritonclient[grpc]==2.68.0
 
 # === Calibration (uses scikit-learn, no extra dep) ===
 # isotonic regression is in sklearn — no separate package needed

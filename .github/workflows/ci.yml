@@ -15,6 +15,9 @@ jobs:
   compose-boot:
     name: Docker Compose boot check
     runs-on: ubuntu-latest
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
 
     steps:
       - name: Check out the repository
@@ -26,10 +29,20 @@ jobs:
       - name: Create .env from example
         run: cp .env.example .env
 
-      # Install only the lint and type-check tools — not the full requirements —
-      # so this step is fast and fails early before we wait for Docker.
+      # Python 3.11 and the same requirements-dev.txt as every other job, so lint and types see the same versions.
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-test.txt
+            requirements-showcase.txt
+            requirements-dev.txt
+
       - name: Install dependencies
-        run: pip install ruff mypy
+        run: pip install -r requirements-dev.txt
 
       # ruff checks for style errors, unused imports, and formatting issues.
       - name: Lint (ruff)
@@ -38,6 +51,15 @@ jobs:
       # mypy checks for type mismatches without running the code.
       - name: Type check (mypy)
         run: mypy api/ core/ --ignore-missing-imports --no-strict-optional
+
+      # Log in to Docker Hub so image pulls are not limited as anonymous requests (the rate limit that failed the
+      # boot check). The step is skipped when the secrets are absent, for example on pull requests from forks.
+      - name: Log in to Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
 
       # Boot every service defined in docker-compose.yml and wait for all
       # healthchecks to pass (--wait). If any service fails to become healthy,
@@ -156,6 +178,9 @@ jobs:
     runs-on: ubuntu-latest
     # Stop the job if it hangs, so a stuck service cannot block CI for hours.
     timeout-minutes: 30
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     # Least privilege: this job only needs to read the code, nothing else.
     permissions:
       contents: read
@@ -163,6 +188,9 @@ jobs:
       # Download the code of the commit being tested.
       - name: Check out the repository
         uses: actions/checkout@v4
+        with:
+          # The Level 10 pre-registration check compares commit dates, so it needs the full git history.
+          fetch-depth: 0
 
       # Use Python 3.11, the version the Docker image and the lint settings target. The pip cache makes repeat runs
       # faster and is keyed on requirements.txt.
@@ -171,20 +199,21 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: |
+            requirements.txt
+            requirements-test.txt
+            requirements-showcase.txt
+            requirements-dev.txt
 
       # The app configuration reads DATABASE_URL and other settings from .env, so create it from the example.
       - name: Create .env from example
         run: cp .env.example .env
 
-      # Install exactly the pinned packages. This also installs the pinned ruff, mypy, pytest and anyio.
+      # Install exactly the pinned packages from the ONE dev file. It includes requirements.txt (the pinned app, ruff,
+      # mypy, pytest and anyio), requirements-test.txt and requirements-showcase.txt (dvc and the test packages,
+      # kept out of requirements.txt because that feeds the Docker image), and the type stubs.
       - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      # The Level 8 showcase (run by `make show-all QUICK=1` below) needs the dvc command and the test packages.
-      # They are kept out of requirements.txt, which feeds the Docker image.
-      - name: Install showcase-only packages
-        run: pip install -r requirements-test.txt -r requirements-showcase.txt
+        run: pip install -r requirements-dev.txt
 
       # Style check on the Level 7 code and the code it uses.
       - name: Lint (ruff)
@@ -199,14 +228,28 @@ jobs:
       #   - test_velocity_features.py needs the package fakeredis, which is not in requirements.txt.
       #   - Two geo tests fail on numpy 2.x because numpy is not pinned in requirements.txt (numpy 2.x prints
       #     floats as np.float64(...), which the old code cannot parse).
+      # FAIL_ON_SKIP=1 makes the run fail if any test is skipped (see tests/fail_on_skip.py). Tests that cannot run
+      # here are left out on purpose by marker: gpu (needs a GPU), ml (runs in the ml-tests job) and needs_dvc
+      # (needs files from `dvc pull`, local only).
       - name: Unit tests
+        env:
+          FAIL_ON_SKIP: "1"
         run: >-
-          pytest tests/unit -q -rs -p no:cacheprovider
+          pytest tests/unit -q -rs -p no:cacheprovider -m "not gpu and not ml and not needs_dvc"
           --ignore=tests/unit/test_velocity_features.py
           --deselect tests/unit/test_geo_velocity.py::test_vectorized_batch_equals_old_loop_on_many_random_rows
           --deselect tests/unit/test_geo_velocity.py::test_array_haversine_matches_single_pair_haversine_bit_for_bit
 
       # Start only the two services the next steps need, and wait until their health checks pass.
+      # Log in to Docker Hub so image pulls are not limited as anonymous requests (the rate limit that failed the
+      # boot check). The step is skipped when the secrets are absent, for example on pull requests from forks.
+      - name: Log in to Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+
       - name: Start Postgres and Redpanda
         run: docker compose up --wait postgres redpanda
 
@@ -294,6 +337,9 @@ jobs:
       # Download the code of the commit being tested.
       - name: Check out the repository
         uses: actions/checkout@v4
+        with:
+          # The Level 10 pre-registration check compares commit dates, so it needs the full git history.
+          fetch-depth: 0
 
       # Use Python 3.11, the version the Docker image targets.
       - name: Set up Python 3.11
@@ -304,19 +350,79 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             requirements-test.txt
+            requirements-showcase.txt
+            requirements-dev.txt
 
       # The app configuration reads its settings from .env, so create it from the example. No service is started.
       - name: Create .env from example
         run: cp .env.example .env
 
-      # The pinned app packages, plus the test-only packages (requirements-test.txt keeps them out of the Docker image).
+      # The same ONE dev file as the other jobs (pinned app packages, test-only packages and type stubs).
       - name: Install dependencies
-        run: pip install -r requirements.txt -r requirements-test.txt
+        run: pip install -r requirements-dev.txt
+
+      # Fails if core/ or showcase/ imports a package that requirements-dev.txt (and the files it includes) lacks.
+      - name: Check that every import is declared
+        run: python -m core.imports_check
+
+      # Fails if a top-level folder is not listed in config/folder_classification.yaml, or an engine folder is not
+      # listed in config/new_engine_paths.yaml.
+      - name: Check the top-level folder classification
+        run: python -m core.folder_check
 
       # Run the fast folders. "-m not needs_stack" skips tests that need the Docker stack. The geo-velocity tests and
       # test_velocity_features.py (which the level-showcase job leaves out) DO run here: the geo tests now use a small
       # relative tolerance instead of exact bits, and requirements-test.txt installs fakeredis.
+      # FAIL_ON_SKIP=1: any skipped test fails the job. gpu, ml and needs_dvc tests are deselected by marker instead.
       - name: Fast tests
+        env:
+          FAIL_ON_SKIP: "1"
         run: >-
-          pytest -q -rs -p no:cacheprovider -m "not needs_stack"
+          pytest -q -rs -p no:cacheprovider -m "not needs_stack and not gpu and not ml and not needs_dvc"
           tests/unit tests/contract tests/property tests/schema tests/baselines
+
+  # ---------------------------------------------------------------------------
+  # Job: ml-tests
+  # What: installs the machine-learning libraries (requirements-ml.txt) and runs the tests marked "ml", which the
+  #       other jobs leave out because those libraries are not installed there.
+  # Why:  these tests check the Level 5 training scripts and the Level 9 audit. FAIL_ON_SKIP=1 makes any skip fail.
+  # ---------------------------------------------------------------------------
+  ml-tests:
+    name: ML tests (requirements-ml.txt)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      FAIL_ON_SKIP: "1"
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-ml.txt
+
+      # The scripts read their settings from .env, so create it from the example.
+      - name: Create .env from example
+        run: cp .env.example .env
+
+      # requirements-ml.txt cannot be installed in one go: shap==0.51.0 asks for numpy>=2, but the file pins
+      # numpy==1.26.4, the version the frozen model v1 was built with. So: install everything except shap, then shap
+      # without its dependencies, then its few missing dependencies while numpy stays at 1.26.4.
+      # pytest, PyYAML and orjson use the same versions as requirements.txt and requirements-test.txt.
+      - name: Install the machine-learning libraries
+        run: |
+          grep -v '^shap==' requirements-ml.txt > "$RUNNER_TEMP/ml-without-shap.txt"
+          echo "numpy==1.26.4" > "$RUNNER_TEMP/numpy-constraint.txt"
+          pip install -r "$RUNNER_TEMP/ml-without-shap.txt" pytest==8.3.5 PyYAML==6.0.3 orjson==3.10.18
+          pip install --no-deps shap==0.51.0
+          pip install -c "$RUNNER_TEMP/numpy-constraint.txt" cloudpickle llvmlite numba slicer
+
+      # Only the test files that use the ml marker (the other test files need packages that are not installed here).
+      # needs_dvc tests are left out: they need files from `dvc pull`.
+      - name: Run the ml tests
+        run: pytest $(grep -rl "pytest.mark.ml" tests/unit) -q -rs -p no:cacheprovider -m "ml and not needs_dvc"

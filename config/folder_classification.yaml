@@ -1,0 +1,43 @@
+# Every top-level folder of the repository, sorted into "engine" or "not_engine".
+#
+# engine     = a folder for the NEW engine (simulator, new features, new model). It must ALSO be listed
+#              (as "<name>/") in config/new_engine_paths.yaml, so the pre-registration check watches it.
+# not_engine = everything else (the v1 system, tools, docs, tests, data).
+#
+# A new top-level folder that is not listed here makes `python -m core.folder_check` fail (and CI fail),
+# so every new folder has to be classified on purpose before it is added.
+# api/ and models/ are not_engine as folders, but they hold engine paths (api/v1/, models/mule_*) that
+# config/new_engine_paths.yaml lists.
+
+folder_classification:
+  label: policy
+  reason: A fixed list forces a decision about every new folder, so new-engine code cannot appear in a folder the order check does not watch.
+  engine:
+    - sim
+    - world
+    - worlds
+    - engine
+    - decisions
+    - features_m1
+  not_engine:
+    - .dvc
+    - .github
+    - agent
+    - api
+    - benchmarks
+    - config
+    - core
+    - data
+    - docs
+    - envs
+    - features
+    - infra
+    - migrations
+    - models
+    - online_learning
+    - reports
+    - scripts
+    - serving
+    - showcase
+    - specs
+    - tests
