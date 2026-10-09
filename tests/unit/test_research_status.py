@@ -8,6 +8,14 @@ import yaml
 STATUS_PATH = Path(__file__).resolve().parents[2] / "config" / "research_status.yaml"
 
 ALLOWED_STATUSES = ["confirmed", "changed", "reported", "unverified"]
+ALLOWED_TOOL_RECHECKS = ["none", "single", "both", "disagree"]
+
+# The findings whose page the author opened and read.
+HAND_CHECKED_IDS = {
+    "cfcfrms_hold_process", "cloudsek_xhelper", "npci_95_percent_low_value_p2m", "fca_37_percent_not_reported",
+    "fca_cash_out_second_to_fifth", "yield_paper_89_vs_61", "pixsim_paper_and_code", "dpip_five_services",
+    "i4c_registry_figures", "mulehunter_rule_false_positives",
+}
 
 
 def load_findings():
@@ -35,6 +43,14 @@ def check_findings(findings):
         if not isinstance(finding.get("hand_checked"), bool):
             raise ValueError(f"{finding_id}: hand_checked must be true or false")
 
+        # tool_rechecked must be one of the four agreed words.
+        if finding.get("tool_rechecked") not in ALLOWED_TOOL_RECHECKS:
+            raise ValueError(f"{finding_id}: tool_rechecked {finding.get('tool_rechecked')!r} is not allowed")
+
+        # note must be text (it may be empty).
+        if not isinstance(finding.get("note"), str):
+            raise ValueError(f"{finding_id}: note must be a string")
+
 
 def count_by_status(findings):
     counts = {status: 0 for status in ALLOWED_STATUSES}
@@ -60,9 +76,17 @@ def test_status_counts():
     assert count_by_status(load_findings()) == {"confirmed": 11, "changed": 4, "reported": 6, "unverified": 6}
 
 
-def test_exactly_three_are_hand_checked():
-    hand_checked = [finding for finding in load_findings() if finding["hand_checked"]]
-    assert len(hand_checked) == 3
+def test_exactly_ten_are_hand_checked():
+    hand_checked = {finding["id"] for finding in load_findings() if finding["hand_checked"]}
+    assert len(hand_checked) == 10
+    assert hand_checked == HAND_CHECKED_IDS
+
+
+def test_tool_recheck_counts():
+    counts = {word: 0 for word in ALLOWED_TOOL_RECHECKS}
+    for finding in load_findings():
+        counts[finding["tool_rechecked"]] += 1
+    assert counts == {"both": 9, "single": 4, "disagree": 2, "none": 12}
 
 
 def test_bad_status_word_is_rejected():
@@ -76,4 +100,11 @@ def test_duplicate_id_is_rejected():
     findings = copy.deepcopy(load_findings())
     findings[1]["id"] = findings[0]["id"]
     with pytest.raises(ValueError, match="duplicate id"):
+        check_findings(findings)
+
+
+def test_bad_tool_recheck_word_is_rejected():
+    findings = copy.deepcopy(load_findings())
+    findings[0]["tool_rechecked"] = "maybe"
+    with pytest.raises(ValueError, match="tool_rechecked"):
         check_findings(findings)
