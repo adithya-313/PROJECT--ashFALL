@@ -1,0 +1,146 @@
+# Research status table for Level 10.
+#
+# status is one of: confirmed, changed, reported, unverified.
+#   confirmed  = a source says it.
+#   changed    = the source says something different from the first plan.
+#   reported   = seen only in a secondary or vendor source.
+#   unverified = not found in a source yet.
+# hand_checked says whether the author opened the page.
+# source_url is null where no URL is recorded.
+
+findings:
+  - id: mulehunter_rule_false_positives
+    claim: "RBIH found rule-based mule detection gives high false positive rates."
+    status: confirmed
+    hand_checked: false
+    source_url: null
+  - id: mulehunter_slow_turnaround
+    claim: "RBIH found rule-based mule detection is slow to turn around."
+    status: unverified
+    hand_checked: false
+    source_url: null
+  - id: mulehunter_bank_count
+    claim: "Number of banks using MuleHunter.AI; counts conflict, dated timeline: 21 in Oct 2025, 23 in Dec 2025, 26 in Mar 2026, 31 in Sep 2026."
+    status: changed
+    hand_checked: false
+    source_url: null
+  - id: i4c_registry_figures
+    claim: "I4C Suspect Registry holds lakhs of suspect identifiers and Layer 1 mule accounts (MHA Lok Sabha answers)."
+    status: confirmed
+    hand_checked: false
+    source_url: null
+  - id: i4c_registry_bank_count
+    claim: "Number of banks on the I4C registry itself."
+    status: unverified
+    hand_checked: false
+    source_url: null
+  - id: dpip_five_services
+    claim: "DPIP has five services: Ingestion, Screening, Feedback, Revoke, Dispute."
+    status: confirmed
+    hand_checked: false
+    source_url: https://docs.rbihub.in/digital-payments-intelligence-platform
+  - id: dpip_live_8_banks
+    claim: "DPIP live on 1 Sep 2026 with 8 banks (MediaNama, 11 Sep 2026)."
+    status: reported
+    hand_checked: false
+    source_url: null
+  - id: dpip_salted_identifiers
+    claim: "DPIP identifiers are salted before hashing (MediaNama, 11 Sep 2026)."
+    status: reported
+    hand_checked: false
+    source_url: null
+  - id: dpip_api_field_names
+    claim: "DPIP API endpoint paths and field names."
+    status: unverified
+    hand_checked: false
+    source_url: null
+  - id: npci_dozen_bank_pilot
+    claim: "NPCI pilot with about a dozen banks, each running NPCI's model locally."
+    status: reported
+    hand_checked: false
+    source_url: null
+  - id: npci_nvidia_mule_detection
+    claim: "NPCI and NVIDIA announced a payments AI foundation model on 18 Feb 2026; no primary source describes mule detection."
+    status: changed
+    hand_checked: false
+    source_url: null
+  - id: hdfc_questdb_streaming
+    claim: "HDFC Bank streaming platform for mule detection (QuestDB case study, 17 Jul 2026)."
+    status: reported
+    hand_checked: false
+    source_url: null
+  - id: cfcfrms_hold_process
+    claim: "The beneficiary bank puts on hold an amount to the extent of the amount reported (MHA SOP, 2 Jan 2026)."
+    status: confirmed
+    hand_checked: true
+    source_url: https://cdnbbsr.s3waas.gov.in/s3ec03936824c0191953647ec609b4f49b/uploads/2026/06/2026061955.pdf
+  - id: freeze_narrowed_to_lien
+    claim: "A rule that a blanket freeze must be narrowed to a lien on the disputed amount."
+    status: unverified
+    hand_checked: false
+    source_url: null
+  - id: rbi_60_day_debit_hold_draft
+    claim: "RBI draft (11 Sep 2026) allows temporary debit holds of up to 60 days."
+    status: reported
+    hand_checked: false
+    source_url: https://m.rbi.org.in/scripts/bs_viewcontent.aspx?Id=5170
+  - id: thirty_sixty_seconds_to_intervene
+    claim: "Banks may have 30 to 60 seconds to intervene (a conference comment)."
+    status: reported
+    hand_checked: false
+    source_url: null
+  - id: fca_37_percent_not_reported
+    claim: "Only 37% of offboarded mule accounts were reported to the National Fraud Database (period Jan 2022 to Sep 2023)."
+    status: confirmed
+    hand_checked: false
+    source_url: https://www.fca.org.uk/publications/multi-firm-reviews/firms-use-national-fraud-database-money-mule-account-detection-tools
+  - id: fca_unrelated_payers_balances_near_zero
+    claim: "The FCA does not use the combined wording about unrelated payers and balances near zero."
+    status: changed
+    hand_checked: false
+    source_url: https://www.fca.org.uk/publications/multi-firm-reviews/proceeds-fraud-detecting-preventing-money-mules
+  - id: yield_paper_89_vs_61
+    claim: "A live mule system's yield was 89% versus 61% under the incumbent rules (arXiv 2607.17586)."
+    status: confirmed
+    hand_checked: false
+    source_url: null
+  - id: pixsim_paper_and_code
+    claim: "PixSim paper (arXiv 2609.30684) and Apache-2.0 code exist."
+    status: confirmed
+    hand_checked: false
+    source_url: https://github.com/BashirZeimarani/pixsim_public
+  - id: amlgentex_code_licence
+    claim: "AMLGentex code is Apache-2.0."
+    status: confirmed
+    hand_checked: false
+    source_url: https://github.com/aidotse/AMLGentex
+  - id: amlgentex_output_licence_and_release_date
+    claim: "AMLGentex output dataset licence and latest release date."
+    status: unverified
+    hand_checked: false
+    source_url: null
+  - id: cloudsek_xhelper
+    claim: "XHelper-style network: 10-minute payout window and USDT confirmed; account counts differ from the first plan."
+    status: changed
+    hand_checked: true
+    source_url: https://www.cloudsek.com/blog/shadow-banking-in-your-pocket-exposing-android-app-used-by-money-mules
+  - id: dataset_licences_ibm_and_samld
+    claim: "IBM AML-Data is CDLA-Sharing-1.0; SAML-D is CC BY-NC-SA 4.0."
+    status: confirmed
+    hand_checked: false
+    source_url: null
+  - id: amlsim_truman_napier
+    claim: "IBM AMLSim, Truman and Napier AI Agentic Test Simulator details from plan Section 2."
+    status: unverified
+    hand_checked: false
+    source_url: null
+  - id: npci_95_percent_low_value_p2m
+    claim: "Over 95% of UPI P2M volume is up to 2,000 rupees (NPCI FAQ)."
+    status: confirmed
+    hand_checked: true
+    source_url: https://www.npci.org.in/uploads/FA_Qs_Merchant_Discount_Rate_MDR_on_Select_UPI_P2_M_Transactions_58dba1d39e.pdf
+  - id: fca_cash_out_second_to_fifth
+    claim: "Cash-out is concentrated between the second and fifth mule accounts (FCA, 23 Sep 2026)."
+    status: confirmed
+    hand_checked: false
+    source_url: https://www.fca.org.uk/publications/multi-firm-reviews/money-mules-activity-cashing-out-findings
