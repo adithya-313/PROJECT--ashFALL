@@ -23,4 +23,5 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 markers = [
     "needs_stack: test needs the Docker Compose stack (database, Kafka) running",
+    "gpu: test needs a CUDA GPU with torch and Triton; CI leaves it out, run it with `make test-gpu`",
 ]
