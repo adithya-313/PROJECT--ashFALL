@@ -162,8 +162,10 @@ def diagnostics_table(results: dict[str, Any]) -> str:
 def paysim_section(paysim_source: dict[str, Any]) -> str:
     """Section 5: PaySim's own guidance, quoted only if it was really read; otherwise a visible NOT VERIFIED line."""
     if paysim_source.get("verified") and paysim_source.get("exact_sentence"):
+        note = paysim_source.get("provided_by", "")
+        provided = f" {note[:1].upper()}{note[1:]}." if note else ""
         return (f"> {paysim_source['exact_sentence']}\n\nSource: {paysim_source['source_url']} "
-                f"(retrieved on {paysim_source['retrieved_on']}).")
+                f"(retrieved on {paysim_source['retrieved_on']}).{provided}")
     return (f"**{NOT_VERIFIED_LINE}**\n\nSource to check: {paysim_source.get('source_url', 'unknown')}. The page text "
             "could not be read automatically, so no sentence is quoted here. Nothing in this report depends on it.")
 
@@ -207,6 +209,18 @@ def learned_section(results: dict[str, Any]) -> str:
             + "\n\nHow easy the generated columns are to separate:\n\n" + diagnostics_table(results))
 
 
+def paysim_reason(paysim_source: dict[str, Any]) -> str:
+    """Why PaySim says the balance columns are unsuitable (only shown once the source sentence is verified)."""
+    if not (paysim_source.get("verified") and paysim_source.get("exact_sentence")):
+        return ""
+    return (
+        "\n\nPaySim's own explanation (section 5) fits these numbers: transactions that are detected as fraud are "
+        "cancelled, so the balance columns do not behave like real transaction balances, and PaySim says they must "
+        "not be used for fraud detection. The drop in the audit when they are removed shows how much model v1 "
+        "relied on them."
+    )
+
+
 def render_report(results: dict[str, Any], paysim_source: dict[str, Any]) -> str:
     """The full markdown report with its seven sections."""
     verdict = build_verdict(results)
@@ -215,7 +229,7 @@ def render_report(results: dict[str, Any], paysim_source: dict[str, Any]) -> str
         how_section(results),
         "## 2. Results\n\n" + results_table(results) + f"\n\nBase rate of the test split: {results['base_rate']:.4f}.",
         learned_section(results),
-        "## 4. Why the score misled (or did not)\n\n" + verdict,
+        "## 4. Why the score misled (or did not)\n\n" + verdict + paysim_reason(paysim_source),
         "## 5. PaySim's own guidance\n\n" + paysim_section(paysim_source),
         "## 6. Design rules that follow\n\n" + bullets(DESIGN_RULES),
         "## 7. Limits of this audit\n\n" + bullets(LIMITS),

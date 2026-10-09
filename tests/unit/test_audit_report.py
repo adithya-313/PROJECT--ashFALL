@@ -86,3 +86,16 @@ def test_report_quotes_the_sentence_only_when_verified() -> None:
               "exact_sentence": "An exact test sentence.", "verified": True}
     report = render_report(make_results(), source)
     assert "> An exact test sentence." in report and NOT_VERIFIED_LINE not in report
+
+
+def test_verified_source_shows_the_sentence_the_owner_note_and_the_paysim_reason() -> None:
+    """With verified=true the report quotes the sentence, names who provided it, and gives the PaySim reason."""
+    sentence = "NOTE: Transactions which are detected as fraud are cancelled, so these columns must not be used."
+    source = {"source_url": "https://example.test/paysim", "retrieved_on": "2026-10-09", "exact_sentence": sentence,
+              "verified": True, "provided_by": "copied by the repository owner from the Kaggle page"}
+    report = render_report(make_results(), source)
+    assert f"> {sentence}" in report
+    assert "Copied by the repository owner" in report
+    assert "detected as fraud are cancelled" in report and NOT_VERIFIED_LINE not in report
+    unverified = render_report(make_results(), {**source, "verified": False, "exact_sentence": ""})
+    assert "detected as fraud are cancelled" not in unverified

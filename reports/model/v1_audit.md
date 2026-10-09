@@ -55,11 +55,13 @@ How easy the generated columns are to separate:
 
 Model v1's original PR-AUC was 0.995, while a model with no skill would score about the base rate of 0.005. A copy retrained on the CPU with all 15 features scored 0.994; the gap of 0.0003 to the original is an ESTIMATE of CPU versus GPU training (it was not tested). Without the balance columns, PR-AUC fell from 0.994 to 0.813 (a large drop of 0.181). Without the type flags, PR-AUC fell from 0.994 to 0.988 (a small drop of 0.007). Without the five generated columns, PR-AUC fell from 0.994 to 0.960 (a small drop of 0.034). Removing the balance columns dropped PR-AUC from 0.994 to 0.813, and it still stayed well above the base rate of 0.005. So the score DEPENDS on the balance group, which is recorded after the transaction (a leak). The injected patterns may also be easy to separate on their own. The separability diagnostic (the table in section 3) shows how easy the injected patterns are to tell apart: new_device_flag is non-zero in 46% of fraud rows and 15% of other rows. On an out-of-time split (train on steps up to 372, test on later steps) all 15 features scored 0.992, a drop of 0.002 from the control; without the balance columns the out-of-time score was 0.664. The strongest single feature was newbalanceOrig with PR-AUC 0.191, 19% of the original score. No single feature explains the score; its strength comes from combining columns, so this is not evidence that the score was fine. type_PAYMENT alone scored 0.008, which is 0.8% of the original score and 1.5 times the base rate of 0.005.
 
+PaySim's own explanation (section 5) fits these numbers: transactions that are detected as fraud are cancelled, so the balance columns do not behave like real transaction balances, and PaySim says they must not be used for fraud detection. The drop in the audit when they are removed shows how much model v1 relied on them.
+
 ## 5. PaySim's own guidance
 
-**NOT VERIFIED — source sentence still to be added**
+> NOTE: Transactions which are detected as fraud are cancelled, so for fraud detection these columns (oldbalanceOrg, newbalanceOrig, oldbalanceDest, newbalanceDest ) must not be used.
 
-Source to check: https://www.kaggle.com/datasets/ealaxi/paysim1. The page text could not be read automatically, so no sentence is quoted here. Nothing in this report depends on it.
+Source: https://www.kaggle.com/datasets/ealaxi/paysim1 (retrieved on 2026-10-09). Copied by the repository owner from the Kaggle page (not fetched by the tooling).
 
 ## 6. Design rules that follow
 
