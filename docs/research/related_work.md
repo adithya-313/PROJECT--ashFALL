@@ -16,7 +16,9 @@ Status words: confirmed, changed, reported, unverified.
 - Borrow: pattern files, alert-budget metrics, three regimes (centralised, isolated, federated).
 - Differs: device tracking, label delay, holds and adaptive fraudsters were not found in the text read.
 - Status: code licence **confirmed**. The output dataset licence and the latest release date are **unverified**.
-- The spike (B4) decides whether to build on it or only borrow from it.
+- The spike gave the verdict: borrow ideas and use as an outside check.
+- Verdict line: `Verdict: borrow ideas and use as an outside check`. Evidence: `docs/research/amlgentex_spike_verdict.md`.
+- The decision and its reasons are in `docs/decisions/level-10-amlgentex-decision.md`.
 
 ## IBM AMLSim, Truman and Napier AI Agentic Test Simulator
 - IBM AMLSim, Truman (AAMAS 2025) and the Napier AI Agentic Test Simulator come from plan Section 2 only.

@@ -18,6 +18,9 @@ Nothing here is an official interface.
 - Status: **confirmed**.
 - "Live on 1 Sep 2026 with 8 banks" and "salted" come only from MediaNama, 11 Sep 2026. Status: **reported**.
 - The API reference with endpoint paths and field names could not be opened. Status: **unverified**.
+- The DPIP API reference requires a Pratirupa login and offers no public signup, so the field names are not public.
+- A sixth DPIP service, augmentation, is under consideration and subject to approval. It is NOT live.
+- The mocks in Section 2 keep their own design names.
 
 ### I4C Suspect Registry
 - Launched 10 Sep 2024 (I4C page).
