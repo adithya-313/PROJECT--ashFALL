@@ -1,0 +1,206 @@
+# Actions the engine may take, with the legal basis, the maximum duration and whether a human must approve.
+#
+# Each action has:
+#   scope     = amount_only, whole_account or channel_only
+#   in_force  = true if the rule is in force today, false if it is only a draft
+# and four labelled blocks: precondition, legal_basis, max_duration_days, requires_human_approval.
+# Where no maximum was found the value is null, not_found is true and the label is assumption.
+# Labels: sourced (link, date and quote), reported (link and date), assumption, policy.
+# Checked by: python -m core.config_validator config/legal_actions.yaml
+
+notes:
+  - No official source was found for a rule that a blanket freeze must be narrowed to the disputed amount.
+  - A lien on the disputed amount is an action the SOP allows.
+  - '"30-60 seconds" was only a conference comment, not a rule.'
+
+actions:
+  pre_payment_warning:
+    scope: channel_only
+    in_force: true
+    precondition:
+      label: assumption
+      value: null
+      not_found: true
+      reason: A bank-side warning; no precondition was found in any source.
+    legal_basis:
+      label: assumption
+      value: null
+      not_found: true
+      reason: A bank-side warning; no legal basis found.
+    max_duration_days:
+      label: assumption
+      value: null
+      not_found: true
+      reason: Not applicable; a warning has no duration.
+    requires_human_approval:
+      label: assumption
+      value: false
+      reason: A bank-side warning needs no sign-off in our design.
+
+  short_payment_delay:
+    scope: channel_only
+    in_force: true
+    precondition:
+      label: assumption
+      value: null
+      not_found: true
+      reason: A design choice of the project; no precondition was found in any source.
+    legal_basis:
+      label: assumption
+      value: null
+      not_found: true
+      reason: Design choice of the project; no legal basis found.
+    max_duration_days:
+      label: assumption
+      value: null
+      not_found: true
+      reason: Design choice of the project; no maximum found.
+    requires_human_approval:
+      label: assumption
+      value: false
+      reason: Design choice of the project; a short delay needs no sign-off.
+
+  hold_reported_amount:
+    scope: amount_only
+    in_force: true
+    precondition:
+      label: sourced
+      value: police-screened CFCFRMS notice received by the bank
+      source:
+        url: https://cdnbbsr.s3waas.gov.in/s3ec03936824c0191953647ec609b4f49b/uploads/2026/06/2026061955.pdf
+        date: "2026-01-02"
+        quote: "put on hold an amount to the extent of the amount reported"
+      reason: The SOP describes the hold as following a notice that the police have screened.
+    legal_basis:
+      label: sourced
+      value: BNSS sections 168 read with 94, and 106 where applicable (MHA SOP for NCRP-CFCFRMS)
+      source:
+        url: https://cdnbbsr.s3waas.gov.in/s3ec03936824c0191953647ec609b4f49b/uploads/2026/06/2026061955.pdf
+        date: "2026-01-02"
+        quote: "put on hold an amount to the extent of the amount reported"
+      reason: The hold is limited to the reported amount.
+    max_duration_days:
+      label: assumption
+      value: null
+      not_found: true
+      reason: No maximum duration was found in the SOP.
+    requires_human_approval:
+      label: sourced
+      value: true
+      source:
+        url: https://cdnbbsr.s3waas.gov.in/s3ec03936824c0191953647ec609b4f49b/uploads/2026/06/2026061955.pdf
+        date: "2026-01-02"
+        quote: "put on hold an amount to the extent of the amount reported"
+      reason: Police review the report before the notice is sent; no separate bank-level approval was found.
+
+  lien_on_disputed_amount:
+    scope: amount_only
+    in_force: true
+    precondition:
+      label: assumption
+      value: null
+      not_found: true
+      reason: No separate precondition for a lien was found in the SOP.
+    legal_basis:
+      label: sourced
+      value: MHA SOP for NCRP-CFCFRMS, Annexure III
+      source:
+        url: https://cdnbbsr.s3waas.gov.in/s3ec03936824c0191953647ec609b4f49b/uploads/2026/06/2026061955.pdf
+        date: "2026-01-02"
+        quote: "Banks/intermediaries can put the disputed amount on lien"
+      reason: SOP Annexure III, page 65.
+    max_duration_days:
+      label: assumption
+      value: null
+      not_found: true
+      reason: No maximum duration was found in the SOP.
+    requires_human_approval:
+      label: assumption
+      value: true
+      reason: Bank nodal officer sign-off is our design choice, not found in the SOP.
+
+  suspend_digital_services:
+    scope: channel_only
+    in_force: true
+    precondition:
+      label: assumption
+      value: account reported multiple times
+      reason: Our reading of the SOP; the exact trigger is not quoted.
+    legal_basis:
+      label: sourced
+      value: MHA SOP for NCRP-CFCFRMS
+      source:
+        url: https://cdnbbsr.s3waas.gov.in/s3ec03936824c0191953647ec609b4f49b/uploads/2026/06/2026061955.pdf
+        date: "2026-01-02"
+        quote: "suspend digital banking services"
+      reason: The SOP names suspending digital banking services as a step.
+    max_duration_days:
+      label: assumption
+      value: null
+      not_found: true
+      reason: No maximum duration was found in the SOP.
+    requires_human_approval:
+      label: assumption
+      value: true
+      reason: The SOP describes enhanced due diligence and lawful directions; no explicit sign-off found.
+
+  temporary_debit_hold_rbi_draft:
+    scope: amount_only
+    in_force: false
+    precondition:
+      label: assumption
+      value: flagged by the bank's monitoring
+      reason: The draft is described as letting the bank act on its own monitoring.
+    legal_basis:
+      label: reported
+      value: RBI draft KYC Amendment Directions, 11 Sep 2026 (draft, not in force)
+      source:
+        url: https://m.rbi.org.in/scripts/bs_viewcontent.aspx?Id=5170
+        date: "2026-09-11"
+      reason: The page could not be opened by the research tool; details come from secondary coverage.
+    max_duration_days:
+      label: reported
+      value: 60
+      source:
+        url: https://m.rbi.org.in/scripts/bs_viewcontent.aspx?Id=5170
+        date: "2026-09-11"
+      reason: The draft allows a temporary debit hold of up to 60 days, from secondary coverage.
+    requires_human_approval:
+      label: reported
+      value: false
+      source:
+        url: https://m.rbi.org.in/scripts/bs_viewcontent.aspx?Id=5170
+        date: "2026-09-11"
+      reason: The draft is described as allowing the bank to act on its own; not confirmed.
+
+  full_account_freeze:
+    scope: whole_account
+    in_force: true
+    precondition:
+      label: assumption
+      value: last resort only
+      reason: Our design choice; a freeze is the most harmful action.
+    legal_basis:
+      label: reported
+      value: BNSS section 106 seizure on LEA directions; attachment needs a Magistrate under section 107
+      source:
+        url: https://www.livelaw.in/pdf_upload/kartik-yogeshwar-chatur-v-union-of-india-ors-632526.pdf
+        date: "2025-11-20"
+        quote: "the orders passed under Section 106 of the BNSS ... debit freezing the accounts of the petitioners stand quashed and set aside."
+      also_see:
+        - judgment: Headstar Global v State of Kerala (Kerala High Court)
+          date: "2025-06-02"
+          url: https://www.livelaw.in/pdf_upload/2037000374020256-604943.pdf
+      reason: The Bombay High Court quashed freezes issued without that process.
+    max_duration_days:
+      label: assumption
+      value: null
+      not_found: true
+      reason: No maximum duration was found.
+    requires_human_approval:
+      label: reported
+      value: true
+      source:
+        url: https://www.livelaw.in/pdf_upload/kartik-yogeshwar-chatur-v-union-of-india-ors-632526.pdf
+        date: "2025-11-20"
+      reason: The court required the legal process (a directed seizure or a Magistrate order) before a freeze.
