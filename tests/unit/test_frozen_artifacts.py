@@ -88,6 +88,7 @@ def test_pinned_hashes_equal_the_hashes_in_the_dvc_files() -> None:
         )
 
 
+@pytest.mark.needs_dvc  # the model v1 files come from `dvc pull`
 def test_frozen_files_on_disk_match_their_hashes() -> None:
     """If the model files are present, they match the recorded hashes. Skipped when they are not on this machine."""
     if not all(path.exists() for path in FROZEN_ARTIFACT_PATHS):

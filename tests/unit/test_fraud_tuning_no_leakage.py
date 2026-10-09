@@ -1,20 +1,18 @@
 # File: tests/unit/test_fraud_tuning_no_leakage.py
 # Purpose: Proves the Optuna tuning script only touches the train split, samples it stratified, and feeds the
 #          models only the 15 contract features (no labels, identifiers or other leakage columns).
-import importlib.util
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
+from tests.lazy_script import lazy_script
+
 # The script imports several heavy libraries; skip cleanly if any are missing in this environment.
-for library in ("mlflow", "optuna", "xgboost", "catboost", "yaml"):
-    pytest.importorskip(library)
+pytestmark = pytest.mark.ml  # needs the requirements-ml.txt libraries: CI's fast job leaves it out, the ml job runs it
 
 SCRIPT_PATH = Path(__file__).resolve().parent.parent.parent / "scripts" / "fraud_tuning.py"
-spec = importlib.util.spec_from_file_location("fraud_tuning", SCRIPT_PATH)
-fraud_tuning = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(fraud_tuning)
+fraud_tuning = lazy_script(SCRIPT_PATH, ("mlflow", "optuna", "xgboost", "catboost", "yaml"))
 
 FORBIDDEN_FEATURES = [
     "isFraud", "isFlaggedFraud", "is_adversarial", "adversarial_pattern_type", "nameOrig", "nameDest",

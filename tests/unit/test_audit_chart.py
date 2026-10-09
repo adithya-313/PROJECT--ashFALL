@@ -5,9 +5,7 @@ Purpose: Proves the Level 9 chart function produces a real, non-empty PNG from a
 
 import pytest
 
-pytest.importorskip("matplotlib", reason="matplotlib is only installed with requirements-ml.txt")
-
-from scripts.audit_chart import make_chart_png  # noqa: E402
+pytestmark = pytest.mark.ml  # needs the requirements-ml.txt libraries: CI's fast job leaves it out, the ml job runs it
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
@@ -26,6 +24,9 @@ def fake_results() -> dict:
 
 def test_chart_is_a_non_empty_png() -> None:
     """The returned bytes start with the PNG signature and are not tiny."""
+    pytest.importorskip("matplotlib", reason="matplotlib is only installed with requirements-ml.txt")
+    from scripts.audit_chart import make_chart_png
+
     png = make_chart_png(fake_results())
     assert png.startswith(PNG_SIGNATURE)
     assert len(png) > 5000

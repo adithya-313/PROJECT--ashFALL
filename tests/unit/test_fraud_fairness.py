@@ -1,29 +1,21 @@
 # File: tests/unit/test_fraud_fairness.py
 # Purpose: Checks the 5.9 fairness code and model-card helpers: false-positive-rate arithmetic, labelled threshold
 #          scales, the merchant-tier caveat, interval clamping, and the markdown table readers used by the card.
-import importlib.util
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
-for library in ("mlflow", "optuna", "xgboost", "shap", "joblib", "yaml"):
-    pytest.importorskip(library)
+from tests.lazy_script import lazy_script
 
+pytestmark = pytest.mark.ml  # needs the requirements-ml.txt libraries: CI's fast job leaves it out, the ml job runs it
+
+LIBRARIES = ("mlflow", "optuna", "xgboost", "shap", "joblib", "yaml")
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent.parent / "scripts"
 
-
-def load_script(name: str):
-    """Load a script from scripts/ by file path (it is not a package)."""
-    spec = importlib.util.spec_from_file_location(name, SCRIPTS_DIR / f"{name}.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-evaluation = load_script("fraud_evaluation")
-card = load_script("fraud_model_card")
+evaluation = lazy_script(SCRIPTS_DIR / "fraud_evaluation.py", LIBRARIES)
+card = lazy_script(SCRIPTS_DIR / "fraud_model_card.py", LIBRARIES)
 
 
 def tiny_data():

@@ -1,20 +1,18 @@
 # File: tests/unit/test_fraud_evaluation.py
 # Purpose: Checks the 5.4 evaluation helpers: type conversion of tuned params, winner rule, segment scoring with
 #          'undefined' where no fraud exists, and that a SHAP explainer pickled with joblib loads back.
-import importlib.util
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
-for library in ("mlflow", "optuna", "xgboost", "catboost", "shap", "joblib", "yaml"):
-    pytest.importorskip(library)
+from tests.lazy_script import lazy_script
+
+pytestmark = pytest.mark.ml  # needs the requirements-ml.txt libraries: CI's fast job leaves it out, the ml job runs it
 
 SCRIPT_PATH = Path(__file__).resolve().parent.parent.parent / "scripts" / "fraud_evaluation.py"
-spec = importlib.util.spec_from_file_location("fraud_evaluation", SCRIPT_PATH)
-fraud_evaluation = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(fraud_evaluation)
+fraud_evaluation = lazy_script(SCRIPT_PATH, ("mlflow", "optuna", "xgboost", "catboost", "shap", "joblib", "yaml"))
 
 
 def test_convert_param_gives_real_types():
