@@ -36,7 +36,7 @@ def test_world_ranges_has_ten_parameters():
 
 def test_world_ranges_label_counts():
     parameters = load_yaml(WORLD_RANGES_PATH)["parameters"]
-    assert count_parameter_labels(parameters) == {"sourced": 3, "reported": 2, "assumption": 5}
+    assert count_parameter_labels(parameters) == {"sourced": 5, "assumption": 5}
 
 
 def test_world_ranges_parameters_have_unit_and_all_three_ranges():
