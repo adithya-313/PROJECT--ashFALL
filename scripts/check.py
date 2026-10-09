@@ -97,6 +97,13 @@ def level_numbers() -> list[int]:
     return sorted(int(m.group(1)) for n in names if (m := re.match(r"^level_(\d\d)\.py$", n)))
 
 
+def ml_test_files() -> list[str]:
+    """The test files that use the ml marker, found the same way the CI job finds them (grep for pytest.mark.ml)."""
+    files = [path for path in (REPO_ROOT / "tests" / "unit").rglob("*.py")
+             if "pytest.mark.ml" in path.read_text(encoding="utf-8")]
+    return sorted(path.relative_to(REPO_ROOT).as_posix() for path in files)
+
+
 def build_steps() -> list[Step]:
     """Every step, in order. The commands mirror ci.yml; tests/unit/test_check_matches_ci.py guards the job names."""
     steps = [
@@ -112,6 +119,13 @@ def build_steps() -> list[Step]:
         Step("fast tests", "pytest-fast",
              [PYTHON, "-m", "pytest", "-q", "-rs", "-p", "no:cacheprovider", "-m", "not needs_stack", "tests/unit",
               "tests/contract", "tests/property", "tests/schema", "tests/baselines"]),
+        # Mirrors the ml-tests job. CI installs requirements-ml.txt first; like the other steps, this one does not
+        # install anything, so run it in an environment that already has those libraries. CI sets FAIL_ON_SKIP=1; here
+        # must_not_contain="SKIPPED" has the same effect (any skipped test fails the step), as in the integration step.
+        Step("ml tests", "ml-tests",
+             [PYTHON, "-m", "pytest", *ml_test_files(), "-q", "-rs", "-p", "no:cacheprovider",
+              "-m", "ml and not needs_dvc"],
+             must_not_contain="SKIPPED"),
         Step("stack is running and healthy", "compose-boot", check=check_stack_is_running, needs_docker=True),
         Step("/health contract", "compose-boot", check=check_health_contract, needs_docker=True),
         Step("integration tests", "level-showcase",
