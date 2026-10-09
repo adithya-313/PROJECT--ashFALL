@@ -84,7 +84,3 @@ graph TD
   Visualization engine pre-provisioned with the internal Prometheus instance as its default datasource for real-time telemetry and alerting.
 
 ---
-
-## 3. Kubernetes Mapping (Level 10 Placeholder)
-
-*This section will detail the production Kubernetes mapping, including Helm chart structure, StatefulSets (PostgreSQL, Redis), Deployments (API, workers, Triton Inference Server), Horizontal Pod Autoscaling (HPA), KEDA event-driven scaling, and Istio service mesh routing. Formal implementation is scheduled for Level 10.*
