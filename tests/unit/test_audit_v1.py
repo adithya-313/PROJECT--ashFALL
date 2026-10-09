@@ -42,6 +42,7 @@ def test_groups_cover_the_15_features_exactly_once() -> None:
     assert not set(BALANCE) & set(GENERATED) and not set(TYPE_FLAGS) & set(GENERATED)
 
 
+@pytest.mark.ml  # needs the Level 5 libraries from requirements-ml.txt
 def test_groups_match_the_real_prepare_features() -> None:
     """If the Level 5 libraries are installed, prepare_features really returns these 15 columns."""
     pytest.importorskip("lightgbm", reason="the Level 5 libraries are only installed with requirements-ml.txt")

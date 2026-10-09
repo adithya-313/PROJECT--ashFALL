@@ -1,19 +1,17 @@
 # File: tests/unit/test_fraud_client.py
 # Purpose: Checks the serving client's own logic without needing Triton: input validation, the calibration step
 #          (numpy.interp read from the canonical pickle versus the pickle's own predict), and fixed constants.
-import importlib.util
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-pytest.importorskip("tritonclient.grpc")
-joblib = pytest.importorskip("joblib")
+from tests.lazy_script import lazy_script
+
+pytestmark = pytest.mark.ml  # needs the requirements-ml.txt libraries: CI's fast job leaves it out, the ml job runs it
 
 CLIENT_PATH = Path(__file__).resolve().parent.parent.parent / "serving" / "fraud_client.py"
-spec = importlib.util.spec_from_file_location("fraud_client", CLIENT_PATH)
-fraud_client = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(fraud_client)
+fraud_client = lazy_script(CLIENT_PATH, ("tritonclient.grpc", "joblib"))
 
 
 def test_row_must_have_15_features():
@@ -43,8 +41,11 @@ def test_calibration_maps_with_a_toy_step_function():
     assert result == pytest.approx([0.0, 0.05, 0.1, 0.55, 1.0])  # outside the range it holds the end values
 
 
-@pytest.mark.skipif(not fraud_client.CALIBRATOR_PATH.exists(), reason="calibrator pickle not present (gitignored)")
+@pytest.mark.needs_dvc  # the calibrator pickle comes from `dvc pull`
 def test_numpy_calibration_matches_the_canonical_pickle():
+    if not fraud_client.CALIBRATOR_PATH.exists():
+        pytest.skip("calibrator pickle not present (gitignored)")
+    joblib = pytest.importorskip("joblib")
     # Triton returns float32 scores, so test on float32-valued scores (what the client really receives).
     calibrator = joblib.load(fraud_client.CALIBRATOR_PATH)
     arrays = fraud_client.load_calibration_arrays()

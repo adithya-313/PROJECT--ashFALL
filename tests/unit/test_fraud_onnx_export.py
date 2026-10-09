@@ -1,20 +1,18 @@
 # File: tests/unit/test_fraud_onnx_export.py
 # Purpose: Checks the 5.6 ONNX export helpers on a tiny model: conversion works, the fraud probability column is
 #          read correctly, scores match native within 1e-5, ONNX Runtime loads on CPU, and a too-large gap fails.
-import importlib.util
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
-for library in ("mlflow", "optuna", "xgboost", "shap", "onnxruntime", "onnxmltools", "yaml"):
-    pytest.importorskip(library)
+from tests.lazy_script import lazy_script
+
+pytestmark = pytest.mark.ml  # needs the requirements-ml.txt libraries: CI's fast job leaves it out, the ml job runs it
 
 SCRIPT_PATH = Path(__file__).resolve().parent.parent.parent / "scripts" / "fraud_onnx_export.py"
-spec = importlib.util.spec_from_file_location("fraud_onnx_export", SCRIPT_PATH)
-fraud_onnx_export = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(fraud_onnx_export)
+fraud_onnx_export = lazy_script(SCRIPT_PATH, ("mlflow", "optuna", "xgboost", "shap", "onnxruntime", "onnxmltools", "yaml"))
 
 FEATURES = [f"feature_{i}" for i in range(15)]
 

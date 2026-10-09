@@ -1,20 +1,18 @@
 # File: tests/unit/test_fraud_calibration.py
 # Purpose: Checks the 5.5 calibration helpers: bin check, [0,1] and monotonic checks, threshold selection rules,
 #          and that a saved XGBoost model reloads with identical scores.
-import importlib.util
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
-for library in ("mlflow", "optuna", "xgboost", "shap", "joblib", "yaml"):
-    pytest.importorskip(library)
+from tests.lazy_script import lazy_script
+
+pytestmark = pytest.mark.ml  # needs the requirements-ml.txt libraries: CI's fast job leaves it out, the ml job runs it
 
 SCRIPT_PATH = Path(__file__).resolve().parent.parent.parent / "scripts" / "fraud_calibration.py"
-spec = importlib.util.spec_from_file_location("fraud_calibration", SCRIPT_PATH)
-fraud_calibration = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(fraud_calibration)
+fraud_calibration = lazy_script(SCRIPT_PATH, ("mlflow", "optuna", "xgboost", "shap", "joblib", "yaml"))
 
 
 def make_calibrated_data(rows: int = 50_000):

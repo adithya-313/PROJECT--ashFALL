@@ -1,19 +1,17 @@
 # File: tests/unit/test_fraud_baseline_features.py
 # Purpose: Checks that the fraud baseline feature contract is exact: named columns only, bools as 0/1, fixed one-hot.
-import importlib.util
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
+from tests.lazy_script import lazy_script
+
 # The script imports several heavy libraries; skip cleanly if any are missing in this environment.
-for library in ("mlflow", "xgboost", "lightgbm", "catboost", "yaml"):
-    pytest.importorskip(library)
+pytestmark = pytest.mark.ml  # needs the requirements-ml.txt libraries: CI's fast job leaves it out, the ml job runs it
 
 SCRIPT_PATH = Path(__file__).resolve().parent.parent.parent / "scripts" / "fraud_baseline.py"
-spec = importlib.util.spec_from_file_location("fraud_baseline", SCRIPT_PATH)
-fraud_baseline = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(fraud_baseline)
+fraud_baseline = lazy_script(SCRIPT_PATH, ("mlflow", "xgboost", "lightgbm", "catboost", "yaml"))
 
 EXPECTED_FEATURES = [
     "amount", "oldbalanceOrg", "newbalanceOrig", "oldbalanceDest", "newbalanceDest",
