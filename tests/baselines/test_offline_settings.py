@@ -38,3 +38,19 @@ def test_grafana_phone_home_setting_is_still_off(name: str) -> None:
         "internet, and the Level 8 no-egress check depends on it. If you removed it on purpose, update this test "
         "and explain why in your pull request."
     )
+
+
+# The command-line flag that turns off anonymous usage reports, for each service that has one.
+USAGE_REPORT_FLAG = "-reporting.enabled=false"
+
+
+@pytest.mark.parametrize("service", ["loki", "tempo"])
+def test_usage_reporting_flag_is_still_off(service: str) -> None:
+    """Loki and Tempo are still started with the flag that turns off their anonymous usage reports."""
+    compose = yaml.safe_load(COMPOSE_FILE.read_text(encoding="utf-8"))
+    command = compose["services"][service].get("command", [])
+    assert USAGE_REPORT_FLAG in command, (
+        f"docker-compose.yml no longer starts {service} with {USAGE_REPORT_FLAG}. That flag stops {service} from sending "
+        "usage reports to Grafana Labs, and the Level 8 no-egress check depends on it. If you removed it on purpose, "
+        "update this test and explain why in your pull request."
+    )
