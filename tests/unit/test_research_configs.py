@@ -77,9 +77,9 @@ def test_rbi_draft_is_not_in_force_and_has_a_60_day_limit():
     assert draft["max_duration_days"]["value"] == 60
 
 
-def test_lien_has_a_sourced_legal_basis():
+def test_lien_has_a_reported_legal_basis():
     lien = load_yaml(LEGAL_ACTIONS_PATH)["actions"]["lien_on_disputed_amount"]
-    assert lien["legal_basis"]["label"] == "sourced"
+    assert lien["legal_basis"]["label"] == "reported"
 
 
 def test_only_the_draft_has_a_maximum_duration():

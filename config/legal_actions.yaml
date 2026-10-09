@@ -102,13 +102,12 @@ actions:
       not_found: true
       reason: No separate precondition for a lien was found in the SOP.
     legal_basis:
-      label: sourced
-      value: MHA SOP for NCRP-CFCFRMS, Annexure III
+      label: reported
+      value: "MHA SOP for NCRP-CFCFRMS (2 Jan 2026) mentions lien in several places; Bombay High Court, Kartik Yogeshwar Chatur v Union of India (20 Nov 2025) distinguishes a lien from a debit freeze"
       source:
         url: https://cdnbbsr.s3waas.gov.in/s3ec03936824c0191953647ec609b4f49b/uploads/2026/06/2026061955.pdf
         date: "2026-01-02"
-        quote: "Banks/intermediaries can put the disputed amount on lien"
-      reason: SOP Annexure III, page 65.
+      reason: "The SOP mentions lien 19 times, but the author found no sentence that tells banks to lien only the disputed amount; lien appears mainly in court-order summaries. Lien on the disputed amount is therefore treated as the project's own design option, built on the sourced rule to hold the reported amount."
     max_duration_days:
       label: assumption
       value: null
