@@ -32,9 +32,13 @@ async def find_missing_preconditions() -> list[str]:
 
 
 def need_git_history() -> None:
-    """The proof needs git history. Say plainly if it is not there."""
-    if not level10_check.run_git(["rev-parse", "--git-dir"]):
-        raise NotRun("this folder is not a git repository, so the commit order cannot be checked")
+    """The proof needs the full git history. If it is missing, the check is NOT RUN, which fails the level.
+
+    The showcase framework counts NOT RUN as a failure unless the explicit --allow-not-run flag is given.
+    """
+    problem = level10_check.git_history_problem()
+    if problem:
+        raise NotRun(problem)
 
 
 def date_text(date: Any) -> str:

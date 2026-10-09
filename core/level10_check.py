@@ -25,13 +25,11 @@ STATUS_PATH = REPO_ROOT / "config" / "research_status.yaml"
 DECISIONS_PATH = REPO_ROOT / "docs" / "decisions" / "level-10-evaluation-decisions.md"
 AMLGENTEX_DECISION_PATH = REPO_ROOT / "docs" / "decisions" / "level-10-amlgentex-decision.md"
 VERDICT_PATH = REPO_ROOT / "docs" / "research" / "amlgentex_spike_verdict.md"
+NEW_ENGINE_PATHS_FILE = REPO_ROOT / "config" / "new_engine_paths.yaml"
 
 CONFIG_PATHS = [EVALUATION_PATH, WORLD_RANGES_PATH, LEGAL_ACTIONS_PATH]
 STATUS_WORDS = ["confirmed", "changed", "reported", "unverified"]
 TOOL_RECHECK_WORDS = ["none", "single", "both", "disagree"]
-
-# Paths the new engine will use. They do not exist yet, and nothing under them may be older than the rules.
-NEW_ENGINE_PATHS = ["sim/", "world/", "worlds/", "engine/", "decisions/"]
 
 # One file from the v1 PaySim era. It is OLDER than evaluation.yaml, on purpose (see its earlier_work_note).
 V1_MODEL_FILE = "scripts/data_split.py"
@@ -95,33 +93,54 @@ def broken_copy_is_rejected():
     }
 
 
-def run_git(arguments):
-    """Run a read-only git command in the repo and return its text output ('' if git fails)."""
-    result = subprocess.run(["git", "-C", str(REPO_ROOT)] + arguments, capture_output=True, text=True)
+def load_new_engine_paths(path=NEW_ENGINE_PATHS_FILE):
+    """Read the list of new-engine paths from config/new_engine_paths.yaml."""
+    return load_yaml(path)["new_engine_paths"]["paths"]
+
+
+def run_git(arguments, repo_root=REPO_ROOT):
+    """Run a read-only git command in a repo folder and return its text output ('' if git fails)."""
+    result = subprocess.run(["git", "-C", str(repo_root)] + arguments, capture_output=True, text=True)
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
-def first_add_date(paths):
-    """Date of the earliest commit that ADDED a file under these paths, or None if there is none."""
-    output = run_git(["log", "--diff-filter=A", "--format=%aI", "--"] + paths)
+def git_history_problem(repo_root=REPO_ROOT):
+    """Return '' when the full git history is there, otherwise a plain sentence that says what is wrong."""
+    # The folder must be the top of its own repository (not just a folder inside some other repository).
+    top_folder = run_git(["rev-parse", "--show-toplevel"], repo_root)
+    if not top_folder or Path(top_folder).resolve() != Path(repo_root).resolve():
+        return "this folder is not a git repository, so the commit order cannot be checked"
+    if run_git(["rev-parse", "--is-shallow-repository"], repo_root) == "true":
+        return ("the git history is shallow (cut short), so the commit order cannot be checked; "
+                "fetch the full history (CI: set fetch-depth: 0 on the checkout step)")
+    return ""
+
+
+def first_commit_date(paths, repo_root=REPO_ROOT):
+    """Date of the earliest commit that TOUCHED any file under these paths, or None if there is none."""
+    output = run_git(["log", "--format=%aI", "--"] + paths, repo_root)
     dates = [datetime.fromisoformat(line) for line in output.splitlines() if line.strip()]
     return min(dates) if dates else None
 
 
-def preregistration_proof():
+def preregistration_proof(repo_root=REPO_ROOT, engine_paths=None):
     """Show from git history that the rules came before any new-engine code.
 
+    Compares the first commit that touched any new-engine path with the commit of config/evaluation.yaml.
     Returns a dict with the dates, a result ("OK" or "NOT OK") and one plain sentence.
     The v1 PaySim code is older than the rules by design, so the proof is about the NEW engine only.
     """
-    evaluation_date = first_add_date(["config/evaluation.yaml"])
-    decisions_date = first_add_date(["docs/decisions/level-10-evaluation-decisions.md"])
-    v1_date = first_add_date([V1_MODEL_FILE])
+    if engine_paths is None:
+        engine_paths = load_new_engine_paths()
+
+    evaluation_date = first_commit_date(["config/evaluation.yaml"], repo_root)
+    decisions_date = first_commit_date(["docs/decisions/level-10-evaluation-decisions.md"], repo_root)
+    v1_date = first_commit_date([V1_MODEL_FILE], repo_root)
 
     # Collect every new-engine path that already has a commit.
     new_engine_dates = {}
-    for path in NEW_ENGINE_PATHS:
-        date = first_add_date([path])
+    for path in engine_paths:
+        date = first_commit_date([path], repo_root)
         if date is not None:
             new_engine_dates[path] = date
 
