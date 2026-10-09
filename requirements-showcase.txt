@@ -1,0 +1,3 @@
+# Packages that only the showcase needs (check 3 of the Level 8 showcase uses the dvc command). Kept out of requirements.txt,
+# which feeds the Docker image.
+dvc==3.67.1

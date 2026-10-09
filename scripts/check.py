@@ -39,6 +39,7 @@ class Step:
     expect_exit: int = 0
     must_contain: str = ""
     must_not_contain: str = ""
+    is_showcase: bool = False  # True for the level showcase steps, which --skip-showcases leaves out
 
 
 def ruff_step(name: str, job: str, folders: list[str]) -> Step:
@@ -122,8 +123,49 @@ def build_steps() -> list[Step]:
     ]
     for number in level_numbers():
         steps.append(Step(f"showcase level {number} (quick)", "level-showcase",
-                          [PYTHON, "-m", "showcase", "--level", str(number), "--quick"], needs_docker=True))
+                          [PYTHON, "-m", "showcase", "--level", str(number), "--quick"], needs_docker=True,
+                          is_showcase=True))
     return steps
+
+
+def parse_pinned_version(requirements_text: str, tool: str) -> str | None:
+    """The version after 'tool==' at the start of a line in requirements.txt text, or None."""
+    match = re.search(rf"^{re.escape(tool)}==([0-9][0-9A-Za-z.]*)", requirements_text, re.MULTILINE)
+    return match.group(1) if match else None
+
+
+def parse_installed_version(version_output: str) -> str | None:
+    """The first version-looking number (such as 0.15.12) in the output of `<tool> --version`, or None."""
+    match = re.search(r"[0-9]+(?:\.[0-9]+)+", version_output)
+    return match.group(0) if match else None
+
+
+def version_warning(tool: str, pinned: str | None, installed: str | None) -> str | None:
+    """A warning text when the installed version differs from the CI pin (or cannot be read), otherwise None."""
+    if pinned is None:
+        return f"WARNING: no pinned {tool} version found in requirements.txt"
+    if installed is None:
+        return f"WARNING: could not read the installed {tool} version (CI uses {pinned})"
+    if installed != pinned:
+        return f"WARNING: {tool} {installed} is installed but CI uses {pinned}; results may differ"
+    return None
+
+
+def print_tool_versions() -> None:
+    """Print installed versus CI-pinned versions of ruff and mypy. A difference is only a warning, never a failure."""
+    requirements = (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")
+    for tool in ("ruff", "mypy"):
+        try:
+            result = subprocess.run([PYTHON, "-m", tool, "--version"], capture_output=True, text=True, timeout=60)
+            installed = parse_installed_version(result.stdout + result.stderr)
+        except (OSError, subprocess.TimeoutExpired):
+            installed = None
+        pinned = parse_pinned_version(requirements, tool)
+        print(f"{tool}: installed {installed or 'unknown'}, CI pins {pinned or 'unknown'}")
+        warning = version_warning(tool, pinned, installed)
+        if warning:
+            print(warning)
+    print()
 
 
 def run_step(step: Step) -> tuple[bool, str]:
@@ -142,6 +184,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the CI checks locally.")
     parser.add_argument("--no-docker", action="store_true", help="skip the steps that need Docker")
     parser.add_argument("--only", help="run only the step with this exact name")
+    parser.add_argument("--skip-showcases", action="store_true", help="skip only the level showcase steps")
     args = parser.parse_args(argv)
     steps = build_steps()
     if args.only:
@@ -149,8 +192,12 @@ def main(argv: list[str] | None = None) -> int:
         if not steps:
             print("No step with that name. Names: " + ", ".join(step.name for step in build_steps()))
             return 2
+    print_tool_versions()
     failures = 0
     for step in steps:
+        if args.skip_showcases and step.is_showcase:
+            print(f"SKIPPED  {'-':>6}  {step.name}  (skipped by --skip-showcases)")
+            continue
         if args.no_docker and step.needs_docker:
             print(f"SKIPPED  {'-':>6}  {step.name}  (needs Docker; skipped by --no-docker)")
             continue

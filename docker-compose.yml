@@ -81,6 +81,15 @@ services:
       - "3000:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      # Turn off Grafana's calls to the internet (Level 8: the stack must work with the outgoing network blocked).
+      # Names follow GF_<section>_<key> (like the line above); the keys are in the [analytics] section of Grafana's defaults.ini:
+      # reporting_enabled sends usage counters to stats.grafana.org; the two check_for_* settings ask grafana.com for new versions.
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+      - GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES=false
+      # At start-up Grafana also downloads the public key it uses to check plugin signatures from grafana.com (seen as failed
+      # lookups on a network with no outside access). [plugins] public_key_retrieval_disabled turns that download off.
+      - GF_PLUGINS_PUBLIC_KEY_RETRIEVAL_DISABLED=true
     volumes:
       - grafana_data:/var/lib/grafana
       - ./infra/grafana/provisioning:/etc/grafana/provisioning
@@ -100,6 +109,10 @@ services:
   loki:
     # Official Grafana Loki image, version matching standard Grafana interoperability.
     image: grafana/loki:3.2.0
+    # Loki had no command here, so it ran the image's default argument (-config.file=/etc/loki/local-config.yaml, kept below).
+    # -reporting.enabled=false turns off Loki's anonymous usage reports (its -help says the default is true). Level 8: the
+    # stack must work with the outgoing network blocked.
+    command: ["-config.file=/etc/loki/local-config.yaml", "-reporting.enabled=false"]
     ports:
       - "3100:3100"
 
@@ -107,7 +120,8 @@ services:
   # them so Grafana can query and display the full request journey across services.
   tempo:
     image: grafana/tempo:2.4.1
-    command: ["-config.file=/etc/tempo.yaml"]
+    # -reporting.enabled=false turns off Tempo's anonymous usage reports (its -help says the default is true).
+    command: ["-config.file=/etc/tempo.yaml", "-reporting.enabled=false"]
     volumes:
       - ./infra/docker/tempo.yaml:/etc/tempo.yaml
     ports:

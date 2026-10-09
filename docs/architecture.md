@@ -91,6 +91,8 @@ PaySim rows are deliberately not loaded into the `transactions` table.
 so accidental changes fail a test. `make check` (or `python scripts/check.py`) runs the same checks locally; add
 `--no-docker` to skip the Docker ones.
 
+The Level 8 showcase (`python -m showcase --level 8`) also proves the stack works with its outgoing network blocked; Grafana's phone-home calls are switched off in `docker-compose.yml` for that reason. See [level-8-safety-net.md](level-8-safety-net.md).
+
 ## Configuration and feature switches
 
 Settings live in `core/config.py` and are read from environment variables or `.env` (copy `.env.example`). Four feature
@@ -104,4 +106,3 @@ switches are declared and default to off: `ENABLE_BANK_INTEGRATION_API`, `ENABLE
 - A parked (dead-letter) message needs a human decision; there is no replay tool yet.
 - The DVC remote is a folder on the same disk, so it does not protect against loss of the laptop.
 - CI cannot run `dvc pull` or re-score the model.
-- There is no showcase for Level 8 yet.

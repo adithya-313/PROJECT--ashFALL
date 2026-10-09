@@ -1,0 +1,75 @@
+# Override file for the "no outgoing network" copy of the stack (used by the Level 8 showcase).
+# It is layered on top of docker-compose.yml with: docker compose -f docker-compose.yml -f <this file> -p ashfall-noegress
+#
+# What it does, for EVERY service:
+#   - ports: none are published, so the copy cannot clash with the real stack and nothing on the host can reach it;
+#   - networks: only "nonet", an INTERNAL network (Docker blocks all traffic to the outside from it). A service that was also
+#     attached to a normal network would be able to reach the internet again, so no service gets a second network;
+#   - env_file: .env.example instead of .env, so the real .env is never used by the copy.
+# And, for a few services:
+#   - api logging: the normal setup sends logs to a fluentd address on the HOST (which the Docker daemon opens), so the copy
+#     uses plain local json-file logging instead;
+#   - grafana and tempo: their config files are bind-mounted read-only, so the copy cannot write into the repository folder.
+# Files in this folder never contain machine-specific paths.
+
+services:
+  api:
+    ports: !reset []
+    networks:
+      - nonet
+    env_file: !override
+      - .env.example
+    logging: !override
+      driver: json-file
+  postgres:
+    ports: !reset []
+    networks:
+      - nonet
+    env_file: !override
+      - .env.example
+  redis:
+    ports: !reset []
+    networks:
+      - nonet
+  prometheus:
+    ports: !reset []
+    networks:
+      - nonet
+  grafana:
+    ports: !reset []
+    networks:
+      - nonet
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+  fluent-bit:
+    ports: !reset []
+    networks:
+      - nonet
+  loki:
+    ports: !reset []
+    networks:
+      - nonet
+  tempo:
+    ports: !reset []
+    networks:
+      - nonet
+    volumes:
+      - ./infra/docker/tempo.yaml:/etc/tempo.yaml:ro
+  triton:
+    ports: !reset []
+    networks:
+      - nonet
+  redpanda:
+    ports: !reset []
+    networks:
+      - nonet
+  outbox-relay:
+    ports: !reset []
+    networks:
+      - nonet
+    env_file: !override
+      - .env.example
+
+networks:
+  nonet:
+    internal: true

@@ -181,6 +181,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # The Level 8 showcase (run by `make show-all QUICK=1` below) needs the dvc command and the test packages.
+      # They are kept out of requirements.txt, which feeds the Docker image.
+      - name: Install showcase-only packages
+        run: pip install -r requirements-test.txt -r requirements-showcase.txt
+
       # Style check on the Level 7 code and the code it uses.
       - name: Lint (ruff)
         run: ruff check showcase api core
@@ -308,10 +313,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt -r requirements-test.txt
 
-      # Run the fast folders. "-m not needs_stack" skips tests that need the Docker stack. Two geo tests are left out
-      # on purpose, as in the level-showcase job: they compare floating-point numbers bit for bit, and numpy 2.x
-      # (not pinned in requirements.txt) prints floats as np.float64(...), which the old code cannot parse. Known issue,
-      # not fixed here.
+      # Run the fast folders. "-m not needs_stack" skips tests that need the Docker stack. The geo-velocity tests and
+      # test_velocity_features.py (which the level-showcase job leaves out) DO run here: the geo tests now use a small
+      # relative tolerance instead of exact bits, and requirements-test.txt installs fakeredis.
       - name: Fast tests
         run: >-
           pytest -q -rs -p no:cacheprovider -m "not needs_stack"
