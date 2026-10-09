@@ -109,6 +109,10 @@ services:
   loki:
     # Official Grafana Loki image, version matching standard Grafana interoperability.
     image: grafana/loki:3.2.0
+    # Loki had no command here, so it ran the image's default argument (-config.file=/etc/loki/local-config.yaml, kept below).
+    # -reporting.enabled=false turns off Loki's anonymous usage reports (its -help says the default is true). Level 8: the
+    # stack must work with the outgoing network blocked.
+    command: ["-config.file=/etc/loki/local-config.yaml", "-reporting.enabled=false"]
     ports:
       - "3100:3100"
 
@@ -116,7 +120,8 @@ services:
   # them so Grafana can query and display the full request journey across services.
   tempo:
     image: grafana/tempo:2.4.1
-    command: ["-config.file=/etc/tempo.yaml"]
+    # -reporting.enabled=false turns off Tempo's anonymous usage reports (its -help says the default is true).
+    command: ["-config.file=/etc/tempo.yaml", "-reporting.enabled=false"]
     volumes:
       - ./infra/docker/tempo.yaml:/etc/tempo.yaml
     ports:
