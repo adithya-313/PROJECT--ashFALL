@@ -163,6 +163,9 @@ jobs:
       # Download the code of the commit being tested.
       - name: Check out the repository
         uses: actions/checkout@v4
+        with:
+          # The Level 10 pre-registration check compares commit dates, so it needs the full git history.
+          fetch-depth: 0
 
       # Use Python 3.11, the version the Docker image and the lint settings target. The pip cache makes repeat runs
       # faster and is keyed on requirements.txt.
@@ -294,6 +297,9 @@ jobs:
       # Download the code of the commit being tested.
       - name: Check out the repository
         uses: actions/checkout@v4
+        with:
+          # The Level 10 pre-registration check compares commit dates, so it needs the full git history.
+          fetch-depth: 0
 
       # Use Python 3.11, the version the Docker image targets.
       - name: Set up Python 3.11

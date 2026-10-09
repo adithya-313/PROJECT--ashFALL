@@ -1,0 +1,18 @@
+# Line endings: store text files with LF in the repository and check them out with LF on every system.
+* text=auto eol=lf
+
+# Binary files: never change their bytes (images and model files).
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.onnx binary
+*.ubj binary
+*.pkl binary
+*.pt binary
+*.pth binary
+*.joblib binary
+*.parquet binary
+
+Makefile text eol=lf
