@@ -5,15 +5,20 @@ import pytest
 
 from features.geo_velocity import haversine_distance_km
 
-# This test needs a CUDA GPU plus the torch and OpenAI Triton kernel language packages (WSL2 venv); skip elsewhere.
-torch = pytest.importorskip("torch")
-pytest.importorskip("triton")
-pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA GPU not available")
+# This test needs a CUDA GPU plus the torch and OpenAI Triton kernel language packages (WSL2 venv).
+# It is marked "gpu": CI leaves it out with -m "not gpu", and `make test-gpu` runs it on a machine with the GPU.
+pytestmark = pytest.mark.gpu
 
 N_PAIRS = 10_000
 
 
 def test_gpu_matches_cpu_reference():
+    # These skips happen only when the test RUNS (not when it is collected), so CI can deselect it without a skip.
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("triton")
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA GPU not available")
+
     from features.gpu_geo_velocity import compute_geo_velocity_gpu
 
     # Reproducible random inputs: coordinates anywhere on Earth and elapsed times from 1 minute to 24 hours.

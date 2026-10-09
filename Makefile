@@ -4,8 +4,10 @@
 #   make show LEVEL=7 [QUICK=1] [ALLOW_NOT_RUN=1]
 #   make show-all [QUICK=1] [ALLOW_NOT_RUN=1]
 #   make check [ARGS=--no-docker]   (run the CI checks locally; see scripts/check.py)
+#   make test-gpu                   (run the tests marked gpu; needs a CUDA GPU, torch and Triton)
 
-PYTHON ?= python
+# Use python if it exists, otherwise python3 (Ubuntu and WSL often have only python3). Override: make PYTHON=...
+PYTHON ?= $(shell command -v python >/dev/null 2>&1 && echo python || echo python3)
 LEVEL ?=
 QUICK ?=
 ALLOW_NOT_RUN ?=
@@ -13,7 +15,7 @@ ALLOW_NOT_RUN ?=
 QUICK_FLAG = $(if $(filter 1 true,$(QUICK)),--quick,)
 ALLOW_FLAG = $(if $(filter 1 true,$(ALLOW_NOT_RUN)),--allow-not-run,)
 
-.PHONY: show show-all check
+.PHONY: show show-all check test-gpu
 
 show:
 	@test -n "$(LEVEL)" || { echo "Usage: make show LEVEL=7 [QUICK=1] [ALLOW_NOT_RUN=1]"; exit 2; }
@@ -25,3 +27,7 @@ show-all:
 # Run the same checks as the CI jobs (lint, types, tests, the running stack). Add ARGS=--no-docker to skip the Docker steps.
 check:
 	$(PYTHON) scripts/check.py $(ARGS)
+
+# CI leaves the gpu tests out (-m "not gpu"). Run them here on a machine that has the GPU.
+test-gpu:
+	$(PYTHON) -m pytest tests/unit -m gpu -q -rs

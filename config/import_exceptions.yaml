@@ -1,0 +1,10 @@
+# Imports in core/ and showcase/ that are NOT in requirements-dev.txt on purpose.
+#
+# Each module below must be declared in the requirements file named next to it. The check
+# (python -m core.imports_check) fails if it is not, so an exception can never hide a missing package.
+
+declared_in_other_files:
+  label: policy
+  reason: Training and benchmark scripts run in the machine-learning environment, whose pins (numpy, pandas and others) conflict with the app pins, so installing that whole file in CI would break.
+  modules:
+    mlflow: requirements-ml.txt

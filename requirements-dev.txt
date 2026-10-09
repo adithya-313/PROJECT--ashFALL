@@ -1,0 +1,14 @@
+# The ONE file that defines the development and CI environment.
+# CI installs only this file, and `pip install -r requirements-dev.txt` makes a laptop match CI.
+# It includes the other requirements files, so every version is pinned in exactly one place.
+# `python -m core.imports_check` fails if core/ or showcase/ imports a package that none of these files declares.
+-r requirements.txt
+-r requirements-test.txt
+-r requirements-showcase.txt
+
+# pydantic: core/config.py imports it directly. It was only installed as a dependency of pydantic-settings and
+# fastapi, so it is declared here with the range those packages already require.
+pydantic>=2.7,<3
+
+# types-PyYAML: type stubs for yaml, so mypy can check core/config_validator.py.
+types-PyYAML==6.0.12.20260518
