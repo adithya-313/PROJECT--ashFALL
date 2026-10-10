@@ -46,6 +46,6 @@ No model code exists yet. The `models/` directory holds only v1 PaySim artefacts
 | Date | 2026-10-10 |
 | Issue IDs | G1, G3, G4, G5, G6, L1, L3, L5, E1, E2, E3, N1, N2, N3 |
 | Files | `docs/research/mule_typologies.md` |
-| What changed | 15 verified findings added as a new table section; no existing row changed, research_status.yaml untouched. |
+| What changed | 15 verified findings added as a new table section; no existing row changed, research_status.yaml untouched. Source dates corrected after a second check: Indore 3 Sep 2026, Telangana 30 Apr 2024; Kerala source is Deccan Herald (PTI not found). |
 | Why | Task 2: verify the October 2026 findings before parameters depend on them. |
 | Results exist? | No. |
