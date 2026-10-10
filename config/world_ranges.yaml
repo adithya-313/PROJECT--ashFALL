@@ -46,7 +46,7 @@ parameters:
       url: https://www.fca.org.uk/publications/multi-firm-reviews/firms-use-national-fraud-database-money-mule-account-detection-tools
       date: "2025-01-23"
       quote: "Of these offboarded money mules, only 37% were reported to the National Fraud Database (NFD)."
-    reason: UK proxy for India (no Indian figure found); covers Jan 2022 to Sep 2023.
+    reason: "UK proxy for India (no Indian figure found); covers Jan 2022 to Sep 2023. Measures firms reporting offboarded mules to the shared database, not victims complaining (corrected 2026-10-10, review item R1). Used for the bank-to-registry reporting share; the victim complaint share is a separate parameter added later. FCA also notes one firm reported only 6% and some over 66%."
 
   minutes_money_stays_in_mule_account:
     label: sourced

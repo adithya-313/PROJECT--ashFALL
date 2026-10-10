@@ -27,3 +27,14 @@ showcase code. Nothing was renamed and no frozen code was touched.
 
 No model code exists yet. The `models/` directory holds only v1 PaySim artefacts
 (DVC-tracked, excluded by the `earlier_work_note` in `evaluation.yaml`).
+
+## A-002
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-10-10 |
+| Issue IDs | R1, L2 |
+| Files | config/world_ranges.yaml, config/research_status.yaml, docs/plan/section-02-research-foundation.md |
+| What changed | Wording only, no number or range changed. |
+| Why | The 37% was being read as a victim complaint rate. |
+| Results exist? | No. |

@@ -134,7 +134,7 @@ findings:
     hand_checked: true
     tool_rechecked: both
     source_url: https://www.fca.org.uk/publications/multi-firm-reviews/firms-use-national-fraud-database-money-mule-account-detection-tools
-    note: "Author saw the sentence with 194,084 mules offboarded by 25 firms between Jan 2022 and Sep 2023; only 37% reported to the National Fraud Database."
+    note: "Author saw the sentence with 194,084 mules offboarded by 25 firms between Jan 2022 and Sep 2023; only 37% reported to the National Fraud Database. Corrected 2026-10-10 (R1): this measures firms reporting offboarded mules to the database, not victim complaints."
   - id: fca_unrelated_payers_balances_near_zero
     claim: "The FCA does not use the combined wording about unrelated payers and balances near zero."
     status: changed

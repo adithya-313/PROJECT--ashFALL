@@ -24,7 +24,7 @@ Every design choice traces to a finding below. "Verify" items are re-checked aga
 | Absence of routine activity (salary, bills, regular transfers) in mule accounts | Indian practitioner guidance and BCG, 2026 | Reported | Feature |
 | Shared devices across accounts; account clusters opened from one device; SIM swaps; emulator and remote-access use | Device-intelligence vendors, 2026 | Reported (vendor) | Shared-control features and world |
 | XHelper-style platforms: tens of thousands of mule accounts, OTP forwarding or linked-number replacement, payouts within about 10 minutes, merchant accounts preferred, USDT cash-out | CloudSEK, Mar 2024 | Established for that operation | World building blocks |
-| Only 37% of offboarded mule accounts reported to the UK's shared fraud database (2022–23) | FCA, via secondary source | Verify on the FCA page | Under-reporting range |
+| Only 37% of offboarded mule accounts reported to the UK's shared fraud database (2022–23) | FCA, via secondary source | Verify on the FCA page | Bank-to-registry reporting share, not victim complaints (corrected in Level 11, R1) |
 | A live mule system's escalations were 89% confirmed ("yield"), up from 61% under rules | arXiv paper, Jul 2026 | Verify | Yield-rate metric |
 | Industry claims 85–95% of AML rule alerts are false positives | Vendor reports, 2024–2026 | Context only | Rules baseline narrative |
 | Typical amounts, hops, account lifetimes, account-type shares, mule-specific false-positive rates | — | Not found publicly | Ranges and many worlds |
