@@ -169,7 +169,7 @@ findings:
     hand_checked: false
     tool_rechecked: none
     source_url: null
-    note: "Spike found no licence for generated data and no Hugging Face dataset card in the repo; the repo has no tags or releases (commit 4b9a69d, 2026-02-22). Question for the authors planned as a GitHub issue; not yet posted. Answer will be recorded here."
+    note: "Spike found no licence for generated data and no Hugging Face dataset card in the repo; the repo has no tags or releases (commit 4b9a69d, 2026-02-22). Question posted as https://github.com/aidotse/AMLGentex/issues/79 on 2026-10-10. No reply yet; answer will be recorded here."
   - id: cloudsek_xhelper
     claim: "XHelper-style network: 10-minute payout window and USDT confirmed; account counts differ from the first plan."
     status: changed
