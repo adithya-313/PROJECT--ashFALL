@@ -56,6 +56,36 @@ latency:
   feature_computation_max_ms: 50
   reason: No public or legal limit exists, and the "30-60 seconds" figure was only a conference comment, so a stricter number is chosen on purpose.
 
+# Amended 2026-10-10 (issues L3, N4, A2, E1; review items R3, R4).
+# Logged in docs/research/amendments.md. No model code exists yet.
+
+money_held_and_returned:
+  label: policy
+  issue_ids: [L3, R3]
+  held_means: Victim money placed under lien or held in time, as a share of stolen money.
+  returned_means: Victim money actually given back to victims after the slow release step, as a share of stolen money.
+  always_report_both: true
+  reason: Holding money is not the same as returning it. A lien can take weeks to become money back in the victim's hands, so a single "recovered" number would overstate success.
+
+base_rate_reweighting:
+  label: policy
+  issue_ids: [E1, R4]
+  applies_to: [yield_rate, false_alarms_per_day]
+  report: both as measured and re-weighted to the real-world base rate
+  inflation_factor_comes_from: the world card of each world
+  real_world_ratio_comes_from: a parameter that Level 11 adds to config/world_ranges.yaml (no number is written here on purpose)
+  reason: Small simulated worlds hold far more fraud than real life, so precision-style numbers look better than they would in practice. Re-weighting shows the honest version beside the raw one.
+
+genuine_harm:
+  label: policy
+  issue_ids: [A2, N4, R3]
+  counts:
+    - Genuine accounts restricted, and restriction-days (vulnerable personas weighted higher).
+    - Genuine shops downstream of mules that were restricted or had money pulled back.
+    - Days a genuine account waits before a wrong lien is released.
+    - Warnings shown to genuine payers.
+  reason: Harm is not only "accounts frozen". Genuine shops that sold goods to mules, and people waiting for a wrong lien to be lifted, are real harm. The fair_comparison block above stays unchanged.
+
 held_out_tactics:
   label: policy
   used_only_in: [test_worlds, stress_worlds]
@@ -85,3 +115,5 @@ not_decided_here:
   - success criteria for tracing
   - success criteria for least-harm actions
   - success criteria for shared intelligence
+  - weights for vulnerable personas in genuine harm
+  - how long a wait for a wrong lien to be released counts as too long
