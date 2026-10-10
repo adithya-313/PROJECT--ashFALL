@@ -49,3 +49,14 @@ No model code exists yet. The `models/` directory holds only v1 PaySim artefacts
 | What changed | 15 verified findings added as a new table section; no existing row changed, research_status.yaml untouched. Source dates corrected after a second check: Indore 3 Sep 2026, Telangana 30 Apr 2024; Kerala source is Deccan Herald (PTI not found). |
 | Why | Task 2: verify the October 2026 findings before parameters depend on them. |
 | Results exist? | No. |
+
+## A-004
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-10-10 |
+| Issue IDs | G1, G2, G3, G4, G5, G6, A2, E3 |
+| File | config/world_ranges.yaml and tests/unit/test_research_configs.py |
+| What changed | 23 new parameters added, 2 labelled reported and 21 assumption; no existing parameter changed; the test count updated from 10 to 33 and a new test protects the original ten. |
+| Why | task 3: record ranges before any world code exists. |
+| Results exist? | No. |

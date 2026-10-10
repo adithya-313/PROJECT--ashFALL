@@ -112,6 +112,224 @@ parameters:
     stress: [0.0, 0.80]
     reason: One report says current/corporate accounts were preferred; no share published.
 
+  # Added 2026-10-10 (Level 11 Part 1, task 3, issues G1-G6). Logged as A-004
+  # in docs/research/amendments.md. Widths of ranges are the author's choices,
+  # not findings. Shares inside one group are rescaled to add up to 1 by the
+  # world builder in Level 12; they are stored separately here.
+
+  mule_origin_share_rented:
+    label: assumption
+    issue_ids: [G1]
+    unit: fraction
+    training: [0.2, 0.5]
+    test: [0.1, 0.7]
+    stress: [0.0, 0.9]
+    reason: Police cases describe rented accounts (a Bengaluru case in July 2025 involved 357+ accounts) but no origin split is published.
+
+  mule_origin_share_borrowed_kyc:
+    label: assumption
+    issue_ids: [G1]
+    unit: fraction
+    training: [0.1, 0.4]
+    test: [0.05, 0.6]
+    stress: [0.0, 0.9]
+    reason: Misused or borrowed KYC documents are described in press reports; no split is published.
+
+  mule_origin_share_business:
+    label: assumption
+    issue_ids: [G1]
+    unit: fraction
+    training: [0.05, 0.3]
+    test: [0.02, 0.5]
+    stress: [0.0, 0.8]
+    reason: One report says current and merchant accounts were preferred; no share is published.
+
+  rented_mule_owner_activity_kept_share:
+    label: assumption
+    issue_ids: [G1]
+    unit: fraction
+    training: [0.3, 0.8]
+    test: [0.1, 1.0]
+    stress: [0.0, 1.0]
+    reason: A rented mule keeps part of its owner's normal payments alongside the illicit flows (review issue G1); no figure is published.
+
+  cashout_share_crypto:
+    label: assumption
+    issue_ids: [G2]
+    unit: fraction
+    training: [0.15, 0.45]
+    test: [0.05, 0.65]
+    stress: [0.0, 0.9]
+    reason: One 2024 operation report (CloudSEK) describes crypto (USDT) cash-out; no channel split is published.
+
+  cashout_share_atm:
+    label: assumption
+    issue_ids: [G2]
+    unit: fraction
+    training: [0.1, 0.35]
+    test: [0.05, 0.5]
+    stress: [0.0, 0.8]
+    reason: ATM withdrawal is a known cash-out route; no split is published.
+
+  cashout_share_branch_or_cheque:
+    label: assumption
+    issue_ids: [G2]
+    unit: fraction
+    training: [0.02, 0.2]
+    test: [0.0, 0.35]
+    stress: [0.0, 0.6]
+    reason: Branch and cheque withdrawals are known but slower; no split is published.
+
+  share_of_mule_outflows_to_genuine_shops:
+    label: assumption
+    issue_ids: [G2, A2]
+    unit: fraction
+    training: [0.05, 0.25]
+    test: [0.02, 0.4]
+    stress: [0.0, 0.7]
+    reason: Mules also buy goods from genuine shops, so innocent shops receive stolen money (review issue A2); no figure is published.
+
+  atm_daily_limit_inr:
+    label: assumption
+    issue_ids: [G2]
+    unit: rupees
+    training: [20000, 50000]
+    test: [10000, 100000]
+    stress: [5000, 200000]
+    reason: ATM daily limits differ by bank and card; no figure has been verified yet and it must be checked against bank or NPCI documents.
+
+  mule_warmup_days:
+    label: assumption
+    issue_ids: [G3]
+    unit: days
+    training: [2, 14]
+    test: [0, 30]
+    stress: [0, 60]
+    reason: Warm-up before use is described as a tactic; no duration is published.
+
+  mule_active_days_before_dropped:
+    label: assumption
+    issue_ids: [G3]
+    unit: days
+    training: [2, 14]
+    test: [1, 30]
+    stress: [1, 90]
+    reason: A mule is dropped after a lien or after N days; no figure is published.
+
+  victims_per_mule_typical:
+    label: assumption
+    issue_ids: [G3]
+    unit: count
+    training: [1, 5]
+    test: [1, 10]
+    stress: [1, 20]
+    reason: Most mules receive money from few victims; no figure is published.
+
+  victims_per_mule_largest:
+    label: reported
+    issue_ids: [G3, E3]
+    unit: count
+    training: [10, 50]
+    test: [5, 80]
+    stress: [5, 200]
+    source:
+      url: https://www.freepressjournal.in/indore/15-crore-51-complaints-15-states-indore-mba-student-lands-in-cyber-crime-net
+      date: "2026-09-03"
+    reason: "Heavy tail: a few mules reach many victims. One Indore account was linked to 51 complaints from 15 states (complaints, not necessarily victims; a news report)."
+
+  gang_stops_using_liened_account_share:
+    label: assumption
+    issue_ids: [G4]
+    unit: fraction
+    training: [0.6, 0.95]
+    test: [0.4, 1.0]
+    stress: [0.0, 1.0]
+    reason: "Fixed gang reaction rule (a design choice): stop using an account once it has a lien; no rate is published."
+
+  gang_rotates_to_spare_account_share:
+    label: assumption
+    issue_ids: [G4]
+    unit: fraction
+    training: [0.4, 0.9]
+    test: [0.2, 1.0]
+    stress: [0.0, 1.0]
+    reason: "Fixed gang reaction rule: move to spare accounts. A Jaipur report (July 2026) says a gang spread proceeds across many accounts to stay ahead of freezes, but gives no rate."
+
+  gang_splits_amounts_share:
+    label: assumption
+    issue_ids: [G4]
+    unit: fraction
+    training: [0.2, 0.7]
+    test: [0.1, 0.9]
+    stress: [0.0, 1.0]
+    reason: "Fixed gang reaction rule: split amounts into smaller parts; no rate is published."
+
+  gang_feed_delay_minutes:
+    label: assumption
+    issue_ids: [G4]
+    unit: minutes
+    training: [10, 240]
+    test: [5, 720]
+    stress: [1, 2880]
+    reason: A gang sees what happened to its accounts late, never the truth (review issue G4); no figure is published.
+
+  gang_feed_miss_share:
+    label: assumption
+    issue_ids: [G4]
+    unit: fraction
+    training: [0.1, 0.4]
+    test: [0.05, 0.6]
+    stress: [0.0, 0.9]
+    reason: A gang's observation feed misses some events; no figure is published.
+
+  share_of_accounts_sold_to_several_gangs:
+    label: assumption
+    issue_ids: [G5]
+    unit: fraction
+    training: [0.05, 0.3]
+    test: [0.02, 0.5]
+    stress: [0.0, 0.8]
+    reason: Police cases describe suppliers selling account kits to several buyers, so gang networks overlap; no share is published.
+
+  share_of_scams_investment_or_job:
+    label: reported
+    issue_ids: [G6]
+    unit: fraction
+    training: [0.55, 0.80]
+    test: [0.4, 0.9]
+    stress: [0.2, 1.0]
+    source:
+      url: https://www.deccanherald.com/india/keralam/operation-cy-hunt-police-sting-reveals-newest-recruits-of-cybercrime-rackets-in-kerala-3783625
+      date: "2025-11-01"
+    reason: Kerala Police data reported 34.8% trading and 33% job scams (about 68% together) of cyber fraud cases in 2025. Shares of cases, not money; one state only.
+
+  scam_payments_per_victim:
+    label: assumption
+    issue_ids: [G6]
+    unit: count
+    training: [1, 6]
+    test: [1, 12]
+    stress: [1, 30]
+    reason: Different scam types have different numbers of payments; no distribution is published.
+
+  scam_payment_spread_days:
+    label: assumption
+    issue_ids: [G6]
+    unit: days
+    training: [0, 10]
+    test: [0, 30]
+    stress: [0, 90]
+    reason: Investment and job scams escalate over days; no figure is published.
+
+  scam_small_payout_back_share:
+    label: assumption
+    issue_ids: [G6]
+    unit: fraction
+    training: [0.05, 0.3]
+    test: [0.0, 0.5]
+    stress: [0.0, 0.8]
+    reason: Some scams pay victims small amounts back to build trust; no figure is published.
+
 # Things that were searched for and not found. No numbers and no labels on purpose.
 searched_but_not_found:
   - mule account type shares for India
