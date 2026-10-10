@@ -38,3 +38,14 @@ No model code exists yet. The `models/` directory holds only v1 PaySim artefacts
 | What changed | Wording only, no number or range changed. |
 | Why | The 37% was being read as a victim complaint rate. |
 | Results exist? | No. |
+
+## A-003
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-10-10 |
+| Issue IDs | G1, G3, G4, G5, G6, L1, L3, L5, E1, E2, E3, N1, N2, N3 |
+| Files | `docs/research/mule_typologies.md` |
+| What changed | 15 verified findings added as a new table section; no existing row changed, research_status.yaml untouched. |
+| Why | Task 2: verify the October 2026 findings before parameters depend on them. |
+| Results exist? | No. |
