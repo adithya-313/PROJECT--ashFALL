@@ -82,3 +82,25 @@ No model code exists yet. The `models/` directory holds only v1 PaySim artefacts
 | What changed | 22 new parameters, 1 reported and 21 assumption; atm_daily_limit_inr corrected from an assumption of 20000-50000 training to a reported range 20000-100000 training with a source, because bank pages and the RBI FAQ were found; the ten original parameters untouched; count test 51 -> 73 |
 | Why | task 3 plus a correction to a guess made earlier in the same level |
 | Results exist? | No. |
+
+## A-007
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-10-10 |
+| Issue IDs | R5 |
+| File | docs/research/rules_baseline_spec.md |
+| What changed | a new design-constraint section added at the end; no existing rule changed; no numbers added |
+| Why | OS updates must not trigger a new-device rule |
+| Results exist? | No. |
+
+## A-008
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-10-10 |
+| Issue IDs | N1, N2, N3 |
+| File | docs/interfaces/national_systems.md |
+| What changed | a new subsection of mock fields: identifier reuse, per-bank DPIP participation, hold latency; no existing field changed |
+| Why | task 6: the mock national systems must carry what the world will model |
+| Results exist? | No. |
