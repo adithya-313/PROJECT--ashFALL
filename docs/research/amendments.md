@@ -71,3 +71,14 @@ No model code exists yet. The `models/` directory holds only v1 PaySim artefacts
 | What changed | 18 new parameters, 1 reported and 17 assumption; no existing parameter changed; count test 33 -> 51; victim_report_delay_minutes is superseded in practice but left untouched. |
 | Why | task 3: record ranges before world code exists. |
 | Results exist? | No. |
+
+## A-006
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-10-10 |
+| Issue IDs | N1, N2, N3, E1, E2, E3, E4, G2 |
+| Files | config/world_ranges.yaml and tests/unit/test_research_configs.py |
+| What changed | 22 new parameters, 1 reported and 21 assumption; atm_daily_limit_inr corrected from an assumption of 20000-50000 training to a reported range 20000-100000 training with a source, because bank pages and the RBI FAQ were found; the ten original parameters untouched; count test 51 -> 73 |
+| Why | task 3 plus a correction to a guess made earlier in the same level |
+| Results exist? | No. |
