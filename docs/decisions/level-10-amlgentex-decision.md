@@ -26,5 +26,5 @@ ashFALL's labels arrive late and biased, so this is a documented difference betw
 - Commit only the generation script, the configs, the seed and the pinned AMLGentex commit hash `4b9a69d`. Anyone can then regenerate the data.
 
 ## Open item
-A question about data licensing is to be asked of the authors as a GitHub issue. It is not yet posted.
+Question posted as https://github.com/aidotse/AMLGentex/issues/79 on 2026-10-10. No reply yet; answer will be recorded here.
 The answer goes in `config/research_status.yaml` (finding `amlgentex_output_licence_and_release_date`).
