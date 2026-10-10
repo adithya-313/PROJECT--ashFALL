@@ -46,7 +46,7 @@ parameters:
       url: https://www.fca.org.uk/publications/multi-firm-reviews/firms-use-national-fraud-database-money-mule-account-detection-tools
       date: "2025-01-23"
       quote: "Of these offboarded money mules, only 37% were reported to the National Fraud Database (NFD)."
-    reason: UK proxy for India (no Indian figure found); covers Jan 2022 to Sep 2023.
+    reason: "UK proxy for India (no Indian figure found); covers Jan 2022 to Sep 2023. Measures firms reporting offboarded mules to the shared database, not victims complaining (corrected 2026-10-10, review item R1). Used for the bank-to-registry reporting share; the victim complaint share is a separate parameter added later. FCA also notes one firm reported only 6% and some over 66%."
 
   minutes_money_stays_in_mule_account:
     label: sourced
@@ -111,6 +111,607 @@ parameters:
     test: [0.02, 0.50]
     stress: [0.0, 0.80]
     reason: One report says current/corporate accounts were preferred; no share published.
+
+  # Added 2026-10-10 (Level 11 Part 1, task 3, issues G1-G6). Logged as A-004
+  # in docs/research/amendments.md. Widths of ranges are the author's choices,
+  # not findings. Shares inside one group are rescaled to add up to 1 by the
+  # world builder in Level 12; they are stored separately here.
+
+  mule_origin_share_rented:
+    label: assumption
+    issue_ids: [G1]
+    unit: fraction
+    training: [0.2, 0.5]
+    test: [0.1, 0.7]
+    stress: [0.0, 0.9]
+    reason: Police cases describe rented accounts (a Bengaluru case in July 2025 involved 357+ accounts) but no origin split is published.
+
+  mule_origin_share_borrowed_kyc:
+    label: assumption
+    issue_ids: [G1]
+    unit: fraction
+    training: [0.1, 0.4]
+    test: [0.05, 0.6]
+    stress: [0.0, 0.9]
+    reason: Misused or borrowed KYC documents are described in press reports; no split is published.
+
+  mule_origin_share_business:
+    label: assumption
+    issue_ids: [G1]
+    unit: fraction
+    training: [0.05, 0.3]
+    test: [0.02, 0.5]
+    stress: [0.0, 0.8]
+    reason: One report says current and merchant accounts were preferred; no share is published.
+
+  rented_mule_owner_activity_kept_share:
+    label: assumption
+    issue_ids: [G1]
+    unit: fraction
+    training: [0.3, 0.8]
+    test: [0.1, 1.0]
+    stress: [0.0, 1.0]
+    reason: A rented mule keeps part of its owner's normal payments alongside the illicit flows (review issue G1); no figure is published.
+
+  cashout_share_crypto:
+    label: assumption
+    issue_ids: [G2]
+    unit: fraction
+    training: [0.15, 0.45]
+    test: [0.05, 0.65]
+    stress: [0.0, 0.9]
+    reason: One 2024 operation report (CloudSEK) describes crypto (USDT) cash-out; no channel split is published.
+
+  cashout_share_atm:
+    label: assumption
+    issue_ids: [G2]
+    unit: fraction
+    training: [0.1, 0.35]
+    test: [0.05, 0.5]
+    stress: [0.0, 0.8]
+    reason: ATM withdrawal is a known cash-out route; no split is published.
+
+  cashout_share_branch_or_cheque:
+    label: assumption
+    issue_ids: [G2]
+    unit: fraction
+    training: [0.02, 0.2]
+    test: [0.0, 0.35]
+    stress: [0.0, 0.6]
+    reason: Branch and cheque withdrawals are known but slower; no split is published.
+
+  share_of_mule_outflows_to_genuine_shops:
+    label: assumption
+    issue_ids: [G2, A2]
+    unit: fraction
+    training: [0.05, 0.25]
+    test: [0.02, 0.4]
+    stress: [0.0, 0.7]
+    reason: Mules also buy goods from genuine shops, so innocent shops receive stolen money (review issue A2); no figure is published.
+
+  atm_daily_limit_inr:
+    label: reported
+    issue_ids: [G2]
+    unit: rupees
+    training: [20000, 100000]
+    test: [10000, 200000]
+    stress: [5000, 200000]
+    source:
+      url: https://sbi.co.in/web/personal-banking/cards/debit-card/sbi-platinum-international-debit-card
+      date: "2026-10-01"
+    reason: "RBI says ATM cash limits are set by the card issuer, so there is no national limit. SBI pages show 1 lakh rupees a day for one card and 2 lakh for its top card, and HDFC allows up to 2 lakh. Limits for basic cards and payments banks were not verified. Corrected 2026-10-10 from an earlier guess (see A-006)."
+
+  mule_warmup_days:
+    label: assumption
+    issue_ids: [G3]
+    unit: days
+    training: [2, 14]
+    test: [0, 30]
+    stress: [0, 60]
+    reason: Warm-up before use is described as a tactic; no duration is published.
+
+  mule_active_days_before_dropped:
+    label: assumption
+    issue_ids: [G3]
+    unit: days
+    training: [2, 14]
+    test: [1, 30]
+    stress: [1, 90]
+    reason: A mule is dropped after a lien or after N days; no figure is published.
+
+  victims_per_mule_typical:
+    label: assumption
+    issue_ids: [G3]
+    unit: count
+    training: [1, 5]
+    test: [1, 10]
+    stress: [1, 20]
+    reason: Most mules receive money from few victims; no figure is published.
+
+  victims_per_mule_largest:
+    label: reported
+    issue_ids: [G3, E3]
+    unit: count
+    training: [10, 50]
+    test: [5, 80]
+    stress: [5, 200]
+    source:
+      url: https://www.freepressjournal.in/indore/15-crore-51-complaints-15-states-indore-mba-student-lands-in-cyber-crime-net
+      date: "2026-09-03"
+    reason: "Heavy tail: a few mules reach many victims. One Indore account was linked to 51 complaints from 15 states (complaints, not necessarily victims; a news report)."
+
+  gang_stops_using_liened_account_share:
+    label: assumption
+    issue_ids: [G4]
+    unit: fraction
+    training: [0.6, 0.95]
+    test: [0.4, 1.0]
+    stress: [0.0, 1.0]
+    reason: "Fixed gang reaction rule (a design choice): stop using an account once it has a lien; no rate is published."
+
+  gang_rotates_to_spare_account_share:
+    label: assumption
+    issue_ids: [G4]
+    unit: fraction
+    training: [0.4, 0.9]
+    test: [0.2, 1.0]
+    stress: [0.0, 1.0]
+    reason: "Fixed gang reaction rule: move to spare accounts. A Jaipur report (July 2026) says a gang spread proceeds across many accounts to stay ahead of freezes, but gives no rate."
+
+  gang_splits_amounts_share:
+    label: assumption
+    issue_ids: [G4]
+    unit: fraction
+    training: [0.2, 0.7]
+    test: [0.1, 0.9]
+    stress: [0.0, 1.0]
+    reason: "Fixed gang reaction rule: split amounts into smaller parts; no rate is published."
+
+  gang_feed_delay_minutes:
+    label: assumption
+    issue_ids: [G4]
+    unit: minutes
+    training: [10, 240]
+    test: [5, 720]
+    stress: [1, 2880]
+    reason: A gang sees what happened to its accounts late, never the truth (review issue G4); no figure is published.
+
+  gang_feed_miss_share:
+    label: assumption
+    issue_ids: [G4]
+    unit: fraction
+    training: [0.1, 0.4]
+    test: [0.05, 0.6]
+    stress: [0.0, 0.9]
+    reason: A gang's observation feed misses some events; no figure is published.
+
+  share_of_accounts_sold_to_several_gangs:
+    label: assumption
+    issue_ids: [G5]
+    unit: fraction
+    training: [0.05, 0.3]
+    test: [0.02, 0.5]
+    stress: [0.0, 0.8]
+    reason: Police cases describe suppliers selling account kits to several buyers, so gang networks overlap; no share is published.
+
+  share_of_scams_investment_or_job:
+    label: reported
+    issue_ids: [G6]
+    unit: fraction
+    training: [0.55, 0.80]
+    test: [0.4, 0.9]
+    stress: [0.2, 1.0]
+    source:
+      url: https://www.deccanherald.com/india/keralam/operation-cy-hunt-police-sting-reveals-newest-recruits-of-cybercrime-rackets-in-kerala-3783625
+      date: "2025-11-01"
+    reason: Kerala Police data reported 34.8% trading and 33% job scams (about 68% together) of cyber fraud cases in 2025. Shares of cases, not money; one state only.
+
+  scam_payments_per_victim:
+    label: assumption
+    issue_ids: [G6]
+    unit: count
+    training: [1, 6]
+    test: [1, 12]
+    stress: [1, 30]
+    reason: Different scam types have different numbers of payments; no distribution is published.
+
+  scam_payment_spread_days:
+    label: assumption
+    issue_ids: [G6]
+    unit: days
+    training: [0, 10]
+    test: [0, 30]
+    stress: [0, 90]
+    reason: Investment and job scams escalate over days; no figure is published.
+
+  scam_small_payout_back_share:
+    label: assumption
+    issue_ids: [G6]
+    unit: fraction
+    training: [0.05, 0.3]
+    test: [0.0, 0.5]
+    stress: [0.0, 0.8]
+    reason: Some scams pay victims small amounts back to build trust; no figure is published.
+
+  # Added 2026-10-10 (Level 11 Part 1, task 3b-1, issues L1-L5, A1, A3).
+  # Logged as A-005 in docs/research/amendments.md. Widths of ranges are the
+  # author's choices, not findings.
+  # complaint_delay_* below supersede victim_report_delay_minutes, which stays
+  # unchanged for Level 10. victim_complaint_share and the existing
+  # share_reported_to_shared_database are the two halves of issue L2.
+  # A2 is covered by share_of_mule_outflows_to_genuine_shops (added earlier).
+
+  complaint_delay_unauthorised_debit_minutes:
+    label: assumption
+    issue_ids: [L1]
+    unit: minutes
+    training: [10, 240]
+    test: [5, 1440]
+    stress: [2, 4320]
+    reason: "Complaints about unauthorised debits can come within minutes (one Telangana case in April 2024 was reported in 12 minutes), but no distribution is published."
+
+  complaint_delay_investment_scam_days:
+    label: assumption
+    issue_ids: [L1]
+    unit: days
+    training: [3, 15]
+    test: [1, 30]
+    stress: [0.5, 60]
+    reason: "The Maharashtra Chief Minister said in August 2026 that reporting delays of 3 to 15 days make recovery harder; this is a remark, not a measured distribution."
+
+  complaint_delay_job_scam_days:
+    label: assumption
+    issue_ids: [L1]
+    unit: days
+    training: [3, 15]
+    test: [1, 30]
+    stress: [0.5, 60]
+    reason: "Job scams unfold over days like investment scams; no separate delay figure is published (Kerala Police data shows trading and job scams are the two largest types)."
+
+  victim_complaint_share:
+    label: assumption
+    issue_ids: [L2]
+    unit: fraction
+    training: [0.2, 0.7]
+    test: [0.1, 0.8]
+    stress: [0.05, 0.9]
+    reason: "Share of scammed victims who complain at all. No Indian figure was found. This is separate from share_reported_to_shared_database, which is the bank-to-registry reporting share."
+
+  lien_release_days:
+    label: reported
+    issue_ids: [L3, N4]
+    unit: days
+    training: [14, 90]
+    test: [7, 120]
+    stress: [1, 365]
+    source:
+      url: https://cdnbbsr.s3waas.gov.in/s3ec05e250c59336b505ed411d455abaa3/uploads/2026/06/2026061818.pdf
+      date: "2026-01-02"
+    reason: "The MHA/I4C procedure (2 Jan 2026) has a 90-day route for grievances without a lawful direction, which is conditional; one High Court (Madhya Pradesh, 15 Jan 2026) ordered a three-month hold in one case; BNSS sections 106 and 107 state no general number of days."
+
+  share_of_held_money_returned_to_victims:
+    label: assumption
+    issue_ids: [L3]
+    unit: fraction
+    training: [0.3, 0.8]
+    test: [0.1, 0.95]
+    stress: [0.0, 1.0]
+    reason: "No published share of held money that is actually returned. Context: about 12.3% of reported money was under lien in 2023 (derived from a Lok Sabha reply) and Odisha recovered about 2.7% of losses in 2023-2025 (news report)."
+
+  analyst_accuracy_base:
+    label: assumption
+    issue_ids: [L4]
+    unit: fraction
+    training: [0.75, 0.95]
+    test: [0.65, 0.97]
+    stress: [0.6, 0.99]
+    reason: "Starting range from the project plan; no published analyst accuracy figure was found."
+
+  analyst_accuracy_drop_when_evidence_weak:
+    label: assumption
+    issue_ids: [L4]
+    unit: fraction
+    training: [0.05, 0.2]
+    test: [0.02, 0.3]
+    stress: [0.0, 0.45]
+    reason: "How many points of accuracy an analyst loses when the evidence in a case is weak (review issue L4); no figure is published."
+
+  analyst_accuracy_drop_when_queue_overloaded:
+    label: assumption
+    issue_ids: [L4]
+    unit: fraction
+    training: [0.02, 0.15]
+    test: [0.0, 0.25]
+    stress: [0.0, 0.4]
+    reason: "How many points of accuracy are lost when the queue is over capacity (review issue L4); no figure is published."
+
+  analyst_follows_model_score_share:
+    label: assumption
+    issue_ids: [L4]
+    unit: fraction
+    training: [0.1, 0.4]
+    test: [0.0, 0.6]
+    stress: [0.0, 0.9]
+    reason: "How strongly a high model score pushes the analyst to agree (review issue L4); no figure is published."
+
+  bulk_confirmation_events_per_year:
+    label: assumption
+    issue_ids: [L5]
+    unit: count
+    training: [1, 6]
+    test: [0, 12]
+    stress: [0, 24]
+    reason: "Police crackdowns confirm many mule accounts at once; no frequency is published."
+
+  bulk_confirmation_size_accounts:
+    label: assumption
+    issue_ids: [L5]
+    unit: count
+    training: [100, 1000]
+    test: [50, 3000]
+    stress: [20, 10000]
+    reason: "One Gujarat sweep (Operation Mule Hunt, June 2026) acted on 913 mule accounts; one example, not a distribution."
+
+  bulk_confirmation_delay_days:
+    label: assumption
+    issue_ids: [L5]
+    unit: days
+    training: [7, 60]
+    test: [1, 180]
+    stress: [0, 365]
+    reason: "How long after the transactions a crackdown confirms the accounts; no figure is published."
+
+  episode_share_of_ordinary_people_per_year:
+    label: assumption
+    issue_ids: [A1]
+    unit: fraction
+    training: [0.02, 0.1]
+    test: [0.01, 0.2]
+    stress: [0.0, 0.4]
+    reason: "Share of genuine people who have a short period that looks like mule activity in a year (a wedding or medical collection, a kitty, a fest treasurer); no figure is published."
+
+  episode_length_days:
+    label: assumption
+    issue_ids: [A1]
+    unit: days
+    training: [3, 30]
+    test: [1, 60]
+    stress: [1, 120]
+    reason: "How long such a period lasts; no figure is published."
+
+  episode_payer_count:
+    label: assumption
+    issue_ids: [A1]
+    unit: count
+    training: [10, 100]
+    test: [5, 300]
+    stress: [3, 1000]
+    reason: "How many different people send money to the collector during an episode; no figure is published."
+
+  false_complaints_per_100000_genuine_payments:
+    label: assumption
+    issue_ids: [A3]
+    unit: count
+    training: [0.05, 2]
+    test: [0.01, 10]
+    stress: [0.0, 50]
+    reason: "Some complaints are mistaken or false; no rate is published."
+
+  false_complaint_merchant_weight:
+    label: assumption
+    issue_ids: [A3]
+    unit: ratio
+    training: [2, 10]
+    test: [1, 20]
+    stress: [1, 50]
+    reason: "How many times more likely a payment to a merchant is to get a false complaint than a payment to a person (review issue A3); no figure is published."
+
+  # Added 2026-10-10 (Level 11 Part 1, task 3b-2, issues N1-N3, E1-E4).
+  # Logged as A-006 in docs/research/amendments.md. Widths of ranges are the
+  # author's choices, not findings. The three bank_customer_share_* values are
+  # rescaled to add up to 1 by the world builder in Level 12. Each simulated
+  # bank draws its own value for bank_weak_kyc_account_share within the range.
+
+  identifier_shared_across_mule_accounts_share:
+    label: assumption
+    issue_ids: [N1]
+    unit: fraction
+    training: [0.1, 0.5]
+    test: [0.05, 0.7]
+    stress: [0.0, 0.9]
+    reason: "Police cases describe one phone number or device behind many mule accounts, and a 2024 DoT release says more than 1 crore mobile connections were disconnected (cumulative). No share of reused identifiers is published."
+
+  identifier_changed_after_flag_share:
+    label: assumption
+    issue_ids: [N1]
+    unit: fraction
+    training: [0.2, 0.6]
+    test: [0.1, 0.8]
+    stress: [0.0, 1.0]
+    reason: "After one identifier is flagged a gang may switch to fresh ones; no rate is published."
+
+  registry_coverage_layer1_mule_share:
+    label: assumption
+    issue_ids: [N2]
+    unit: fraction
+    training: [0.3, 0.7]
+    test: [0.15, 0.9]
+    stress: [0.05, 1.0]
+    reason: "The Suspect Registry had 32.08 lakh layer-1 mule accounts shared by June 2026 (Lok Sabha reply) but no denominator, so the share of all layer-1 mules covered is unknown."
+
+  registry_coverage_deeper_mule_share:
+    label: assumption
+    issue_ids: [N2]
+    unit: fraction
+    training: [0.01, 0.15]
+    test: [0.0, 0.3]
+    stress: [0.0, 0.5]
+    reason: "Deeper mules are almost never reported (project design, review issue N2); no figure is published."
+
+  registry_entry_delay_days:
+    label: assumption
+    issue_ids: [N2]
+    unit: days
+    training: [1, 14]
+    test: [0.5, 45]
+    stress: [0.0, 120]
+    reason: "Time between a mule being identified and its entry appearing in the registry; no figure is published."
+
+  probability_a_bank_takes_part_in_dpip:
+    label: assumption
+    issue_ids: [N2]
+    unit: fraction
+    training: [0.4, 1.0]
+    test: [0.2, 1.0]
+    stress: [0.0, 1.0]
+    reason: "DPIP went live on 1 September 2026 with 8 banks (reported, not hand-checked). The world draws a yes or no for each of its three banks using this chance."
+
+  hold_latency_minutes:
+    label: assumption
+    issue_ids: [N3]
+    unit: minutes
+    training: [5, 60]
+    test: [2, 240]
+    stress: [1, 1440]
+    reason: "One Telangana case (April 2024) held money 25 minutes after the victim reported at 12 minutes, which is one example and not a distribution."
+
+  hold_missed_share:
+    label: assumption
+    issue_ids: [N3]
+    unit: fraction
+    training: [0.05, 0.3]
+    test: [0.02, 0.5]
+    stress: [0.0, 0.8]
+    reason: "Share of hold requests that arrive after the money has already left; no figure is published."
+
+  share_of_victims_unable_to_reach_1930_first_try:
+    label: assumption
+    issue_ids: [N3, L1]
+    unit: fraction
+    training: [0.05, 0.3]
+    test: [0.02, 0.5]
+    stress: [0.0, 0.8]
+    reason: "A 2023 Moneylife article recounts one test in which 2 of 15 calls to 1930 were answered; it is anecdotal and no statistics were found."
+
+  unreachable_1930_extra_delay_minutes:
+    label: assumption
+    issue_ids: [N3]
+    unit: minutes
+    training: [10, 180]
+    test: [5, 720]
+    stress: [1, 2880]
+    reason: "Extra waiting when a victim cannot get through to 1930; no figure is published."
+
+  real_world_complaints_per_100000_upi_payments:
+    label: assumption
+    issue_ids: [E1]
+    unit: complaints per 100000 payments
+    training: [0.7, 1.4]
+    test: [0.3, 2.5]
+    stress: [0.1, 6.0]
+    reason: "Derived. 2,402,579 NCRP complaints in 2025 (PIB, confirmed) divided by about 228,281.85 million UPI payments (monthly figures from secondary copies, not NPCI's own table) is about 1.05 per 100,000. Complaints cover all financial fraud, so this is an upper-bound proxy for UPI. It is used to re-weight precision-style metrics, not as the fraud rate inside the small world."
+
+  world_fraud_inflation_factor:
+    label: assumption
+    issue_ids: [E1]
+    unit: times
+    training: [100, 2000]
+    test: [50, 5000]
+    stress: [10, 20000]
+    reason: "How many times more fraud a small simulated world holds than real life, so models have enough examples. It is recorded on each world card; no external figure exists."
+
+  genuine_payment_median_amount_inr:
+    label: assumption
+    issue_ids: [E2]
+    unit: rupees
+    training: [150, 600]
+    test: [50, 1500]
+    stress: [20, 5000]
+    reason: "NPCI says more than 95 percent of UPI person-to-merchant volume is up to 2,000 rupees (see genuine_payments_up_to_2000_inr_share), which implies a small median. No median is published."
+
+  genuine_payment_amount_spread_sigma:
+    label: assumption
+    issue_ids: [E2]
+    unit: log-scale spread
+    training: [0.9, 1.5]
+    test: [0.7, 2.0]
+    stress: [0.5, 2.5]
+    reason: "Controls how heavy the tail of payment amounts is, so most payments are small and a few are very large. The value is the author's choice and no figure is published."
+
+  upi_per_transaction_limit_inr:
+    label: reported
+    issue_ids: [E2]
+    unit: rupees
+    training: [50000, 100000]
+    test: [25000, 100000]
+    stress: [10000, 500000]
+    source:
+      url: https://www.npci.org.in/uploads/UPI_OC_No185_B_FY_2025_26_Addendum_to_OC_185_A_Implementation_of_higher_per_transaction_limit_for_specific_categories_in_UPI_ba517a0902.pdf
+      date: "2025-08-28"
+    reason: "NPCI keeps the standard person-to-person limit at 1 lakh rupees per transaction (no change found in 2025 or 2026) and raised verified-merchant categories such as tax payments to 5 lakh (circulars 185A and 185B). Banks and apps may set lower limits, so the range sits below the ceiling, and the stress end allows the higher category limits."
+
+  number_of_regions:
+    label: assumption
+    issue_ids: [E3]
+    unit: count
+    training: [3, 6]
+    test: [2, 10]
+    stress: [1, 20]
+    reason: "How many regions the town is split into; the number is the author's choice."
+
+  share_of_victims_in_a_different_region_from_the_mule:
+    label: assumption
+    issue_ids: [E3]
+    unit: fraction
+    training: [0.5, 0.9]
+    test: [0.3, 0.95]
+    stress: [0.1, 1.0]
+    reason: "One Indore account was linked to complaints from 15 states (news report), so victims are often far from the mule. No share is published."
+
+  bank_customer_share_large_public:
+    label: assumption
+    issue_ids: [E4]
+    unit: fraction
+    training: [0.35, 0.55]
+    test: [0.2, 0.7]
+    stress: [0.1, 0.9]
+    reason: "Share of the town's customers at the large public bank; the author's choice."
+
+  bank_customer_share_private:
+    label: assumption
+    issue_ids: [E4]
+    unit: fraction
+    training: [0.25, 0.45]
+    test: [0.15, 0.6]
+    stress: [0.05, 0.8]
+    reason: "Share of customers at the private bank; the author's choice."
+
+  bank_customer_share_payments_bank:
+    label: assumption
+    issue_ids: [E4]
+    unit: fraction
+    training: [0.05, 0.25]
+    test: [0.02, 0.4]
+    stress: [0.0, 0.6]
+    reason: "Share of customers at the payments bank; the author's choice."
+
+  bank_weak_kyc_account_share:
+    label: assumption
+    issue_ids: [E4]
+    unit: fraction
+    training: [0.02, 0.15]
+    test: [0.01, 0.3]
+    stress: [0.0, 0.5]
+    reason: "Share of a bank's accounts opened with weak identity checks; each bank draws its own value. No figure is published."
+
+  slowest_to_fastest_bank_hold_ratio:
+    label: assumption
+    issue_ids: [E4, N3]
+    unit: ratio
+    training: [1.5, 5]
+    test: [1, 10]
+    stress: [1, 30]
+    reason: "How many times slower the slowest bank is at applying a hold than the fastest, so the three banks differ in speed; no figure is published."
 
 # Things that were searched for and not found. No numbers and no labels on purpose.
 searched_but_not_found:

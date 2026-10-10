@@ -73,3 +73,31 @@ Mock hold request and response. The `action` is one of the names in `config/lega
   "response": {"request_id": "example_req_1", "status": "example_status", "held_amount_inr": 1000, "updated_at": "2026-01-01T00:00:00Z"}
 }
 ```
+
+### Fields added for Level 11 (N1, N2, N3)
+
+None of these field names are official; they are our design.
+
+N1, identifier reuse: add one field `distinct_accounts_linked` (a whole number: how many different accounts this hashed identifier has been reported against) to the mock screening response example. The same identifier can appear on several mule accounts, and a gang may switch to a fresh identifier after one is flagged.
+```json
+{
+  "request": {"identifier_hash": "example_hash_001", "identifier_type": "example_type", "requesting_bank_id": "example_bank_1"},
+  "response": {"match": true, "status": "example_status", "risk_score": 0.0, "distinct_accounts_linked": 4}
+}
+```
+
+N2, per-bank participation: a small mock bank settings example. Each of the three banks has this `dpip_participation` flag, so some banks do not receive registry matches.
+```json
+{
+  "bank_id": "example_bank_1",
+  "dpip_participation": false
+}
+```
+
+N3, hold latency: in the mock hold response add `requested_at`, `applied_at`, `latency_minutes` and `outcome`, where outcome is one of "applied" (the hold succeeded), "too_late" (the money left just before the hold landed) or "missed" (the hold completely failed). Money may already have left the account before a hold lands.
+```json
+{
+  "request": {"request_id": "example_req_1", "account_ref": "example_account_1", "amount_inr": 1000, "action": "hold_reported_amount", "issued_at": "2026-01-01T00:00:00Z"},
+  "response": {"request_id": "example_req_1", "status": "example_status", "held_amount_inr": 1000, "updated_at": "2026-01-01T00:00:00Z", "requested_at": "2026-01-01T00:00:00Z", "applied_at": "2026-01-01T00:15:00Z", "latency_minutes": 15, "outcome": "applied"}
+}
+```

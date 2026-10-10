@@ -22,3 +22,17 @@ The "slow turnaround" part of that claim is **unverified**.
 The thresholds are tuned on validation worlds.
 They are tuned so that the rules baseline and the ML system have the same genuine-restriction rate.
 This follows `config/evaluation.yaml` (`fair_comparison`).
+
+## Device rules: a design constraint (added 2026-10-10, review item R5)
+The four rules above do not use device information, so there is no "new device"
+rule today. If a device rule is added later (Level 17), it must follow this
+constraint.
+A "new device" means a change of hardware, a changed or swapped SIM, or a fresh
+app install on a different phone. An operating system update on the same phone
+is NOT a new device, and a rule must not fire on an update alone.
+Why: operating system updates reach many ordinary people over days or weeks, so
+a rule that fired on them would create a wave of false alarms on genuine
+customers. The simulated world includes an OS update wave as a labelled stress
+test (review item R2) to check this.
+This section sets no numbers. Any numbers for a device rule will come from the
+tuning rule above, like the other rules.

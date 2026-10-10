@@ -30,13 +30,13 @@ def test_world_ranges_file_is_valid():
     assert validate_file(WORLD_RANGES_PATH) == []
 
 
-def test_world_ranges_has_ten_parameters():
-    assert len(load_yaml(WORLD_RANGES_PATH)["parameters"]) == 10
+def test_world_ranges_parameter_count():
+    assert len(load_yaml(WORLD_RANGES_PATH)["parameters"]) == 73
 
 
 def test_world_ranges_label_counts():
     parameters = load_yaml(WORLD_RANGES_PATH)["parameters"]
-    assert count_parameter_labels(parameters) == {"sourced": 5, "assumption": 5}
+    assert count_parameter_labels(parameters) == {"sourced": 5, "reported": 5, "assumption": 63}
 
 
 def test_world_ranges_parameters_have_unit_and_all_three_ranges():
@@ -44,6 +44,25 @@ def test_world_ranges_parameters_have_unit_and_all_three_ranges():
     for name, block in parameters.items():
         for key in ["unit", "training", "test", "stress"]:
             assert key in block, f"{name} has no {key}"
+
+
+def test_original_ten_parameters_still_present():
+    """Level 10 is frozen; this protects the original ten."""
+    parameters = load_yaml(WORLD_RANGES_PATH)["parameters"]
+    original_ten = [
+        "hops_to_cash_out",
+        "share_offboarded_within_first_year",
+        "share_reported_to_shared_database",
+        "minutes_money_stays_in_mule_account",
+        "mule_transfer_amount_inr",
+        "genuine_payments_up_to_2000_inr_share",
+        "victim_report_delay_minutes",
+        "mules_per_gang",
+        "share_of_mules_who_are_witting",
+        "share_of_mules_on_current_or_merchant_accounts"
+    ]
+    for name in original_ten:
+        assert name in parameters, f"missing {name}"
 
 
 def test_world_ranges_lists_what_was_not_found():

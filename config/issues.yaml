@@ -1,0 +1,238 @@
+# Issue register for the October 2026 world review (review item R6).
+# Checked by: python -m core.issue_register
+# It is also checked by tests/unit/test_issue_register.py, which runs in CI.
+#
+# status words
+#   built    = the part owned by Level 11 Part 1 exists now and is checked
+#              automatically (see evidence). later_work lists what later levels add.
+#   planned  = nothing exists yet; a later level owns it (see later_work).
+#   deferred = deliberately not built; reason says why.
+# evidence kinds (the checker looks each one up for real)
+#   config    = a block in a config file that lists this issue ID in issue_ids
+#   amendment = an entry in docs/research/amendments.md whose Issue IDs row lists this ID
+#   doc       = a doc file that contains the given text
+#   test      = a test function that exists in the given file
+
+G1:
+  title: "Mule origin; rented mules keep normal life"
+  status: built
+  evidence:
+    - {kind: config, file: config/world_ranges.yaml, name: mule_origin_share_rented}
+    - {kind: config, file: config/world_ranges.yaml, name: rented_mule_owner_activity_kept_share}
+    - {kind: amendment, id: A-004}
+  later_work: ["Level 12: world builder", "Level 15: features"]
+G2:
+  title: "Cash-out channels including ATM limits and genuine shops"
+  status: built
+  evidence:
+    - {kind: config, file: config/world_ranges.yaml, name: cashout_share_crypto}
+    - {kind: config, file: config/world_ranges.yaml, name: atm_daily_limit_inr}
+    - {kind: amendment, id: A-004}
+    - {kind: amendment, id: A-006}
+  later_work: ["Level 12: world builder", "Level 15: features", "Level 23: money tracer"]
+G3:
+  title: "Mule lifecycle; heavy-tailed victims per mule"
+  status: built
+  evidence:
+    - {kind: config, file: config/world_ranges.yaml, name: mule_warmup_days}
+    - {kind: config, file: config/world_ranges.yaml, name: victims_per_mule_largest}
+    - {kind: amendment, id: A-004}
+  later_work: ["Level 12: world builder", "Level 16: labels"]
+G4:
+  title: "Fixed gang reactions; gang observation feed"
+  status: built
+  evidence:
+    - {kind: config, file: config/world_ranges.yaml, name: gang_stops_using_liened_account_share}
+    - {kind: config, file: config/world_ranges.yaml, name: gang_feed_miss_share}
+    - {kind: amendment, id: A-004}
+  later_work: ["Level 12: world builder"]
+G5:
+  title: "Account market shared by gangs"
+  status: built
+  evidence:
+    - {kind: config, file: config/world_ranges.yaml, name: share_of_accounts_sold_to_several_gangs}
+    - {kind: amendment, id: A-004}
+  later_work: ["Level 12: world builder"]
+G6:
+  title: "Scam-type payment schedules"
+  status: built
+  evidence:
+    - {kind: config, file: config/world_ranges.yaml, name: share_of_scams_investment_or_job}
+    - {kind: config, file: config/world_ranges.yaml, name: scam_payments_per_victim}
+    - {kind: amendment, id: A-004}
+  later_work: ["Level 12: world builder"]
+L1:
+  title: "Complaint delay by scam type"
+  status: built
+  evidence:
+    - {kind: config, file: config/world_ranges.yaml, name: complaint_delay_investment_scam_days}
+    - {kind: amendment, id: A-005}
+  later_work: ["Level 12: world builder", "Level 16: labels"]
+L2:
+  title: "Victim complaint share vs bank registry reporting"
+  status: built
+  evidence:
+    - {kind: config, file: config/world_ranges.yaml, name: victim_complaint_share}
+    - {kind: amendment, id: A-002}
+    - {kind: amendment, id: A-005}
+  later_work: ["Level 12: world builder"]
+L3:
+  title: "Money held vs money returned"
+  status: built
+  evidence:
+    - {kind: config, file: config/evaluation.yaml, name: money_held_and_returned}
+    - {kind: config, file: config/world_ranges.yaml, name: lien_release_days}
+    - {kind: amendment, id: A-001}
+    - {kind: amendment, id: A-005}
+  later_work: ["Level 23: money tracer", "Level 28: evaluation suite"]
+L4:
+  title: "Analyst accuracy depends on evidence, load and score"
+  status: built
+  evidence:
+    - {kind: config, file: config/world_ranges.yaml, name: analyst_accuracy_base}
+    - {kind: amendment, id: A-005}
+  later_work: ["Level 12: world builder", "Level 22: analyst queue", "Level 27: investigation agent"]
+L5:
+  title: "Bulk-label events"
+  status: built
+  evidence:
+    - {kind: config, file: config/world_ranges.yaml, name: bulk_confirmation_size_accounts}
+    - {kind: amendment, id: A-005}
+  later_work: ["Level 12: world builder", "Level 16: labels", "Level 34 (Tier 2)"]
+A1:
+  title: "Episodes for ordinary people"
+  status: built
+  evidence:
+    - {kind: config, file: config/world_ranges.yaml, name: episode_share_of_ordinary_people_per_year}
+    - {kind: amendment, id: A-005}
+  later_work: ["Level 11 Part 2: the world engine generates episodes"]
+A2:
+  title: "Genuine shops downstream of mules"
+  status: built
+  evidence:
+    - {kind: config, file: config/evaluation.yaml, name: genuine_harm}
+    - {kind: config, file: config/world_ranges.yaml, name: share_of_mule_outflows_to_genuine_shops}
+    - {kind: amendment, id: A-001}
+    - {kind: amendment, id: A-004}
+  later_work: ["Level 12: world builder", "Level 21: action chooser", "Level 23: money tracer"]
+A3:
+  title: "False complaints weighted to merchants"
+  status: built
+  evidence:
+    - {kind: config, file: config/world_ranges.yaml, name: false_complaint_merchant_weight}
+    - {kind: amendment, id: A-005}
+  later_work: ["Level 12: world builder"]
+N1:
+  title: "Identifier reuse"
+  status: built
+  evidence:
+    - {kind: config, file: config/world_ranges.yaml, name: identifier_shared_across_mule_accounts_share}
+    - {kind: doc, file: docs/interfaces/national_systems.md, text: "distinct_accounts_linked"}
+    - {kind: amendment, id: A-006}
+    - {kind: amendment, id: A-008}
+  later_work: ["Level 13: mock national systems"]
+N2:
+  title: "Registry coverage by depth; DPIP participation"
+  status: built
+  evidence:
+    - {kind: config, file: config/world_ranges.yaml, name: registry_coverage_deeper_mule_share}
+    - {kind: doc, file: docs/interfaces/national_systems.md, text: "dpip_participation"}
+    - {kind: amendment, id: A-006}
+    - {kind: amendment, id: A-008}
+  later_work: ["Level 13: mock national systems", "Level 28: evaluation suite", "Level 33 (Tier 2)"]
+N3:
+  title: "Hold latency and missed holds"
+  status: built
+  evidence:
+    - {kind: config, file: config/world_ranges.yaml, name: hold_latency_minutes}
+    - {kind: doc, file: docs/interfaces/national_systems.md, text: "latency_minutes"}
+    - {kind: amendment, id: A-006}
+    - {kind: amendment, id: A-008}
+  later_work: ["Level 13: mock national systems", "Level 23: money tracer"]
+N4:
+  title: "Stacked liens; slow release of wrong liens"
+  status: built
+  evidence:
+    - {kind: config, file: config/evaluation.yaml, name: genuine_harm}
+    - {kind: config, file: config/world_ranges.yaml, name: lien_release_days}
+    - {kind: amendment, id: A-001}
+    - {kind: amendment, id: A-005}
+  later_work: ["Level 21: action chooser"]
+E1:
+  title: "Base rate and inflation factor"
+  status: built
+  evidence:
+    - {kind: config, file: config/evaluation.yaml, name: base_rate_reweighting}
+    - {kind: config, file: config/world_ranges.yaml, name: real_world_complaints_per_100000_upi_payments}
+    - {kind: amendment, id: A-001}
+    - {kind: amendment, id: A-006}
+  later_work: ["Level 18: models", "Level 28: evaluation suite"]
+E2:
+  title: "Heavy-tailed amounts; UPI limits"
+  status: built
+  evidence:
+    - {kind: config, file: config/world_ranges.yaml, name: genuine_payment_median_amount_inr}
+    - {kind: config, file: config/world_ranges.yaml, name: upi_per_transaction_limit_inr}
+    - {kind: amendment, id: A-006}
+  later_work: ["Level 11 Part 2: the world engine generates amounts"]
+E3:
+  title: "Regions"
+  status: built
+  evidence:
+    - {kind: config, file: config/world_ranges.yaml, name: number_of_regions}
+    - {kind: amendment, id: A-006}
+  later_work: ["Level 15: features", "Level 33 (Tier 2)"]
+E4:
+  title: "Three different banks"
+  status: built
+  evidence:
+    - {kind: config, file: config/world_ranges.yaml, name: bank_customer_share_large_public}
+    - {kind: amendment, id: A-006}
+  later_work: ["Level 13: mock national systems", "Level 33 (Tier 2)"]
+R1:
+  title: "Correct the 37% finding"
+  status: built
+  evidence:
+    - {kind: amendment, id: A-002}
+R2:
+  title: "Stress-test library replaces scenario timelines"
+  status: planned
+  later_work: ["Level 11 Part 2: the labelled stress-test library"]
+R3:
+  title: "Held vs returned in evaluation"
+  status: built
+  evidence:
+    - {kind: config, file: config/evaluation.yaml, name: money_held_and_returned}
+    - {kind: config, file: config/evaluation.yaml, name: genuine_harm}
+    - {kind: amendment, id: A-001}
+R4:
+  title: "Base-rate rule in evaluation"
+  status: built
+  evidence:
+    - {kind: config, file: config/evaluation.yaml, name: base_rate_reweighting}
+    - {kind: amendment, id: A-001}
+R5:
+  title: "OS updates do not trigger new-device rules"
+  status: built
+  evidence:
+    - {kind: doc, file: docs/research/rules_baseline_spec.md, text: "Device rules: a design constraint"}
+    - {kind: amendment, id: A-007}
+  later_work: ["Level 15: features", "Level 17: rules baseline"]
+R6:
+  title: "Issue tracker check"
+  status: built
+  evidence:
+    - {kind: test, file: tests/unit/test_issue_register.py, name: test_real_register_is_valid}
+    - {kind: amendment, id: A-009}
+R7:
+  title: "Failed payments in the transaction feed"
+  status: planned
+  later_work: ["Level 14: bank APIs and transaction feed"]
+R8:
+  title: "Device and routine-life feature fixes"
+  status: planned
+  later_work: ["Level 15: features"]
+R9:
+  title: "Arms-race design changes"
+  status: deferred
+  reason: "Awaiting a decision before Level 35; nothing is built or planned until that decision is made."
