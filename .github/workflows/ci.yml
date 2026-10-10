@@ -410,17 +410,10 @@ jobs:
       - name: Create .env from example
         run: cp .env.example .env
 
-      # requirements-ml.txt cannot be installed in one go: shap==0.51.0 asks for numpy>=2, but the file pins
-      # numpy==1.26.4, the version the frozen model v1 was built with. So: install everything except shap, then shap
-      # without its dependencies, then its few missing dependencies while numpy stays at 1.26.4.
+      # requirements-ml.txt installs in one go (numpy stays 1.26.4 for the frozen model v1; shap is pinned to 0.49.1).
       # pytest, PyYAML and orjson use the same versions as requirements.txt and requirements-test.txt.
       - name: Install the machine-learning libraries
-        run: |
-          grep -v '^shap==' requirements-ml.txt > "$RUNNER_TEMP/ml-without-shap.txt"
-          echo "numpy==1.26.4" > "$RUNNER_TEMP/numpy-constraint.txt"
-          pip install -r "$RUNNER_TEMP/ml-without-shap.txt" pytest==8.3.5 PyYAML==6.0.3 orjson==3.10.18
-          pip install --no-deps shap==0.51.0
-          pip install -c "$RUNNER_TEMP/numpy-constraint.txt" cloudpickle llvmlite numba slicer
+        run: pip install -r requirements-ml.txt pytest==8.3.5 PyYAML==6.0.3 orjson==3.10.18
 
       # Only the test files that use the ml marker (the other test files need packages that are not installed here).
       # needs_dvc tests are left out: they need files from `dvc pull`.
