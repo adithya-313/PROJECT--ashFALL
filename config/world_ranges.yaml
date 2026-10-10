@@ -330,6 +330,179 @@ parameters:
     stress: [0.0, 0.8]
     reason: Some scams pay victims small amounts back to build trust; no figure is published.
 
+  # Added 2026-10-10 (Level 11 Part 1, task 3b-1, issues L1-L5, A1, A3).
+  # Logged as A-005 in docs/research/amendments.md. Widths of ranges are the
+  # author's choices, not findings.
+  # complaint_delay_* below supersede victim_report_delay_minutes, which stays
+  # unchanged for Level 10. victim_complaint_share and the existing
+  # share_reported_to_shared_database are the two halves of issue L2.
+  # A2 is covered by share_of_mule_outflows_to_genuine_shops (added earlier).
+
+  complaint_delay_unauthorised_debit_minutes:
+    label: assumption
+    issue_ids: [L1]
+    unit: minutes
+    training: [10, 240]
+    test: [5, 1440]
+    stress: [2, 4320]
+    reason: "Complaints about unauthorised debits can come within minutes (one Telangana case in April 2024 was reported in 12 minutes), but no distribution is published."
+
+  complaint_delay_investment_scam_days:
+    label: assumption
+    issue_ids: [L1]
+    unit: days
+    training: [3, 15]
+    test: [1, 30]
+    stress: [0.5, 60]
+    reason: "The Maharashtra Chief Minister said in August 2026 that reporting delays of 3 to 15 days make recovery harder; this is a remark, not a measured distribution."
+
+  complaint_delay_job_scam_days:
+    label: assumption
+    issue_ids: [L1]
+    unit: days
+    training: [3, 15]
+    test: [1, 30]
+    stress: [0.5, 60]
+    reason: "Job scams unfold over days like investment scams; no separate delay figure is published (Kerala Police data shows trading and job scams are the two largest types)."
+
+  victim_complaint_share:
+    label: assumption
+    issue_ids: [L2]
+    unit: fraction
+    training: [0.2, 0.7]
+    test: [0.1, 0.8]
+    stress: [0.05, 0.9]
+    reason: "Share of scammed victims who complain at all. No Indian figure was found. This is separate from share_reported_to_shared_database, which is the bank-to-registry reporting share."
+
+  lien_release_days:
+    label: reported
+    issue_ids: [L3, N4]
+    unit: days
+    training: [14, 90]
+    test: [7, 120]
+    stress: [1, 365]
+    source:
+      url: https://cdnbbsr.s3waas.gov.in/s3ec05e250c59336b505ed411d455abaa3/uploads/2026/06/2026061818.pdf
+      date: "2026-01-02"
+    reason: "The MHA/I4C procedure (2 Jan 2026) has a 90-day route for grievances without a lawful direction, which is conditional; one High Court (Madhya Pradesh, 15 Jan 2026) ordered a three-month hold in one case; BNSS sections 106 and 107 state no general number of days."
+
+  share_of_held_money_returned_to_victims:
+    label: assumption
+    issue_ids: [L3]
+    unit: fraction
+    training: [0.3, 0.8]
+    test: [0.1, 0.95]
+    stress: [0.0, 1.0]
+    reason: "No published share of held money that is actually returned. Context: about 12.3% of reported money was under lien in 2023 (derived from a Lok Sabha reply) and Odisha recovered about 2.7% of losses in 2023-2025 (news report)."
+
+  analyst_accuracy_base:
+    label: assumption
+    issue_ids: [L4]
+    unit: fraction
+    training: [0.75, 0.95]
+    test: [0.65, 0.97]
+    stress: [0.6, 0.99]
+    reason: "Starting range from the project plan; no published analyst accuracy figure was found."
+
+  analyst_accuracy_drop_when_evidence_weak:
+    label: assumption
+    issue_ids: [L4]
+    unit: fraction
+    training: [0.05, 0.2]
+    test: [0.02, 0.3]
+    stress: [0.0, 0.45]
+    reason: "How many points of accuracy an analyst loses when the evidence in a case is weak (review issue L4); no figure is published."
+
+  analyst_accuracy_drop_when_queue_overloaded:
+    label: assumption
+    issue_ids: [L4]
+    unit: fraction
+    training: [0.02, 0.15]
+    test: [0.0, 0.25]
+    stress: [0.0, 0.4]
+    reason: "How many points of accuracy are lost when the queue is over capacity (review issue L4); no figure is published."
+
+  analyst_follows_model_score_share:
+    label: assumption
+    issue_ids: [L4]
+    unit: fraction
+    training: [0.1, 0.4]
+    test: [0.0, 0.6]
+    stress: [0.0, 0.9]
+    reason: "How strongly a high model score pushes the analyst to agree (review issue L4); no figure is published."
+
+  bulk_confirmation_events_per_year:
+    label: assumption
+    issue_ids: [L5]
+    unit: count
+    training: [1, 6]
+    test: [0, 12]
+    stress: [0, 24]
+    reason: "Police crackdowns confirm many mule accounts at once; no frequency is published."
+
+  bulk_confirmation_size_accounts:
+    label: assumption
+    issue_ids: [L5]
+    unit: count
+    training: [100, 1000]
+    test: [50, 3000]
+    stress: [20, 10000]
+    reason: "One Gujarat sweep (Operation Mule Hunt, June 2026) acted on 913 mule accounts; one example, not a distribution."
+
+  bulk_confirmation_delay_days:
+    label: assumption
+    issue_ids: [L5]
+    unit: days
+    training: [7, 60]
+    test: [1, 180]
+    stress: [0, 365]
+    reason: "How long after the transactions a crackdown confirms the accounts; no figure is published."
+
+  episode_share_of_ordinary_people_per_year:
+    label: assumption
+    issue_ids: [A1]
+    unit: fraction
+    training: [0.02, 0.1]
+    test: [0.01, 0.2]
+    stress: [0.0, 0.4]
+    reason: "Share of genuine people who have a short period that looks like mule activity in a year (a wedding or medical collection, a kitty, a fest treasurer); no figure is published."
+
+  episode_length_days:
+    label: assumption
+    issue_ids: [A1]
+    unit: days
+    training: [3, 30]
+    test: [1, 60]
+    stress: [1, 120]
+    reason: "How long such a period lasts; no figure is published."
+
+  episode_payer_count:
+    label: assumption
+    issue_ids: [A1]
+    unit: count
+    training: [10, 100]
+    test: [5, 300]
+    stress: [3, 1000]
+    reason: "How many different people send money to the collector during an episode; no figure is published."
+
+  false_complaints_per_100000_genuine_payments:
+    label: assumption
+    issue_ids: [A3]
+    unit: count
+    training: [0.05, 2]
+    test: [0.01, 10]
+    stress: [0.0, 50]
+    reason: "Some complaints are mistaken or false; no rate is published."
+
+  false_complaint_merchant_weight:
+    label: assumption
+    issue_ids: [A3]
+    unit: ratio
+    training: [2, 10]
+    test: [1, 20]
+    stress: [1, 50]
+    reason: "How many times more likely a payment to a merchant is to get a false complaint than a payment to a person (review issue A3); no figure is published."
+
 # Things that were searched for and not found. No numbers and no labels on purpose.
 searched_but_not_found:
   - mule account type shares for India
