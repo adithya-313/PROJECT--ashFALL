@@ -104,3 +104,14 @@ No model code exists yet. The `models/` directory holds only v1 PaySim artefacts
 | What changed | a new subsection of mock fields: identifier reuse, per-bank DPIP participation, hold latency; no existing field changed |
 | Why | task 6: the mock national systems must carry what the world will model |
 | Results exist? | No. |
+
+## A-009
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-10-10 |
+| Issue IDs | R6 |
+| Files | config/issues.yaml, core/issue_register.py, tests/unit/test_issue_register.py |
+| What changed | new issue register of 31 issue IDs and a checker that looks up every piece of evidence for real; the Level 10 validator and CI files are untouched; the register is enforced through the existing fast tests |
+| Why | task 7: no issue can be forgotten silently |
+| Results exist? | No. |
