@@ -7,6 +7,7 @@ TERM: opening balance: Initial funded deposit placed into an account before any 
 
 from dataclasses import dataclass
 from typing import Any
+
 import numpy as np
 
 from world.amounts import AmountProfile, create_amount_profile

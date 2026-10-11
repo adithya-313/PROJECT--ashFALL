@@ -5,7 +5,6 @@ WHY: Verifies T1 (config_reader validation and range drawing), T2 (exact paise-r
 TERM: paise: One hundredth of an Indian rupee (1 INR = 100 paise), stored as exact integers.
 """
 
-from pathlib import Path
 import numpy as np
 import pytest
 

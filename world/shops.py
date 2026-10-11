@@ -6,6 +6,7 @@ TERM: shop: A merchant account receiving everyday customer purchases or paying s
 """
 
 from dataclasses import dataclass
+
 import numpy as np
 
 from world.banks import Bank

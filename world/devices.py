@@ -7,6 +7,7 @@ TERM: OS generation: An integer rating (1 to OS_GENERATIONS) representing older 
 """
 
 from dataclasses import dataclass
+
 import numpy as np
 
 from world.placeholders import ANDROID_SHARE, OS_GENERATIONS

@@ -8,6 +8,7 @@ TERM: routine item: A planned financial payment schedule entry representing rout
 
 from dataclasses import dataclass
 from typing import Any
+
 import numpy as np
 
 from world.amounts import draw_amount_paise, split_into_legal_payments
@@ -45,6 +46,23 @@ class RoutineItem:
     is_inbound: bool
 
 
+def build_bill_items(person: Person, utilities: list[Shop], rng: np.random.Generator) -> list[RoutineItem]:
+    """
+    WHAT: Creates routine bill payment items for utility expenses.
+    WHY: Separates recurring monthly household utility bills into a distinct helper.
+    """
+    items: list[RoutineItem] = []
+    med = person.amount_profile.median_paise
+    for _ in range(BILLS_PER_MONTH):
+        if utilities:
+            u_shop = rng.choice(utilities)
+            b_day = int(rng.integers(BILL_DAY_WINDOW[0], BILL_DAY_WINDOW[1], endpoint=True))
+            items.append(
+                RoutineItem(person.person_id, "bill_out", b_day, BILL_MULTIPLE * med, u_shop.account_id, False)
+            )
+    return items
+
+
 def build_salaried_items(person: Person, shops: list[Shop], rng: np.random.Generator) -> list[RoutineItem]:
     """
     WHAT: Creates salary deposit, residential rent, and utility bill routine items for salaried employees.
@@ -56,21 +74,20 @@ def build_salaried_items(person: Person, shops: list[Shop], rng: np.random.Gener
     if person.employer_shop_id:
         employer = next(s for s in shops if s.shop_id == person.employer_shop_id)
         s_day = int(rng.integers(SALARY_DAY_WINDOW[0], SALARY_DAY_WINDOW[1], endpoint=True))
-        items.append(RoutineItem(person.person_id, "salary_in", s_day, SALARY_MULTIPLE * med, employer.account_id, True))
+        items.append(
+            RoutineItem(person.person_id, "salary_in", s_day, SALARY_MULTIPLE * med, employer.account_id, True)
+        )
 
     landlords = [s for s in shops if s.kind == "landlord"]
     if landlords:
         landlord = rng.choice(landlords)
         r_day = int(rng.integers(RENT_DAY_WINDOW[0], RENT_DAY_WINDOW[1], endpoint=True))
-        items.append(RoutineItem(person.person_id, "rent_out", r_day, RENT_MULTIPLE * med, landlord.account_id, False))
+        items.append(
+            RoutineItem(person.person_id, "rent_out", r_day, RENT_MULTIPLE * med, landlord.account_id, False)
+        )
 
     utilities = [s for s in shops if s.kind == "utility"]
-    for _ in range(BILLS_PER_MONTH):
-        if utilities:
-            u_shop = rng.choice(utilities)
-            b_day = int(rng.integers(BILL_DAY_WINDOW[0], BILL_DAY_WINDOW[1], endpoint=True))
-            items.append(RoutineItem(person.person_id, "bill_out", b_day, BILL_MULTIPLE * med, u_shop.account_id, False))
-
+    items.extend(build_bill_items(person, utilities, rng))
     return items
 
 
@@ -141,7 +158,6 @@ def run_one_month(world: Any, rng: np.random.Generator) -> dict[str, int]:
     WHAT: Runs a minimal one-month cycle of routine payments across all simulated citizens.
     WHY: Exercises all ledgers with realistic concurrent transaction traffic to test invariants.
     """
-    people_map = {p.person_id: p for p in world.people}
     timed_items: list[tuple[int, RoutineItem, str]] = []
 
     for person in world.people:

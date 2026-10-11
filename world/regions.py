@@ -6,6 +6,7 @@ TERM: region: A discrete geographic sub-district within the simulated town (inde
 """
 
 from typing import Any
+
 import numpy as np
 
 

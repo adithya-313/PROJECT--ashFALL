@@ -8,6 +8,7 @@ TERM: heavy-tailed distribution: A probability distribution where extreme high v
 """
 
 import math
+
 import numpy as np
 import pytest
 

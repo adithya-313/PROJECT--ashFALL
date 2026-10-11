@@ -7,16 +7,15 @@ TERM: look-alike: A genuine customer whose ordinary transaction pattern resemble
 """
 
 import numpy as np
-import pytest
 
-from world.banks import Bank, build_banks
-from world.config_reader import get_parameter_entry, read_world_ranges
-from world.devices import Device, create_device
+from world.banks import build_banks
+from world.config_reader import read_world_ranges
+from world.devices import create_device
 from world.ledger import Ledger
-from world.people import Person, build_people
-from world.personas import PERSONAS, choose_persona_name, get_persona
+from world.people import build_people
+from world.personas import get_persona
 from world.placeholders import ANDROID_SHARE, OS_GENERATIONS, PERSONA_MIX
-from world.shops import Shop, build_shops
+from world.shops import build_shops
 
 
 def setup_test_ecosystem(n_people: int, n_shops: int, seed: int = 1234):

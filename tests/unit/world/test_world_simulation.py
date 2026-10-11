@@ -8,10 +8,11 @@ TERM: world fingerprint: A cryptographic SHA-256 checksum over the entire state 
 
 import subprocess
 import sys
+
 import numpy as np
 import pytest
 
-from world.build_world import World, build_world, world_fingerprint
+from world.build_world import build_world, world_fingerprint
 from world.checks import (
     check_balances_equal_entry_sums,
     check_money_conserved,
@@ -63,7 +64,7 @@ def test_t10_checkers_pass_after_month_run() -> None:
     """
     world = build_world(seed=101, n_people=60, n_shops=12)
     rng = np.random.default_rng(101)
-    total_opening = sum(l.balance_of(acc) for l in world.ledgers for acc in l.accounts)
+    total_opening = sum(ldg.balance_of(acc) for ldg in world.ledgers for acc in ldg.accounts)
 
     run_one_month(world, rng)
 

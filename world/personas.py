@@ -7,6 +7,7 @@ TERM: mule look-alike: An innocent person (such as a tea stall owner or gig work
 """
 
 from dataclasses import dataclass
+
 import numpy as np
 
 from world.placeholders import PERSONA_MIX

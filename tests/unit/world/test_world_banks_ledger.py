@@ -3,11 +3,13 @@ WHAT: Unit tests for Step 3 (banks, ledgers, atomic payments, and invariant chec
 WHY: Verifies T6 (ledger limit check), T7 (atomic payments), T8 (cross-bank entries & privacy),
      T9 (conservation of money), T10 (checkers and negative corrupted tests), and T11 (bank properties).
 ISSUE IDs: E4 (bank differences), E2 (UPI limit enforcement).
-TERM: atomic payment: A financial operation that either executes all debit and credit legs completely or changes nothing.
+TERM: atomic payment: A financial operation that either executes all debit and
+     credit legs completely or changes nothing.
 TERM: per-bank visibility: An information boundary where a bank's ledger only answers for its own accounts.
 """
 
 from dataclasses import dataclass
+
 import numpy as np
 import pytest
 
@@ -18,8 +20,8 @@ from world.checks import (
     check_no_negative_balances,
 )
 from world.config_reader import read_world_ranges
-from world.ledger import AccountNotInThisBank, Ledger, LedgerEntry
-from world.payments import PaymentResult, make_payment
+from world.ledger import AccountNotInThisBank, Ledger
+from world.payments import make_payment
 
 
 @dataclass
@@ -141,7 +143,7 @@ def test_t9_conservation_across_random_payments() -> None:
     WHY: Fulfills test requirement T9 proving strict conservation of money across all banks.
     """
     world = create_test_setup()
-    opening_total = sum(l.balance_of(acc) for l in world.ledgers for acc in l.accounts)
+    opening_total = sum(ldg.balance_of(acc) for ldg in world.ledgers for acc in ldg.accounts)
     rng = np.random.default_rng(777)
     all_accounts = ["acc_0_a", "acc_0_b", "acc_1_a", "acc_1_b"]
 
@@ -151,7 +153,7 @@ def test_t9_conservation_across_random_payments() -> None:
         amount = int(rng.integers(1, 150000))
         make_payment(world, sender, receiver, amount, minute=m)
 
-    current_total = sum(l.balance_of(acc) for l in world.ledgers for acc in l.accounts)
+    current_total = sum(ldg.balance_of(acc) for ldg in world.ledgers for acc in ldg.accounts)
     assert current_total == opening_total
 
 
@@ -161,7 +163,7 @@ def test_t10_checkers_pass_and_detect_corruptions() -> None:
     WHY: Fulfills test requirement T10 verifying that checkers detect negative balances, drift, and leakage.
     """
     world = create_test_setup()
-    total_opening = sum(l.balance_of(acc) for l in world.ledgers for acc in l.accounts)
+    total_opening = sum(ldg.balance_of(acc) for ldg in world.ledgers for acc in ldg.accounts)
 
     assert check_no_negative_balances(world.ledgers) == []
     assert check_balances_equal_entry_sums(world.ledgers) == []

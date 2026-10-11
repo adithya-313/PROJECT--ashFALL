@@ -4,9 +4,10 @@ WHY: Constructs the full town simulation in a reproducible, seed-driven sequence
 TERM: world fingerprint: A unique SHA-256 digest calculated over the serialized state of all entities in a world.
 """
 
-from dataclasses import dataclass
 import hashlib
+from dataclasses import dataclass
 from typing import Any
+
 import numpy as np
 
 from world.banks import Bank, build_banks
@@ -81,7 +82,9 @@ def serialize_world_entities(world: World) -> list[str]:
     """
     lines: list[str] = [f"seed:{world.seed}"]
     for b in world.banks:
-        lines.append(f"b:{b.bank_index}:{b.kind}:{b.customer_share:.8f}:{b.weak_kyc_share:.8f}:{b.hold_delay_factor:.8f}")
+        lines.append(
+            f"b:{b.bank_index}:{b.kind}:{b.customer_share:.8f}:{b.weak_kyc_share:.8f}:{b.hold_delay_factor:.8f}"
+        )
     for s in world.shops:
         lines.append(f"s:{s.shop_id}:{s.kind}:{s.region}:{s.bank_index}:{s.account_id}")
     for p in world.people:
@@ -90,11 +93,13 @@ def serialize_world_entities(world: World) -> list[str]:
             f"{p.weak_kyc}:{p.device.fingerprint}:{p.amount_profile.median_paise}:"
             f"{p.amount_profile.sigma:.6f}:{p.employer_shop_id}:{p.opening_balance_paise}"
         )
-    for l in world.ledgers:
-        for acc in sorted(l.accounts):
-            lines.append(f"l:{l.bank_index}:acc:{acc}:{l.balance_of(acc)}")
-        for e in l.entries:
-            lines.append(f"l:{l.bank_index}:e:{e.entry_id}:{e.minute}:{e.account_id}:{e.amount_paise}:{e.kind}:{e.transfer_id}")
+    for ldg in world.ledgers:
+        for acc in sorted(ldg.accounts):
+            lines.append(f"l:{ldg.bank_index}:acc:{acc}:{ldg.balance_of(acc)}")
+        for e in ldg.entries:
+            lines.append(
+                f"l:{ldg.bank_index}:e:{e.entry_id}:{e.minute}:{e.account_id}:{e.amount_paise}:{e.kind}:{e.transfer_id}"
+            )
     return lines
 
 
