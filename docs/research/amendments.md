@@ -115,3 +115,17 @@ No model code exists yet. The `models/` directory holds only v1 PaySim artefacts
 | What changed | new issue register of 31 issue IDs and a checker that looks up every piece of evidence for real; the Level 10 validator and CI files are untouched; the register is enforced through the existing fast tests |
 | Why | task 7: no issue can be forgotten silently |
 | Results exist? | No. |
+
+## A-010
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-10-11 |
+| Issue IDs | None |
+| Files | `tests/unit/test_level_10_module.py` |
+| What changed | The stale "no new-engine code exists" assertion in `tests/unit/test_level_10_module.py` was replaced by the date-ordering check that every entry in `new_engine_dates` is strictly later than `evaluation_date`. |
+| Why | Level 11 legitimately added `world/`, which made the old assertion permanently false. The new check proves all new-engine paths postdate `config/evaluation.yaml`. |
+| Results exist? | No. |
+
+No model code exists yet (models start in Level 18; `world/` is simulator code).
+

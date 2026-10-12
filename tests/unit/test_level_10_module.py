@@ -55,7 +55,15 @@ def test_each_broken_copy_is_rejected_in_memory() -> None:
 def test_preregistration_proof_is_ok_and_honest() -> None:
     proof = level10_check.preregistration_proof()
     assert proof["result"] == "OK"
-    assert proof["new_engine_dates"] == {}
+    # WHAT: Check that every new-engine path has its first commit strictly later than evaluation.yaml.
+    # WHY: The old assertion required proof["new_engine_dates"] to be empty. That became untrue
+    # when Level 11 legitimately added world/ (simulator code, not a model). The new check proves
+    # that all new-engine paths postdate config/evaluation.yaml as required by pre-registration.
+    for path, date in proof["new_engine_dates"].items():
+        assert date > proof["evaluation_date"], (
+            f"New-engine path '{path}' (first commit {date}) predates "
+            f"evaluation.yaml ({proof['evaluation_date']})"
+        )
     # The evaluation commit is on or after the decisions commit, give or take a minute.
     assert proof["evaluation_date"] >= proof["decisions_date"] - timedelta(minutes=1)
     assert "by design" in proof["sentence"]
