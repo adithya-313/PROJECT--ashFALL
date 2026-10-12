@@ -1,0 +1,85 @@
+# Failure realism parameters for the Level 11 simulated world.
+#
+# Every parameter is registered as an assumption or reported observation with nested ranges [min, max].
+# Training sits inside test, and test sits inside stress.
+# Evaluated and validated by core.config_validator.
+# Checked by: python -m core.config_validator config/failure_realism.yaml
+
+parameters:
+  npci_incident_count_per_30_days:
+    label: assumption
+    unit: incidents per 30 days
+    training: [0, 2]
+    test: [0, 3]
+    stress: [0, 6]
+    reason: "Assumption; no annual count published."
+
+  npci_incident_duration_minutes:
+    label: assumption
+    unit: minutes
+    training: [95, 180]
+    test: [60, 300]
+    stress: [30, 600]
+    reason: "The only verified figures are 95 minutes of unscheduled downtime in March 2025 (a monthly total, not one incident) and about five hours below 80% success on 12 April 2025 (Economic Times, 2025-04-16); the 95-180 range is an assumption."
+
+  npci_incident_success_rate:
+    label: assumption
+    unit: fraction succeeding
+    training: [0.5, 0.8]
+    test: [0.3, 0.9]
+    stress: [0.0, 0.95]
+    reason: "Economic Times reported below 80% for about five hours; a Rediff report quoted an unnamed source at 50-60%; neither is an NPCI incident record; the range is an assumption."
+
+  bank_downtime_count_per_bank_per_30_days:
+    label: assumption
+    unit: downtimes per bank/30d
+    training: [1, 6]
+    test: [0, 10]
+    stress: [0, 20]
+    reason: "The 31 downtimes in May 2024 covered all banks together; this per-bank range is an assumption."
+
+  bank_downtime_duration_minutes:
+    label: reported
+    unit: minutes
+    training: [60, 120]
+    test: [30, 240]
+    stress: [15, 720]
+    source:
+      url: https://economictimes.com/industry/banking/finance/banking/inadequate-tech-at-banks-to-blame-for-upi-downtimes/articleshow/110806141.cms
+      date: "2024-06-08"
+    reason: "Secondary source quoting NPCI data; 31 downtime instances from various banks totalling more than 47 hours in May 2024; 47 hours over 31 instances is about 91 minutes each (a derived figure, our arithmetic); the range is our choice around it."
+
+  bank_downtime_success_rate:
+    label: assumption
+    unit: fraction succeeding
+    training: [0.2, 0.7]
+    test: [0.0, 0.9]
+    stress: [0.0, 0.95]
+    reason: "No published rate for single-bank downtime; assumption."
+
+  technical_decline_rate:
+    label: reported
+    unit: fraction of payments
+    training: [0.007, 0.008]
+    test: [0.005, 0.015]
+    stress: [0.003, 0.03]
+    source:
+      url: https://www.zeebiz.com/economy-infra/news-only-08-of-upi-transactions-face-technical-declines-now-npci-327217
+      date: "2024-11-20"
+    reason: "Secondary source quoting NPCI's chief executive, technical decline rate 0.7-0.8 per cent; test and stress widths are our choices."
+
+  customer_wrong_pin_rate:
+    label: assumption
+    unit: fraction of payments
+    training: [0.002, 0.01]
+    test: [0.001, 0.02]
+    stress: [0.0005, 0.05]
+    reason: "Sources say most failures are business-related and total declines are typically under 1 per cent, but give no wrong-PIN or network split; assumptions."
+
+  app_network_failure_rate:
+    label: assumption
+    unit: fraction of payments
+    training: [0.001, 0.006]
+    test: [0.0005, 0.012]
+    stress: [0.0002, 0.03]
+    reason: "Sources say most failures are business-related and total declines are typically under 1 per cent, but give no wrong-PIN or network split; assumptions."
