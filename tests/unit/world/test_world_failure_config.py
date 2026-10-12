@@ -133,3 +133,36 @@ def test_y4_reader_integration_and_draw_bounds() -> None:
     # Read-only check: background_realism.yaml still contains exactly 17 keys.
     bg_data = read_background_realism()
     assert len(bg_data["parameters"]) == 17
+
+
+def test_y5_draw_failure_settings() -> None:
+    """
+    WHAT: Tests draw_failure_settings across seeds and ranges, ensuring strict bounds.
+    WHY: Verifies that wrong PIN, network drop, and technical decline rates obey config bounds.
+    """
+    from world.failures import draw_failure_settings
+
+    data = read_background_realism("config/failure_realism.yaml")
+    p_tr = data["parameters"]["customer_wrong_pin_rate"]["training"]
+    n_tr = data["parameters"]["app_network_failure_rate"]["training"]
+    t_tr = data["parameters"]["technical_decline_rate"]["training"]
+
+    for seed in range(50):
+        rng = np.random.default_rng(seed)
+        s = draw_failure_settings(data, rng, range_name="training")
+        assert p_tr[0] <= s.wrong_pin_rate <= p_tr[1]
+        assert n_tr[0] <= s.network_failure_rate <= n_tr[1]
+        assert t_tr[0] <= s.technical_decline_rate <= t_tr[1]
+
+    rng_test = np.random.default_rng(999)
+    s_test = draw_failure_settings(data, rng_test, range_name="test")
+    p_te = data["parameters"]["customer_wrong_pin_rate"]["test"]
+    assert p_te[0] <= s_test.wrong_pin_rate <= p_te[1]
+
+    s_stress = draw_failure_settings(data, rng_test, range_name="stress")
+    p_st = data["parameters"]["customer_wrong_pin_rate"]["stress"]
+    assert p_st[0] <= s_stress.wrong_pin_rate <= p_st[1]
+
+    with pytest.raises(ValueError, match="unknown_range"):
+        draw_failure_settings(data, rng_test, range_name="unknown_range")
+
