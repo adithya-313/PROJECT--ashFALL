@@ -1,0 +1,143 @@
+# Background realism parameters for the Level 11 simulated world.
+#
+# Every parameter is registered as an assumption with nested ranges [min, max].
+# Training sits inside test, and test sits inside stress.
+# Evaluated and validated by core.config_validator.
+# Checked by: python -m core.config_validator config/background_realism.yaml
+
+parameters:
+  festival_peak_day_in_world:
+    label: assumption
+    unit: day number in world
+    training: [30, 50]
+    test: [20, 56]
+    stress: [10, 60]
+    reason: "Assumption; window of calendar days within which the primary annual festival peak falls in a simulated world."
+
+  festival_uplift_fraction:
+    label: assumption
+    unit: fraction over normal
+    training: [0.05, 0.25]
+    test: [0.02, 0.35]
+    stress: [0.01, 0.8]
+    reason: "The only reported figure is that Diwali-eve volume was about 6-9% above that October's daily average (NPCI-based reports, Oct 2025, as quoted in the Level 11 plan); uplift over normal non-festive weeks is not published, so this is a range."
+
+  festival_rise_days:
+    label: assumption
+    unit: days
+    training: [5, 12]
+    test: [3, 18]
+    stress: [2, 25]
+    reason: "Assumption; duration over which celebratory retail payments progressively rise towards the festive peak."
+
+  festival_fade_days:
+    label: assumption
+    unit: days
+    training: [3, 10]
+    test: [2, 14]
+    stress: [1, 20]
+    reason: "Assumption; duration over which heightened consumer spending recedes back to baseline transaction volumes."
+
+  other_festival_count:
+    label: assumption
+    unit: festivals per world
+    training: [1, 3]
+    test: [0, 4]
+    stress: [0, 6]
+    reason: "Other festivals: no published series found; assumption for the number of secondary cultural festivals per simulated year."
+
+  other_festival_uplift_fraction:
+    label: assumption
+    unit: fraction over normal
+    training: [0.01, 0.08]
+    test: [0.005, 0.12]
+    stress: [0.002, 0.2]
+    reason: "Other festivals: no published series found; secondary regional celebrations induce smaller transaction surges than Diwali."
+
+  other_festival_rise_fade_days:
+    label: assumption
+    unit: days (each side)
+    training: [2, 5]
+    test: [1, 8]
+    stress: [1, 12]
+    reason: "Other festivals: no published series found; minor festivals exhibit tighter ramp-up and cool-down activity periods."
+
+  month_start_uplift_fraction:
+    label: assumption
+    unit: fraction on day 1
+    training: [0.02, 0.15]
+    test: [0.01, 0.25]
+    stress: [0.0, 0.5]
+    reason: "Assumption; beginning-of-month salary disbursement, residential rents, and utility bill settlements create an immediate liquidity surge."
+
+  month_start_easing_days:
+    label: assumption
+    unit: days to ease to normal
+    training: [7, 15]
+    test: [4, 20]
+    stress: [3, 28]
+    reason: "Assumption; number of days required for first-of-month financial settlement obligations to taper toward steady-state rates."
+
+  weekend_difference_fraction:
+    label: assumption
+    unit: signed, weekend vs weekday
+    training: [-0.15, 0.15]
+    test: [-0.3, 0.3]
+    stress: [-0.5, 0.5]
+    reason: "Not found publicly; the range includes \"no difference\" (zero) as weekend consumer patterns vary across payment types."
+
+  night_activity_floor:
+    label: assumption
+    unit: share of peak activity
+    training: [0.05, 0.2]
+    test: [0.02, 0.35]
+    stress: [0.01, 0.6]
+    reason: "The persona peak hours and the night floor are assumptions; reflects baseline nocturnal transaction volume from 24/7 automated flows."
+
+  daily_peak_width_hours:
+    label: assumption
+    unit: hours
+    training: [2, 4]
+    test: [1.5, 6]
+    stress: [1, 8]
+    reason: "Assumption; standard deviation width of diurnal Gaussian activity curves concentrating individual payments around preferred hours."
+
+  peak_hour_salaried_employee:
+    label: assumption
+    unit: hour of day (0-24)
+    training: [18, 21]
+    test: [16, 22]
+    stress: [12, 23.5]
+    reason: "The persona peak hours and the night floor are assumptions; salaried professionals concentrate discretionary purchases during evening hours after office shifts."
+
+  peak_hour_student:
+    label: assumption
+    unit: hour of day
+    training: [19, 22]
+    test: [17, 23]
+    stress: [14, 23.5]
+    reason: "The persona peak hours and the night floor are assumptions; student demographic transactions peak in late evening social hours."
+
+  peak_hour_retiree:
+    label: assumption
+    unit: hour of day
+    training: [10, 13]
+    test: [8, 15]
+    stress: [7, 18]
+    reason: "The persona peak hours and the night floor are assumptions; retired citizens conduct routine banking and household errands during morning hours."
+
+  peak_hour_small_shopkeeper:
+    label: assumption
+    unit: hour of day
+    training: [13, 17]
+    test: [11, 19]
+    stress: [9, 22]
+    reason: "The persona peak hours and the night floor are assumptions; merchant accounts process highest transaction density during afternoon commercial hours."
+
+  peak_hour_gig_worker:
+    label: assumption
+    unit: hour of day
+    training: [17, 21]
+    test: [14, 23]
+    stress: [11, 23.5]
+    reason: "The persona peak hours and the night floor are assumptions; ride-hail and food delivery platforms peak during evening dinner and commuting rush hours."
