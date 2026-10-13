@@ -1,11 +1,16 @@
 """
 WHAT: Enforces structural comment standards, docstring conventions, and line limits on new world code.
-WHY: Ensures code readability, prevents regression in architectural documentation, and validates rule R7 standards.
-TERM: Abstract Syntax Tree: In-memory hierarchical representation of Python source syntax parsed for inspection.
-TERM: Lexical Tokenizer: Stream scanner breaking Python text into categorized tokens such as comments and names.
-TERM: Docstring: String literal appearing as the first statement of a module, class, or function definition.
-TERM: Comment Ratio: Metric dividing the count of comment lines by the count of executable code lines.
-TERM: Code Line: Source line containing syntax tokens excluding blank lines and multi-line docstring bodies.
+WHY: Ensures code readability and prevents regressions in architectural documentation.
+TERM: Abstract Syntax Tree: a tree structure showing how code is organized,
+      e.g. breaking a function into its name, inputs, and statements.
+TERM: Tokenizer: a tool reading source code word by word,
+      e.g. separating comments from code words.
+TERM: Docstring: text placed right after a function header explaining what it does,
+      e.g. triple-quoted notes at the top of a file.
+TERM: Comment Ratio: the fraction of lines that explain code,
+      e.g. having 1 comment line for every 4 code lines gives a ratio of 0.25.
+TERM: Code Line: a line of code doing real work,
+      e.g. an assignment like x = 1, ignoring empty lines.
 """
 
 import ast
@@ -208,7 +213,7 @@ def test_function_lengths_and_docstrings() -> None:
 def test_comment_to_code_ratio_threshold() -> None:
     """
     WHAT: Computes comment lines / code lines for every file in NEW_CODE_FILES to assert ratio >= 0.25.
-    WHY: Guarantees every new file maintains rich inline step-by-step commentary (rule R7 standards).
+    WHY: Guarantees every new file maintains rich inline step-by-step commentary.
     Example:
         # For each file, comment_lines / code_lines >= 0.25
         # assert ratio >= 0.25, f"{filepath}: ratio {ratio} < 0.25"
@@ -226,7 +231,7 @@ def test_comment_to_code_ratio_threshold() -> None:
 def test_inside_function_comment_ratio_threshold() -> None:
     """
     WHAT: Computes comment lines / code lines inside function bodies to assert ratio >= 0.25.
-    WHY: Verifies requirement C2 guaranteeing that function bodies contain rich inline commentary.
+    WHY: Ensures functions are self-explanatory so future readers understand why each step happens.
     Example:
         # For each file, inside_function_comments / inside_function_code >= 0.25
         # assert fn_ratio >= 0.25, f"{filepath}: function ratio {fn_ratio} < 0.25"

@@ -1,14 +1,24 @@
 """
 WHAT: Calendar-driven payment simulation engine coordinating temporal rhythms, failure routing, and event auditing.
 WHY: Replaces 11A fixed-day payment runner with an authentic astronomical timeline that records payment attempts.
-TERM: calendar runner: An execution engine that schedules and runs financial transactions across simulated time.
-TERM: payment event: An immutable record documenting transaction outcome, financial routing, and failure domains.
-TERM: failure domain: The operational zone responsible for a payment rejection (central, banks, app, or user).
-TERM: partial degradation: A temporary drop in transaction success probability without complete service blackout.
-TERM: diurnal rhythm: Periodic fluctuations in human activity recurring over a 24-hour cycle.
-TERM: vectorised: Mathematical operations applied across entire arrays simultaneously using optimized library routines.
-TERM: Poisson: A discrete probability distribution expressing the count of events occurring in a fixed interval of time.
-TERM: stable sort: A sorting algorithm that preserves the relative input order of records with equal keys.
+TERM: calendar runner: a program running simulated town payments minute by minute,
+      e.g. paying salaries on the first and rent on the third.
+TERM: payment event: a saved note recording what happened to a payment,
+      e.g. whether money moved or a bank declined it.
+TERM: failure domain: who caused a payment to fail,
+      e.g. the customer running out of money versus a bank server crashing.
+TERM: partial degradation: a service running slowly or dropping some requests rather than completely shutting down,
+      e.g. a bank failing half of its transfers.
+TERM: daily rhythm: 24-hour cycles of human activity,
+      e.g. people sleeping at night and shopping during the afternoon.
+TERM: vectorised: doing math on whole lists of numbers at once,
+      e.g. multiplying 24 hours of weights in a single fast step.
+TERM: Poisson: a way to pick a random count when you only know the average,
+      e.g. a shop averaging 3 customers an hour might get 1 one hour and 5 the next.
+TERM: stable sort: sorting items so ties keep their starting order,
+      e.g. two payments at minute 60 stay in the order they were created.
+TERM: purpose: the real-life reason for a payment,
+      e.g. paying monthly rent or buying groceries at a shop.
 """
 
 # Import Python standard library calendar utilities for Gregorian month lengths.
@@ -357,7 +367,8 @@ def _execute_payment_leg(
 ) -> PaymentEvent:
     """
     WHAT: Evaluates outages and executes a single UPI payment leg across bank ledgers.
-    WHY: Implements rule R7 by transforming failed payments into events without balance mutations.
+    WHY: Implements issue R7 (failed payments are recorded but move no money)
+         by creating failure events without balance mutations.
     Args: world: World container; plan: WorldPlan; payment: planned item; leg: amount; bank_map: lookup; rng: generator.
     Returns: PaymentEvent recording outcome, status, diagnostic reason, and failure domain.
     Example: ev = _execute_payment_leg(world, plan, pmt, 1000, bank_map, rng); assert isinstance(ev, PaymentEvent)
@@ -398,7 +409,8 @@ def _record_event_counts(ev: PaymentEvent, counts: dict[str, int]) -> None:
 def run_world(world: Any, plan: WorldPlan, rng: np.random.Generator) -> RunResult:
     """
     WHAT: Executes calendar-driven routine life, evaluating outages and logging payment events.
-    WHY: Orchestrates Level 11B-3 payment execution with strict R7 ledger invariant adherence.
+    WHY: Orchestrates calendar payment execution following issue R7
+         (failed payments are recorded but move no money).
     Args: world: Container of people, shops, ledgers; plan: WorldPlan; rng: generator.
     Returns: RunResult dataclass containing chronological event audit log and diagnostic tallies.
     Example: res = run_world(world, plan, rng); assert len(res.events) >= 0 and res.counts['attempts'] >= 0

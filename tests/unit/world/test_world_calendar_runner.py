@@ -1,11 +1,21 @@
 """
 WHAT: Unit tests C1-C10 verifying determinism, ledger conservation, failure attribution, and calendar rhythms.
-WHY: Guarantees that the calendar runner conforms to rule R7, preserves accounting invariants, and models outages.
-TERM: calendar runner: An execution engine that schedules and runs financial transactions across simulated time.
-TERM: payment event: An immutable record documenting transaction outcome, financial routing, and failure domains.
-TERM: failure domain: The operational zone responsible for a payment rejection (central, banks, app, or user).
-TERM: partial degradation: A temporary drop in transaction success probability without complete service blackout.
-TERM: determinism: The guarantee that identical pseudo-random seeds yield bitwise identical simulation objects.
+WHY: Guarantees that the calendar runner conforms to issue R7 (failed payments are recorded but move no money),
+     preserves accounting invariants, and models outages.
+TERM: calendar runner: a program running simulated town payments minute by minute,
+      e.g. paying salaries on the first and rent on the third.
+TERM: payment event: a saved note recording what happened to a payment,
+      e.g. whether money moved or a bank declined it.
+TERM: failure domain: who caused a payment to fail,
+      e.g. the customer running out of money versus a bank server crashing.
+TERM: partial degradation: a service running slowly or dropping some requests rather than completely shutting down,
+      e.g. a bank failing half of its transfers.
+TERM: determinism: getting the exact same outcome every time you start with the same seed,
+      e.g. running seed 7 twice produces identical numbers.
+TERM: purpose: the real-life reason for a payment,
+      e.g. paying monthly rent or buying groceries at a shop.
+TERM: golden hash: a fixed fingerprint saved from an earlier known-good run,
+      e.g. checking that tomorrow's run gives the exact same fingerprint so we know nothing broke.
 """
 
 import calendar
@@ -56,7 +66,7 @@ def _hash_event_list(events: list[PaymentEvent]) -> str:
 def test_c1_determinism_identical_and_differing_seeds() -> None:
     """
     WHAT: Asserts identical seeds yield identical SHA-256 event digests, while different seeds differ.
-    WHY: Verifies requirement C1 proving complete reproducibility of payments and failure events.
+    WHY: If the same seed ever gave different payments, no bug could be reproduced.
     Example:
         # Runs with seed 101 produce identical event lists; seed 202 produces different events
         # h1 = _hash_event_list(run_world(w1, p1, r1).events)
@@ -82,7 +92,7 @@ def test_c1_determinism_identical_and_differing_seeds() -> None:
 def test_c2_ledger_invariants_pass_after_sixty_one_days() -> None:
     """
     WHAT: Evaluates non-negative balance, entry sum, and conservation checkers after 61 days.
-    WHY: Verifies requirement C2 proving accounting invariants hold across all banks.
+    WHY: Protects against money disappearing or being created out of thin air across the banking system.
     Example:
         # All three checkers return empty lists indicating zero accounting violations
         # assert check_no_negative_balances(world.ledgers) == []
@@ -106,7 +116,7 @@ def test_c2_ledger_invariants_pass_after_sixty_one_days() -> None:
 def test_c3_failed_payments_move_no_money() -> None:
     """
     WHAT: Asserts ledger entries match successful events exactly and failed payments mutate no funds.
-    WHY: Verifies requirement C3 proving rule R7: failed payments post zero ledger entries.
+    WHY: Protects issue R7 (failed payments are recorded but move no money) so declines never touch ledger balances.
     Example:
         # Successful event count equals transfer debit and credit pairs
         # assert len(debits) == len(successes) and sum(debit_paise) == sum(success_paise)
@@ -129,7 +139,7 @@ def test_c3_failed_payments_move_no_money() -> None:
 def test_c4_event_shape_and_chronological_ordering() -> None:
     """
     WHAT: Checks that every event adheres to domain and reason invariants and events are sorted.
-    WHY: Verifies requirement C4 guaranteeing schema validity and monotonic minute progression.
+    WHY: Protects the event log format and ensures simulated time never travels backward.
     Example:
         # Every failed event has an approved failure domain and minutes are non-decreasing
         # assert all(e.failure_domain in FAILURE_DOMAINS for e in failed_events)
@@ -197,7 +207,7 @@ def _measure_c5_degradation(
 def test_c5_partial_degradation_under_bank_downtime() -> None:
     """
     WHAT: Measures failure share for bank downtime incident with rate 0.5 within 4 standard deviations.
-    WHY: Verifies requirement C5 proving degraded operation without full network blackouts.
+    WHY: Protects realistic outage behavior where an affected bank slows down instead of completely crashing.
     Example:
         # Downtime at success rate 0.5 causes expected 50% failures: |k - 0.5*N| <= 4*sqrt(0.25*N)
         # assert abs(measured_fails - expected) <= 4 * sd
@@ -271,7 +281,7 @@ def _measure_c6_festival_volume(
 def test_c6_calendar_festival_volume_and_poisson_bound() -> None:
     """
     WHAT: Asserts peak festival attempts exceed 2x median daily volume and total matches Poisson within 4 SD.
-    WHY: Verifies requirement C6 proving calendar multipliers drive transactional volume surges.
+    WHY: Protects festival surge realism ensuring commercial purchases spike noticeably during celebrations.
     Example:
         # Exaggerated festival bump at day 35 drives daily transactions > 2x median
         # assert peak_count > 2 * median_count and abs(total - expected) <= 4 * sqrt(expected)
@@ -325,7 +335,7 @@ def _measure_c7_diurnal_night(
 def test_c7_persona_daily_diurnal_rhythm() -> None:
     """
     WHAT: Tests that persona everyday payments in hours 0-5 match diurnal curve within 4 standard deviations.
-    WHY: Verifies requirement C7 proving diurnal hourly curve shapes transaction timestamps.
+    WHY: Protects realistic daily human rhythms so people make payments during the day rather than late night.
     Example:
         # Binomial distribution for payments in hours 0-5: |k - n*p| <= 4 * sqrt(n*p*(1-p))
         # assert abs(measured_k - exp_k) <= 4 * sd
@@ -347,7 +357,7 @@ def test_c7_persona_daily_diurnal_rhythm() -> None:
 def test_c8_insufficient_balance_produces_customer_failure() -> None:
     """
     WHAT: Drains citizen balance via valid payment, verifies subsequent attempt logs customer failure.
-    WHY: Verifies requirement C8 proving insolvency triggers failure events without ledger corruption.
+    WHY: Protects against overdrafts so accounts with zero balance fail payments safely without negative balances.
     Example:
         # Account drained to 0 paise rejects 500 paise with status 'failed' and domain 'customer'
         # assert ev.status == 'failed' and ev.failure_domain == 'customer'
@@ -376,7 +386,7 @@ def test_c8_insufficient_balance_produces_customer_failure() -> None:
 def test_c9_fixed_items_follow_calendar_months() -> None:
     """
     WHAT: Tests that salaried employees receive exactly two salary attempts inside configured windows.
-    WHY: Verifies requirement C9 proving recurring fixed items follow true calendar dates.
+    WHY: Protects monthly recurring living costs so salaries and rent execute on actual calendar dates.
     Example:
         # In 61 days covering Sep and Oct, salaried employees receive exactly 1 salary credit per month
         # assert len(salary_events) == 2 and 1 <= dt.day <= 5
@@ -404,7 +414,7 @@ def test_c9_fixed_items_follow_calendar_months() -> None:
 def test_c10_legacy_runner_and_tests_untouched() -> None:
     """
     WHAT: Asserts 11A routine runner executes on fresh world and preserves ledger consistency.
-    WHY: Verifies requirement C10 proving backward compatibility with original 11A simulation.
+    WHY: Protects backward compatibility ensuring earlier simulation engines and tests continue working.
     Example:
         # Running 11A run_one_month produces positive success counts and clean ledger invariant checks
         # results = run_one_month(world, rng); assert results.get('ok', 0) > 0

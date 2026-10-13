@@ -1,9 +1,12 @@
 """
 WHAT: Unit tests P1-P3 verifying deterministic WorldPlan drawing, parameter refusals, and fixed draw sequence.
 WHY: Proves that WorldPlan drawing is reproducible, respects boundary invariants, and locks random draw order.
-TERM: world plan: An immutable specification of calendar dynamics and outage schedules drawn before simulation.
-TERM: determinism: The guarantee that identical pseudo-random seeds yield bitwise identical simulation objects.
-TERM: draw order: The strict sequential ordering of random number consumption across simulation components.
+TERM: world plan: a complete calendar schedule made before the run starts,
+      e.g. picking which days have holidays or bank slowdowns.
+TERM: determinism: getting the exact same outcome every time you start with the same seed,
+      e.g. running seed 7 twice produces identical numbers.
+TERM: draw order: taking random numbers in a strict step-by-step sequence,
+      e.g. always picking holidays before picking bank outages.
 """
 
 import numpy as np
@@ -15,7 +18,7 @@ from world.world_plan import draw_world_plan, spawn_world_streams
 def test_p1_same_seed_identical_plan_different_seed_differs() -> None:
     """
     WHAT: Tests that identical seeds yield identical WorldPlan objects while different seeds differ.
-    WHY: Verifies requirement P1 ensuring that world plans are completely deterministic functions of the seed.
+    WHY: If the same seed ever created different calendar plans, simulation runs could not be reproduced.
     Example:
         # Drawing two plans with seed 100 produces identical Diwali peak day and incident start minutes
         p1 = draw_world_plan(np.random.default_rng(100), n_days=61)
@@ -40,7 +43,7 @@ def test_p1_same_seed_identical_plan_different_seed_differs() -> None:
 def test_p2_short_horizon_raises_festival_value_error() -> None:
     """
     WHAT: Tests that n_days=30 fails with the standard festival validation ValueError message.
-    WHY: Verifies requirement P2 guaranteeing that too-short world durations fail loudly without suppression.
+    WHY: Protects against invalid simulation runs by stopping immediately if the horizon is too short.
     Example:
         # A 30-day horizon is too cramped for the festival peak window (upper bound 50 in training)
         with pytest.raises(ValueError, match="strictly greater than the upper bound"):
@@ -57,7 +60,7 @@ def test_p2_short_horizon_raises_festival_value_error() -> None:
 def test_p3_fixed_draw_order_and_independent_state() -> None:
     """
     WHAT: Tests that plan drawing consumes random draws in an invariant sequence independent of external state.
-    WHY: Verifies requirement P3 proving that draw order is strictly locked and repeatable across environments.
+    WHY: Protects draw order so picking calendar events consumes random numbers in a fixed sequence.
     Example:
         # Two fresh generators at identical state generate the exact same plan components in lockstep
         r1 = np.random.default_rng(999)
@@ -80,7 +83,7 @@ def test_p3_fixed_draw_order_and_independent_state() -> None:
 def test_p4_spawn_world_streams_identical_and_independent() -> None:
     """
     WHAT: Tests that spawn_world_streams gives identical pairs for identical seeds and independent streams.
-    WHY: Verifies requirement B2 guaranteeing that plan and runner receive decorrelated random draws.
+    WHY: Protects independence between the planning phase and runtime execution random streams.
     Example:
         # Same seed yields bitwise identical generators; plan_rng and run_rng produce different first draws
         # p1, r1 = spawn_world_streams(42); p2, r2 = spawn_world_streams(42)
