@@ -16,10 +16,12 @@ from world.amounts import (
     AmountProfile,
     create_amount_profile,
     draw_amount_paise,
+    lookalike_small_amount_paise,
     split_into_legal_payments,
 )
 from world.config_reader import draw_in_range, get_parameter_entry, read_world_ranges
 from world.money import rupees_to_paise
+from world.placeholders import LOOKALIKE_SMALL_AMOUNT_FRACTION
 
 
 def test_t4_amounts_heavy_tailed_properties() -> None:
@@ -107,3 +109,25 @@ def test_split_rule_rejects_invalid_inputs() -> None:
         split_into_legal_payments(0, 1000)
     with pytest.raises(ValueError, match="limit"):
         split_into_legal_payments(1000, 0)
+
+
+def test_lookalike_small_amount_worked_values() -> None:
+    """
+    WHAT: Tests lookalike_small_amount_paise against inline calculation for a range of median values.
+    WHY: Verifies numerical correctness of the shared look-alike rule across varied median scales.
+    """
+    medians = [0, 1, 49, 50, 99, 100, 1000, 123457]
+    for m in medians:
+        expected = max(1, int(round(LOOKALIKE_SMALL_AMOUNT_FRACTION * m)))
+        assert lookalike_small_amount_paise(m) == expected
+
+
+def test_lookalike_small_amount_floor_at_one_paise() -> None:
+    """
+    WHAT: Tests that lookalike_small_amount_paise enforces a floor of at least 1 paise for tiny medians.
+    WHY: Ensures no zero or negative amount payments can be generated for look-alike transactions.
+    """
+    for tiny_median in [0, 1, 2, 3, 4]:
+        assert lookalike_small_amount_paise(tiny_median) >= 1
+    assert lookalike_small_amount_paise(0) == 1
+

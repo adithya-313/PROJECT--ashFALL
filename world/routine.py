@@ -11,7 +11,7 @@ from typing import Any
 
 import numpy as np
 
-from world.amounts import draw_amount_paise, split_into_legal_payments
+from world.amounts import draw_amount_paise, lookalike_small_amount_paise, split_into_legal_payments
 from world.payments import find_ledger_for_account, make_payment
 from world.people import Person
 from world.personas import get_persona
@@ -20,7 +20,6 @@ from world.placeholders import (
     BILL_MULTIPLE,
     BILLS_PER_MONTH,
     EVERYDAY_PAYMENTS_PER_MONTH,
-    LOOKALIKE_SMALL_AMOUNT_FRACTION,
     LOOKALIKE_SMALL_INCOMING_PER_MONTH,
     RENT_DAY_WINDOW,
     RENT_MULTIPLE,
@@ -109,7 +108,7 @@ def build_casual_and_lookalike_items(
 
     persona = get_persona(person.persona_name)
     if persona.looks_like_mule_in_normal_life:
-        small_amt = max(1, int(round(LOOKALIKE_SMALL_AMOUNT_FRACTION * med)))
+        small_amt = lookalike_small_amount_paise(med)
         others = [p for p in all_people if p.person_id != person.person_id]
         if others:
             senders = rng.choice(others, size=LOOKALIKE_SMALL_INCOMING_PER_MONTH, replace=True)

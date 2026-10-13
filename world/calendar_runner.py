@@ -20,7 +20,7 @@ from typing import Any
 import numpy as np
 
 # Import domain modules for currency limits, failures, ledgers, and temporal schedules.
-from world.amounts import draw_amount_paise, split_into_legal_payments
+from world.amounts import draw_amount_paise, lookalike_small_amount_paise, split_into_legal_payments
 from world.failure_decision import decide_failure
 from world.failures import PaymentEvent, make_event
 from world.ledger import Ledger
@@ -28,7 +28,6 @@ from world.payments import find_ledger_for_account, make_payment
 from world.personas import get_persona
 from world.placeholders import (
     EVERYDAY_PAYMENTS_PER_MONTH,
-    LOOKALIKE_SMALL_AMOUNT_FRACTION,
     LOOKALIKE_SMALL_INCOMING_PER_MONTH,
     ROUTINE_MINUTE_OF_DAY,
 )
@@ -246,8 +245,8 @@ def _sample_lookalike_inbounds(
     # Container collecting peer transfers into lookalike account.
     payments: list[PlannedPayment] = []
     idx = start_idx
-    # Scale small inbound credit amount by configured fraction of median transfer.
-    amt = max(1, int(round(LOOKALIKE_SMALL_AMOUNT_FRACTION * person.amount_profile.median_paise)))
+    # Scale small inbound credit amount using the shared lookalike rule.
+    amt = lookalike_small_amount_paise(person.amount_profile.median_paise)
     for _ in range(count):
         # Sample a distinct sender from the community.
         sender = rng.choice(others)
