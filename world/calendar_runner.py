@@ -23,6 +23,7 @@ TERM: purpose: the real-life reason for a payment,
 
 # Import Python standard library calendar utilities for Gregorian month lengths.
 import calendar
+import dataclasses
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -54,7 +55,9 @@ from world.rhythms import daily_multiplier, hour_weight
 from world.routine import build_salaried_items
 from world.world_plan import WorldPlan
 
-PAYMENT_PURPOSES: tuple[str, ...] = ("salary", "rent", "bill", "everyday", "lookalike_in")
+PAYMENT_PURPOSES: tuple[str, ...] = (
+    "salary", "rent", "bill", "everyday", "lookalike_in", "episode_in", "episode_out"
+)
 ROUTINE_TYPE_TO_PURPOSE: dict[str, str] = {
     "salary_in": "salary",
     "rent_out": "rent",
@@ -467,31 +470,55 @@ def _execute_single_planned(
         _record_event_counts(ev, counts)
 
 
+def _merge_planned_payments(
+    normal: list[PlannedPayment], episode_payments: Sequence[PlannedPayment]
+) -> list[PlannedPayment]:
+    """
+    WHAT: Reindexes scheduled episode payments after routine payments and sorts by minute and sequence.
+    WHY: Preserves deterministic sequence ordering where routine payments precede episode payments on ties.
+         An empty sequence for episode_payments means no burst episodes are active in this run.
+    Args: normal: Routine payments list; episode_payments: Sequence of candidate episode payment records.
+    Returns: Combined and chronologically sorted list of all candidate payments across the simulated horizon.
+    Example:
+        # all_pmts = _merge_planned_payments(normal, episodes); assert len(all_pmts) >= len(normal)
+    """
+    # An empty sequence for episode_payments means no burst episodes are active in this run.
+    base_len = len(normal)
+    # Reindex episode payments so sequence indices strictly follow routine payments.
+    reindexed = [dataclasses.replace(p, creation_index=base_len + i) for i, p in enumerate(episode_payments)]
+    # Merge routine and episode candidates into unified candidate transaction list.
+    all_payments = normal + reindexed
+    # Perform stable sort by simulation minute followed by sequential creation index.
+    all_payments.sort(key=lambda p: (p.minute, p.creation_index))
+    return all_payments
+
+
 def run_world(
-    world: Any, plan: WorldPlan, rng: np.random.Generator, device_events: Sequence[DeviceEvent] = ()
+    world: Any, plan: WorldPlan, rng: np.random.Generator,
+    device_events: Sequence[DeviceEvent] = (), episode_payments: Sequence[PlannedPayment] = ()
 ) -> RunResult:
     """
     WHAT: Executes calendar-driven routine life, evaluating outages and logging payment events.
-    WHY: Orchestrates calendar payment execution following issue R7 and R5 device tracking.
-         Empty device_events means devices never change (full worlds pass a schedule).
-    Args: world: World container; plan: WorldPlan; rng: Generator; device_events: Schedule.
+    WHY: Orchestrates calendar payment execution following issue R7, R5 device tracking, and A1 episodes.
+         Empty device_events means devices never change; empty episode_payments means no episodes.
+    Args: world: World; plan: Plan; rng: RNG; device_events: Events; episode_payments: Episodes.
     Returns: RunResult containing chronological event logs, device stamps, and tallies.
-    Example:
-        # res = run_world(world, plan, rng); assert len(res.events) >= 0
+    Example: # res = run_world(world, plan, rng); assert len(res.events) >= 0
     """
     # 1. Build lookup tables and initialize device history tracking.
     bank_map, p_by_id = _build_account_bank_map(world.ledgers), {p.person_id: p for p in world.people}
     p_by_acc, dev_state = {p.account_id: p for p in world.people}, start_device_runtime(world.people)
     events, purposes, stamps, counts = [], [], [], {"attempts": 0, "successes": 0, "failures": 0}
     dev_idx, new_devs = 0, 0
-    # 2. Iterate planned payments, applying due device events and stamping sender devices.
-    for pmt in _collect_all_planned_payments(world, plan, rng):
+    # 2. Collect routine payments and merge with reindexed scheduled episode payments.
+    all_planned = _merge_planned_payments(_collect_all_planned_payments(world, plan, rng), episode_payments)
+    # 3. Iterate planned payments, applying due device events and stamping sender devices.
+    for pmt in all_planned:
         dev_idx = _apply_due_device_events(device_events, dev_idx, pmt.minute, p_by_id, dev_state)
         stamp = stamp_sender_device(p_by_acc.get(pmt.from_account), dev_state)
-        if stamp.is_new_device:
-            new_devs += 1
+        new_devs += int(stamp.is_new_device)
         _execute_single_planned(world, plan, pmt, stamp, bank_map, rng, events, purposes, stamps, counts)
-    # 3. Apply any remaining device events after the final transaction has executed.
+    # 4. Apply any remaining device events after the final transaction has executed.
     dev_idx = _apply_due_device_events(device_events, dev_idx, 100000000, p_by_id, dev_state)
     if len(purposes) != len(events) or len(stamps) != len(events) or any(p not in PAYMENT_PURPOSES for p in purposes):
         raise RuntimeError("Validation error: event list length mismatch or invalid purpose.")
