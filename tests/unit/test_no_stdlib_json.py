@@ -24,6 +24,9 @@ def test_no_stdlib_json():
     """
     repo_root = Path(__file__).parent.parent.parent
     target_dirs = [repo_root / "api", repo_root / "core"]
+    # A missing folder must fail, not silently pass.
+    for folder in target_dirs:
+        assert folder.is_dir(), f"Expected folder is missing: {folder}"
     violations = find_stdlib_json_imports(target_dirs)
     assert not violations, "Found 'import json' in the codebase:\n" + "\n".join(violations)
 
