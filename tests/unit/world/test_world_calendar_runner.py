@@ -59,7 +59,6 @@ def _hash_event_list(events: list[PaymentEvent]) -> str:
             f"{ev.minute}:{ev.from_account}:{ev.to_account}:{ev.amount_paise}:"
             f"{ev.from_bank_index}:{ev.to_bank_index}:{ev.status}:{ev.reason}:{ev.failure_domain}"
         )
-    # Hash the joined lines using SHA-256 to create a unique fingerprint string.
     return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
 
 
@@ -171,7 +170,6 @@ def _events_for_purpose(res: RunResult, purpose: str) -> list[PaymentEvent]:
         # everyday_events = _events_for_purpose(res, "everyday")
         # assert isinstance(everyday_events, list)
     """
-    # Extract events whose corresponding entry in event_purposes matches target purpose.
     return [ev for ev, p in zip(res.events, res.event_purposes) if p == purpose]
 
 

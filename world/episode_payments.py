@@ -83,11 +83,11 @@ def _get_config_entry(ranges: dict[str, Any], key: str) -> dict[str, Any]:
     """
     # Look for top-level parameters dictionary key from standard world ranges file.
     if "parameters" in ranges:
-        # Resolve parameter distribution block from nested parameters dictionary.
+        # The real config file keeps its entries under 'parameters'.
         return get_parameter_entry(ranges, key)
     # Check fallback dictionary structure used in unit test fixture dictionaries.
     if key in ranges:
-        # Return parameter distribution block directly from flat mock dictionary.
+        # Tests may pass the entries directly, without the 'parameters' level.
         return ranges[key]
     # Raise error if parameter identifier is absent from both dictionary structures.
     raise ValueError(f"Unknown config parameter key: '{key}'")
@@ -157,11 +157,10 @@ def _select_payers(
     if needed > available:
         # Increment audit counter tracking episodes capped by world population.
         report["payer_caps"] += 1
-        # Return all available citizens when demand exceeds available supply.
+        # Asked for more payers than exist: use everyone (the cap is counted in the report).
         return list(candidates)
     # Sample required number of payer indices uniformly without replacement.
     chosen_indices = rng.choice(available, size=needed, replace=False)
-    # Map sampled numeric indices back to citizen entity records.
     return [candidates[int(i)] for i in chosen_indices]
 
 
@@ -180,7 +179,6 @@ def _build_inflow_payment(
     """
     # Sample payment minute from payer diurnal distribution clamped to episode bounds.
     minute = _draw_inflow_time(day, payer, episode, probs, rng)
-    # Instantiate immutable PlannedPayment marked with episode_in purpose tag.
     return PlannedPayment(minute, payer.account_id, collector.account_id, amount, idx, EPISODE_IN_PURPOSE)
 
 
@@ -290,7 +288,6 @@ def _sample_relatives(candidates: list[Any], rng: np.random.Generator) -> list[A
     # Sample count of assisting relatives uniformly between 1 and max_rel.
     n_rel = int(rng.integers(1, max_rel, endpoint=True))
     chosen_indices = rng.choice(len(candidates), size=n_rel, replace=False)
-    # Map sampled relative indices to citizen entity instances.
     return [candidates[int(i)] for i in chosen_indices]
 
 
@@ -337,7 +334,6 @@ def _get_shop_recipients(world: Any, allowed_kinds: tuple[str, ...]) -> list[str
     if not shops:
         # Halt execution if simulation world topology lacks required merchant types.
         raise RuntimeError(f"Required shop kinds {allowed_kinds} do not exist in world")
-    # Return list of matching merchant account identifiers.
     return shops
 
 
@@ -356,7 +352,7 @@ def _calculate_outflow_parts(total: int, count: int) -> list[int]:
     # Return single total payment if only one installment is requested.
     if k == 1:
         return [total]
-    # Return base installments with remainder paise in final part.
+    # The last part takes the leftover paise, so the parts add up exactly to the total.
     return [base] * (k - 1) + [base + rem]
 
 
@@ -412,7 +408,6 @@ def _plan_outflows(
     if outflow_minute >= n_days * 1440:
         report["outflows_beyond_horizon"] += len(parts)
         return [], start_idx
-    # Emit candidate payment transfers for valid within-horizon disbursements.
     return _build_outflow_payments(collector, recipients, parts, outflow_minute, start_idx, report, rng)
 
 
@@ -533,5 +528,4 @@ def plan_episode_payments(
         new_pmts, idx = _plan_single_episode(world, plan, ep, ranges, rng, probs, range_name, report, idx, p_by_id)
         # Append newly generated candidate payments to aggregate output container.
         payments.extend(new_pmts)
-    # Return immutable result object packaging payments list and report.
     return EpisodePlanResult(payments=payments, report=report)

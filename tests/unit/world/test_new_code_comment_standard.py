@@ -89,7 +89,6 @@ def _collect_function_ranges(tree: ast.AST) -> list[tuple[int, int]]:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             # Record span from the def keyword line to the last line of the function.
             ranges.append((node.lineno, node.end_lineno))
-    # Return the collected spans for all functions in the file.
     return ranges
 
 
