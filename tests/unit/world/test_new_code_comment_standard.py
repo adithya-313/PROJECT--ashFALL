@@ -25,10 +25,14 @@ NEW_CODE_FILES: list[str] = [
     "world/calendar_runner.py",
     # Device lifecycle simulation runtime module.
     "world/device_runtime.py",
+    # Episode payment planning module.
+    "world/episode_payments.py",
     # Test suites for world plan, calendar runner, and device event wiring.
     "tests/unit/world/test_world_plan.py",
     "tests/unit/world/test_world_calendar_runner.py",
     "tests/unit/world/test_world_device_wiring.py",
+    # Episode payment test suite.
+    "tests/unit/world/test_world_episode_payments.py",
     # Audit test verifying comment density and docstring standards.
     "tests/unit/world/test_new_code_comment_standard.py",
 ]

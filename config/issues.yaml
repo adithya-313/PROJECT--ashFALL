@@ -105,6 +105,7 @@ A1:
   evidence:
     - {kind: config, file: config/world_ranges.yaml, name: episode_share_of_ordinary_people_per_year}
     - {kind: amendment, id: A-005}
+    - {kind: amendment, id: A-011}
   later_work: ["Level 11 Part 2: the world engine generates episodes"]
 A2:
   title: "Genuine shops downstream of mules"

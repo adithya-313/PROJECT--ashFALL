@@ -129,3 +129,15 @@ No model code exists yet. The `models/` directory holds only v1 PaySim artefacts
 
 No model code exists yet (models start in Level 18; `world/` is simulator code).
 
+## A-011
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-10-13 |
+| Issue IDs | A1 |
+| Files | config/world_ranges.yaml, tests/unit/test_research_configs.py, config/issues.yaml |
+| What changed | 6 new assumption parameters for episode payment patterns; no existing parameter changed; count test 73 -> 79, assumption label count 63 -> 69. |
+| Why | Level 11 piece 11B-3c needs amounts and timing to turn episodes into payments; none is published. |
+| Results exist? | No. |
+
+

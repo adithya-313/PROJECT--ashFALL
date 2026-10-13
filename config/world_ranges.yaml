@@ -488,6 +488,60 @@ parameters:
     stress: [3, 1000]
     reason: "How many different people send money to the collector during an episode; no figure is published."
 
+  episode_contribution_multiple_of_payer_median:
+    label: assumption
+    issue_ids: [A1]
+    unit: multiple
+    training: [1, 10]
+    test: [0.5, 20]
+    stress: [0.2, 40]
+    reason: "Each payer sends this many times their own typical payment (a gift, a kitty share, a fest fee); no figure is published."
+
+  episode_kitty_contribution_rounds:
+    label: assumption
+    issue_ids: [A1]
+    unit: count
+    training: [2, 4]
+    test: [1, 6]
+    stress: [1, 12]
+    reason: "How many times each chit or kitty member pays in during one episode; no figure is published."
+
+  episode_sale_multiple_of_collector_median:
+    label: assumption
+    issue_ids: [A1]
+    unit: multiple
+    training: [10, 60]
+    test: [5, 80]
+    stress: [2, 95]
+    reason: "Size of the one large payment a seller receives, as a multiple of the seller's typical payment; capped below the buyer's opening balance multiple of 100; no figure is published."
+
+  episode_outflow_share_of_inflow:
+    label: assumption
+    issue_ids: [A1]
+    unit: fraction
+    training: [0.6, 0.95]
+    test: [0.4, 1.0]
+    stress: [0.1, 1.0]
+    reason: "Share of the money received during the episode that is paid out again (to vendors, a kitty winner, a lender or bills); no figure is published."
+
+  episode_outflow_delay_days:
+    label: assumption
+    issue_ids: [A1]
+    unit: days
+    training: [0, 7]
+    test: [0, 14]
+    stress: [0, 30]
+    reason: "Days between the end of an episode and the money going out again; no figure is published."
+
+  episode_outflow_payment_count:
+    label: assumption
+    issue_ids: [A1]
+    unit: count
+    training: [1, 3]
+    test: [1, 5]
+    stress: [1, 10]
+    reason: "How many separate payments a collector or bill-payer makes when paying money out; no figure is published."
+
   false_complaints_per_100000_genuine_payments:
     label: assumption
     issue_ids: [A3]
