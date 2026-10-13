@@ -35,6 +35,9 @@ NEW_CODE_FILES: list[str] = [
     "tests/unit/world/test_world_episode_payments.py",
     # Audit test verifying comment density and docstring standards.
     "tests/unit/world/test_new_code_comment_standard.py",
+    # Golden run hashes module and verification recipe test suite.
+    "world/run_hashes.py",
+    "tests/unit/world/test_run_hashes.py",
 ]
 
 

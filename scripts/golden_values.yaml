@@ -1,0 +1,51 @@
+# Golden values baseline catalog for ashFALL simulation and issue register.
+fp:
+  expected:
+    fingerprint: 0f09c489d4055fa0343316c6619fd5e254e074779c0e30d9a4bc315308f5986f
+  setup: build_world(seed=7, n_people=300, n_shops=40) and calculate world_fingerprint
+  reason: Verifies Level 11A bit-for-bit world entity initialization reproducibility.
+  set_by: 11A (PR #43)
+
+g1:
+  expected:
+    ledger_hash: 1ede1d085a0a503bbe7873588ff25a0f6c5b83b49b8850b75a183be7afad16da
+    counts:
+      insufficient_balance: 9
+      ok: 7310
+  setup: build_world(seed=7, n_people=300, n_shops=40) and run_one_month with RNG seed 11
+  reason: Verifies monthly routine execution outcomes and double-entry accounting ledger entries.
+  set_by: 11A routine; recorded in 11B-3a cleanup (PR #48)
+
+g2:
+  expected:
+    event_hash: 12921b27db24a71a00be469709e768408a8e1a52cd568fd5db4f4dcea9d9f8dd
+    counts:
+      attempts: 2915
+      successes: 2865
+      failures: 50
+      domain_sender_bank: 22
+      domain_npci_central: 8
+      domain_app_or_network: 6
+      domain_receiver_bank: 9
+      domain_customer: 5
+  setup: build_world(seed=101, n_people=60, n_shops=12) with 61-day world plan and run_world without device events
+  reason: Verifies calendar runner transaction event dispatch, ledger updates, and outage failure breakdown.
+  set_by: 11B-3a (PR #47)
+
+g3:
+  expected:
+    stamp_hash: d826b197411f9a2d80e77970ceafc3be071525c794ac32b06385376b22d76b46
+    device_counts:
+      events_applied: 32
+      new_device_payments: 7
+    people_hash: 606b19fe450db9a6367c36596364ae2000c5f26c7681911e452d2923c63dab97
+  setup: build_world(seed=101, n_people=60, n_shops=12) with 61-day world plan and device schedule drawn from device_realism.yaml
+  reason: Verifies device lifecycle dynamics, OS version increments, and sender device telemetry stamping.
+  set_by: 11B-3b (PR #49)
+
+issues:
+  expected:
+    summary: "OK: 31 issues checked (built 27, planned 3, deferred 1)"
+  setup: python -B -m core.issue_register on config/issues.yaml
+  reason: Verifies all 31 research issues and their status invariants remain valid and registered.
+  set_by: 11A/11B review catch-up (PR #42 / PR #50)
