@@ -192,13 +192,13 @@ def _generate_fixed_items(
     return items, idx
 
 
-def _precompute_persona_weights(plan: WorldPlan) -> dict[str, np.ndarray]:
+def persona_hour_probabilities(plan: WorldPlan) -> dict[str, np.ndarray]:
     """
     WHAT: Precomputes normalized 24-hour diurnal activity probabilities for each persona.
     WHY: Optimizes payment timestamp sampling by vectorizing hour selection across days.
     Args: plan: WorldPlan supplying temporal rhythm settings and persona peak hours.
     Returns: Dictionary mapping persona string names to normalized 24-element probability arrays.
-    Example: weights = _precompute_persona_weights(plan); assert len(weights['student']) == 24
+    Example: weights = persona_hour_probabilities(plan); assert len(weights['student']) == 24
     """
     # Lookup table storing discrete hourly probability density functions.
     weights: dict[str, np.ndarray] = {}
@@ -337,7 +337,7 @@ def _collect_all_planned_payments(
     fixed, next_idx = _generate_fixed_items(world, plan, rng, 0)
     all_payments.extend(fixed)
     # 2. Precompute hourly diurnal probability profiles.
-    probs = _precompute_persona_weights(plan)
+    probs = persona_hour_probabilities(plan)
     # 3. Iterate across horizon days to sample everyday and lookalike payments.
     for day in range(plan.n_days):
         everyday, next_idx = _generate_day_everyday_payments(world, plan, day, probs, rng, next_idx)
