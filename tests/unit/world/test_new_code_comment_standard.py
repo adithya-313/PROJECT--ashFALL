@@ -26,6 +26,10 @@ NEW_CODE_FILES: list[str] = [
     "tests/unit/world/test_new_code_comment_standard.py",
 ]
 
+NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
+    ("world/amounts.py", "lookalike_small_amount_paise"),
+]
+
 
 def _collect_docstring_lines(tree: ast.AST) -> set[int]:
     """
@@ -264,3 +268,34 @@ def test_module_docstrings_define_technical_terms() -> None:
         if not doc or "TERM:" not in doc:
             missing.append(filepath)
     assert not missing, f"Files missing technical term definitions (TERM:) in module docstring: {missing}"
+
+
+def test_new_functions_in_old_files_standard() -> None:
+    """
+    WHAT: Asserts new functions in older files satisfy line limits (<= 30) and docstring standards.
+    WHY: Prevents code bloat and unmaintained documentation when adding helper routines to older modules.
+    Example:
+        # Every function in NEW_FUNCTIONS_IN_OLD_FILES is <= 30 lines with full WHAT/WHY/Example tags
+        # assert len(errors) == 0
+    """
+    # Verify the registry contains the required entry and cannot shrink.
+    assert ("world/amounts.py", "lookalike_small_amount_paise") in NEW_FUNCTIONS_IN_OLD_FILES
+    assert len(NEW_FUNCTIONS_IN_OLD_FILES) >= 1
+    errors: list[str] = []
+    # Audit each registered function across older codebase files.
+    for filepath, fn_name in NEW_FUNCTIONS_IN_OLD_FILES:
+        # Parse module AST to find target function definitions.
+        with open(filepath, "r", encoding="utf-8") as f:
+            tree = ast.parse(f.read(), filename=filepath)
+        nodes = [
+            n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == fn_name
+        ]
+        # Check function exists and enforce 30-line limit and docstring rules.
+        if not nodes:
+            errors.append(f"{filepath}: function '{fn_name}' not found")
+        for node in nodes:
+            if node.end_lineno - node.lineno + 1 > 30:
+                errors.append(f"{filepath}:{fn_name}: function length > 30")
+            errors.extend(_validate_function_docstring(node, filepath))
+    assert not errors, "Standards violations in older file functions:\n" + "\n".join(errors)
+
