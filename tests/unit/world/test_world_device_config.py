@@ -1,5 +1,5 @@
 """
-WHAT: Unit tests V1-V4 for device realism configuration parameters.
+WHAT: Unit tests V1-V5 for device realism configuration parameters.
 WHY: Ensures phone replacement cycles, upgrade uplifts, reinstalls, and OS adoption bands validate
      strictly (issues A1, R5, R2).
 ISSUE IDs: A1 (episode and device realism), R5 (OS updates and device rules), R2 (background realism validation).
@@ -8,6 +8,7 @@ TERM: device realism: Parameter distributions governing hardware lifespans, app 
 """
 
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -112,3 +113,42 @@ def test_v4_reader_integration_and_draw_bounds() -> None:
     # Read-only checks on pre-existing configs.
     assert len(read_background_realism(BG_CONFIG_PATH)["parameters"]) == 17
     assert len(read_background_realism(FAILURE_CONFIG_PATH)["parameters"]) == 9
+
+
+def _check_settings_range(settings: Any, data: dict[str, Any], range_name: str) -> None:
+    """
+    WHAT: Validates that drawn device settings fields fall strictly within configured boundaries.
+    WHY: Verifies boundary confinement across training, test, and stress distributions.
+    """
+    p = data["parameters"]
+    p_repl = p["phone_replacement_months"][range_name]
+    p_sale = p["phone_change_festival_sale_uplift"][range_name]
+    p_days = p["phone_change_festival_sale_days"][range_name]
+    p_rein = p["app_reinstall_per_person_per_year"][range_name]
+    assert p_repl[0] <= settings.replacement_months <= p_repl[1]
+    assert p_sale[0] <= settings.sale_uplift <= p_sale[1]
+    assert p_days[0] <= settings.sale_days <= p_days[1]
+    assert p_rein[0] <= settings.reinstall_per_year <= p_rein[1]
+    assert isinstance(settings.sale_days, int) and not isinstance(settings.sale_days, bool)
+
+
+def test_v5_draw_device_settings() -> None:
+    """
+    WHAT: Tests draw_device_settings across 50 seeds, checking bounds and range refusals.
+    WHY: Verifies correct random drawing and type checking for all device setting fields.
+    """
+    from world.device_events import draw_device_settings
+
+    data = read_background_realism(CONFIG_PATH)
+    for seed in range(50):
+        rng = np.random.default_rng(seed)
+        s_train = draw_device_settings(data, rng, range_name="training")
+        _check_settings_range(s_train, data, "training")
+        s_test = draw_device_settings(data, rng, range_name="test")
+        _check_settings_range(s_test, data, "test")
+        s_stress = draw_device_settings(data, rng, range_name="stress")
+        _check_settings_range(s_stress, data, "stress")
+
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError, match="Unknown range name|Missing range split"):
+        draw_device_settings(data, rng, range_name="unknown_split")
