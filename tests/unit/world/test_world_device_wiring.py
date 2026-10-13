@@ -9,6 +9,7 @@ TERM: golden hash: a cryptographic SHA-256 digest ensuring simulation outputs re
       e.g. verifying that a repeated simulation run produces the exact same payment ledger.
 """
 
+import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -30,7 +31,6 @@ from world.checks import (
 from world.device_events import make_device_event
 from world.device_runtime import (
     NO_DEVICE_STAMP,
-    DeviceRuntimeState,
     DeviceStamp,
     apply_device_event,
     stamp_sender_device,
@@ -427,9 +427,10 @@ def test_w8_injected_schedule_stamps_payments_in_order() -> None:
         # res = run_world(w, plan, r_rng, device_events=[os_ev, phone_ev])
         # assert stamps[0].is_new_device is False and stamps[2].is_new_device is True
     """
-    # 1. Build world and retrieve person 0 device profile.
+    # 1. Build world and retrieve person 0 device profile and original device identifier.
     w = build_world(seed=101, n_people=60, n_shops=12)
     p0 = w.people[0]
+    orig_dev = p0.device.device_id
     fp0, os0, plat = p0.device.fingerprint, p0.device.os_generation, p0.device.platform
     # 2. Inject hand-built OS update at minute 1130 and phone replacement at minute 2000.
     ev1 = make_device_event(p0.person_id, 1130, "os_update", plat, os0, os0 + 1, fp0, fp0)
@@ -437,12 +438,65 @@ def test_w8_injected_schedule_stamps_payments_in_order() -> None:
     p_rng, r_rng = spawn_world_streams(101)
     plan = draw_world_plan(p_rng, n_days=61)
     res = run_world(w, plan, r_rng, device_events=[ev1, ev2])
-    # 3. Collect chronological stamps on person 0 payments and assert expected transitions.
+    # 3. Assert p0 final device identifier reflects phone replacement suffix.
+    assert p0.device.device_id == f"{orig_dev}_p1"
+    # 4. Collect chronological stamps on person 0 payments and assert expected transitions.
     stamps = [s for ev, s in zip(res.events, res.event_sender_devices) if ev.from_account == p0.account_id]
     assert stamps[0] == DeviceStamp(fp0, os0, False)
     assert stamps[1] == DeviceStamp(fp0, os0 + 1, False)
     assert stamps[2] == DeviceStamp("fp_new_hw", os0 + 2, True)
     assert stamps[3] == DeviceStamp("fp_new_hw", os0 + 2, False)
-    # 4. Print measured verification line confirming orderly injected transitions.
+    # 5. Print measured verification line confirming orderly injected transitions.
     print(f"MEASURED W8: p0_payments={len(stamps)} s0={stamps[0]} s1={stamps[1]} s2={stamps[2]} s3={stamps[3]}")
+
+
+def test_d1_person_dataclass_fields_clean_after_run() -> None:
+    """
+    WHAT: Asserts every Person entity retains only its declared dataclass fields after a full calendar run.
+    WHY: Proves device event processing and phone replacements use runtime state without monkey-patching attributes.
+         Prevents state leaks onto domain entities and ensures Person instances remain clean dataclasses.
+    Example:
+        # for p in world.people:
+        #     assert set(vars(p)) == {f.name for f in dataclasses.fields(p)}
+    """
+    # 1. Execute full simulation run with drawn device event schedule.
+    world, plan, sched, res = _run_sim_with_devices(seed=101)
+    # 2. Extract declared field names from the Person dataclass definition.
+    expected_fields = {f.name for f in dataclasses.fields(world.people[0])}
+    # 3. Assert every citizen's instance attributes exactly match declared fields.
+    for p in world.people:
+        diff = set(vars(p)) - expected_fields
+        assert set(vars(p)) == expected_fields, f"Person {p.person_id} has extraneous attributes: {diff}"
+    # 4. Print measured line confirming no hidden monkey-patched attributes exist.
+    print(f"MEASURED D1: people_count={len(world.people)} all_fields_clean=True")
+
+
+def test_d2_two_phone_changes_and_reinstall_device_ids() -> None:
+    """
+    WHAT: Asserts two successive phone change events advance device_id suffix from _p1 to _p2, with reinstall between.
+    WHY: Proves device runtime state tracks physical handset upgrades while app reinstalls preserve device ID.
+         Enforces that device ID numbering relies on original ID and cumulative phone replacements in runtime state.
+    Example:
+        # apply_device_event(person, ev1, state); assert person.device.device_id == f"{orig}_p1"
+        # apply_device_event(person, reinst, state); assert person.device.device_id == f"{orig}_p1"
+        # apply_device_event(person, ev2, state); assert person.device.device_id == f"{orig}_p2"
+    """
+    # 1. Initialize test person with starting handset and allocate explicit runtime state.
+    dev = Device(device_id="dev_orig", platform="android", os_generation=2, fingerprint="fp_0")
+    person = DummyPerson("p1", dev)
+    state = start_device_runtime([person])
+    # 2. Apply first phone change event and verify suffix advances to _p1.
+    ev1 = make_device_event("p1", 10, "phone_change", "android", 2, 3, "fp_0", "fp_1")
+    apply_device_event(person, ev1, state)
+    assert person.device.device_id == "dev_orig_p1"
+    # 3. Apply intermediate app reinstall and verify hardware device identifier remains unchanged.
+    ev_re = make_device_event("p1", 20, "reinstall", "android", 3, 3, "fp_1", "fp_re")
+    apply_device_event(person, ev_re, state)
+    assert person.device.device_id == "dev_orig_p1"
+    # 4. Apply second phone change event and verify suffix advances to _p2.
+    ev2 = make_device_event("p1", 30, "phone_change", "android", 3, 4, "fp_re", "fp_2")
+    apply_device_event(person, ev2, state)
+    assert person.device.device_id == "dev_orig_p2"
+    # 5. Output measured line confirming sequential device identifiers.
+    print(f"MEASURED D2: p1_id=dev_orig_p1 reinstall_id=dev_orig_p1 p2_id={person.device.device_id}")
 
