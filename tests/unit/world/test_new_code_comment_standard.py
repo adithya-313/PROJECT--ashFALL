@@ -1,21 +1,18 @@
 """
 WHAT: Enforces structural comment standards, docstring conventions, and line limits on new world code.
-WHY: Ensures code readability and prevents regressions in architectural documentation.
+WHY: Ratio checks rewarded filler comments; docstrings carry the explanation while return-restate comments are banned.
 TERM: Abstract Syntax Tree: a tree structure showing how code is organized,
       e.g. breaking a function into its name, inputs, and statements.
-TERM: Tokenizer: a tool reading source code word by word,
-      e.g. separating comments from code words.
 TERM: Docstring: text placed right after a function header explaining what it does,
       e.g. triple-quoted notes at the top of a file.
-TERM: Comment Ratio: the fraction of lines that explain code,
-      e.g. having 1 comment line for every 4 code lines gives a ratio of 0.25.
-TERM: Code Line: a line of code doing real work,
-      e.g. an assignment like x = 1, ignoring empty lines.
+TERM: Comment Line: a line starting with a hash symbol explaining intent,
+      e.g. # Child streams 0 and 1 are the plan and run streams.
+TERM: Return Restatement: an uninformative comment that merely echoes the return statement below it,
+      e.g. # Return the result sitting directly above return result.
 """
 
 import ast
 import os
-import tokenize
 from typing import Any
 
 # Master registry of newly authored codebase modules and test suites.
@@ -45,108 +42,6 @@ NEW_CODE_FILES: list[str] = [
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
     ("world/amounts.py", "lookalike_small_amount_paise"),
 ]
-
-
-def _collect_docstring_lines(tree: ast.AST) -> set[int]:
-    """
-    WHAT: Traverses an AST tree to collect all physical line numbers occupied by docstring literals.
-    WHY: Distinguishes documentation strings from executable code lines during comment ratio calculations.
-    Args: tree: Root Abstract Syntax Tree node of the parsed Python source file.
-    Returns: Set of integer 1-indexed line numbers containing module, class, or function docstrings.
-    Example:
-        # tree = ast.parse('def f():\\n    \"\"\"doc\"\"\"\\n    pass')
-        # doc_lines = _collect_docstring_lines(tree); assert 2 in doc_lines
-    """
-    doc_lines: set[int] = set()
-    # Walk all syntax tree nodes to discover docstring expressions.
-    for node in ast.walk(tree):
-        # Check modules, classes, and functions for leading string statements.
-        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
-            # Look at the first statement in the body of the definition.
-            if node.body and isinstance(node.body[0], ast.Expr):
-                val = node.body[0].value
-                # If expression value is a string, record every physical line it covers.
-                if isinstance(val, ast.Constant) and isinstance(val.value, str):
-                    for line_num in range(node.body[0].lineno, node.body[0].end_lineno + 1):
-                        doc_lines.add(line_num)
-    return doc_lines
-
-
-def _collect_function_ranges(tree: ast.AST) -> list[tuple[int, int]]:
-    """
-    WHAT: Scans an Abstract Syntax Tree to identify starting and ending line intervals of functions.
-    WHY: Enables measuring code lines and comments that sit specifically within function bodies.
-    Args: tree: Root Abstract Syntax Tree node of the parsed Python source file.
-    Returns: List of tuples where each element contains (start_line, end_line) of a function definition.
-    Example:
-        # tree = ast.parse('def f():\\n    pass')
-        # ranges = _collect_function_ranges(tree); assert len(ranges) == 1
-    """
-    ranges: list[tuple[int, int]] = []
-    # Find all function definition nodes in the syntax tree.
-    for node in ast.walk(tree):
-        # Check if node represents a standard or asynchronous function definition.
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            # Record span from the def keyword line to the last line of the function.
-            ranges.append((node.lineno, node.end_lineno))
-    return ranges
-
-
-def _tally_tokens(
-    filepath: str, doc_lines: set[int], fn_ranges: list[tuple[int, int]]
-) -> tuple[int, int, int, int]:
-    """
-    WHAT: Scans tokens of a file and tallies comment lines and code lines globally and inside functions.
-    WHY: Breaks token scanning into a focused helper under 30 lines to preserve modular design.
-    Args: filepath: Path to file; doc_lines: Set of docstring line numbers; fn_ranges: List of function spans.
-    Returns: Tuple of (all_comments_count, all_code_count, fn_comments_count, fn_code_count).
-    Example:
-        # c, code, fn_c, fn_code = _tally_tokens('world/world_plan.py', set(), [])
-        # assert code >= 0
-    """
-    all_c, all_code, fn_c, fn_code = set(), set(), set(), set()
-    ignored = (tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT, tokenize.ENDMARKER, tokenize.ENCODING)
-    # Read the file with the tokenizer to inspect comments and syntax tokens.
-    with open(filepath, "rb") as f:
-        for tok in tokenize.tokenize(f.readline):
-            line = tok.start[0]
-            in_fn = any(s <= line <= e for s, e in fn_ranges)
-            if tok.type == tokenize.COMMENT:
-                all_c.add(line)
-                if in_fn:
-                    fn_c.add(line)
-            elif tok.type not in ignored:
-                for idx in range(tok.start[0], tok.end[0] + 1):
-                    if idx not in doc_lines:
-                        all_code.add(idx)
-                        if in_fn:
-                            fn_code.add(idx)
-    return len(all_c), len(all_code), len(fn_c), len(fn_code)
-
-
-def _calculate_file_ratios(filepath: str) -> tuple[float, float]:
-    """
-    WHAT: Computes the whole-file comment ratio and the inside-functions comment ratio for a file.
-    WHY: Verifies both global documentation density and localized inline commentary inside functions.
-    Args: filepath: Relative file path to the Python source file being analyzed.
-    Returns: Tuple of (whole_file_ratio, inside_functions_ratio).
-    Example:
-        # whole, inside = _calculate_file_ratios('world/world_plan.py')
-        # assert whole >= 0.25 and inside >= 0.25
-    """
-    # Parse source tree to find docstring line spans and function definitions.
-    with open(filepath, "r", encoding="utf-8") as f:
-        tree = ast.parse(f.read(), filename=filepath)
-    # Collect line numbers for docstrings and line intervals for function bodies.
-    doc_lines = _collect_docstring_lines(tree)
-    fn_ranges = _collect_function_ranges(tree)
-    # Tally comments and code lines across the file and inside functions.
-    n_all_c, n_all_code, n_fn_c, n_fn_code = _tally_tokens(filepath, doc_lines, fn_ranges)
-    # Compute the ratio for the entire file.
-    whole_ratio = n_all_c / n_all_code if n_all_code else 0.0
-    # Compute the ratio strictly within function bodies.
-    inside_ratio = n_fn_c / n_fn_code if n_fn_code else 0.0
-    return whole_ratio, inside_ratio
 
 
 def _validate_function_docstring(node: Any, filepath: str) -> list[str]:
@@ -229,40 +124,30 @@ def test_function_lengths_and_docstrings() -> None:
     assert not errors, "Function standards violations:\n" + "\n".join(errors)
 
 
-def test_comment_to_code_ratio_threshold() -> None:
+def test_no_comment_restates_a_return() -> None:
     """
-    WHAT: Computes comment lines / code lines for every file in NEW_CODE_FILES to assert ratio >= 0.25.
-    WHY: Guarantees every new file maintains rich inline step-by-step commentary.
+    WHAT: Traverses all files in NEW_CODE_FILES to forbid comments directly above returns that restate the return.
+    WHY: Comment-ratio checks incentivized vacuous filler comments; docstrings carry the true architectural explanation.
     Example:
-        # For each file, comment_lines / code_lines >= 0.25
-        # assert ratio >= 0.25, f"{filepath}: ratio {ratio} < 0.25"
+        # Fails if '# Return x' is directly followed by 'return x'
+        # violations = []; assert not violations
     """
-    failures: list[str] = []
-    # Check the whole-file comment-to-code ratio for each registered file.
+    violations: list[str] = []
+    # Inspect every registered new code file for redundant return restatements.
     for filepath in NEW_CODE_FILES:
-        whole_ratio, _ = _calculate_file_ratios(filepath)
-        # Check that the file meets or exceeds the required 25% comment density.
-        if whole_ratio < 0.25:
-            failures.append(f"{filepath}: whole-file ratio {whole_ratio:.3f} < 0.25")
-    assert not failures, "Comment ratio threshold violations:\n" + "\n".join(failures)
-
-
-def test_inside_function_comment_ratio_threshold() -> None:
-    """
-    WHAT: Computes comment lines / code lines inside function bodies to assert ratio >= 0.25.
-    WHY: Ensures functions are self-explanatory so future readers understand why each step happens.
-    Example:
-        # For each file, inside_function_comments / inside_function_code >= 0.25
-        # assert fn_ratio >= 0.25, f"{filepath}: function ratio {fn_ratio} < 0.25"
-    """
-    failures: list[str] = []
-    # Check the inside-function comment-to-code ratio for each registered file.
-    for filepath in NEW_CODE_FILES:
-        _, inside_ratio = _calculate_file_ratios(filepath)
-        # Check that inline comments inside function bodies meet or exceed 25%.
-        if inside_ratio < 0.25:
-            failures.append(f"{filepath}: inside-function ratio {inside_ratio:.3f} < 0.25")
-    assert not failures, "Inside-function comment ratio threshold violations:\n" + "\n".join(failures)
+        with open(filepath, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        # Scan adjacent line pairs to catch comments preceding return statements.
+        for idx in range(len(lines) - 1):
+            curr_line = lines[idx].strip()
+            next_line = lines[idx + 1].strip()
+            # Check if current line is a comment starting with Return after the hash.
+            if curr_line.startswith("#"):
+                comment_text = curr_line[1:].strip()
+                if comment_text.startswith("Return") and next_line.startswith("return"):
+                    violations.append(f"{filepath}:{idx + 1}: '{curr_line}' sits directly above '{next_line}'")
+    print(f"MEASURED: checked {len(NEW_CODE_FILES)} files for comments restating returns")
+    assert not violations, "Found comments restating a return:\n" + "\n".join(violations)
 
 
 def test_module_docstrings_define_technical_terms() -> None:
