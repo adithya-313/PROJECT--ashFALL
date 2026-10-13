@@ -11,10 +11,22 @@ TERM: golden hash: a cryptographic SHA-256 digest ensuring simulation outputs re
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
+# Third-party numerical computation and test framework modules.
 import numpy as np
 import pytest
 
+# Simulation engine imports for world construction, calendar runner, and device runtime.
+from tests.unit.world.test_world_calendar_runner import _hash_event_list
+from world.background_config import read_background_realism
+from world.build_world import build_world
+from world.calendar_runner import RunResult, run_world
+from world.checks import (
+    check_balances_equal_entry_sums,
+    check_money_conserved,
+    check_no_negative_balances,
+)
 from world.device_events import make_device_event
 from world.device_runtime import (
     NO_DEVICE_STAMP,
@@ -23,13 +35,17 @@ from world.device_runtime import (
     initial_known_fingerprints,
     stamp_sender_device,
 )
+from world.device_schedule import draw_device_event_schedule
 from world.devices import Device
-from world.world_plan import spawn_life_streams, spawn_world_streams
+from world.world_plan import WorldPlan, draw_world_plan, spawn_life_streams, spawn_world_streams
 
+# Absolute path to repository root for configuration file resolution.
 REPO_ROOT = Path(__file__).resolve().parents[3]
+# Device realism configuration file path defining empirical device lifecycle transition rates.
 DEVICE_CONFIG_PATH = REPO_ROOT / "config" / "device_realism.yaml"
 
 
+# Stand-in lightweight dummy citizen data container for isolated unit tests.
 @dataclass
 class DummyPerson:
     """
@@ -73,8 +89,9 @@ def test_spawn_life_streams() -> None:
 
 def test_apply_device_event_precondition_mismatches() -> None:
     """
-    WHAT: Tests argument and hardware state verification before mutating citizen device profiles.
-    WHY: Proves mismatched person ID, fingerprint before, or OS version raises RuntimeError immediately.
+    WHAT: Tests argument and hardware state verification before mutating citizen mobile device profiles.
+    WHY: Proves mismatched person ID, fingerprint before, or OS version raises RuntimeError immediately,
+         preventing simulation world state and device lifecycle drift.
     Example:
         # with pytest.raises(RuntimeError):
         #     apply_device_event(person, event)
@@ -93,6 +110,7 @@ def test_apply_device_event_precondition_mismatches() -> None:
     ev_bad_os = make_device_event("p1", 10, "phone_change", "android", 1, 4, "fp_old", "fp_new")
     with pytest.raises(RuntimeError, match="OS mismatch"):
         apply_device_event(p1, ev_bad_os)
+
 
 
 def test_apply_device_event_os_update() -> None:
@@ -178,4 +196,247 @@ def test_stamp_sender_device_novelty_and_shop() -> None:
     assert s2 == DeviceStamp("fp_new", 2, True)
     s3 = stamp_sender_device(person, known)
     assert s3 == DeviceStamp("fp_new", 2, False)
+
+
+def _run_sim_with_devices(seed: int = 101) -> tuple[Any, WorldPlan, list[Any], RunResult]:
+    """
+    WHAT: Constructs a test town world, life streams, and executes calendar simulation with devices.
+    WHY: Extracts boilerplate simulation setup into a shared helper to maintain 30-line test limits.
+    Args: seed: Integer pseudo-random master seed controlling world and schedule generation.
+    Returns: Tuple of world container, plan instance, generated device schedule, and RunResult.
+    Example:
+        # world, plan, sched, res = _run_sim_with_devices(101)
+        # assert len(res.events) > 0
+    """
+    # 1. Load device realism config and build town world with 60 citizens and 12 merchants.
+    ranges = read_background_realism(DEVICE_CONFIG_PATH)
+    w = build_world(seed=seed, n_people=60, n_shops=12)
+    p_rng, r_rng = spawn_world_streams(seed)
+    dev_rng, _ = spawn_life_streams(seed)
+    # 2. Draw world plan and device lifecycle event schedule for 61 calendar days.
+    plan = draw_world_plan(p_rng, n_days=61)
+    sched = draw_device_event_schedule(ranges, dev_rng, w.people, plan.festivals, plan.n_days)
+    # 3. Execute calendar simulation with device events and return run result.
+    res = run_world(w, plan, r_rng, device_events=sched)
+    return w, plan, sched, res
+
+
+def test_w1_empty_schedule_reproduces_g2_hash_and_counts() -> None:
+    """
+    WHAT: Runs calendar simulation with empty device event sequence and compares hash and counts to G2.
+    WHY: Proves backward compatibility and zero side effects when device lifecycle events
+         are omitted from calendar runs.
+    Example:
+        # run_world(w, plan, r_rng, device_events=())
+        # assert _hash_event_list(res.events) == GOLDEN_G2_HASH
+    """
+    # 1. Build world with seed 101, 60 people, 12 shops matching golden G2 configuration.
+    w = build_world(seed=101, n_people=60, n_shops=12)
+    p_rng, r_rng = spawn_world_streams(101)
+    plan = draw_world_plan(p_rng, n_days=61)
+    # 2. Run simulation passing empty device schedule tuple.
+    res = run_world(w, plan, r_rng, device_events=())
+    # 3. Assert exact reproduction of G2 golden hash and failure breakdown counts from Level 11B preflight.
+    gold_h = "12921b27db24a71a00be469709e768408a8e1a52cd568fd5db4f4dcea9d9f8dd"
+    gold_counts = {
+        "attempts": 2915, "successes": 2865, "failures": 50, "domain_sender_bank": 22,
+        "domain_npci_central": 8, "domain_app_or_network": 6, "domain_receiver_bank": 9, "domain_customer": 5,
+    }
+    assert _hash_event_list(res.events) == gold_h
+    assert res.counts == gold_counts
+    assert res.device_counts == {"events_applied": 0, "new_device_payments": 0}
+    # 4. Print measured verification line for test audit tracking.
+    print(f"MEASURED W1: hash={gold_h[:16]}... attempts={res.counts['attempts']} failures={res.counts['failures']}")
+
+
+def test_w2_determinism_with_device_schedules() -> None:
+    """
+    WHAT: Asserts identical seeds produce identical device stamps, while different seeds diverge.
+    WHY: Enforces strict simulation determinism and reproducibility across multi-stream pseudo-random execution.
+    Example:
+        # res1 = run_world(w1, plan1, r_rng1, device_events=ev1)
+        # assert res1.event_sender_devices == res2.event_sender_devices
+    """
+    # 1. Execute run 1 with seed 101 including generated device lifecycle events.
+    w1, _, _, res1 = _run_sim_with_devices(101)
+    # 2. Execute run 2 with identical seed 101 to verify deterministic stamp replay.
+    w2, _, _, res2 = _run_sim_with_devices(101)
+    # 3. Execute run 3 with different seed 202 to verify schedule divergence.
+    w3, _, _, res3 = _run_sim_with_devices(202)
+    # 4. Assert identical event hashes and device stamp alignment between runs 1 and 2.
+    assert _hash_event_list(res1.events) == _hash_event_list(res2.events)
+    assert res1.event_sender_devices == res2.event_sender_devices
+    # 5. Assert device stamps diverge under different random seeds.
+    assert res1.event_sender_devices != res3.event_sender_devices
+    print(f"MEASURED W2: stamps1={len(res1.event_sender_devices)} identical=True diff_seed_diverges=True")
+
+
+def test_w3_completeness_all_events_applied_final_devices() -> None:
+    """
+    WHAT: Asserts all scheduled device events are applied and each person reflects their final event state.
+    WHY: Proves calendar runner advances device event cursor completely without skipping or dropping items.
+    Example:
+        # world, plan, sched, res = _run_sim_with_devices(101)
+        # assert res.device_counts["events_applied"] == len(sched)
+    """
+    # 1. Run calendar simulation with active device event schedule.
+    w, _, sched, res = _run_sim_with_devices(101)
+    assert res.device_counts["events_applied"] == len(sched)
+    # 2. Group device events by citizen to locate the terminal event per individual.
+    ev_by_person: dict[str, list[Any]] = {}
+    for ev in sched:
+        ev_by_person.setdefault(ev.person_id, []).append(ev)
+    # 3. Verify terminal handset state equals the after-state of the last applied event.
+    matched = 0
+    for p in w.people:
+        if p.person_id in ev_by_person:
+            last_ev = ev_by_person[p.person_id][-1]
+            assert p.device.fingerprint == last_ev.fingerprint_after
+            assert p.device.os_generation == last_ev.os_generation_after
+            matched += 1
+    # 4. Output measured verification line for test completeness confirmation.
+    n_app = res.device_counts["events_applied"]
+    print(f"MEASURED W3: total_events={len(sched)} applied={n_app} people_with_events={matched}")
+
+
+def test_w4_exact_new_device_payment_accounting() -> None:
+    """
+    WHAT: Asserts new_device_payments matches an independent tally of events followed by sender payments.
+    WHY: Guarantees exact telemetry accounting for new hardware usage without trusting runner counters.
+    Example:
+        # world, plan, sched, res = _run_sim_with_devices(101)
+        # assert res.device_counts["new_device_payments"] == expected_count
+    """
+    # 1. Run simulation and map bank account IDs to citizen person IDs.
+    w, _, sched, res = _run_sim_with_devices(101)
+    acc_map = {p.account_id: p.person_id for p in w.people}
+    pmt_mins: dict[str, list[int]] = {}
+    for ev in res.events:
+        if ev.from_account in acc_map:
+            pmt_mins.setdefault(acc_map[ev.from_account], []).append(ev.minute)
+    # 2. Group fingerprint-altering events and independently count subsequent payment adoption.
+    fp_events: dict[str, list[Any]] = {}
+    for e in sched:
+        if e.fingerprint_before != e.fingerprint_after:
+            fp_events.setdefault(e.person_id, []).append(e)
+    # 3. Count events whose citizen paid before any subsequent fingerprint change.
+    expected = 0
+    for pid, evs in fp_events.items():
+        mins = pmt_mins.get(pid, [])
+        for i, ev in enumerate(evs):
+            nxt_m = evs[i + 1].minute if i + 1 < len(evs) else float("inf")
+            expected += int(any(ev.minute <= m < nxt_m for m in mins))
+    # 4. Assert exact match with calendar runner reported new device transaction tally.
+    assert res.device_counts["new_device_payments"] == expected
+    print(f"MEASURED W4: new_device_payments={res.device_counts['new_device_payments']} independent_count={expected}")
+
+
+
+def test_w5_r5_os_update_keeps_fingerprint_increments_os() -> None:
+    """
+    WHAT: Asserts each OS update preserves device familiarity and increments the OS generation stamp.
+    WHY: Directly verifies issue R5 compliance on full simulation datasets, ensuring OS updates are never new devices.
+    Example:
+        # for ev in os_updates:
+        #     assert stamp.is_new_device is False and stamp.os_generation == ev.os_generation_after
+    """
+    # 1. Run calendar simulation with realistic device events.
+    w, _, sched, res = _run_sim_with_devices(101)
+    acc_map = {p.account_id: p.person_id for p in w.people}
+    payments = list(zip(res.events, res.event_sender_devices))
+    # 2. Filter schedule for OS update events and verify subsequent payment stamps.
+    os_updates = [e for e in sched if e.kind == "os_update"]
+    checked = 0
+    for ev in os_updates:
+        subs = [
+            (pmt, s) for pmt, s in payments
+            if acc_map.get(pmt.from_account) == ev.person_id and pmt.minute >= ev.minute
+        ]
+        # 3. Assert first payment after OS update is not flagged as new device and has updated OS.
+        if subs:
+            _, stamp = subs[0]
+            assert stamp.is_new_device is False
+            assert stamp.os_generation == ev.os_generation_after
+            checked += 1
+    # 4. Assert at least one OS update was evaluated and output measured summary.
+    assert checked > 0
+    print(f"MEASURED W5: total_os_updates={len(os_updates)} verified_payments={checked}")
+
+
+def test_w6_shop_senders_receive_no_device_stamp() -> None:
+    """
+    WHAT: Asserts all transactions initiated from merchant store accounts carry the NO_DEVICE_STAMP sentinel.
+    WHY: Proves commercial entity payments (such as salary disbursements) do not claim consumer handset telemetry.
+    Example:
+        # world, plan, sched, res = _run_sim_with_devices(101)
+        # assert all(s == NO_DEVICE_STAMP for ev, s in zip(res.events, res.event_sender_devices) if is_shop(ev))
+    """
+    # 1. Run calendar simulation and isolate merchant store account IDs.
+    w, _, _, res = _run_sim_with_devices(101)
+    shop_accs = {s.account_id for s in w.shops}
+    # 2. Filter all executed transactions where the debit origin is a shop account.
+    shop_legs = [
+        (ev, s) for ev, s in zip(res.events, res.event_sender_devices)
+        if ev.from_account in shop_accs
+    ]
+    # 3. Verify every shop debit payment carries the empty NO_DEVICE_STAMP record.
+    assert len(shop_legs) > 0
+    for ev, s in shop_legs:
+        assert s == NO_DEVICE_STAMP
+    # 4. Output measured telemetry line confirming shop sentinel consistency.
+    print(f"MEASURED W6: total_shop_payments={len(shop_legs)} all_no_device_stamp=True")
+
+
+def test_w7_ledger_invariants_pass_with_devices() -> None:
+    """
+    WHAT: Evaluates double-entry accounting integrity checkers on all bank ledgers after running with devices.
+    WHY: Proves device lifecycle state and metadata stamping do not corrupt monetary conservation or balances.
+    Example:
+        # world, plan, sched, res = _run_sim_with_devices(101)
+        # assert check_money_conserved(world.ledgers, total_opening) == []
+    """
+    # 1. Build world and compute total opening balance across all bank accounts.
+    ranges = read_background_realism(DEVICE_CONFIG_PATH)
+    w = build_world(seed=101, n_people=60, n_shops=12)
+    opening = sum(ldg.balance_of(acc) for ldg in w.ledgers for acc in ldg.accounts)
+    # 2. Execute 61-day simulation with active device lifecycle events.
+    p_rng, r_rng = spawn_world_streams(101)
+    dev_rng, _ = spawn_life_streams(101)
+    plan = draw_world_plan(p_rng, n_days=61)
+    sched = draw_device_event_schedule(ranges, dev_rng, w.people, plan.festivals, plan.n_days)
+    run_world(w, plan, r_rng, device_events=sched)
+    # 3. Verify non-negative balances, entry sum equality, and total money conservation.
+    assert check_no_negative_balances(w.ledgers) == []
+    assert check_balances_equal_entry_sums(w.ledgers) == []
+    assert check_money_conserved(w.ledgers, opening) == []
+    # 4. Output measured accounting confirmation line for audit logs.
+    print(f"MEASURED W7: opening_paise={opening} no_neg=True sums_match=True conserved=True")
+
+
+def test_w8_injected_schedule_stamps_payments_in_order() -> None:
+    """
+    WHAT: Asserts hand-crafted OS update and phone change events produce exact chronological stamps on payments.
+    WHY: Validates precision of payment-by-payment stamping across sequential handset lifecycle transitions.
+    Example:
+        # res = run_world(w, plan, r_rng, device_events=[os_ev, phone_ev])
+        # assert stamps[0].is_new_device is False and stamps[2].is_new_device is True
+    """
+    # 1. Build world and retrieve person 0 device profile.
+    w = build_world(seed=101, n_people=60, n_shops=12)
+    p0 = w.people[0]
+    fp0, os0, plat = p0.device.fingerprint, p0.device.os_generation, p0.device.platform
+    # 2. Inject hand-built OS update at minute 1130 and phone replacement at minute 2000.
+    ev1 = make_device_event(p0.person_id, 1130, "os_update", plat, os0, os0 + 1, fp0, fp0)
+    ev2 = make_device_event(p0.person_id, 2000, "phone_change", plat, os0 + 1, os0 + 2, fp0, "fp_new_hw")
+    p_rng, r_rng = spawn_world_streams(101)
+    plan = draw_world_plan(p_rng, n_days=61)
+    res = run_world(w, plan, r_rng, device_events=[ev1, ev2])
+    # 3. Collect chronological stamps on person 0 payments and assert expected transitions.
+    stamps = [s for ev, s in zip(res.events, res.event_sender_devices) if ev.from_account == p0.account_id]
+    assert stamps[0] == DeviceStamp(fp0, os0, False)
+    assert stamps[1] == DeviceStamp(fp0, os0 + 1, False)
+    assert stamps[2] == DeviceStamp("fp_new_hw", os0 + 2, True)
+    assert stamps[3] == DeviceStamp("fp_new_hw", os0 + 2, False)
+    # 4. Print measured verification line confirming orderly injected transitions.
+    print(f"MEASURED W8: p0_payments={len(stamps)} s0={stamps[0]} s1={stamps[1]} s2={stamps[2]} s3={stamps[3]}")
 
