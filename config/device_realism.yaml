@@ -1,0 +1,65 @@
+# Device realism parameters for Level 11B-2b (device dynamics and OS update waves).
+# Grounded in empirical hardware replacement cycles and mobile platform telemetry where published,
+# with conservative assumption intervals where data is not published.
+# NOTE: The market share split between Android and iOS is intentionally not duplicated here;
+# the existing placeholder ANDROID_SHARE (94% Android, 6% iOS) stays as it is in world/placeholders.py.
+
+parameters:
+  phone_replacement_months:
+    label: reported
+    unit: "months between phone changes"
+    training: [33, 39]
+    test: [24, 48]
+    stress: [12, 60]
+    source:
+      url: https://www.communicationstoday.co.in/indias-smartphone-replacement-cycle-extends-to-36-months/
+      date: "2024-10-17"
+    reason: "Secondary source reporting IDC research (the page names IDC, and The Hindu BusinessLine appears on the page); the cycle rose from 24 months to almost 36 months; one phone change per 36 months is about 0.09 percent of people per day (our arithmetic: 1 divided by 36 times 30 days); the range, test and stress widths are our choices."
+
+  phone_change_festival_sale_uplift:
+    label: assumption
+    unit: "extra fraction of the rate"
+    training: [0.5, 2.0]
+    test: [0.2, 4.0]
+    stress: [0.0, 8.0]
+    reason: "Counterpoint says the festive season contributes 20-25 percent of annual Indian smartphone sales (Economic Times, 2024-10-10); that is a share of SALES, not of phone CHANGES, so no change-rate uplift is published; the range is an assumption."
+
+  phone_change_festival_sale_days:
+    label: assumption
+    unit: "days after the Diwali peak"
+    training: [7, 21]
+    test: [3, 30]
+    stress: [1, 45]
+    reason: "Counterpoint says the festive season contributes 20-25 percent of annual Indian smartphone sales (Economic Times, 2024-10-10); that is a share of SALES, not of phone CHANGES, so no change-rate uplift is published; the range is an assumption."
+
+  app_reinstall_per_person_per_year:
+    label: assumption
+    unit: "reinstalls per person/year"
+    training: [0.1, 0.5]
+    test: [0.05, 1.0]
+    stress: [0.0, 3.0]
+    reason: "No published rate found; assumption."
+
+  os_wave_count_per_world:
+    label: assumption
+    unit: "waves per world"
+    training: [1, 2]
+    test: [0, 3]
+    stress: [0, 5]
+    reason: "No published figures for India; assumption."
+
+  os_wave_length_days:
+    label: assumption
+    unit: "days"
+    training: [14, 42]
+    test: [7, 56]
+    stress: [3, 90]
+    reason: "No published figures for India; assumption."
+
+  os_wave_final_share_of_eligible:
+    label: assumption
+    unit: "share of eligible devices"
+    training: [0.3, 0.7]
+    test: [0.15, 0.85]
+    stress: [0.05, 1.0]
+    reason: "Apple reported 66 percent of iPhones on iOS 26 about five months after release (global, MacRumors 2026-02-13); no India figure and no Android figure was found; our waves last weeks, so the range is an assumption."
