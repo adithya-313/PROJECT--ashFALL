@@ -25,7 +25,7 @@ from world.payments import find_ledger_for_account, make_payment
 from world.placeholders import EVERYDAY_PAYMENTS_PER_MONTH, SALARY_DAY_WINDOW
 from world.rhythms import daily_multiplier, hour_weight
 from world.routine import run_one_month
-from world.world_plan import draw_world_plan
+from world.world_plan import draw_world_plan, spawn_world_streams
 
 
 # =============================================================================
@@ -68,17 +68,17 @@ def test_c1_determinism_identical_and_differing_seeds() -> None:
         # h1 = _hash_event_list(run_world(w1, p1, r1).events)
         # assert h1 == _hash_event_list(run_world(w2, p2, r2).events)
     """
-    # Build two worlds and plans using identical seed 101.
+    # Build two worlds and plans using identical seed 101 with independent streams.
     w1 = build_world(seed=101, n_people=60, n_shops=12)
-    p1 = draw_world_plan(np.random.default_rng(101), n_days=61)
-    res1 = run_world(w1, p1, np.random.default_rng(101))
+    p_rng1, r_rng1 = spawn_world_streams(101)
+    res1 = run_world(w1, draw_world_plan(p_rng1, n_days=61), r_rng1)
     w2 = build_world(seed=101, n_people=60, n_shops=12)
-    p2 = draw_world_plan(np.random.default_rng(101), n_days=61)
-    res2 = run_world(w2, p2, np.random.default_rng(101))
+    p_rng2, r_rng2 = spawn_world_streams(101)
+    res2 = run_world(w2, draw_world_plan(p_rng2, n_days=61), r_rng2)
     # Build third run using distinct seed 202.
     w3 = build_world(seed=202, n_people=60, n_shops=12)
-    p3 = draw_world_plan(np.random.default_rng(202), n_days=61)
-    res3 = run_world(w3, p3, np.random.default_rng(202))
+    p_rng3, r_rng3 = spawn_world_streams(202)
+    res3 = run_world(w3, draw_world_plan(p_rng3, n_days=61), r_rng3)
     # Assert identical digests for seed 101 and differing digest for seed 202.
     assert _hash_event_list(res1.events) == _hash_event_list(res2.events)
     assert _hash_event_list(res1.events) != _hash_event_list(res3.events)
@@ -99,9 +99,10 @@ def test_c2_ledger_invariants_pass_after_sixty_one_days() -> None:
     """
     world = build_world(seed=42, n_people=80, n_shops=12)
     total_opening = sum(ldg.balance_of(acc) for ldg in world.ledgers for acc in ldg.accounts)
-    plan = draw_world_plan(np.random.default_rng(42), n_days=61)
+    p_rng, r_rng = spawn_world_streams(42)
+    plan = draw_world_plan(p_rng, n_days=61)
     # Execute full 61-day simulation run across all institutions.
-    run_world(world, plan, np.random.default_rng(42))
+    run_world(world, plan, r_rng)
     # Verify no account balance drops below zero paise.
     assert check_no_negative_balances(world.ledgers) == []
     # Verify balances equal sum of debits and credits.
@@ -124,8 +125,9 @@ def test_c3_failed_payments_move_no_money() -> None:
         # assert len(debits) == len(successes) and sum(debit_paise) == sum(success_paise)
     """
     world = build_world(seed=88, n_people=80, n_shops=12)
-    plan = draw_world_plan(np.random.default_rng(88), n_days=61)
-    res = run_world(world, plan, np.random.default_rng(88))
+    p_rng, r_rng = spawn_world_streams(88)
+    plan = draw_world_plan(p_rng, n_days=61)
+    res = run_world(world, plan, r_rng)
     # Extract transfer debits and credits posted during the run.
     debits = [e for ldg in world.ledgers for e in ldg.entries if e.kind == "transfer_debit"]
     credits = [e for ldg in world.ledgers for e in ldg.entries if e.kind == "transfer_credit"]
@@ -150,8 +152,9 @@ def test_c4_event_shape_and_chronological_ordering() -> None:
         # assert all(e.failure_domain in FAILURE_DOMAINS for e in failed_events)
     """
     world = build_world(seed=77, n_people=60, n_shops=10)
-    plan = draw_world_plan(np.random.default_rng(77), n_days=61)
-    res = run_world(world, plan, np.random.default_rng(77))
+    p_rng, r_rng = spawn_world_streams(77)
+    plan = draw_world_plan(p_rng, n_days=61)
+    res = run_world(world, plan, r_rng)
     assert len(res.events) > 0
     # Check that events advance chronologically.
     for i in range(len(res.events) - 1):
@@ -177,12 +180,13 @@ def test_c5_partial_degradation_under_bank_downtime() -> None:
         # assert abs(measured_fails - expected) <= 4 * sd
     """
     world = build_world(seed=55, n_people=100, n_shops=15)
-    base_plan = draw_world_plan(np.random.default_rng(55), n_days=61)
+    p_rng, r_rng = spawn_world_streams(55)
+    base_plan = draw_world_plan(p_rng, n_days=61)
     # Inject bank downtime on bank 0 from minute 1000 to 20000 with 0.5 success rate.
     inc = Incident("bank_downtime", 1000, 19000, 0, 0.5)
     clean_fails = FailureSettings(0.0, 0.0, 0.0)
     plan = dataclasses.replace(base_plan, incidents=[inc], failure_settings=clean_fails)
-    res = run_world(world, plan, np.random.default_rng(55))
+    res = run_world(world, plan, r_rng)
     w_events = [e for e in res.events if 1000 <= e.minute < 20000]
     b0_events = [e for e in w_events if e.from_bank_index == 0]
     b0_fails = sum(1 for e in b0_events if e.failure_domain == "sender_bank")
@@ -230,10 +234,11 @@ def test_c6_calendar_festival_volume_and_poisson_bound() -> None:
         # assert peak_count > 2 * median_count and abs(total - expected) <= 4 * sqrt(expected)
     """
     world = build_world(seed=66, n_people=100, n_shops=15)
-    base_plan = draw_world_plan(np.random.default_rng(66), n_days=61)
+    p_rng, r_rng = spawn_world_streams(66)
+    base_plan = draw_world_plan(p_rng, n_days=61)
     fest = Festival("diwali", 35, 5, 5, 4.0)
     plan = dataclasses.replace(base_plan, festivals=[fest])
-    res = run_world(world, plan, np.random.default_rng(66))
+    res = run_world(world, plan, r_rng)
     everyday = [e for e in res.events if e.to_account.startswith("acc_shop_") and e.minute % 1440 != 600]
     daily_counts = [0] * 61
     for e in everyday:
@@ -261,8 +266,9 @@ def test_c7_persona_daily_diurnal_rhythm() -> None:
         # assert abs(measured_k - exp_k) <= 4 * sd
     """
     world = build_world(seed=33, n_people=100, n_shops=15)
-    plan = draw_world_plan(np.random.default_rng(33), n_days=61)
-    res = run_world(world, plan, np.random.default_rng(33))
+    p_rng, r_rng = spawn_world_streams(33)
+    plan = draw_world_plan(p_rng, n_days=61)
+    res = run_world(world, plan, r_rng)
     persona = "salaried_employee"
     accs = {p.account_id for p in world.people if p.persona_name == persona}
     everyday = [
@@ -294,7 +300,8 @@ def test_c8_insufficient_balance_produces_customer_failure() -> None:
         # assert ev.status == 'failed' and ev.failure_domain == 'customer'
     """
     world = build_world(seed=22, n_people=50, n_shops=10)
-    plan = draw_world_plan(np.random.default_rng(22), n_days=61)
+    p_rng, r_rng = spawn_world_streams(22)
+    plan = draw_world_plan(p_rng, n_days=61)
     bank_map = _build_account_bank_map(world.ledgers)
     person, shop = world.people[0], world.shops[0]
     ldg = find_ledger_for_account(world.ledgers, person.account_id)
@@ -305,7 +312,7 @@ def test_c8_insufficient_balance_produces_customer_failure() -> None:
     assert ldg.balance_of(person.account_id) == 0
     entries_before = len(ldg.entries)
     pmt = PlannedPayment(10, person.account_id, shop.account_id, 500, 0)
-    ev = _execute_payment_leg(world, plan, pmt, 500, bank_map, np.random.default_rng(22))
+    ev = _execute_payment_leg(world, plan, pmt, 500, bank_map, r_rng)
     assert ev.status == "failed" and ev.failure_domain == "customer" and ev.reason == "insufficient_balance"
     assert ldg.balance_of(person.account_id) == 0 and len(ldg.entries) == entries_before
 
@@ -324,8 +331,9 @@ def test_c9_fixed_items_follow_calendar_months() -> None:
         # assert len(salary_events) == 2 and 1 <= dt.day <= 5
     """
     world = build_world(seed=12, n_people=80, n_shops=12)
-    plan = draw_world_plan(np.random.default_rng(12), n_days=61)
-    res = run_world(world, plan, np.random.default_rng(12))
+    p_rng, r_rng = spawn_world_streams(12)
+    plan = draw_world_plan(p_rng, n_days=61)
+    res = run_world(world, plan, r_rng)
     salaried = [p for p in world.people if p.persona_name == "salaried_employee"]
     employer_accs = {s.account_id for s in world.shops if s.kind == "employer"}
     for p in salaried:

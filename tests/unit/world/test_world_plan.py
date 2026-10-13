@@ -9,7 +9,7 @@ TERM: draw order: The strict sequential ordering of random number consumption ac
 import numpy as np
 import pytest
 
-from world.world_plan import draw_world_plan
+from world.world_plan import draw_world_plan, spawn_world_streams
 
 
 def test_p1_same_seed_identical_plan_different_seed_differs() -> None:
@@ -75,3 +75,24 @@ def test_p3_fixed_draw_order_and_independent_state() -> None:
     assert plan1.festivals == plan2.festivals
     assert plan1.incidents == plan2.incidents
     assert plan1.failure_settings == plan2.failure_settings
+
+
+def test_p4_spawn_world_streams_identical_and_independent() -> None:
+    """
+    WHAT: Tests that spawn_world_streams gives identical pairs for identical seeds and independent streams.
+    WHY: Verifies requirement B2 guaranteeing that plan and runner receive decorrelated random draws.
+    Example:
+        # Same seed yields bitwise identical generators; plan_rng and run_rng produce different first draws
+        # p1, r1 = spawn_world_streams(42); p2, r2 = spawn_world_streams(42)
+        # assert p1.uniform() == p2.uniform() and p1.uniform() != r1.uniform()
+    """
+    # Spawn two stream pairs from identical root seed 42.
+    plan_rng1, run_rng1 = spawn_world_streams(42)
+    plan_rng2, run_rng2 = spawn_world_streams(42)
+    # Assert identical seeds reproduce the exact same random draws across both stream positions.
+    assert plan_rng1.uniform() == plan_rng2.uniform()
+    assert run_rng1.uniform() == run_rng2.uniform()
+    # Spawn a fresh pair to test independence between plan and run streams.
+    plan_rng3, run_rng3 = spawn_world_streams(42)
+    # Assert plan_rng and run_rng produce different first draws from their respective streams.
+    assert plan_rng3.uniform() != run_rng3.uniform()
