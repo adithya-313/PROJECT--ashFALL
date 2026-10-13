@@ -35,6 +35,13 @@ from world.rhythms import daily_multiplier, hour_weight
 from world.routine import build_salaried_items
 from world.world_plan import WorldPlan
 
+PAYMENT_PURPOSES: tuple[str, ...] = ("salary", "rent", "bill", "everyday", "lookalike_in")
+ROUTINE_TYPE_TO_PURPOSE: dict[str, str] = {
+    "salary_in": "salary",
+    "rent_out": "rent",
+    "bill_out": "bill",
+}
+
 
 @dataclass(frozen=True)
 class PlannedPayment:
@@ -48,6 +55,7 @@ class PlannedPayment:
     to_account: str
     amount_paise: int
     creation_index: int
+    purpose: str
 
 
 @dataclass(frozen=True)
@@ -59,6 +67,7 @@ class RunResult:
 
     events: list[PaymentEvent]
     counts: dict[str, int]
+    event_purposes: list[str]
 
 
 def _build_account_bank_map(ledgers: list[Ledger]) -> dict[str, int]:
@@ -129,8 +138,9 @@ def _fixed_for_person(
             # Map sender and receiver accounts according to inbound cash flow flag.
             from_acc = item.counterparty_account_id if item.is_inbound else person.account_id
             to_acc = person.account_id if item.is_inbound else item.counterparty_account_id
+            purpose = ROUTINE_TYPE_TO_PURPOSE[item.kind]
             # Append planned payment and increment stable sequence counter.
-            items.append(PlannedPayment(minute, from_acc, to_acc, item.amount_paise, idx))
+            items.append(PlannedPayment(minute, from_acc, to_acc, item.amount_paise, idx, purpose))
             idx += 1
     return items, idx
 
@@ -199,7 +209,7 @@ def _sample_single_everyday(
     shop = rng.choice(shops)
     # Draw purchase amount from person log-normal spending distribution.
     amt = draw_amount_paise(person.amount_profile, rng)
-    return PlannedPayment(minute, person.account_id, shop.account_id, amt, idx)
+    return PlannedPayment(minute, person.account_id, shop.account_id, amt, idx, "everyday")
 
 
 def _generate_day_everyday_payments(
@@ -254,7 +264,7 @@ def _sample_lookalike_inbounds(
         hour = int(rng.choice(24, p=probs[sender.persona_name]))
         minute = day * 1440 + hour * 60 + int(rng.integers(0, 60))
         # Record scheduled peer-to-peer inbound transfer.
-        payments.append(PlannedPayment(minute, sender.account_id, person.account_id, amt, idx))
+        payments.append(PlannedPayment(minute, sender.account_id, person.account_id, amt, idx, "lookalike_in"))
         idx += 1
     return payments, idx
 
@@ -398,6 +408,7 @@ def run_world(world: Any, plan: WorldPlan, rng: np.random.Generator) -> RunResul
     # Assemble and sort all planned transactions across the horizon.
     planned = _collect_all_planned_payments(world, plan, rng)
     events: list[PaymentEvent] = []
+    event_purposes: list[str] = []
     counts: dict[str, int] = {"attempts": 0, "successes": 0, "failures": 0}
     # Execute each planned payment, splitting by UPI transaction limit caps.
     for payment in planned:
@@ -408,5 +419,8 @@ def run_world(world: Any, plan: WorldPlan, rng: np.random.Generator) -> RunResul
         for leg in legs:
             ev = _execute_payment_leg(world, plan, payment, leg, bank_map, rng)
             events.append(ev)
+            event_purposes.append(payment.purpose)
             _record_event_counts(ev, counts)
-    return RunResult(events, counts)
+    if len(event_purposes) != len(events) or any(p not in PAYMENT_PURPOSES for p in event_purposes):
+        raise RuntimeError("Validation error: event_purposes length mismatch or invalid purpose.")
+    return RunResult(events, counts, event_purposes)

@@ -282,7 +282,7 @@ def test_c8_insufficient_balance_produces_customer_failure() -> None:
     assert ldg.balance_of(person.account_id) == 0
     entries_before = len(ldg.entries)
     # Attempt to send 500 paise from the empty account.
-    pmt = PlannedPayment(10, person.account_id, shop.account_id, 500, 0)
+    pmt = PlannedPayment(10, person.account_id, shop.account_id, 500, 0, purpose="everyday")
     ev = _execute_payment_leg(world, plan, pmt, 500, bank_map, r_rng)
     # Check that payment failed with customer domain and bank ledger did not change.
     assert ev.status == "failed" and ev.failure_domain == "customer" and ev.reason == "insufficient_balance"
