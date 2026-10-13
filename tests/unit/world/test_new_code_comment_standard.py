@@ -35,6 +35,9 @@ NEW_CODE_FILES: list[str] = [
     # Golden run hashes module and verification recipe test suite.
     "world/run_hashes.py",
     "tests/unit/world/test_run_hashes.py",
+    # Verification script and verification unit test suite.
+    "scripts/verify_world.py",
+    "tests/unit/test_verify_world.py",
 ]
 
 
