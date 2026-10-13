@@ -15,6 +15,7 @@ import numpy as np
 
 from world.config_reader import draw_in_range
 from world.money import rupees_to_paise
+from world.placeholders import LOOKALIKE_SMALL_AMOUNT_FRACTION
 
 
 @dataclass
@@ -107,3 +108,21 @@ def split_into_legal_payments(amount_paise: int, limit_paise: int) -> list[int]:
         parts.append(remaining)
 
     return parts
+
+
+def lookalike_small_amount_paise(median_paise: int) -> int:
+    """
+    WHAT: Calculates the transfer size in paise for look-alike mule camouflage payments.
+    WHY: Establishes a single authoritative location for this financial rule so the legacy
+         11A routine runner and the calendar runner compute identical amounts and never drift apart.
+    Args: median_paise: The recipient account's median transaction amount in paise.
+    Returns: Calculated small payment value in integer paise, floored at a minimum of 1 paise.
+    Example:
+        # LOOKALIKE_SMALL_AMOUNT_FRACTION is 0.1; for median 500 paise, 0.1 * 500 = 50 paise
+        # amt = lookalike_small_amount_paise(500)
+        # assert amt == 50
+    """
+    # Scale recipient median transfer size by the configured fraction (0.1).
+    scaled = LOOKALIKE_SMALL_AMOUNT_FRACTION * median_paise
+    # Round to the nearest whole paise and enforce a minimum floor of 1 paise.
+    return max(1, int(round(scaled)))

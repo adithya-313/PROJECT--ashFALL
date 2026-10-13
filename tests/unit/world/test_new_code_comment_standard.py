@@ -1,11 +1,16 @@
 """
 WHAT: Enforces structural comment standards, docstring conventions, and line limits on new world code.
-WHY: Ensures code readability, prevents regression in architectural documentation, and validates rule R7 standards.
-TERM: Abstract Syntax Tree: In-memory hierarchical representation of Python source syntax parsed for inspection.
-TERM: Lexical Tokenizer: Stream scanner breaking Python text into categorized tokens such as comments and names.
-TERM: Docstring: String literal appearing as the first statement of a module, class, or function definition.
-TERM: Comment Ratio: Metric dividing the count of comment lines by the count of executable code lines.
-TERM: Code Line: Source line containing syntax tokens excluding blank lines and multi-line docstring bodies.
+WHY: Ensures code readability and prevents regressions in architectural documentation.
+TERM: Abstract Syntax Tree: a tree structure showing how code is organized,
+      e.g. breaking a function into its name, inputs, and statements.
+TERM: Tokenizer: a tool reading source code word by word,
+      e.g. separating comments from code words.
+TERM: Docstring: text placed right after a function header explaining what it does,
+      e.g. triple-quoted notes at the top of a file.
+TERM: Comment Ratio: the fraction of lines that explain code,
+      e.g. having 1 comment line for every 4 code lines gives a ratio of 0.25.
+TERM: Code Line: a line of code doing real work,
+      e.g. an assignment like x = 1, ignoring empty lines.
 """
 
 import ast
@@ -19,6 +24,10 @@ NEW_CODE_FILES: list[str] = [
     "tests/unit/world/test_world_plan.py",
     "tests/unit/world/test_world_calendar_runner.py",
     "tests/unit/world/test_new_code_comment_standard.py",
+]
+
+NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
+    ("world/amounts.py", "lookalike_small_amount_paise"),
 ]
 
 
@@ -208,7 +217,7 @@ def test_function_lengths_and_docstrings() -> None:
 def test_comment_to_code_ratio_threshold() -> None:
     """
     WHAT: Computes comment lines / code lines for every file in NEW_CODE_FILES to assert ratio >= 0.25.
-    WHY: Guarantees every new file maintains rich inline step-by-step commentary (rule R7 standards).
+    WHY: Guarantees every new file maintains rich inline step-by-step commentary.
     Example:
         # For each file, comment_lines / code_lines >= 0.25
         # assert ratio >= 0.25, f"{filepath}: ratio {ratio} < 0.25"
@@ -226,7 +235,7 @@ def test_comment_to_code_ratio_threshold() -> None:
 def test_inside_function_comment_ratio_threshold() -> None:
     """
     WHAT: Computes comment lines / code lines inside function bodies to assert ratio >= 0.25.
-    WHY: Verifies requirement C2 guaranteeing that function bodies contain rich inline commentary.
+    WHY: Ensures functions are self-explanatory so future readers understand why each step happens.
     Example:
         # For each file, inside_function_comments / inside_function_code >= 0.25
         # assert fn_ratio >= 0.25, f"{filepath}: function ratio {fn_ratio} < 0.25"
@@ -259,3 +268,34 @@ def test_module_docstrings_define_technical_terms() -> None:
         if not doc or "TERM:" not in doc:
             missing.append(filepath)
     assert not missing, f"Files missing technical term definitions (TERM:) in module docstring: {missing}"
+
+
+def test_new_functions_in_old_files_standard() -> None:
+    """
+    WHAT: Asserts new functions in older files satisfy line limits (<= 30) and docstring standards.
+    WHY: Prevents code bloat and unmaintained documentation when adding helper routines to older modules.
+    Example:
+        # Every function in NEW_FUNCTIONS_IN_OLD_FILES is <= 30 lines with full WHAT/WHY/Example tags
+        # assert len(errors) == 0
+    """
+    # Verify the registry contains the required entry and cannot shrink.
+    assert ("world/amounts.py", "lookalike_small_amount_paise") in NEW_FUNCTIONS_IN_OLD_FILES
+    assert len(NEW_FUNCTIONS_IN_OLD_FILES) >= 1
+    errors: list[str] = []
+    # Audit each registered function across older codebase files.
+    for filepath, fn_name in NEW_FUNCTIONS_IN_OLD_FILES:
+        # Parse module AST to find target function definitions.
+        with open(filepath, "r", encoding="utf-8") as f:
+            tree = ast.parse(f.read(), filename=filepath)
+        nodes = [
+            n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == fn_name
+        ]
+        # Check function exists and enforce 30-line limit and docstring rules.
+        if not nodes:
+            errors.append(f"{filepath}: function '{fn_name}' not found")
+        for node in nodes:
+            if node.end_lineno - node.lineno + 1 > 30:
+                errors.append(f"{filepath}:{fn_name}: function length > 30")
+            errors.extend(_validate_function_docstring(node, filepath))
+    assert not errors, "Standards violations in older file functions:\n" + "\n".join(errors)
+

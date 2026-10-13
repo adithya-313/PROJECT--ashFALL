@@ -1,14 +1,22 @@
 """
 WHAT: World plan orchestration module bundling pre-drawn temporal rhythms, festival calendars, and outages.
 WHY: Draws all world-level schedule variations once upfront to ensure consistent and deterministic playback.
-TERM: world plan: An immutable specification of calendar dynamics and outage schedules drawn before simulation.
-TERM: simulated clock: A chronological mapper translating continuous elapsed minutes into calendar dates.
-TERM: temporal rhythms: Periodic diurnal, weekly, and monthly payment activity scaling curves.
-TERM: festival calendar: Stochastically generated holiday peaks with piecewise linear rise and fade multipliers.
-TERM: incident schedule: Chronologically ordered downtime intervals for central switches and banks.
-TERM: failure settings: Background transaction decline rates covering PIN errors, network drops, and technical declines.
-TERM: seed sequence: An algorithm expanding a root integer into high-entropy, independent seed states.
-TERM: spawn: The process of creating isolated, non-overlapping pseudo-random streams from one parent seed.
+TERM: world plan: a complete calendar schedule made before the run starts,
+      e.g. picking which days have holidays or bank slowdowns.
+TERM: simulated clock: a counter turning minutes into calendar dates,
+      e.g. minute 1440 means day 2 at midnight.
+TERM: temporal rhythms: daily and weekly patterns of human activity,
+      e.g. people buy more groceries at noon than at 3 AM.
+TERM: festival calendar: a list of holiday dates that boost shopping,
+      e.g. Diwali increasing store sales for five days.
+TERM: incident schedule: a planned timetable of outages,
+      e.g. a bank server going down from 10 AM to 2 PM.
+TERM: failure settings: everyday reasons payments fail,
+      e.g. typing the wrong PIN or losing phone signal.
+TERM: seed sequence: a method turning one starting number into several separate random number streams,
+      e.g. splitting seed 42 so planning and running never share numbers.
+TERM: spawn: creating new independent random number streams from one parent,
+      e.g. giving one stream to the planner and another to the payment runner.
 """
 
 from dataclasses import dataclass

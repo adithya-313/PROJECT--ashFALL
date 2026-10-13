@@ -1,14 +1,24 @@
 """
 WHAT: Calendar-driven payment simulation engine coordinating temporal rhythms, failure routing, and event auditing.
 WHY: Replaces 11A fixed-day payment runner with an authentic astronomical timeline that records payment attempts.
-TERM: calendar runner: An execution engine that schedules and runs financial transactions across simulated time.
-TERM: payment event: An immutable record documenting transaction outcome, financial routing, and failure domains.
-TERM: failure domain: The operational zone responsible for a payment rejection (central, banks, app, or user).
-TERM: partial degradation: A temporary drop in transaction success probability without complete service blackout.
-TERM: diurnal rhythm: Periodic fluctuations in human activity recurring over a 24-hour cycle.
-TERM: vectorised: Mathematical operations applied across entire arrays simultaneously using optimized library routines.
-TERM: Poisson: A discrete probability distribution expressing the count of events occurring in a fixed interval of time.
-TERM: stable sort: A sorting algorithm that preserves the relative input order of records with equal keys.
+TERM: calendar runner: a program running simulated town payments minute by minute,
+      e.g. paying salaries on the first and rent on the third.
+TERM: payment event: a saved note recording what happened to a payment,
+      e.g. whether money moved or a bank declined it.
+TERM: failure domain: who caused a payment to fail,
+      e.g. the customer running out of money versus a bank server crashing.
+TERM: partial degradation: a service running slowly or dropping some requests rather than completely shutting down,
+      e.g. a bank failing half of its transfers.
+TERM: daily rhythm: 24-hour cycles of human activity,
+      e.g. people sleeping at night and shopping during the afternoon.
+TERM: vectorised: doing math on whole lists of numbers at once,
+      e.g. multiplying 24 hours of weights in a single fast step.
+TERM: Poisson: a way to pick a random count when you only know the average,
+      e.g. a shop averaging 3 customers an hour might get 1 one hour and 5 the next.
+TERM: stable sort: sorting items so ties keep their starting order,
+      e.g. two payments at minute 60 stay in the order they were created.
+TERM: purpose: the real-life reason for a payment,
+      e.g. paying monthly rent or buying groceries at a shop.
 """
 
 # Import Python standard library calendar utilities for Gregorian month lengths.
@@ -20,7 +30,7 @@ from typing import Any
 import numpy as np
 
 # Import domain modules for currency limits, failures, ledgers, and temporal schedules.
-from world.amounts import draw_amount_paise, split_into_legal_payments
+from world.amounts import draw_amount_paise, lookalike_small_amount_paise, split_into_legal_payments
 from world.failure_decision import decide_failure
 from world.failures import PaymentEvent, make_event
 from world.ledger import Ledger
@@ -28,13 +38,19 @@ from world.payments import find_ledger_for_account, make_payment
 from world.personas import get_persona
 from world.placeholders import (
     EVERYDAY_PAYMENTS_PER_MONTH,
-    LOOKALIKE_SMALL_AMOUNT_FRACTION,
     LOOKALIKE_SMALL_INCOMING_PER_MONTH,
     ROUTINE_MINUTE_OF_DAY,
 )
 from world.rhythms import daily_multiplier, hour_weight
 from world.routine import build_salaried_items
 from world.world_plan import WorldPlan
+
+PAYMENT_PURPOSES: tuple[str, ...] = ("salary", "rent", "bill", "everyday", "lookalike_in")
+ROUTINE_TYPE_TO_PURPOSE: dict[str, str] = {
+    "salary_in": "salary",
+    "rent_out": "rent",
+    "bill_out": "bill",
+}
 
 
 @dataclass(frozen=True)
@@ -49,6 +65,7 @@ class PlannedPayment:
     to_account: str
     amount_paise: int
     creation_index: int
+    purpose: str
 
 
 @dataclass(frozen=True)
@@ -60,6 +77,7 @@ class RunResult:
 
     events: list[PaymentEvent]
     counts: dict[str, int]
+    event_purposes: list[str]
 
 
 def _build_account_bank_map(ledgers: list[Ledger]) -> dict[str, int]:
@@ -130,8 +148,9 @@ def _fixed_for_person(
             # Map sender and receiver accounts according to inbound cash flow flag.
             from_acc = item.counterparty_account_id if item.is_inbound else person.account_id
             to_acc = person.account_id if item.is_inbound else item.counterparty_account_id
+            purpose = ROUTINE_TYPE_TO_PURPOSE[item.kind]
             # Append planned payment and increment stable sequence counter.
-            items.append(PlannedPayment(minute, from_acc, to_acc, item.amount_paise, idx))
+            items.append(PlannedPayment(minute, from_acc, to_acc, item.amount_paise, idx, purpose))
             idx += 1
     return items, idx
 
@@ -200,7 +219,7 @@ def _sample_single_everyday(
     shop = rng.choice(shops)
     # Draw purchase amount from person log-normal spending distribution.
     amt = draw_amount_paise(person.amount_profile, rng)
-    return PlannedPayment(minute, person.account_id, shop.account_id, amt, idx)
+    return PlannedPayment(minute, person.account_id, shop.account_id, amt, idx, "everyday")
 
 
 def _generate_day_everyday_payments(
@@ -246,8 +265,8 @@ def _sample_lookalike_inbounds(
     # Container collecting peer transfers into lookalike account.
     payments: list[PlannedPayment] = []
     idx = start_idx
-    # Scale small inbound credit amount by configured fraction of median transfer.
-    amt = max(1, int(round(LOOKALIKE_SMALL_AMOUNT_FRACTION * person.amount_profile.median_paise)))
+    # Scale small inbound credit amount using the shared lookalike rule.
+    amt = lookalike_small_amount_paise(person.amount_profile.median_paise)
     for _ in range(count):
         # Sample a distinct sender from the community.
         sender = rng.choice(others)
@@ -255,7 +274,7 @@ def _sample_lookalike_inbounds(
         hour = int(rng.choice(24, p=probs[sender.persona_name]))
         minute = day * 1440 + hour * 60 + int(rng.integers(0, 60))
         # Record scheduled peer-to-peer inbound transfer.
-        payments.append(PlannedPayment(minute, sender.account_id, person.account_id, amt, idx))
+        payments.append(PlannedPayment(minute, sender.account_id, person.account_id, amt, idx, "lookalike_in"))
         idx += 1
     return payments, idx
 
@@ -348,7 +367,8 @@ def _execute_payment_leg(
 ) -> PaymentEvent:
     """
     WHAT: Evaluates outages and executes a single UPI payment leg across bank ledgers.
-    WHY: Implements rule R7 by transforming failed payments into events without balance mutations.
+    WHY: Implements issue R7 (failed payments are recorded but move no money)
+         by creating failure events without balance mutations.
     Args: world: World container; plan: WorldPlan; payment: planned item; leg: amount; bank_map: lookup; rng: generator.
     Returns: PaymentEvent recording outcome, status, diagnostic reason, and failure domain.
     Example: ev = _execute_payment_leg(world, plan, pmt, 1000, bank_map, rng); assert isinstance(ev, PaymentEvent)
@@ -389,7 +409,8 @@ def _record_event_counts(ev: PaymentEvent, counts: dict[str, int]) -> None:
 def run_world(world: Any, plan: WorldPlan, rng: np.random.Generator) -> RunResult:
     """
     WHAT: Executes calendar-driven routine life, evaluating outages and logging payment events.
-    WHY: Orchestrates Level 11B-3 payment execution with strict R7 ledger invariant adherence.
+    WHY: Orchestrates calendar payment execution following issue R7
+         (failed payments are recorded but move no money).
     Args: world: Container of people, shops, ledgers; plan: WorldPlan; rng: generator.
     Returns: RunResult dataclass containing chronological event audit log and diagnostic tallies.
     Example: res = run_world(world, plan, rng); assert len(res.events) >= 0 and res.counts['attempts'] >= 0
@@ -399,6 +420,7 @@ def run_world(world: Any, plan: WorldPlan, rng: np.random.Generator) -> RunResul
     # Assemble and sort all planned transactions across the horizon.
     planned = _collect_all_planned_payments(world, plan, rng)
     events: list[PaymentEvent] = []
+    event_purposes: list[str] = []
     counts: dict[str, int] = {"attempts": 0, "successes": 0, "failures": 0}
     # Execute each planned payment, splitting by UPI transaction limit caps.
     for payment in planned:
@@ -409,5 +431,8 @@ def run_world(world: Any, plan: WorldPlan, rng: np.random.Generator) -> RunResul
         for leg in legs:
             ev = _execute_payment_leg(world, plan, payment, leg, bank_map, rng)
             events.append(ev)
+            event_purposes.append(payment.purpose)
             _record_event_counts(ev, counts)
-    return RunResult(events, counts)
+    if len(event_purposes) != len(events) or any(p not in PAYMENT_PURPOSES for p in event_purposes):
+        raise RuntimeError("Validation error: event_purposes length mismatch or invalid purpose.")
+    return RunResult(events, counts, event_purposes)

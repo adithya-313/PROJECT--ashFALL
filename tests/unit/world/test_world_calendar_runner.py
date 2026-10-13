@@ -1,11 +1,21 @@
 """
 WHAT: Unit tests C1-C10 verifying determinism, ledger conservation, failure attribution, and calendar rhythms.
-WHY: Guarantees that the calendar runner conforms to rule R7, preserves accounting invariants, and models outages.
-TERM: calendar runner: An execution engine that schedules and runs financial transactions across simulated time.
-TERM: payment event: An immutable record documenting transaction outcome, financial routing, and failure domains.
-TERM: failure domain: The operational zone responsible for a payment rejection (central, banks, app, or user).
-TERM: partial degradation: A temporary drop in transaction success probability without complete service blackout.
-TERM: determinism: The guarantee that identical pseudo-random seeds yield bitwise identical simulation objects.
+WHY: Guarantees that the calendar runner conforms to issue R7 (failed payments are recorded but move no money),
+     preserves accounting invariants, and models outages.
+TERM: calendar runner: a program running simulated town payments minute by minute,
+      e.g. paying salaries on the first and rent on the third.
+TERM: payment event: a saved note recording what happened to a payment,
+      e.g. whether money moved or a bank declined it.
+TERM: failure domain: who caused a payment to fail,
+      e.g. the customer running out of money versus a bank server crashing.
+TERM: partial degradation: a service running slowly or dropping some requests rather than completely shutting down,
+      e.g. a bank failing half of its transfers.
+TERM: determinism: getting the exact same outcome every time you start with the same seed,
+      e.g. running seed 7 twice produces identical numbers.
+TERM: purpose: the real-life reason for a payment,
+      e.g. paying monthly rent or buying groceries at a shop.
+TERM: golden hash: a fixed fingerprint saved from an earlier known-good run,
+      e.g. checking that tomorrow's run gives the exact same fingerprint so we know nothing broke.
 """
 
 import calendar
@@ -16,7 +26,13 @@ from typing import Any
 import numpy as np
 
 from world.build_world import build_world
-from world.calendar_runner import PlannedPayment, _build_account_bank_map, _execute_payment_leg, run_world
+from world.calendar_runner import (
+    PlannedPayment,
+    RunResult,
+    _build_account_bank_map,
+    _execute_payment_leg,
+    run_world,
+)
 from world.checks import check_balances_equal_entry_sums, check_money_conserved, check_no_negative_balances
 from world.failures import FAILURE_DOMAINS, FailureSettings, PaymentEvent
 from world.festivals import Festival
@@ -25,7 +41,7 @@ from world.payments import find_ledger_for_account, make_payment
 from world.placeholders import EVERYDAY_PAYMENTS_PER_MONTH, SALARY_DAY_WINDOW
 from world.rhythms import daily_multiplier, hour_weight
 from world.routine import run_one_month
-from world.world_plan import draw_world_plan, spawn_world_streams
+from world.world_plan import WorldPlan, draw_world_plan, spawn_world_streams
 
 
 def _hash_event_list(events: list[PaymentEvent]) -> str:
@@ -50,7 +66,7 @@ def _hash_event_list(events: list[PaymentEvent]) -> str:
 def test_c1_determinism_identical_and_differing_seeds() -> None:
     """
     WHAT: Asserts identical seeds yield identical SHA-256 event digests, while different seeds differ.
-    WHY: Verifies requirement C1 proving complete reproducibility of payments and failure events.
+    WHY: If the same seed ever gave different payments, no bug could be reproduced.
     Example:
         # Runs with seed 101 produce identical event lists; seed 202 produces different events
         # h1 = _hash_event_list(run_world(w1, p1, r1).events)
@@ -76,7 +92,7 @@ def test_c1_determinism_identical_and_differing_seeds() -> None:
 def test_c2_ledger_invariants_pass_after_sixty_one_days() -> None:
     """
     WHAT: Evaluates non-negative balance, entry sum, and conservation checkers after 61 days.
-    WHY: Verifies requirement C2 proving accounting invariants hold across all banks.
+    WHY: Protects against money disappearing or being created out of thin air across the banking system.
     Example:
         # All three checkers return empty lists indicating zero accounting violations
         # assert check_no_negative_balances(world.ledgers) == []
@@ -100,7 +116,7 @@ def test_c2_ledger_invariants_pass_after_sixty_one_days() -> None:
 def test_c3_failed_payments_move_no_money() -> None:
     """
     WHAT: Asserts ledger entries match successful events exactly and failed payments mutate no funds.
-    WHY: Verifies requirement C3 proving rule R7: failed payments post zero ledger entries.
+    WHY: Protects issue R7 (failed payments are recorded but move no money) so declines never touch ledger balances.
     Example:
         # Successful event count equals transfer debit and credit pairs
         # assert len(debits) == len(successes) and sum(debit_paise) == sum(success_paise)
@@ -123,7 +139,7 @@ def test_c3_failed_payments_move_no_money() -> None:
 def test_c4_event_shape_and_chronological_ordering() -> None:
     """
     WHAT: Checks that every event adheres to domain and reason invariants and events are sorted.
-    WHY: Verifies requirement C4 guaranteeing schema validity and monotonic minute progression.
+    WHY: Protects the event log format and ensures simulated time never travels backward.
     Example:
         # Every failed event has an approved failure domain and minutes are non-decreasing
         # assert all(e.failure_domain in FAILURE_DOMAINS for e in failed_events)
@@ -145,10 +161,53 @@ def test_c4_event_shape_and_chronological_ordering() -> None:
             assert ev.failure_domain in FAILURE_DOMAINS and ev.reason != "ok"
 
 
+def _events_for_purpose(res: RunResult, purpose: str) -> list[PaymentEvent]:
+    """
+    WHAT: Filters simulated payment events by their recorded execution purpose label string.
+    WHY: Enables purpose-driven evaluation across test assertions comparing like transactions with like.
+    Args: res: RunResult containing generated payment event log and matching purpose labels; purpose: label.
+    Returns: List of PaymentEvent records corresponding strictly to the requested purpose.
+    Example:
+        # everyday_events = _events_for_purpose(res, "everyday")
+        # assert isinstance(everyday_events, list)
+    """
+    # Extract events whose corresponding entry in event_purposes matches target purpose.
+    return [ev for ev, p in zip(res.events, res.event_purposes) if p == purpose]
+
+
+def _measure_c5_degradation(
+    events: list[PaymentEvent],
+) -> tuple[int, int, float, float, int]:
+    """
+    WHAT: Measures payment counts, degraded bank failures, theoretical expectations, and unaffected failures for C5.
+    WHY: Encapsulates statistical measurement calculations under 30 lines for bank downtime degradation checks.
+    Args: events: Complete list of PaymentEvent records emitted during the calendar simulation.
+    Returns: Tuple of (n0, b0_fails, exp, sd, unaffected) tracking transaction volume and failure bounds.
+    Example:
+        # n0, b0_fails, exp, sd, unaffected = _measure_c5_degradation(res.events)
+        # assert n0 >= 0 and b0_fails >= 0
+    """
+    # Filter transactions occurring strictly within the bank downtime incident interval.
+    w_events = [e for e in events if 1000 <= e.minute < 20000]
+    # Isolate payments originating from the degraded financial institution.
+    b0_events = [e for e in w_events if e.from_bank_index == 0]
+    b0_fails = sum(1 for e in b0_events if e.failure_domain == "sender_bank")
+    n0 = len(b0_events)
+    # Expected failures is 50% with binomial standard deviation sqrt(n0 * 0.25).
+    exp = n0 * 0.5
+    sd = float(np.sqrt(n0 * 0.25))
+    # Running out of money is not outage spillover, so count only non-customer failures.
+    unaffected = sum(
+        1 for e in w_events
+        if e.from_bank_index != 0 and e.to_bank_index != 0 and e.status == "failed" and e.failure_domain != "customer"
+    )
+    return n0, b0_fails, exp, sd, unaffected
+
+
 def test_c5_partial_degradation_under_bank_downtime() -> None:
     """
     WHAT: Measures failure share for bank downtime incident with rate 0.5 within 4 standard deviations.
-    WHY: Verifies requirement C5 proving degraded operation without full network blackouts.
+    WHY: Protects realistic outage behavior where an affected bank slows down instead of completely crashing.
     Example:
         # Downtime at success rate 0.5 causes expected 50% failures: |k - 0.5*N| <= 4*sqrt(0.25*N)
         # assert abs(measured_fails - expected) <= 4 * sd
@@ -161,19 +220,13 @@ def test_c5_partial_degradation_under_bank_downtime() -> None:
     clean_fails = FailureSettings(0.0, 0.0, 0.0)
     plan = dataclasses.replace(base_plan, incidents=[inc], failure_settings=clean_fails)
     res = run_world(world, plan, r_rng)
-    # Count payments sent from bank 0 during the outage window.
-    w_events = [e for e in res.events if 1000 <= e.minute < 20000]
-    b0_events = [e for e in w_events if e.from_bank_index == 0]
-    b0_fails = sum(1 for e in b0_events if e.failure_domain == "sender_bank")
-    n0 = len(b0_events)
-    # Expected failures is 50% with standard deviation sqrt(n0 * 0.25).
-    exp = n0 * 0.5
-    sd = float(np.sqrt(n0 * 0.25))
+    # Compute downtime metrics and failure counts using measurement helper.
+    n0, b0_fails, exp, sd, unaffected = _measure_c5_degradation(res.events)
+    print(f"MEASURED C5: n={n0}, k={b0_fails}, expected={exp}, sd={sd}, 4sd={4.0*sd}, unaffected={unaffected}")
     # Make sure failures are within 4 standard deviations and bank 0 was partially degraded.
     assert abs(b0_fails - exp) <= 4.0 * sd, f"Measured {b0_fails} not within 4 SD ({4*sd}) of {exp}"
     assert 0 < b0_fails < n0, "Failure rate must be partial, not 0% or 100%"
-    # Make sure transactions between completely unaffected banks had zero failures.
-    unaffected = sum(1 for e in w_events if e.from_bank_index != 0 and e.to_bank_index != 0 and e.status == "failed")
+    # Make sure transactions between completely unaffected banks had zero non-customer failures.
     assert unaffected == 0, f"Expected 0 failures on unaffected banks, got {unaffected}"
 
 
@@ -198,10 +251,37 @@ def _calc_poisson_expected_everyday(plan: Any, n_people: int) -> float:
     return total
 
 
+def _measure_c6_festival_volume(
+    res: RunResult, plan: Any, n_people: int
+) -> tuple[int, float, float, int, float]:
+    """
+    WHAT: Calculates total everyday purchases, expected Poisson mean, standard deviation, peak, and median.
+    WHY: Supplies statistical measurement figures under 30 lines for festival surge and Poisson bound tests.
+    Args: res: RunResult instance; plan: WorldPlan with festival multipliers; n_people: Citizen count in world.
+    Returns: Tuple of (total, exp_total, sd, peak, med) containing volume metrics for C6.
+    Example:
+        # total, exp, sd, peak, med = _measure_c6_festival_volume(res, plan, 100)
+        # assert total >= 0 and exp > 0.0
+    """
+    # Extract commercial everyday payments using purpose-based filtering.
+    everyday = _events_for_purpose(res, "everyday")
+    daily_counts = [0] * plan.n_days
+    # Aggregate transaction attempts across each simulation day.
+    for e in everyday:
+        daily_counts[e.minute // 1440] += 1
+    # Determine the peak volume on day 35 and the median volume across all days.
+    peak = daily_counts[35]
+    med = float(np.median(daily_counts))
+    # Calculate Poisson expectation and standard deviation across the simulation.
+    exp_total = _calc_poisson_expected_everyday(plan, n_people)
+    sd = float(np.sqrt(exp_total))
+    return len(everyday), exp_total, sd, peak, med
+
+
 def test_c6_calendar_festival_volume_and_poisson_bound() -> None:
     """
     WHAT: Asserts peak festival attempts exceed 2x median daily volume and total matches Poisson within 4 SD.
-    WHY: Verifies requirement C6 proving calendar multipliers drive transactional volume surges.
+    WHY: Protects festival surge realism ensuring commercial purchases spike noticeably during celebrations.
     Example:
         # Exaggerated festival bump at day 35 drives daily transactions > 2x median
         # assert peak_count > 2 * median_count and abs(total - expected) <= 4 * sqrt(expected)
@@ -213,25 +293,49 @@ def test_c6_calendar_festival_volume_and_poisson_bound() -> None:
     fest = Festival("diwali", 35, 5, 5, 4.0)
     plan = dataclasses.replace(base_plan, festivals=[fest])
     res = run_world(world, plan, r_rng)
-    # Count how many everyday purchases happened on each of the 61 days.
-    everyday = [e for e in res.events if e.to_account.startswith("acc_shop_") and e.minute % 1440 != 600]
-    daily_counts = [0] * 61
-    for e in everyday:
-        daily_counts[e.minute // 1440] += 1
+    # Measure everyday volume metrics across the simulation horizon.
+    total, exp_total, sd, peak, med = _measure_c6_festival_volume(res, plan, len(world.people))
+    print(f"MEASURED C6: total={total}, expected={exp_total}, sd={sd}, 4sd={4.0*sd}, peak={peak}, median={med}")
     # Check that day 35 saw more than double the median daily shopping volume.
-    med = float(np.median(daily_counts))
-    assert daily_counts[35] > 2.0 * med, f"Peak {daily_counts[35]} not > 2x median {med}"
+    assert peak > 2.0 * med, f"Peak {peak} not > 2x median {med}"
     # Check that the 61-day total is within 4 standard deviations of the expected Poisson sum.
-    exp_total = _calc_poisson_expected_everyday(plan, len(world.people))
-    sd = float(np.sqrt(exp_total))
-    diff = abs(len(everyday) - exp_total)
-    assert diff <= 4.0 * sd, f"Measured {len(everyday)} diff {diff} exceeds 4 SD ({4*sd}) from {exp_total}"
+    diff = abs(total - exp_total)
+    assert diff <= 4.0 * sd, f"Measured {total} diff {diff} exceeds 4 SD ({4*sd}) from {exp_total}"
+
+
+def _measure_c7_diurnal_night(
+    res: RunResult, world: Any, plan: WorldPlan, persona: str
+) -> tuple[int, int, float, float]:
+    """
+    WHAT: Measures sample size, night payments (hours 0-5), expected count, and standard deviation for C7.
+    WHY: Supplies statistical measurement figures under 30 lines for persona diurnal rhythm tests.
+    Args: res: RunResult instance; world: Simulated town; plan: WorldPlan instance; persona: Target demographic.
+    Returns: Tuple of (n, k, exp, sd) tracking night payment counts against theoretical expectations.
+    Example:
+        # n, k, exp, sd = _measure_c7_diurnal_night(res, world, plan, "salaried_employee")
+        # assert n >= 0 and k >= 0
+    """
+    # Isolate everyday payments initiated by people belonging to the target persona.
+    accs = {p.account_id for p in world.people if p.persona_name == persona}
+    everyday = [
+        e for e in _events_for_purpose(res, "everyday")
+        if e.from_account in accs and e.to_account.startswith("acc_shop_")
+    ]
+    # Compute the theoretical fraction of activity occurring between hours 0 and 5.
+    raw = [hour_weight(h + 0.5, persona, plan.rhythm_settings) for h in range(24)]
+    p_0_5 = sum(raw[:6]) / sum(raw)
+    n = len(everyday)
+    # Count the observed number of everyday payments falling within midnight to 6 AM.
+    k = sum(1 for e in everyday if (e.minute % 1440) // 60 < 6)
+    exp = n * p_0_5
+    sd = float(np.sqrt(n * p_0_5 * (1.0 - p_0_5)))
+    return n, k, exp, sd
 
 
 def test_c7_persona_daily_diurnal_rhythm() -> None:
     """
     WHAT: Tests that persona everyday payments in hours 0-5 match diurnal curve within 4 standard deviations.
-    WHY: Verifies requirement C7 proving diurnal hourly curve shapes transaction timestamps.
+    WHY: Protects realistic daily human rhythms so people make payments during the day rather than late night.
     Example:
         # Binomial distribution for payments in hours 0-5: |k - n*p| <= 4 * sqrt(n*p*(1-p))
         # assert abs(measured_k - exp_k) <= 4 * sd
@@ -242,20 +346,10 @@ def test_c7_persona_daily_diurnal_rhythm() -> None:
     plan = draw_world_plan(p_rng, n_days=61)
     res = run_world(world, plan, r_rng)
     persona = "salaried_employee"
-    # Find all shopping payments made by salaried workers.
-    accs = {p.account_id for p in world.people if p.persona_name == persona}
-    everyday = [
-        e for e in res.events
-        if e.from_account in accs and e.to_account.startswith("acc_shop_") and e.minute % 1440 != 600
-    ]
-    # Calculate expected night-time shopping fraction from hours 0 to 5.
-    raw = [hour_weight(h + 0.5, persona, plan.rhythm_settings) for h in range(24)]
-    p_0_5 = sum(raw[:6]) / sum(raw)
-    n = len(everyday)
-    k = sum(1 for e in everyday if (e.minute % 1440) // 60 < 6)
+    # Measure night-time shopping frequency using diurnal measurement helper.
+    n, k, exp, sd = _measure_c7_diurnal_night(res, world, plan, persona)
+    print(f"MEASURED C7: n={n}, k={k}, expected={exp}, sd={sd}, 4sd={4.0*sd}")
     # Check that night payments match expected count within 4 standard deviations.
-    exp = n * p_0_5
-    sd = float(np.sqrt(n * p_0_5 * (1.0 - p_0_5)))
     diff = abs(k - exp)
     assert diff <= 4.0 * sd, f"Measured {k} diff {diff} exceeds 4 SD ({4*sd}) from {exp}"
 
@@ -263,7 +357,7 @@ def test_c7_persona_daily_diurnal_rhythm() -> None:
 def test_c8_insufficient_balance_produces_customer_failure() -> None:
     """
     WHAT: Drains citizen balance via valid payment, verifies subsequent attempt logs customer failure.
-    WHY: Verifies requirement C8 proving insolvency triggers failure events without ledger corruption.
+    WHY: Protects against overdrafts so accounts with zero balance fail payments safely without negative balances.
     Example:
         # Account drained to 0 paise rejects 500 paise with status 'failed' and domain 'customer'
         # assert ev.status == 'failed' and ev.failure_domain == 'customer'
@@ -282,7 +376,7 @@ def test_c8_insufficient_balance_produces_customer_failure() -> None:
     assert ldg.balance_of(person.account_id) == 0
     entries_before = len(ldg.entries)
     # Attempt to send 500 paise from the empty account.
-    pmt = PlannedPayment(10, person.account_id, shop.account_id, 500, 0)
+    pmt = PlannedPayment(10, person.account_id, shop.account_id, 500, 0, purpose="everyday")
     ev = _execute_payment_leg(world, plan, pmt, 500, bank_map, r_rng)
     # Check that payment failed with customer domain and bank ledger did not change.
     assert ev.status == "failed" and ev.failure_domain == "customer" and ev.reason == "insufficient_balance"
@@ -292,7 +386,7 @@ def test_c8_insufficient_balance_produces_customer_failure() -> None:
 def test_c9_fixed_items_follow_calendar_months() -> None:
     """
     WHAT: Tests that salaried employees receive exactly two salary attempts inside configured windows.
-    WHY: Verifies requirement C9 proving recurring fixed items follow true calendar dates.
+    WHY: Protects monthly recurring living costs so salaries and rent execute on actual calendar dates.
     Example:
         # In 61 days covering Sep and Oct, salaried employees receive exactly 1 salary credit per month
         # assert len(salary_events) == 2 and 1 <= dt.day <= 5
@@ -305,11 +399,13 @@ def test_c9_fixed_items_follow_calendar_months() -> None:
     # Find all salaried workers and employer store accounts.
     salaried = [p for p in world.people if p.persona_name == "salaried_employee"]
     employer_accs = {s.account_id for s in world.shops if s.kind == "employer"}
+    salary_events = _events_for_purpose(res, "salary")
     # Check that each salaried worker got paid twice, once in September and once in October.
     for p in salaried:
-        sal_events = [e for e in res.events if e.to_account == p.account_id and e.from_account in employer_accs]
+        sal_events = [e for e in salary_events if e.to_account == p.account_id]
         assert len(sal_events) == 2, f"Expected exactly 2 salary events, got {len(sal_events)}"
         for ev in sal_events:
+            assert ev.from_account in employer_accs, f"Expected employer sender account, got {ev.from_account}"
             dt = plan.clock.to_datetime(ev.minute)
             assert dt.month in (9, 10), f"Unexpected month {dt.month}"
             assert SALARY_DAY_WINDOW[0] <= dt.day <= SALARY_DAY_WINDOW[1], f"Day {dt.day} outside {SALARY_DAY_WINDOW}"
@@ -318,7 +414,7 @@ def test_c9_fixed_items_follow_calendar_months() -> None:
 def test_c10_legacy_runner_and_tests_untouched() -> None:
     """
     WHAT: Asserts 11A routine runner executes on fresh world and preserves ledger consistency.
-    WHY: Verifies requirement C10 proving backward compatibility with original 11A simulation.
+    WHY: Protects backward compatibility ensuring earlier simulation engines and tests continue working.
     Example:
         # Running 11A run_one_month produces positive success counts and clean ledger invariant checks
         # results = run_one_month(world, rng); assert results.get('ok', 0) > 0
