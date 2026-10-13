@@ -7,8 +7,8 @@ TERM: payment event: a saved note recording what happened to a payment,
       e.g. whether money moved or a bank declined it.
 TERM: failure domain: who caused a payment to fail,
       e.g. the customer running out of money versus a bank server crashing.
-TERM: partial degradation: a service running slowly or dropping some requests rather than completely shutting down,
-      e.g. a bank failing half of its transfers.
+TERM: partial degradation: an outage where some payments fail while others still go through,
+      e.g. a bank declining half of its transfers while approving the rest.
 TERM: daily rhythm: 24-hour cycles of human activity,
       e.g. people sleeping at night and shopping during the afternoon.
 TERM: vectorised: doing math on whole lists of numbers at once,
@@ -23,6 +23,7 @@ TERM: purpose: the real-life reason for a payment,
 
 # Import Python standard library calendar utilities for Gregorian month lengths.
 import calendar
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -31,6 +32,14 @@ import numpy as np
 
 # Import domain modules for currency limits, failures, ledgers, and temporal schedules.
 from world.amounts import draw_amount_paise, lookalike_small_amount_paise, split_into_legal_payments
+from world.device_events import DeviceEvent
+from world.device_runtime import (
+    DeviceRuntimeState,
+    DeviceStamp,
+    apply_device_event,
+    stamp_sender_device,
+    start_device_runtime,
+)
 from world.failure_decision import decide_failure
 from world.failures import PaymentEvent, make_event
 from world.ledger import Ledger
@@ -71,13 +80,15 @@ class PlannedPayment:
 @dataclass(frozen=True)
 class RunResult:
     """
-    WHAT: Encapsulates all generated payment events and diagnostic count aggregates from a simulation run.
+    WHAT: Encapsulates generated payment events, device telemetry stamps, and diagnostic count aggregates.
     WHY: Delivers an audit trail of successful and failed attempts for downstream evaluation.
     """
 
     events: list[PaymentEvent]
     counts: dict[str, int]
     event_purposes: list[str]
+    event_sender_devices: list[DeviceStamp]
+    device_counts: dict[str, int]
 
 
 def _build_account_bank_map(ledgers: list[Ledger]) -> dict[str, int]:
@@ -406,33 +417,83 @@ def _record_event_counts(ev: PaymentEvent, counts: dict[str, int]) -> None:
         counts[f"domain_{ev.failure_domain}"] = counts.get(f"domain_{ev.failure_domain}", 0) + 1
 
 
-def run_world(world: Any, plan: WorldPlan, rng: np.random.Generator) -> RunResult:
+def _apply_due_device_events(
+    device_events: Sequence[DeviceEvent], dev_idx: int, up_to_minute: int,
+    p_by_id: dict[str, Any], dev_state: DeviceRuntimeState,
+) -> int:
+    """
+    WHAT: Advances device event schedule up to specified simulation minute.
+    WHY: Enforces strict chronological order where device updates precede payment execution.
+    Args:
+        device_events: Schedule; dev_idx: Offset; up_to_minute: Minute;
+        p_by_id: Person lookup; dev_state: Runtime state tracker.
+    Returns: Updated offset integer index in the device_events sequence.
+    Example:
+        # new_idx = _apply_due_device_events(events, 0, 100, p_map, state); assert new_idx >= 0
+    """
+    n_dev = len(device_events)
+    # Advance pointer and apply each pending event to the target person.
+    while dev_idx < n_dev and device_events[dev_idx].minute <= up_to_minute:
+        dev_ev = device_events[dev_idx]
+        apply_device_event(p_by_id[dev_ev.person_id], dev_ev, dev_state)
+        dev_idx += 1
+    return dev_idx
+
+
+def _execute_single_planned(
+    world: Any, plan: WorldPlan, payment: PlannedPayment, stamp: DeviceStamp,
+    bank_map: dict[str, int], rng: np.random.Generator,
+    events: list[PaymentEvent], purposes: list[str], stamps: list[DeviceStamp], counts: dict[str, int],
+) -> None:
+    """
+    WHAT: Splits a planned transaction into legal UPI payment legs and records telemetry for each leg.
+    WHY: Handles double-entry ledger execution and appends aligned event purposes and device stamps.
+    Args:
+        world: World; plan: Plan; payment: Item; stamp: DeviceStamp; bank_map: Map;
+        rng: Generator; events: List; purposes: List; stamps: List; counts: Dict.
+    Returns: None. Updates output lists and count dictionaries in place.
+    Example:
+        # _execute_single_planned(w, plan, pmt, stamp, bmap, rng, evs, ps, ss, counts)
+    """
+    # 1. Determine ledger transaction limit for sender institution.
+    sender_l = find_ledger_for_account(world.ledgers, payment.from_account)
+    limit = sender_l.upi_limit_paise if sender_l else 10000000
+    # 2. Execute each payment leg and record aligned event telemetry.
+    for leg in split_into_legal_payments(payment.amount_paise, limit):
+        ev = _execute_payment_leg(world, plan, payment, leg, bank_map, rng)
+        events.append(ev)
+        purposes.append(payment.purpose)
+        stamps.append(stamp)
+        _record_event_counts(ev, counts)
+
+
+def run_world(
+    world: Any, plan: WorldPlan, rng: np.random.Generator, device_events: Sequence[DeviceEvent] = ()
+) -> RunResult:
     """
     WHAT: Executes calendar-driven routine life, evaluating outages and logging payment events.
-    WHY: Orchestrates calendar payment execution following issue R7
-         (failed payments are recorded but move no money).
-    Args: world: Container of people, shops, ledgers; plan: WorldPlan; rng: generator.
-    Returns: RunResult dataclass containing chronological event audit log and diagnostic tallies.
-    Example: res = run_world(world, plan, rng); assert len(res.events) >= 0 and res.counts['attempts'] >= 0
+    WHY: Orchestrates calendar payment execution following issue R7 and R5 device tracking.
+         Empty device_events means devices never change (full worlds pass a schedule).
+    Args: world: World container; plan: WorldPlan; rng: Generator; device_events: Schedule.
+    Returns: RunResult containing chronological event logs, device stamps, and tallies.
+    Example:
+        # res = run_world(world, plan, rng); assert len(res.events) >= 0
     """
-    # Build account to bank mapping table for fast routing resolution.
-    bank_map = _build_account_bank_map(world.ledgers)
-    # Assemble and sort all planned transactions across the horizon.
-    planned = _collect_all_planned_payments(world, plan, rng)
-    events: list[PaymentEvent] = []
-    event_purposes: list[str] = []
-    counts: dict[str, int] = {"attempts": 0, "successes": 0, "failures": 0}
-    # Execute each planned payment, splitting by UPI transaction limit caps.
-    for payment in planned:
-        sender_l = find_ledger_for_account(world.ledgers, payment.from_account)
-        limit = sender_l.upi_limit_paise if sender_l else 10000000
-        legs = split_into_legal_payments(payment.amount_paise, limit)
-        # DECISION: later legs still run if an earlier leg failed. Retries are not modelled in this piece.
-        for leg in legs:
-            ev = _execute_payment_leg(world, plan, payment, leg, bank_map, rng)
-            events.append(ev)
-            event_purposes.append(payment.purpose)
-            _record_event_counts(ev, counts)
-    if len(event_purposes) != len(events) or any(p not in PAYMENT_PURPOSES for p in event_purposes):
-        raise RuntimeError("Validation error: event_purposes length mismatch or invalid purpose.")
-    return RunResult(events, counts, event_purposes)
+    # 1. Build lookup tables and initialize device history tracking.
+    bank_map, p_by_id = _build_account_bank_map(world.ledgers), {p.person_id: p for p in world.people}
+    p_by_acc, dev_state = {p.account_id: p for p in world.people}, start_device_runtime(world.people)
+    events, purposes, stamps, counts = [], [], [], {"attempts": 0, "successes": 0, "failures": 0}
+    dev_idx, new_devs = 0, 0
+    # 2. Iterate planned payments, applying due device events and stamping sender devices.
+    for pmt in _collect_all_planned_payments(world, plan, rng):
+        dev_idx = _apply_due_device_events(device_events, dev_idx, pmt.minute, p_by_id, dev_state)
+        stamp = stamp_sender_device(p_by_acc.get(pmt.from_account), dev_state)
+        if stamp.is_new_device:
+            new_devs += 1
+        _execute_single_planned(world, plan, pmt, stamp, bank_map, rng, events, purposes, stamps, counts)
+    # 3. Apply any remaining device events after the final transaction has executed.
+    dev_idx = _apply_due_device_events(device_events, dev_idx, 100000000, p_by_id, dev_state)
+    if len(purposes) != len(events) or len(stamps) != len(events) or any(p not in PAYMENT_PURPOSES for p in purposes):
+        raise RuntimeError("Validation error: event list length mismatch or invalid purpose.")
+    return RunResult(events, counts, purposes, stamps, {"events_applied": dev_idx, "new_device_payments": new_devs})
+
