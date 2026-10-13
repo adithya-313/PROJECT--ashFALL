@@ -18,13 +18,22 @@ import os
 import tokenize
 from typing import Any
 
+# Master registry of newly authored codebase modules and test suites.
 NEW_CODE_FILES: list[str] = [
+    # Core simulation engine and calendar planning runtime modules.
     "world/world_plan.py",
     "world/calendar_runner.py",
+    # Device lifecycle simulation runtime module.
+    "world/device_runtime.py",
+    # Test suites for world plan, calendar runner, and device event wiring.
     "tests/unit/world/test_world_plan.py",
     "tests/unit/world/test_world_calendar_runner.py",
+    "tests/unit/world/test_world_device_wiring.py",
+    # Audit test verifying comment density and docstring standards.
     "tests/unit/world/test_new_code_comment_standard.py",
 ]
+
+
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
     ("world/amounts.py", "lookalike_small_amount_paise"),
