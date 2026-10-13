@@ -92,3 +92,24 @@ def spawn_world_streams(seed: int) -> tuple[np.random.Generator, np.random.Gener
     children = seed_seq.spawn(2)
     # Return independent random number generators for the static plan and the live runner.
     return np.random.default_rng(children[0]), np.random.default_rng(children[1])
+
+
+def spawn_life_streams(seed: int) -> tuple[np.random.Generator, np.random.Generator]:
+    """
+    WHAT: Derives two auxiliary independent NumPy random number generators from a root seed integer.
+    WHY: Decouples device and episode lifecycle generation from the primary plan and run simulation streams.
+         Spawning four children guarantees that children 2 and 3 never perturb the random draws of children 0 and 1.
+    Args:
+        seed: Root integer seed initializing the high-entropy SeedSequence algorithm.
+    Returns:
+        Tuple of (device_rng, episode_rng) providing independent random streams.
+    Example:
+        dev_rng, ep_rng = spawn_life_streams(42)
+        assert dev_rng.uniform() != ep_rng.uniform()
+    """
+    # Initialize a master seed sequence to generate statistically independent sub-seeds.
+    seed_seq = np.random.SeedSequence(seed)
+    # Spawn four child seed sequences, reserving slots 2 for devices and 3 for future episodes.
+    children = seed_seq.spawn(4)
+    # Return independent random number generators for device lifecycle and episode schedules.
+    return np.random.default_rng(children[2]), np.random.default_rng(children[3])
