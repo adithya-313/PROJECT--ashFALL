@@ -30,10 +30,11 @@ from world.checks import (
 from world.device_events import make_device_event
 from world.device_runtime import (
     NO_DEVICE_STAMP,
+    DeviceRuntimeState,
     DeviceStamp,
     apply_device_event,
-    initial_known_fingerprints,
     stamp_sender_device,
+    start_device_runtime,
 )
 from world.device_schedule import draw_device_event_schedule
 from world.devices import Device
@@ -94,23 +95,23 @@ def test_apply_device_event_precondition_mismatches() -> None:
          preventing simulation world state and device lifecycle drift.
     Example:
         # with pytest.raises(RuntimeError):
-        #     apply_device_event(person, event)
+        #     apply_device_event(person, event, state)
     """
     dev = Device(device_id="dev_p1", platform="android", os_generation=2, fingerprint="fp_old")
     p1 = DummyPerson("p1", dev)
+    state = start_device_runtime([p1])
     # 1. Wrong person ID must raise RuntimeError.
     ev_bad_p = make_device_event("p2", 10, "phone_change", "android", 2, 4, "fp_old", "fp_new")
     with pytest.raises(RuntimeError, match="Person mismatch"):
-        apply_device_event(p1, ev_bad_p)
+        apply_device_event(p1, ev_bad_p, state)
     # 2. Fingerprint mismatch must raise RuntimeError.
     ev_bad_fp = make_device_event("p1", 10, "phone_change", "android", 2, 4, "fp_other", "fp_new")
     with pytest.raises(RuntimeError, match="FP mismatch"):
-        apply_device_event(p1, ev_bad_fp)
+        apply_device_event(p1, ev_bad_fp, state)
     # 3. OS generation mismatch must raise RuntimeError.
     ev_bad_os = make_device_event("p1", 10, "phone_change", "android", 1, 4, "fp_old", "fp_new")
     with pytest.raises(RuntimeError, match="OS mismatch"):
-        apply_device_event(p1, ev_bad_os)
-
+        apply_device_event(p1, ev_bad_os, state)
 
 
 def test_apply_device_event_os_update() -> None:
@@ -118,14 +119,15 @@ def test_apply_device_event_os_update() -> None:
     WHAT: Verifies that OS update events mutate OS generation without altering hardware serial numbers.
     WHY: Proves rule R5 hardware preservation where OS updates keep identical fingerprints and device IDs.
     Example:
-        # apply_device_event(person, os_event)
+        # apply_device_event(person, os_event, state)
         # assert person.device.fingerprint == "fp_init" and person.device.os_generation == 3
     """
     dev = Device(device_id="dev_p1", platform="android", os_generation=2, fingerprint="fp_init")
     person = DummyPerson("p1", dev)
+    state = start_device_runtime([person])
     # 1. Construct valid OS update event keeping fingerprint.
     ev = make_device_event("p1", 50, "os_update", "android", 2, 3, "fp_init", "fp_init")
-    apply_device_event(person, ev)
+    apply_device_event(person, ev, state)
     # 2. Check that OS generation increments while fingerprint and device ID stay invariant.
     assert person.device.os_generation == 3
     assert person.device.fingerprint == "fp_init"
@@ -137,19 +139,20 @@ def test_apply_device_event_phone_change() -> None:
     WHAT: Asserts that phone change events update hardware fingerprint, OS generation, and device ID suffix.
     WHY: Represents physical handset replacement, advancing device identifier across sequential upgrades.
     Example:
-        # apply_device_event(person, phone_ev)
+        # apply_device_event(person, phone_ev, state)
         # assert person.device.device_id == "dev_p1_p1" and person.device.fingerprint == "fp_new"
     """
     dev = Device(device_id="dev_p1", platform="android", os_generation=2, fingerprint="fp_1")
     person = DummyPerson("p1", dev)
+    state = start_device_runtime([person])
     # 1. Apply first phone replacement event.
     ev1 = make_device_event("p1", 60, "phone_change", "android", 2, 4, "fp_1", "fp_2")
-    apply_device_event(person, ev1)
+    apply_device_event(person, ev1, state)
     assert person.device.device_id == "dev_p1_p1"
     assert person.device.fingerprint == "fp_2"
     # 2. Apply second phone replacement event to verify suffix incrementation.
     ev2 = make_device_event("p1", 120, "phone_change", "android", 4, 4, "fp_2", "fp_3")
-    apply_device_event(person, ev2)
+    apply_device_event(person, ev2, state)
     assert person.device.device_id == "dev_p1_p2"
     assert person.device.fingerprint == "fp_3"
 
@@ -159,14 +162,15 @@ def test_apply_device_event_reinstall() -> None:
     WHAT: Tests that app reinstall events cycle the client fingerprint while preserving physical handset state.
     WHY: Models application resets where hardware device ID and OS version remain completely unchanged.
     Example:
-        # apply_device_event(person, reinstall_ev)
+        # apply_device_event(person, reinstall_ev, state)
         # assert person.device.fingerprint == "fp_reinst" and person.device.os_generation == 2
     """
     dev = Device(device_id="dev_p1", platform="android", os_generation=2, fingerprint="fp_orig")
     person = DummyPerson("p1", dev)
+    state = start_device_runtime([person])
     # 1. Construct valid reinstall event altering fingerprint only.
     ev = make_device_event("p1", 80, "reinstall", "android", 2, 2, "fp_orig", "fp_reinst")
-    apply_device_event(person, ev)
+    apply_device_event(person, ev, state)
     # 2. Check fingerprint changes while device ID and OS generation stay invariant.
     assert person.device.fingerprint == "fp_reinst"
     assert person.device.device_id == "dev_p1"
@@ -179,23 +183,25 @@ def test_stamp_sender_device_novelty_and_shop() -> None:
     WHY: Proves initial hardware is recognized, newly adopted fingerprints trigger one new stamp,
          and shops receive NO_DEVICE_STAMP sentinel.
     Example:
-        # stamp = stamp_sender_device(person, known)
+        # stamp = stamp_sender_device(person, state)
         # assert stamp.is_new_device is False
     """
     # 1. Commercial shop senders without devices receive NO_DEVICE_STAMP.
-    assert stamp_sender_device(None, {}) == NO_DEVICE_STAMP
+    empty_state = start_device_runtime([])
+    assert stamp_sender_device(None, empty_state) == NO_DEVICE_STAMP
     dev = Device(device_id="dev_p1", platform="android", os_generation=2, fingerprint="fp_init")
     person = DummyPerson("p1", dev)
-    known = initial_known_fingerprints([person])
+    state = start_device_runtime([person])
     # 2. First payment on starting hardware is recognized as known.
-    s1 = stamp_sender_device(person, known)
+    s1 = stamp_sender_device(person, state)
     assert s1 == DeviceStamp("fp_init", 2, False)
     # 3. After fingerprint change, first payment marks new device and second payment is recognized.
     person.device.fingerprint = "fp_new"
-    s2 = stamp_sender_device(person, known)
+    s2 = stamp_sender_device(person, state)
     assert s2 == DeviceStamp("fp_new", 2, True)
-    s3 = stamp_sender_device(person, known)
+    s3 = stamp_sender_device(person, state)
     assert s3 == DeviceStamp("fp_new", 2, False)
+
 
 
 def _run_sim_with_devices(seed: int = 101) -> tuple[Any, WorldPlan, list[Any], RunResult]:

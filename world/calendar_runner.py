@@ -34,10 +34,11 @@ import numpy as np
 from world.amounts import draw_amount_paise, lookalike_small_amount_paise, split_into_legal_payments
 from world.device_events import DeviceEvent
 from world.device_runtime import (
+    DeviceRuntimeState,
     DeviceStamp,
     apply_device_event,
-    initial_known_fingerprints,
     stamp_sender_device,
+    start_device_runtime,
 )
 from world.failure_decision import decide_failure
 from world.failures import PaymentEvent, make_event
@@ -417,21 +418,24 @@ def _record_event_counts(ev: PaymentEvent, counts: dict[str, int]) -> None:
 
 
 def _apply_due_device_events(
-    device_events: Sequence[DeviceEvent], dev_idx: int, up_to_minute: int, p_by_id: dict[str, Any]
+    device_events: Sequence[DeviceEvent], dev_idx: int, up_to_minute: int,
+    p_by_id: dict[str, Any], dev_state: DeviceRuntimeState,
 ) -> int:
     """
     WHAT: Advances device event schedule up to specified simulation minute.
     WHY: Enforces strict chronological order where device updates precede payment execution.
-    Args: device_events: Schedule; dev_idx: Offset; up_to_minute: Minute; p_by_id: Person lookup.
+    Args:
+        device_events: Schedule; dev_idx: Offset; up_to_minute: Minute;
+        p_by_id: Person lookup; dev_state: Runtime state tracker.
     Returns: Updated offset integer index in the device_events sequence.
     Example:
-        # new_idx = _apply_due_device_events(events, 0, 100, p_map); assert new_idx >= 0
+        # new_idx = _apply_due_device_events(events, 0, 100, p_map, state); assert new_idx >= 0
     """
     n_dev = len(device_events)
     # Advance pointer and apply each pending event to the target person.
     while dev_idx < n_dev and device_events[dev_idx].minute <= up_to_minute:
         dev_ev = device_events[dev_idx]
-        apply_device_event(p_by_id[dev_ev.person_id], dev_ev)
+        apply_device_event(p_by_id[dev_ev.person_id], dev_ev, dev_state)
         dev_idx += 1
     return dev_idx
 
@@ -477,18 +481,19 @@ def run_world(
     """
     # 1. Build lookup tables and initialize device history tracking.
     bank_map, p_by_id = _build_account_bank_map(world.ledgers), {p.person_id: p for p in world.people}
-    p_by_acc, known = {p.account_id: p for p in world.people}, initial_known_fingerprints(world.people)
+    p_by_acc, dev_state = {p.account_id: p for p in world.people}, start_device_runtime(world.people)
     events, purposes, stamps, counts = [], [], [], {"attempts": 0, "successes": 0, "failures": 0}
     dev_idx, new_devs = 0, 0
     # 2. Iterate planned payments, applying due device events and stamping sender devices.
     for pmt in _collect_all_planned_payments(world, plan, rng):
-        dev_idx = _apply_due_device_events(device_events, dev_idx, pmt.minute, p_by_id)
-        stamp = stamp_sender_device(p_by_acc.get(pmt.from_account), known)
+        dev_idx = _apply_due_device_events(device_events, dev_idx, pmt.minute, p_by_id, dev_state)
+        stamp = stamp_sender_device(p_by_acc.get(pmt.from_account), dev_state)
         if stamp.is_new_device:
             new_devs += 1
         _execute_single_planned(world, plan, pmt, stamp, bank_map, rng, events, purposes, stamps, counts)
     # 3. Apply any remaining device events after the final transaction has executed.
-    dev_idx = _apply_due_device_events(device_events, dev_idx, 100000000, p_by_id)
+    dev_idx = _apply_due_device_events(device_events, dev_idx, 100000000, p_by_id, dev_state)
     if len(purposes) != len(events) or len(stamps) != len(events) or any(p not in PAYMENT_PURPOSES for p in purposes):
         raise RuntimeError("Validation error: event list length mismatch or invalid purpose.")
     return RunResult(events, counts, purposes, stamps, {"events_applied": dev_idx, "new_device_payments": new_devs})
+
