@@ -1,9 +1,18 @@
 """
-WHAT: Placeholder numerical constants for the simulated world.
-WHY: Stores numbers that have no formal empirical research finding yet, keeping them isolated in one place.
-     These will move into background_realism.yaml in sub-phase 11B.
+WHAT: Placeholder numerical constants and default assumptions for the simulated world.
+These values govern device market shares, persona distributions, merchant categories, and transaction multipliers.
+They serve as interim stand-ins until formal empirical research calibration is completed in sub-phase 11B.
+
+WHY: Isolating uncalibrated assumptions in a single module prevents arbitrary magic numbers from scattering across code.
+Explicitly marking these assumptions with issue identifiers keeps technical debt transparent and trackable.
+This centralized location makes migrating constants into configuration files straightforward in future releases.
+
 ISSUE IDs: E2, E3, E4 (supporting parameters).
-TERM: placeholder: A temporary assumed constant clearly marked to be replaced by configuration later.
+TERM: placeholder: A temporary assumption or constant explicitly designated for future empirical calibration. For example, assuming Android devices comprise 94% of smartphones.
+TERM: market share: The percentage of total users or devices belonging to a particular operating system or vendor. For example, 94 out of 100 mobile devices running Android.
+TERM: persona mix: The demographic proportions defining how simulated citizens are distributed among lifestyle categories. For example, setting salaried employees at 45% of the population.
+TERM: opening balance: The initial quantity of funds seeded into an account when the world is created. For example, granting a shop 50,000 rupees to support inventory purchases.
+TERM: recurring transfer: A scheduled periodic payment such as monthly salary, apartment rent, or utility services. For example, paying an electricity bill once every month.
 """
 
 # PLACEHOLDER assumption - not from research; moves to config in 11B.
