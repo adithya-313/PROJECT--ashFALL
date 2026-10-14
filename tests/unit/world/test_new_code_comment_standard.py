@@ -80,7 +80,8 @@ NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
 
 def _count_code_lines(node: Any, source_lines: list[str]) -> int:
     """
-    WHAT: Counts executable code lines within an AST function span, excluding docstrings, blank lines, and comment lines.
+    WHAT: Counts executable code lines within an AST function span, excluding docstrings, blank lines,
+    and comment lines.
     It identifies the line span of any top-level docstring expression to filter out documentation text.
     It then iterates through all lines between the function header and end line, ignoring comments and whitespace.
 
@@ -96,7 +97,8 @@ def _count_code_lines(node: Any, source_lines: list[str]) -> int:
         Integer count of non-blank, non-comment code lines belonging to the function body and header.
 
     Example:
-        # code_text = 'def sample(x):\n    \"\"\"A docstring.\"\"\"\n    # A comment line\n    \n    y = x + 10\n    return y\n'
+        # code_text = ('def sample(x):\n    \"\"\"A docstring.\"\"\"\n'
+        #              '    # A comment line\n    \n    y = x + 10\n    return y\n')
         # node = ast.parse(code_text).body[0]
         # lines = code_text.splitlines(keepends=True)
         # count = _count_code_lines(node, lines)
