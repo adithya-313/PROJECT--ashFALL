@@ -66,6 +66,8 @@ NEW_CODE_FILES: list[str] = [
     "world/device_events.py",
     "world/device_schedule.py",
     "world/episodes.py",
+    # Automated test running Level 11B doctests.
+    "tests/unit/world/test_world_doctests.py",
 ]
 
 
