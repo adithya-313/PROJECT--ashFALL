@@ -38,7 +38,13 @@ NEW_CODE_FILES: list[str] = [
     # Verification script and verification unit test suite.
     "scripts/verify_world.py",
     "tests/unit/test_verify_world.py",
+    # Level 11A world files conforming to function length and docstring standards.
+    "world/devices.py",
+    "world/personas.py",
+    "world/money.py",
+    "world/placeholders.py",
 ]
+
 
 
 
