@@ -62,6 +62,12 @@ NEW_CODE_FILES: list[str] = [
     "world/failures.py",
     "world/incidents.py",
     "world/failure_decision.py",
+    # Level 11B device and episode files conforming to function length and docstring standards.
+    "world/device_events.py",
+    "world/device_schedule.py",
+    "world/episodes.py",
+    # Automated test running Level 11B doctests.
+    "tests/unit/world/test_world_doctests.py",
 ]
 
 
