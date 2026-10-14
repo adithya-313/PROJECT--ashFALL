@@ -41,8 +41,28 @@ def read_background_realism(config_path: Path | str | None = None) -> dict[str, 
     """
     WHAT: Reads config/background_realism.yaml and returns the dictionary containing all parameters.
     WHY: Supplies pre-registered background rhythm intervals to world simulation generators.
+
+    Args:
+        config_path: Optional file path or path string to the background realism YAML configuration.
+            Defaults to DEFAULT_BACKGROUND_REALISM_PATH (config/background_realism.yaml).
+
+    Returns:
+        Dictionary mapping configuration parameter names to their empirical and assumed intervals.
+
+    Raises:
+        FileNotFoundError: If the target configuration file does not exist on disk.
+
+    Example:
+        >>> from world.background_config import read_background_realism
+        >>> cfg = read_background_realism()
+        >>> "parameters" in cfg
+        True
+        >>> "festival_peak_day_in_world" in cfg.get("parameters", {})
+        True
     """
+    # Resolve the provided path or fall back to the default configuration path.
     path = Path(config_path) if config_path is not None else DEFAULT_BACKGROUND_REALISM_PATH
+    # Verify that the target configuration file exists before attempting to read.
     if not path.exists():
         raise FileNotFoundError(f"Config file not found at path: {path}")
 
@@ -60,18 +80,41 @@ def draw_whole_number(
     """
     WHAT: Draws one integer uniformly at random within the named interval [low, high] of an entry.
     WHY: Samples discrete counts (such as festival days or easing durations) without leaving bounds.
+
+    Args:
+        entry: Configuration dictionary containing bounded range specifications for intervals.
+        rng: Pseudo-random number generator used for deterministic sampling.
+        range_name: Target dataset split name containing the range boundaries (default "training").
+        param_name: Descriptive parameter name used in diagnostic exception messages.
+
+    Returns:
+        Integer drawn uniformly at random within the inclusive interval [low, high].
+
+    Raises:
+        ValueError: If range_name is missing, bounds are malformed, or low exceeds high.
+
+    Example:
+        >>> import numpy as np
+        >>> from world.background_config import draw_whole_number
+        >>> rng = np.random.default_rng(seed=42)
+        >>> entry = {"training": [3, 7]}
+        >>> draw_whole_number(entry, rng, range_name="training", param_name="sample")
+        3
     """
+    # Check that the requested dataset split is present in the parameter entry.
     if range_name not in entry:
         raise ValueError(
             f"Missing range split '{range_name}' in config parameter '{param_name}'"
         )
 
+    # Validate that the bounds specification contains exactly two elements.
     bounds = entry[range_name]
     if not isinstance(bounds, (list, tuple)) or len(bounds) != 2:
         raise ValueError(
             f"Malformed range for '{param_name}' in split '{range_name}': expected 2 elements, got {bounds}"
         )
 
+    # Ensure the lower bound does not exceed the upper bound.
     low = int(bounds[0])
     high = int(bounds[1])
     if low > high:
