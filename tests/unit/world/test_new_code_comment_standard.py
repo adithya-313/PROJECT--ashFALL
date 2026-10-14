@@ -54,6 +54,14 @@ NEW_CODE_FILES: list[str] = [
     "world/checks.py",
     "world/build_world.py",
     "world/routine.py",
+    # Level 11B time and failure files conforming to function length and docstring standards.
+    "world/background_config.py",
+    "world/clock.py",
+    "world/festivals.py",
+    "world/rhythms.py",
+    "world/failures.py",
+    "world/incidents.py",
+    "world/failure_decision.py",
 ]
 
 
