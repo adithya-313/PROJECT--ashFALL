@@ -1,15 +1,20 @@
 """
 WHAT: Pure audit checker functions verifying financial ledger integrity.
-It inspects all bank ledgers across the world to assert non-negative balances, entry consistency, and money conservation.
+It inspects all bank ledgers across the world to assert non-negative balances, entry consistency,
+and money conservation.
 These verification routines act as automated auditors confirming that the financial engine operates without flaws.
 
 WHY: Programmatically verifies that money is conserved, balances never go negative, and entries match state.
 Closed-loop macroeconomic simulations require mathematical proof that currency is neither lost nor minted.
 Automated audit functions provide fast invariant checking before, during, and after simulation runs.
 
-TERM: conservation of money: The fundamental accounting invariant that the total currency across all accounts remains constant unless explicitly deposited or withdrawn. For example, verifying that total paise across all banks matches opening balances.
-TERM: negative balance: An illegal financial state where an account holds less than zero currency units. For example, an account showing -500 paise due to an unauthorized overdraft.
-TERM: audit check: A pure programmatic verification verifying that simulated financial ledgers adhere strictly to banking rules. For example, asserting that stored account balances match their summed ledger entry history.
+TERM: conservation of money: The fundamental accounting invariant that the total currency across all accounts
+      remains constant unless explicitly deposited or withdrawn. For example, verifying that total paise across
+      all banks matches opening balances.
+TERM: negative balance: An illegal financial state where an account holds less than zero currency units.
+      For example, an account showing -500 paise due to an unauthorized overdraft.
+TERM: audit check: A pure programmatic verification verifying that simulated financial ledgers adhere strictly
+      to banking rules. For example, asserting that stored account balances match their summed ledger entry history.
 """
 
 from world.ledger import Ledger

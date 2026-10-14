@@ -7,10 +7,14 @@ WHY: Guarantees double-entry recording, prevents negative balances, and models p
 Rigorous financial record keeping ensures transactions are completely auditable and money is conserved.
 Isolating ledgers per bank accurately reflects real-world banking boundaries where banks cannot read rival data.
 
-TERM: ledger: The authoritative record of financial transactions and balances for accounts within one bank. For example, a bank database tracking each customer's balance.
-TERM: ledger entry: A single debit or credit line item permanently written to the ledger. For example, recording a 2000 paise debit for groceries.
-TERM: double-entry bookkeeping: An accounting standard where every transfer consists of equal debit and credit legs. For example, debiting the sender and crediting the receiver.
-TERM: balance invariant: A mathematical guarantee that account funds never fall below zero and match transaction sums. For example, ensuring an account balance never drops into negative numbers.
+TERM: ledger: The authoritative record of financial transactions and balances for accounts within one bank.
+      For example, a bank database tracking each customer's balance.
+TERM: ledger entry: A single debit or credit line item permanently written to the ledger.
+      For example, recording a 2000 paise debit for groceries.
+TERM: double-entry bookkeeping: An accounting standard where every transfer consists of equal debit and credit legs.
+      For example, debiting the sender and crediting the receiver.
+TERM: balance invariant: A mathematical guarantee that account funds never fall below zero and match
+      transaction sums. For example, ensuring an account balance never drops into negative numbers.
 """
 
 from dataclasses import dataclass, field

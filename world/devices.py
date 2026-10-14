@@ -5,7 +5,8 @@ WHY: Simulates client device characteristics (platform, OS version generation, a
 TERM: device fingerprint: A synthetic pseudo-hardware identifier uniquely distinguishing a client phone,
       e.g. like a digital serial number or MAC address that helps a bank verify it is really your phone.
 TERM: OS generation: An integer representing the release age of the phone operating system,
-      e.g. generation 1 represents an older OS like Android 10, while generation 5 represents a modern OS like Android 14.
+      e.g. generation 1 represents an older OS like Android 10, while generation 5 represents a modern OS
+      like Android 14.
 TERM: mobile platform: The primary operating system family powering a handset,
       e.g. Android vs iOS running on a consumer smartphone.
 """
@@ -21,7 +22,8 @@ from world.placeholders import ANDROID_SHARE, OS_GENERATIONS
 class Device:
     """
     WHAT: Represents a physical mobile phone associated with a citizen.
-    It encapsulates the device identifier, operating system platform, OS generation rating, and unique hardware fingerprint.
+    It encapsulates the device identifier, operating system platform, OS generation rating,
+    and unique hardware fingerprint.
     WHY: Risk engines inspect device characteristics to detect account takeover and sudden device switching.
     Tracking stable device attributes enables testing genuine software upgrades against anomalous hardware replacements.
     Args:
