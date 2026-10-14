@@ -71,7 +71,6 @@ def draw_world_plan(
     incidents = draw_incident_schedule(fail_ranges, rng, n_days=n_days, n_banks=n_banks, range_name=range_name)
     # Step 4: Draw background failure probability settings (PIN, network, technical).
     failure_settings = draw_failure_settings(fail_ranges, rng, range_name=range_name)
-    # Return the assembled, frozen world plan container.
     return WorldPlan(n_days, clock, festivals, rhythm_settings, incidents, failure_settings, range_name)
 
 
@@ -90,7 +89,7 @@ def spawn_world_streams(seed: int) -> tuple[np.random.Generator, np.random.Gener
     seed_seq = np.random.SeedSequence(seed)
     # Spawn two child seed sequences for world plan generation and transaction execution streams.
     children = seed_seq.spawn(2)
-    # Return independent random number generators for the static plan and the live runner.
+    # Child streams 0 and 1 are the plan and run streams. Never reorder them: every saved world would change.
     return np.random.default_rng(children[0]), np.random.default_rng(children[1])
 
 
@@ -111,5 +110,5 @@ def spawn_life_streams(seed: int) -> tuple[np.random.Generator, np.random.Genera
     seed_seq = np.random.SeedSequence(seed)
     # Spawn four child seed sequences, reserving slots 2 for devices and 3 for future episodes.
     children = seed_seq.spawn(4)
-    # Return independent random number generators for device lifecycle and episode schedules.
+    # Child streams 2 and 3 are the device and episode streams, added later so streams 0 and 1 stay unchanged.
     return np.random.default_rng(children[2]), np.random.default_rng(children[3])

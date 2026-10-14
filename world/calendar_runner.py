@@ -111,7 +111,6 @@ def _build_account_bank_map(ledgers: list[Ledger]) -> dict[str, int]:
         # Assign bank index to each account registered in this ledger.
         for account_id in ledger.accounts:
             account_map[account_id] = b_idx
-    # Return the completed constant-time lookup dictionary.
     return account_map
 
 
@@ -136,7 +135,6 @@ def _collect_monthly_windows(plan: WorldPlan) -> list[tuple[int, int, int]]:
         if ym not in seen_months:
             seen_months.add(ym)
             windows.append((dt.year, dt.month, day))
-    # Return chronological month start positions.
     return windows
 
 

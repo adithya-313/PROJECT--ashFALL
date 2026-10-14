@@ -1,6 +1,10 @@
 """
-File: scripts/verify_world.py
-Purpose: Run every golden simulation check (FP, G1, G2, G3) and issue register in one command.
+WHAT: Verification script orchestrating all golden simulation checks and research issue register audits.
+WHY: Provides a single deterministic command validating entity topology, double-entry ledgers, and calendar runs.
+TERM: Golden Values: canonical baseline fingerprints and transaction count hashes verified for regression testing,
+      e.g. FP entity hash 0f09c489... establishing reproducible world population structure.
+TERM: Fast Suite: the subset of unit and property tests that execute without requiring GPUs or external services,
+      e.g. pytest tests/unit tests/contract skipping ML and stack dependencies.
 """
 
 import argparse
@@ -36,9 +40,10 @@ from world.world_plan import draw_world_plan, spawn_life_streams, spawn_world_st
 def check_fp(golden_cfg: dict[str, Any]) -> tuple[bool, str, str]:
     """
     WHAT: Re-computes world fingerprint for seed 7 and compares against golden baseline.
-    WHY: Verifies Level 11A bit-for-bit entity initialization determinism.
-    Args: golden_cfg: Dictionary loaded from golden_values.yaml.
-    Returns: Tuple of (ok_flag, expected_fingerprint, actual_fingerprint).
+    WHY: Verifies Level 11A bit-for-bit entity initialization determinism and citizen attributes.
+    Args: golden_cfg: Dictionary loaded from golden_values.yaml defining expected fingerprints.
+    Returns: Tuple of (ok_flag, expected_fingerprint, actual_fingerprint) validating world topology.
+    Example: ok, exp, act = check_fp(golden_cfg); assert ok is True and len(act) == 64
     """
     # 1. Build world with standard Level 11A seed 7 configuration.
     world = build_world(seed=7, n_people=300, n_shops=40)
@@ -50,10 +55,11 @@ def check_fp(golden_cfg: dict[str, Any]) -> tuple[bool, str, str]:
 
 def check_g1(golden_cfg: dict[str, Any]) -> tuple[bool, str, str]:
     """
-    WHAT: Runs Level 11A one-month routine and verifies ledger entries hash and counts.
-    WHY: Verifies monthly routine execution and double-entry bookkeeping journals.
-    Args: golden_cfg: Dictionary loaded from golden_values.yaml.
-    Returns: Tuple of (ok_flag, expected_summary, actual_summary).
+    WHAT: Runs Level 11A one-month routine and verifies ledger entries hash and transaction counts.
+    WHY: Verifies monthly routine execution, double-entry bookkeeping journals, and balance conservation.
+    Args: golden_cfg: Dictionary loaded from golden_values.yaml containing expected ledger digests.
+    Returns: Tuple of (ok_flag, expected_summary, actual_summary) reporting ledger verification.
+    Example: ok, exp, act = check_g1(golden_cfg); assert ok is True and "hash=" in act
     """
     # 1. Build world and run monthly routine cycle with fixed generator seed 11.
     world = build_world(seed=7, n_people=300, n_shops=40)
@@ -70,10 +76,11 @@ def check_g1(golden_cfg: dict[str, Any]) -> tuple[bool, str, str]:
 
 def check_g2(golden_cfg: dict[str, Any]) -> tuple[bool, str, str]:
     """
-    WHAT: Runs 61-day calendar simulation without device events and checks G2 hash and counts.
+    WHAT: Runs 61-day calendar simulation without device events and checks G2 hash and transaction counts.
     WHY: Verifies calendar runner transaction dispatch and failure breakdown against PR #47 baseline.
-    Args: golden_cfg: Dictionary loaded from golden_values.yaml.
-    Returns: Tuple of (ok_flag, expected_summary, actual_summary).
+    Args: golden_cfg: Dictionary loaded from golden_values.yaml with calendar event baselines.
+    Returns: Tuple of (ok_flag, expected_summary, actual_summary) tracking calendar execution.
+    Example: ok, exp, act = check_g2(golden_cfg); assert ok is True and "counts=" in act
     """
     # 1. Execute calendar simulation without device schedule.
     world = build_world(seed=101, n_people=60, n_shops=12)
@@ -91,8 +98,9 @@ def check_g3(golden_cfg: dict[str, Any]) -> tuple[bool, str, str]:
     """
     WHAT: Runs 61-day calendar simulation with device schedule and validates G3 baselines.
     WHY: Verifies device lifecycle events, hardware stamps, and people device state against PR #49.
-    Args: golden_cfg: Dictionary loaded from golden_values.yaml.
-    Returns: Tuple of (ok_flag, expected_summary, actual_summary).
+    Args: golden_cfg: Dictionary loaded from golden_values.yaml containing device baseline hashes.
+    Returns: Tuple of (ok_flag, expected_summary, actual_summary) packaging telemetry verification.
+    Example: ok, exp, act = check_g3(golden_cfg); assert ok is True and "stamps=" in act
     """
     # 1. Build world, plan, and device schedule from device realism configuration.
     world = build_world(seed=101, n_people=60, n_shops=12)
@@ -120,9 +128,10 @@ def check_g3(golden_cfg: dict[str, Any]) -> tuple[bool, str, str]:
 def check_issues(golden_cfg: dict[str, Any]) -> tuple[bool, str, str]:
     """
     WHAT: Invokes core.issue_register.main() in-process to verify all 31 research issues.
-    WHY: Validates research issue registration and status invariants without running subprocess.
-    Args: golden_cfg: Dictionary loaded from golden_values.yaml.
-    Returns: Tuple of (ok_flag, expected_summary, actual_summary).
+    WHY: Validates research issue registration and status invariants without spawning a subprocess.
+    Args: golden_cfg: Dictionary loaded from golden_values.yaml containing issue summary text.
+    Returns: Tuple of (ok_flag, expected_summary, actual_summary) confirming issue register status.
+    Example: ok, exp, act = check_issues(golden_cfg); assert ok is True and "31 issues" in exp
     """
     # 1. Capture stdout from core.issue_register.main execution.
     buf = io.StringIO()
@@ -136,10 +145,10 @@ def check_issues(golden_cfg: dict[str, Any]) -> tuple[bool, str, str]:
 
 
 def run_fast_suite() -> tuple[bool, str]:
-    """
-    WHAT: Runs pytest fast test suite via subprocess and captures summary line.
+    """WHAT: Runs pytest fast test suite via subprocess and captures summary line.
     WHY: Verifies the entire fast test suite passes without errors or failures when --suites is set.
-    Returns: Tuple of (passed_flag, last_summary_line).
+    Returns: Tuple of (passed_flag, last_summary_line) capturing fast suite outcome.
+    Example: ok, summary = run_fast_suite(); assert ok is True and "passed" in summary
     """
     # 1. Construct command invoking fast pytest test suite matching CI and check.py.
     cmd = [
@@ -170,9 +179,10 @@ def run_fast_suite() -> tuple[bool, str]:
 def run_all_golden_checks(golden_path: Path) -> list[tuple[str, bool, str, str]]:
     """
     WHAT: Loads golden configuration and executes FP, G1, G2, G3, and issues checks.
-    WHY: Aggregates verification results across all five golden specification areas.
-    Args: golden_path: Filesystem path to golden_values.yaml.
-    Returns: List of (check_name, passed_boolean, expected_string, actual_string).
+    WHY: Aggregates verification results across all five golden specification areas into a single report.
+    Args: golden_path: Filesystem path to golden_values.yaml defining canonical expected outputs.
+    Returns: List of (check_name, passed_boolean, expected_string, actual_string) records.
+    Example: results = run_all_golden_checks(Path("scripts/golden_values.yaml")); assert len(results) == 5
     """
     # 1. Load configuration catalog using core YAML loader.
     cfg = load_yaml(golden_path)
@@ -194,9 +204,10 @@ def run_all_golden_checks(golden_path: Path) -> list[tuple[str, bool, str, str]]
 def main(argv: list[str] | None = None) -> int:
     """
     WHAT: CLI entry point orchestrating golden checks and optional test suite execution.
-    WHY: Provides single command exiting 0 on success and 1 on any failure.
-    Args: argv: Optional CLI argument strings list.
-    Returns: Integer exit code 0 on success or 1 on failure.
+    WHY: Provides a single command exiting 0 on success and 1 on failure for automated pipelines.
+    Args: argv: Optional list of command-line argument strings to parse instead of sys.argv.
+    Returns: Integer exit code indicating overall verification status, where 0 means all passed.
+    Example: code = main(["--golden-file", "scripts/golden_values.yaml"]); assert code == 0
     """
     parser = argparse.ArgumentParser(description="Verify world golden values.")
     parser.add_argument("--golden-file", type=Path, default=REPO_ROOT / "scripts" / "golden_values.yaml")

@@ -1,6 +1,10 @@
 """
-File: tests/unit/test_verify_world.py
-Purpose: Tests that scripts/verify_world.py passes on valid golden values and fails when values diverge.
+WHAT: Unit tests verifying scripts/verify_world.py behavior under normal and mutated configurations.
+WHY: Ensures golden check runner detects deviations properly and exits with appropriate return codes.
+TERM: Mutation Testing: deliberately corrupting expected golden baseline values to verify failure detection,
+      e.g. replacing valid SHA-256 fingerprint with zeroes to confirm script exits with code 1.
+TERM: Golden Baseline: frozen reference data catalog storing canonical simulation hashes and event counts,
+      e.g. scripts/golden_values.yaml holding ground truth outputs.
 """
 
 import subprocess
@@ -13,7 +17,14 @@ REAL_GOLDEN_PATH = REPO_ROOT / "scripts" / "golden_values.yaml"
 
 
 def test_verify_world_passes_with_real_yaml():
-    """Verify that running verify_world.py against real golden values succeeds with exit code 0."""
+    """
+    WHAT: Asserts scripts/verify_world.py exits with status 0 and prints all golden check passes.
+    WHY: Confirms that unchanged repository codebase satisfies all golden baseline values end-to-end.
+    Example:
+        # Runs verify_world.py against real golden_values.yaml
+        # assert proc.returncode == 0
+        # assert "ALL GOLDEN CHECKS PASSED" in proc.stdout
+    """
     cmd = [sys.executable, "-B", str(SCRIPT_PATH), "--golden-file", str(REAL_GOLDEN_PATH)]
     proc = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
     assert proc.returncode == 0, f"Expected 0, got {proc.returncode}:\n{proc.stdout}\n{proc.stderr}"
@@ -23,7 +34,14 @@ def test_verify_world_passes_with_real_yaml():
 
 
 def test_verify_world_fails_when_hash_altered(tmp_path: Path):
-    """Verify that altering an expected golden value causes verify_world.py to report failure and exit 1."""
+    """
+    WHAT: Mutates expected golden fingerprint and asserts scripts/verify_world.py reports FAIL and exits 1.
+    WHY: Verifies the integrity of the golden test harness so tampered values cannot pass undetected.
+    Args: tmp_path: Pytest temporary directory fixture used to isolate mutated YAML configuration.
+    Example:
+        # Mutates FP expected hash to zeroes in temporary file
+        # assert proc.returncode == 1
+    """
     content = REAL_GOLDEN_PATH.read_text(encoding="utf-8")
     # Mutate FP expected hash in temporary file copy so real config remains untouched.
     mutated = content.replace("0f09c489d4055fa0343316c6619fd5e254e074779c0e30d9a4bc315308f5986f", "0" * 64)
