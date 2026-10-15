@@ -227,8 +227,8 @@ def _sample_single_everyday(
     hour = int(rng.choice(24, p=probs[person.persona_name]))
     # Pick a random minute uniformly within the selected hour.
     minute = day * 1440 + hour * 60 + int(rng.integers(0, 60))
-    # Choose destination merchant establishment uniformly from catalog.
-    shop = rng.choice(shops)
+    # Pick shop by integer index directly instead of converting the list, yielding identical random numbers faster.
+    shop = shops[int(rng.integers(0, len(shops)))]
     # Draw purchase amount from person log-normal spending distribution.
     amt = draw_amount_paise(person.amount_profile, rng)
     return PlannedPayment(minute, person.account_id, shop.account_id, amt, idx, "everyday")
@@ -264,15 +264,22 @@ def _generate_day_everyday_payments(
 
 
 def _sample_lookalike_inbounds(
-    person: Any, others: list[Any], day: int, probs: dict[str, np.ndarray],
-    count: int, rng: np.random.Generator, start_idx: int
+    person: Any,
+    person_position: int,
+    people: list[Any],
+    day: int,
+    probs: dict[str, np.ndarray],
+    count: int,
+    rng: np.random.Generator,
+    start_idx: int,
 ) -> tuple[list[PlannedPayment], int]:
     """
     WHAT: Samples small incoming peer transfers for one lookalike person on a simulation day.
     WHY: Generates camouflage inbound traffic where transaction timing follows sender diurnal peak.
-    Args: person: Recipient; others: senders; day: day index; probs: weights; count: draws; rng: rng; start_idx: idx.
+    Args: person: Recipient; person_position: recipient index; people: citizen list; day: day index;
+          probs: weights; count: draws; rng: random generator; start_idx: sequence counter.
     Returns: Tuple of generated PlannedPayment records and advanced sequence counter.
-    Example: inbounds, n_idx = _sample_lookalike_inbounds(p, others, 0, probs, 2, rng, 0); assert len(inbounds) == 2
+    Example: inbounds, n_idx = _sample_lookalike_inbounds(p, 0, people, 0, probs, 2, rng, 0); assert len(inbounds) == 2
     """
     # Container collecting peer transfers into lookalike account.
     payments: list[PlannedPayment] = []
@@ -280,8 +287,10 @@ def _sample_lookalike_inbounds(
     # Scale small inbound credit amount using the shared lookalike rule.
     amt = lookalike_small_amount_paise(person.amount_profile.median_paise)
     for _ in range(count):
-        # Sample a distinct sender from the community.
-        sender = rng.choice(others)
+        # Picking an offset from N - 1 citizens avoids rebuilding the list, giving the exact same sender.
+        pick = int(rng.integers(0, len(people) - 1))
+        sender_position = pick + 1 if pick >= person_position else pick
+        sender = people[sender_position]
         # SENDER rhythm is used because sender is the active actor initiating transfer.
         hour = int(rng.choice(24, p=probs[sender.persona_name]))
         minute = day * 1440 + hour * 60 + int(rng.integers(0, 60))
@@ -309,15 +318,16 @@ def _generate_day_lookalike_payments(
     days_in_month = calendar.monthrange(dt.year, dt.month)[1]
     base_rate = LOOKALIKE_SMALL_INCOMING_PER_MONTH / float(days_in_month)
     boost = daily_multiplier(day * 1440, plan.clock, plan.rhythm_settings, plan.festivals)
-    # Filter lookalike personas and collect candidate external senders.
-    for person in world.people:
+    # Iterate across people with position index to avoid rebuilding sender lists every time.
+    for person_position, person in enumerate(world.people):
         if get_persona(person.persona_name).looks_like_mule_in_normal_life:
             # Sample number of incoming transfers arriving today.
             count = int(rng.poisson(base_rate * boost))
-            others = [p for p in world.people if p.person_id != person.person_id]
-            # Generate transfers if candidate senders are present.
-            if others and count > 0:
-                new_pmts, idx = _sample_lookalike_inbounds(person, others, day, probs, count, rng, idx)
+            # Generate transfers if at least one candidate sender exists and draws are requested.
+            if len(world.people) > 1 and count > 0:
+                new_pmts, idx = _sample_lookalike_inbounds(
+                    person, person_position, world.people, day, probs, count, rng, idx
+                )
                 payments.extend(new_pmts)
     return payments, idx
 
