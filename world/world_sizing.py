@@ -350,7 +350,10 @@ def _resolve_explicit(
     )
 
 
-def _validate_resolved(settings: FastRunSettings) -> None:
+def _validate_resolved(
+    settings: FastRunSettings,
+    background_config: dict[str, Any] | None = None,
+) -> None:
     """
     WHAT: Validates that resolved simulation settings satisfy integer positivity and calendar horizon rules.
     It verifies that seed, population, shops, and days are strictly positive integers.
@@ -362,6 +365,7 @@ def _validate_resolved(settings: FastRunSettings) -> None:
 
     Args:
         settings: FastRunSettings container holding candidate simulation parameters.
+        background_config: Optional background realism dictionary; if None, read from disk.
 
     Returns:
         None upon successful validation without errors.
@@ -385,7 +389,7 @@ def _validate_resolved(settings: FastRunSettings) -> None:
             raise ValueError(f"Parameter {name} ({val}) must be a positive integer.")
 
     # 2. Read authoritative festival season peak bounds from background realism configuration.
-    bg_config = read_background_realism()
+    bg_config = background_config if background_config is not None else read_background_realism()
     festival_bounds = bg_config["parameters"]["festival_peak_day_in_world"]
     if settings.range_name not in festival_bounds:
         raise ValueError(
@@ -411,6 +415,8 @@ def resolve_settings(
     range_name: str | None = None,
     expert_path: Path | str | None = None,
     sizing_config: dict[str, Any] | None = None,
+    *,
+    background_config: dict[str, Any] | None = None,
 ) -> FastRunSettings:
     """
     WHAT: Dispatches simulation parameter resolution across expert, preset, and explicit invocation modes.
@@ -430,6 +436,7 @@ def resolve_settings(
         range_name: Dataset partition name ('training', 'test', 'stress').
         expert_path: Filesystem path to an expert YAML configuration file.
         sizing_config: Sizing policy dictionary loaded from config/world_sizing.yaml.
+        background_config: Optional background realism dictionary for festival bounds validation.
 
     Returns:
         Validated FastRunSettings instance ready for simulation execution.
@@ -459,7 +466,7 @@ def resolve_settings(
         settings = _resolve_explicit(seed, n_people, n_shops, n_days, range_name)
 
     # 3. Perform universal validation across resolved parameters.
-    _validate_resolved(settings)
+    _validate_resolved(settings, background_config=background_config)
     return settings
 
 

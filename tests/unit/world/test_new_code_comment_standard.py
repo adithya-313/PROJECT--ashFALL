@@ -78,6 +78,10 @@ NEW_CODE_FILES: list[str] = [
     "world/machine_limits.py",
     "world/world_sizing.py",
     "tests/unit/world/test_world_sizing.py",
+    # Level 11C-3 stackable layers modules and test suite.
+    "world/world_configs.py",
+    "world/layers.py",
+    "tests/unit/world/test_world_layers.py",
 ]
 
 

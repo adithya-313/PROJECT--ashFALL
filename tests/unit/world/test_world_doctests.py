@@ -25,6 +25,8 @@ DOCTEST_MODULES: list[str] = [
     "world.estimates",
     "world.machine_limits",
     "world.world_sizing",
+    "world.world_configs",
+    "world.layers",
 ]
 
 
