@@ -68,6 +68,9 @@ NEW_CODE_FILES: list[str] = [
     "world/episodes.py",
     # Automated test running Level 11B doctests.
     "tests/unit/world/test_world_doctests.py",
+    # Level 11C-1 fast mode module and test suite.
+    "world/fast_mode.py",
+    "tests/unit/world/test_world_fast_mode.py",
 ]
 
 

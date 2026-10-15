@@ -47,3 +47,6 @@ models/**/*.ubj
 
 # Generated showcase reports: they change on every run and contain timestamps.
 reports/showcase/
+
+# Local world simulation run output folders
+runs/
