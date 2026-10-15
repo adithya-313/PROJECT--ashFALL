@@ -102,6 +102,8 @@ def build_world(
     n_people: int,
     n_shops: int,
     range_name: str = "training",
+    *,
+    ranges: dict[str, Any] | None = None,
 ) -> World:
     """
     WHAT: Builds a complete simulated world deterministically from a single seed.
@@ -117,6 +119,7 @@ def build_world(
         n_people: Number of citizen agents to generate within the simulated town.
         n_shops: Number of commercial retail and employer shops to generate.
         range_name: Configuration interval split to sample parameter bounds from, defaulting to 'training'.
+        ranges: Optional parameter ranges dictionary; if None, loaded directly from disk.
 
     Returns:
         Fully initialized World instance ready for routine execution and fraud modeling.
@@ -130,7 +133,8 @@ def build_world(
     validate_world_sizes(n_people, n_shops)
     # Initialize deterministic random generator and load master parameter ranges.
     rng = np.random.default_rng(seed)
-    ranges = read_world_ranges()
+    if ranges is None:
+        ranges = read_world_ranges()
 
     # Draw the municipal region partition count and construct the three banks.
     n_reg_entry = get_parameter_entry(ranges, "number_of_regions")

@@ -36,6 +36,7 @@ from world.device_schedule import draw_device_event_schedule
 from world.episode_payments import plan_episode_payments
 from world.episodes import Episode, draw_episode_schedule
 from world.failures import PaymentEvent
+from world.world_configs import WorldConfigs
 from world.world_plan import WorldPlan, draw_world_plan, spawn_life_streams, spawn_world_streams
 
 if TYPE_CHECKING:
@@ -108,7 +109,9 @@ class FastRunOutput:
     episode_report: dict[str, Any]
 
 
-def run_fast_world(settings: FastRunSettings) -> FastRunOutput:
+def run_fast_world(
+    settings: FastRunSettings, configs: WorldConfigs | None = None
+) -> FastRunOutput:
     """
     WHAT: Executes a complete simulated world lifecycle according to the canonical test recipe.
     It builds entities, derives independent random streams, draws schedules, and runs payments.
@@ -120,6 +123,7 @@ def run_fast_world(settings: FastRunSettings) -> FastRunOutput:
 
     Args:
         settings: FastRunSettings specifying seed, entity counts, horizon duration, and split.
+        configs: Optional WorldConfigs instance holding customized or layered domain configuration dicts.
 
     Returns:
         FastRunOutput holding completed world entities, calendar plan, run results, and episode reports.
@@ -132,7 +136,8 @@ def run_fast_world(settings: FastRunSettings) -> FastRunOutput:
         (499, 0)
     """
     # 1. Build foundational town entities including banks, double-entry ledgers, shops, and citizens.
-    world = build_world(seed=settings.seed, n_people=settings.n_people, n_shops=settings.n_shops)
+    ranges = configs.world_ranges if configs is not None else read_world_ranges()
+    world = build_world(settings.seed, settings.n_people, settings.n_shops, ranges=ranges)
 
     # 2. Derive independent pseudo-random streams for calendar planning and dynamic transaction execution.
     plan_rng, run_rng = spawn_world_streams(settings.seed)
@@ -140,12 +145,16 @@ def run_fast_world(settings: FastRunSettings) -> FastRunOutput:
     # 3. Derive auxiliary pseudo-random streams for device lifecycle transitions and burst episodes.
     device_rng, episode_rng = spawn_life_streams(settings.seed)
 
-    # 4. Construct the temporal world plan containing clock, festival calendar, and failure settings.
-    plan = draw_world_plan(plan_rng, n_days=settings.n_days, range_name=settings.range_name)
+    # 4. Construct temporal world plan with clock, festival calendar, and failure settings.
+    bg_cfg = configs.background_realism if configs is not None else None
+    fail_cfg = configs.failure_realism if configs is not None else None
+    plan = draw_world_plan(
+        plan_rng, settings.n_days, settings.range_name, background_config=bg_cfg, failure_config=fail_cfg
+    )
 
-    # 5. Read empirical world configuration bounds and device realism parameters.
-    ranges = read_world_ranges()
-    device_config = read_background_realism(Path("config/device_realism.yaml"))
+    # 5. Read device realism parameters from config file or provided configs.
+    dev_path = Path("config/device_realism.yaml")
+    device_config = configs.device_realism if configs is not None else read_background_realism(dev_path)
 
     # 6. Pre-draw device hardware updates, replacements, and OS rollout wave schedules.
     device_events = draw_device_event_schedule(device_config, device_rng, world.people, plan.festivals, plan.n_days)
@@ -161,11 +170,7 @@ def run_fast_world(settings: FastRunSettings) -> FastRunOutput:
 
     # Pass back the complete assembled simulation state and execution artifacts.
     return FastRunOutput(
-        world=world,
-        plan=plan,
-        result=result,
-        episodes=episodes,
-        episode_report=episode_plan.report,
+        world=world, plan=plan, result=result, episodes=episodes, episode_report=episode_plan.report
     )
 
 

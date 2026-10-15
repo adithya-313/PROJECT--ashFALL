@@ -20,6 +20,7 @@ TERM: spawn: creating new independent random number streams from one parent,
 """
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -48,20 +49,31 @@ class WorldPlan:
 
 
 def draw_world_plan(
-    rng: np.random.Generator, n_days: int = 61, range_name: str = "training", n_banks: int = 3
+    rng: np.random.Generator,
+    n_days: int = 61,
+    range_name: str = "training",
+    n_banks: int = 3,
+    *,
+    background_config: dict[str, Any] | None = None,
+    failure_config: dict[str, Any] | None = None,
 ) -> WorldPlan:
     """
     WHAT: Pre-draws all calendar and failure schedule dynamics for a simulated world run.
     WHY: Establishes an immutable, seed-driven temporal timeline before payments execute.
-    Args: rng: Generator for deterministic draws; n_days: horizon in days; range_name: split; n_banks: count.
+    Args: rng: Generator for deterministic draws; n_days: horizon in days; range_name: split; n_banks: count;
+          background_config: optional background realism dict; failure_config: optional failure realism dict.
     Returns: WorldPlan holding frozen clock, festivals, rhythms, incidents, and failure settings.
     Example: plan = draw_world_plan(np.random.default_rng(42), n_days=61, range_name="training", n_banks=3)
     """
     # 1. Initialize simulation clock with world start date (2026-09-01).
     clock = SimClock(WORLD_START_DATE)
-    # 2. Read background realism and failure realism configurations.
-    bg_ranges = read_background_realism()
-    fail_ranges = read_background_realism("config/failure_realism.yaml")
+    # 2. Read background realism and failure realism configurations (using overrides if provided).
+    bg_ranges = background_config if background_config is not None else read_background_realism()
+    fail_ranges = (
+        failure_config
+        if failure_config is not None
+        else read_background_realism("config/failure_realism.yaml")
+    )
     # FIXED DRAW ORDER: rhythm settings -> festival calendar -> incident schedule -> failure settings.
     # Step 1: Draw rhythm settings for diurnal, weekly, and monthly multipliers.
     rhythm_settings = draw_rhythm_settings(bg_ranges, rng, range_name=range_name)
