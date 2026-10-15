@@ -71,6 +71,9 @@ NEW_CODE_FILES: list[str] = [
     # Level 11C-1 fast mode module and test suite.
     "world/fast_mode.py",
     "tests/unit/world/test_world_fast_mode.py",
+    # Level 11C-2a sizing estimates module and test suite.
+    "world/estimates.py",
+    "tests/unit/world/test_world_estimates.py",
 ]
 
 

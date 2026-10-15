@@ -234,7 +234,7 @@ def estimate_world(
     file_bytes = math.ceil(payments * profile.file_bytes_per_payment)
     memory_bytes = math.ceil(payments * profile.memory_bytes_per_payment)
 
-    # Return structured estimate record.
+    # Package calculated resource requirements into immutable estimate record.
     return WorldEstimate(payments, seconds, file_bytes, memory_bytes)
 
 
