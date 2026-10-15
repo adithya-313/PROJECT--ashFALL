@@ -1,0 +1,26 @@
+calibration_world:
+  label: policy
+  seed: 101
+  n_people: 60
+  n_shops: 12
+  n_days: 61
+  range_name: training
+  reason: Same world as golden values G2 and G3, so the calibration run is itself a
+    checked world; it is small enough to run in about a second on a normal laptop.
+payment_count_margin:
+  label: policy
+  value: 1.15
+  reason: Measured payments per person per day ranged from 0.816 to 0.889 across nine
+    seeds and sizes (2026-10-15); the calibration world measures about 0.80, so
+    estimates are raised by 15 percent to lean high rather than low.
+estimate_checks:
+  label: policy
+  payments_upper_ratio: 1.5
+  file_bytes_upper_ratio: 1.5
+  time_upper_ratio: 2.0
+  steady_speed_min_ratio: 0.5
+  reason: How close an estimate must be to a real run in the tests. Payment and file
+    estimates must never be below the real value and at most 1.5 times it. A real run
+    may take at most 2 times the estimated time (other programs on the machine add
+    noise). A 1000-person world must run at least half as many payments per second as
+    the calibration world, which proves speed does not collapse as worlds grow.
