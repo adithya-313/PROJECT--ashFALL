@@ -36,7 +36,8 @@ from world.device_schedule import draw_device_event_schedule
 from world.episode_payments import plan_episode_payments
 from world.episodes import Episode, draw_episode_schedule
 from world.failures import PaymentEvent
-from world.world_configs import WorldConfigs
+from world.layers import Layer, apply_layers, describe_effective_world, read_layer
+from world.world_configs import WorldConfigs, read_world_configs
 from world.world_plan import WorldPlan, draw_world_plan, spawn_life_streams, spawn_world_streams
 
 if TYPE_CHECKING:
@@ -280,20 +281,22 @@ def build_manifest(
     settings: FastRunSettings,
     output: FastRunOutput,
     events_sha256: str,
+    layers: list[Layer] | None = None,
 ) -> dict[str, Any]:
     """
     WHAT: Constructs a metadata dictionary summarizing simulation parameters, counts, and cryptographic digests.
     It captures format version, generator identifier, world fingerprint, event statistics, and file checksums.
-    The dictionary omits all non-deterministic environment properties such as wall-clock times or local file paths.
+    When layers are used, it records their name and SHA-256 digest in application order under a 'layers' key.
 
     WHY: Documents the exact provenance, configuration settings, and output integrity of a simulation run.
     Excluding variable host properties ensures that identical seeds produce identical manifest contents.
-    Downstream verification tools rely on this document to audit data integrity before ingestion.
+    Recording layer digests allows layered simulation runs to be precisely audited and reproduced.
 
     Args:
         settings: FastRunSettings used to initialize and configure the simulation world.
         output: FastRunOutput container holding world entities, execution results, and episode reports.
         events_sha256: Hexadecimal SHA-256 digest of the associated events.jsonl file.
+        layers: Optional list of applied Layer instances whose metadata is recorded in the manifest.
 
     Returns:
         Structured dictionary adhering strictly to the events-v1 manifest specification schema.
@@ -306,23 +309,23 @@ def build_manifest(
         >>> (manifest["format"], manifest["event_count"], manifest["events_file"])
         ('events-v1', 499, 'events.jsonl')
     """
-    # Extract root simulation clock start date formatted as an ISO-8601 string.
+    # 1. Extract root simulation clock start date formatted as an ISO-8601 string.
     clock_start_iso = output.plan.clock.to_datetime(0).isoformat()
 
-    # Calculate authoritative cryptographic fingerprint of all initialized world entities.
+    # 2. Calculate authoritative cryptographic fingerprint of all initialized world entities.
     world_digest = world_fingerprint(output.world)
 
-    # Assemble manifest metadata adhering strictly to the deterministic events-v1 schema.
-    return {
+    # 3. Assemble settings sub-dictionary for the manifest.
+    settings_dict = {
+        "seed": settings.seed, "n_people": settings.n_people, "n_shops": settings.n_shops,
+        "n_days": settings.n_days, "range_name": settings.range_name,
+    }
+
+    # 4. Assemble manifest metadata adhering strictly to the deterministic events-v1 schema.
+    doc: dict[str, Any] = {
         "format": "events-v1",
         "generator": "world.fast_mode",
-        "settings": {
-            "seed": settings.seed,
-            "n_people": settings.n_people,
-            "n_shops": settings.n_shops,
-            "n_days": settings.n_days,
-            "range_name": settings.range_name,
-        },
+        "settings": settings_dict,
         "clock_start": clock_start_iso,
         "world_fingerprint": world_digest,
         "events_file": "events.jsonl",
@@ -333,9 +336,18 @@ def build_manifest(
         "episode_count": len(output.episodes),
         "episode_report": output.episode_report,
     }
+    if layers:
+        doc["layers"] = [{"name": layer.name, "sha256": layer.sha256} for layer in layers]
+    return doc
 
 
-def write_world_files(settings: FastRunSettings, out_dir: Path) -> Path:
+def write_world_files(
+    settings: FastRunSettings,
+    out_dir: Path,
+    *,
+    configs: WorldConfigs | None = None,
+    layers: list[Layer] | None = None,
+) -> Path:
     """
     WHAT: Orchestrates a fast-mode simulation run and writes both events.jsonl and manifest.json to disk.
     It verifies that the target directory is empty before executing, creating the folder if needed.
@@ -348,6 +360,8 @@ def write_world_files(settings: FastRunSettings, out_dir: Path) -> Path:
     Args:
         settings: FastRunSettings specifying simulation seed, entity counts, horizon, and split.
         out_dir: Filesystem Path designating the directory where run artifacts must be written.
+        configs: Optional WorldConfigs instance holding customized or layered domain configuration dicts.
+        layers: Optional list of applied Layer instances to record in manifest metadata.
 
     Returns:
         Path to the written manifest.json metadata file.
@@ -373,7 +387,7 @@ def write_world_files(settings: FastRunSettings, out_dir: Path) -> Path:
         )
 
     # Execute simulation lifecycle completely in memory before creating any disk files.
-    output = run_fast_world(settings)
+    output = run_fast_world(settings, configs=configs)
 
     # Ensure parent output directory hierarchy exists prior to writing output files.
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -382,8 +396,8 @@ def write_world_files(settings: FastRunSettings, out_dir: Path) -> Path:
     events_path = out_dir / "events.jsonl"
     events_sha256 = write_events_file(output, events_path)
 
-    # Build manifest metadata dictionary linking event counts, settings, and file hashes.
-    manifest = build_manifest(settings, output, events_sha256)
+    # Build manifest metadata dictionary linking event counts, settings, file hashes, and layers.
+    manifest = build_manifest(settings, output, events_sha256, layers=layers)
 
     # Write formatted manifest JSON file with explicit UTF-8 encoding and final newline.
     manifest_path = out_dir / "manifest.json"
@@ -427,6 +441,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", type=Path, required=True, help="Target output folder path.")
     parser.add_argument("--max-minutes", type=float, default=None, help="Maximum allowed runtime in minutes.")
     parser.add_argument("--estimate-only", action="store_true", help="Estimate feasibility without running.")
+    parser.add_argument("--layer", type=Path, action="append", default=[], help="Path to YAML layer overlay.")
     return parser
 
 
@@ -485,7 +500,12 @@ def _evaluate_capacity(
     return decision
 
 
-def _export_and_report(settings: FastRunSettings, out_dir: Path) -> int:
+def _export_and_report(
+    settings: FastRunSettings,
+    out_dir: Path,
+    configs: WorldConfigs | None = None,
+    layers: list[Layer] | None = None,
+) -> int:
     """
     WHAT: Executes the complete fast-mode simulation and writes output artifacts to the target folder.
     It serializes events to JSON Lines format, constructs the run manifest, and calculates cryptographic digests.
@@ -498,6 +518,8 @@ def _export_and_report(settings: FastRunSettings, out_dir: Path) -> int:
     Args:
         settings: FastRunSettings specifying the validated simulation configuration.
         out_dir: Target filesystem path where events and manifest files must be saved.
+        configs: Optional WorldConfigs instance holding customized or layered domain configuration dicts.
+        layers: Optional list of applied Layer instances to record in manifest metadata.
 
     Returns:
         Integer exit code 0 indicating successful simulation execution and export.
@@ -515,7 +537,7 @@ def _export_and_report(settings: FastRunSettings, out_dir: Path) -> int:
         0
     """
     # 7. Write simulation files to disk and parse manifest metadata.
-    manifest_path = write_world_files(settings, out_dir)
+    manifest_path = write_world_files(settings, out_dir, configs=configs, layers=layers)
     manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     # Output manifest metadata and file digests for verification.
@@ -528,6 +550,7 @@ def _export_and_report(settings: FastRunSettings, out_dir: Path) -> int:
 def _resolve_cli_settings(
     args: argparse.Namespace,
     sizing_config: dict[str, Any],
+    background_config: dict[str, Any] | None = None,
 ) -> FastRunSettings | None:
     """
     WHAT: Resolves simulation settings from parsed command-line options and outputs diagnostic confirmation.
@@ -541,6 +564,7 @@ def _resolve_cli_settings(
     Args:
         args: Parsed command-line Namespace containing candidate parameter flags.
         sizing_config: Policy configuration dictionary loaded from config/world_sizing.yaml.
+        background_config: Optional background realism dictionary for festival bounds validation.
 
     Returns:
         Validated FastRunSettings instance, or None if parameter resolution encountered a ValueError.
@@ -572,6 +596,7 @@ def _resolve_cli_settings(
             range_name=args.range_name,
             expert_path=args.expert,
             sizing_config=sizing_config,
+            background_config=background_config,
         )
     except ValueError as err:
         print(str(err))
@@ -615,32 +640,45 @@ def main(argv: list[str] | None = None) -> int:
     """
     from world.estimates import read_sizing_config
 
-    # 1. Parse command-line arguments and resolve simulation parameters.
+    # 1. Parse command-line arguments.
     parser = _build_parser()
     args = parser.parse_args(argv)
+
+    # 2. Read baseline configuration and apply specified layer overlays.
+    base_configs = read_world_configs()
+    loaded_layers: list[Layer] = []
+    try:
+        for layer_path in args.layer:
+            loaded_layers.append(read_layer(layer_path))
+        layered_configs, changes = apply_layers(base_configs, loaded_layers)
+    except ValueError as err:
+        print(str(err))
+        return 1
+
+    # 3. Resolve simulation parameters using layered background realism config.
     sizing_config = read_sizing_config()
-    settings = _resolve_cli_settings(args, sizing_config)
+    bg_cfg = layered_configs.background_realism
+    settings = _resolve_cli_settings(args, sizing_config, background_config=bg_cfg)
     if settings is None:
         return 1
 
-    # 2. Reject existing non-empty output directories before performing calibration.
+    # 4. Reject existing non-empty output directories before performing calibration.
     if args.out.exists() and any(args.out.iterdir()):
         print(f"Output folder '{args.out}' already exists and is not empty; nothing was written.")
         return 1
 
-    # 3 & 4. Calibrate host performance and evaluate machine limits.
-    decision = _evaluate_capacity(settings, args.out, sizing_config, args.max_minutes)
+    # 5. Print effective-world summary describing applied layers and parameter state.
+    print(describe_effective_world(loaded_layers, changes, layered_configs))
 
-    # 5. Handle estimate-only evaluation without writing simulation files.
+    # 6. Calibrate host performance and evaluate machine limits against sizing policy.
+    decision = _evaluate_capacity(settings, args.out, sizing_config, args.max_minutes)
     if args.estimate_only:
         return 0 if decision.fits else 1
-
-    # 6. Halt execution if the proposed world violates host limits.
     if not decision.fits:
         return 1
 
-    # 7. Execute full simulation and serialize events and manifest to disk.
-    return _export_and_report(settings, args.out)
+    # 7. Execute full simulation with layered configs and serialize events and manifest to disk.
+    return _export_and_report(settings, args.out, configs=layered_configs, layers=loaded_layers)
 
 
 if __name__ == "__main__":
