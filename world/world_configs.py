@@ -85,7 +85,7 @@ def read_world_configs() -> WorldConfigs:
         >>> len(CONFIG_NAMES)
         4
         >>> sorted(configs.failure_realism["parameters"].keys())[:2]
-        ['bank_incident_daily_chance', 'bank_incident_duration_hours']
+        ['app_network_failure_rate', 'bank_downtime_count_per_bank_per_30_days']
     """
     # 1. Read master world ranges from config/world_ranges.yaml via standard reader.
     world_ranges = read_world_ranges()
