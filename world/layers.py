@@ -102,15 +102,60 @@ class LayerChange:
     layer_name: str
 
 
+def _validate_setting_ranges(
+    ranges_map: dict[str, Any], setting_name: str, layer_name: str
+) -> None:
+    """
+    WHAT: Validates that setting range names and numeric intervals satisfy domain constraints.
+    It verifies range names are among training, test, or stress and bounds consist of two numbers.
+    It asserts that the lower bound does not exceed the upper bound.
+
+    WHY: Isolates granular range-pair validation into a compact, dedicated helper function.
+    Failing early on invalid bounds protects stochastic generators from interval inversion errors.
+    Clear error messages identify the exact setting and range partition that violated requirements.
+
+    Args:
+        ranges_map: Dictionary mapping range partition names to two-element numeric bounds.
+        setting_name: Identifier name of the configuration setting being validated.
+        layer_name: Identifier name of the parent layer for diagnostic error reporting.
+
+    Returns:
+        None upon successful validation of all range bounds.
+
+    Raises:
+        ValueError: If range name is unrecognized, non-numeric, or has low > high.
+
+    Example:
+        >>> _validate_setting_ranges({"training": [40, 45]}, "festival_peak_day_in_world", "demo")
+    """
+    # 1. Enforce that ranges mapping is a non-empty dictionary.
+    if not isinstance(ranges_map, dict) or not ranges_map:
+        raise ValueError(f"Layer '{layer_name}': ranges mapping for '{setting_name}' must be non-empty.")
+
+    # 2. Iterate through each partition range and validate numeric bounds.
+    for range_name, bounds in ranges_map.items():
+        if range_name not in ("training", "test", "stress"):
+            raise ValueError(f"Layer '{layer_name}': invalid range name '{range_name}' for setting '{setting_name}'.")
+        if not isinstance(bounds, (list, tuple)) or len(bounds) != 2:
+            raise ValueError(f"Layer '{layer_name}': range for '{setting_name}' ({range_name}) must have 2 numbers.")
+        low, high = bounds
+        if any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in (low, high)):
+            raise ValueError(f"Layer '{layer_name}': range values for '{setting_name}' ({range_name}) must be numeric.")
+        if low > high:
+            raise ValueError(
+                f"Layer '{layer_name}': range [{low}, {high}] for '{setting_name}' ({range_name}) has low > high."
+            )
+
+
 def _validate_layer_changes(changes: dict[str, Any], layer_name: str) -> None:
     """
-    WHAT: Validates that layer changes target existing configs, settings, and valid nested range names.
+    WHAT: Validates that layer changes target existing configs and known parameter settings.
     It checks that each config belongs to CONFIG_NAMES and that settings exist in baseline parameters.
-    It verifies that every range name is valid and pairs of numbers satisfy low <= high ordering.
+    It delegates range name and interval bound validation to _validate_setting_ranges.
 
     WHY: Prevents misconfigured or misspelled layer overrides from silently corrupting simulations.
     Validating setting existence upfront ensures typos in layer YAML files fail with clear error messages.
-    Enforcing numeric interval validity protects downstream pseudo-random samplers from inversion errors.
+    Decomposing validation maintains small function sizes while ensuring thorough checks.
 
     Args:
         changes: Dictionary mapping configuration names to settings and range replacement bounds.
@@ -120,7 +165,7 @@ def _validate_layer_changes(changes: dict[str, Any], layer_name: str) -> None:
         None upon successful structural and domain validation.
 
     Raises:
-        ValueError: If config name, setting name, range name, or interval bounds are invalid.
+        ValueError: If config name or setting name is unrecognized.
 
     Example:
         >>> sample = {"background_realism": {"festival_peak_day_in_world": {"training": [40, 45]}}}
@@ -146,34 +191,7 @@ def _validate_layer_changes(changes: dict[str, Any], layer_name: str) -> None:
         for setting_name, ranges_map in settings_map.items():
             if setting_name not in cfg_dict["parameters"]:
                 raise ValueError(f"Layer '{layer_name}': unknown setting '{setting_name}' in config '{config_name}'.")
-            if not isinstance(ranges_map, dict) or not ranges_map:
-                raise ValueError(f"Layer '{layer_name}': ranges mapping for '{setting_name}' must be non-empty.")
-
-            # 5. Validate range names and numeric bounds.
-            for range_name, bounds in ranges_map.items():
-                if range_name not in ("training", "test", "stress"):
-                    raise ValueError(
-                        f"Layer '{layer_name}': invalid range name '{range_name}' for setting '{setting_name}'."
-                    )
-                if not isinstance(bounds, (list, tuple)) or len(bounds) != 2:
-                    raise ValueError(
-                        f"Layer '{layer_name}': range for '{setting_name}' ({range_name}) must have 2 numbers."
-                    )
-                low, high = bounds
-                if (
-                    isinstance(low, bool)
-                    or isinstance(high, bool)
-                    or not isinstance(low, (int, float))
-                    or not isinstance(high, (int, float))
-                ):
-                    raise ValueError(
-                        f"Layer '{layer_name}': range values for '{setting_name}' ({range_name}) must be numeric."
-                    )
-                if low > high:
-                    raise ValueError(
-                        f"Layer '{layer_name}': range [{low}, {high}] for '{setting_name}' ({range_name}) "
-                        "has low > high."
-                    )
+            _validate_setting_ranges(ranges_map, setting_name, layer_name)
 
 
 def read_layer(path: Path) -> Layer:
@@ -267,10 +285,10 @@ def apply_layers(
     """
     # 1. Deep-copy baseline configurations to guarantee input immutability.
     applied_configs = WorldConfigs(
-        world_ranges=copy.deepcopy(configs.world_ranges),
-        background_realism=copy.deepcopy(configs.background_realism),
-        failure_realism=copy.deepcopy(configs.failure_realism),
-        device_realism=copy.deepcopy(configs.device_realism),
+        copy.deepcopy(configs.world_ranges),
+        copy.deepcopy(configs.background_realism),
+        copy.deepcopy(configs.failure_realism),
+        copy.deepcopy(configs.device_realism),
     )
     changes: list[LayerChange] = []
     last_layer_for_setting: dict[tuple[str, str], str] = {}
@@ -283,8 +301,7 @@ def apply_layers(
                 last_layer_for_setting[(cfg_name, setting_name)] = layer.name
                 param_block = cfg_dict["parameters"][setting_name]
                 for r_name, r_val in ranges_map.items():
-                    before = list(param_block[r_name])
-                    after = list(r_val)
+                    before, after = list(param_block[r_name]), list(r_val)
                     param_block[r_name] = after
                     changes.append(LayerChange(cfg_name, setting_name, r_name, before, after, layer.name))
 
@@ -294,9 +311,8 @@ def apply_layers(
         errors = check_nested_ranges(param_block)
         if errors:
             err_text = "; ".join(errors)
-            raise ValueError(
-                f"Layer '{layer_name}' broke nesting in {cfg_name}.{setting_name}: {err_text}"
-            )
+            msg = f"Layer '{layer_name}' broke nesting in {cfg_name}.{setting_name}: {err_text}"
+            raise ValueError(msg)
 
     return applied_configs, changes
 
