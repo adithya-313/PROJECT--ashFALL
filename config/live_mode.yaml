@@ -1,0 +1,13 @@
+live_mode:
+  label: policy
+  default_host: 127.0.0.1
+  retry_attempts: 4
+  first_wait_seconds: 0.5
+  wait_growth_factor: 2
+  request_timeout_seconds: 5
+  reason: Live mode sends only to this machine unless a person names another target,
+    so nothing leaves the machine on its own. A failed send is tried 4 times with waits
+    of 0.5, 1 and 2 seconds between tries (each wait twice the last), then live mode
+    stops and reports where it reached, so no event is ever skipped. A receiver that
+    does not answer within 5 seconds counts as a failed try. Chosen by the plan author
+    on 2026-10-16.
