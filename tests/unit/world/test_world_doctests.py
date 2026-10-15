@@ -21,6 +21,7 @@ DOCTEST_MODULES: list[str] = [
     "world.device_events",
     "world.device_schedule",
     "world.episodes",
+    "world.fast_mode",
 ]
 
 
