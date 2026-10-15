@@ -114,9 +114,9 @@ While running on large server hardware provides substantially larger memory capa
 and allows executing multiple independent simulation worlds in parallel, an individual simulation run will
 not automatically accelerate across multiple cores.
 
-## 8. Decided now, built in Level 11C-2b
+## 8. Built in Level 11C-2b
 
-The following operational policies are finalized now and will be implemented in Level 11C-2b:
+The following operational policies were finalized and built in Level 11C-2b:
 - Four standard presets, all spanning 61 days:
   - Tiny: 60 people / 12 shops
   - Small: 300 people / 40 shops
@@ -141,3 +141,12 @@ The following operational policies are finalized now and will be implemented in 
   static numbers would cause severe miscalculations on slower laptops or virtual machines.
 - **Estimating from mean transaction rates**: Rejected because average rates cause roughly half of all generated
   worlds to exceed estimated boundaries, violating conservative safety guarantees.
+
+## 10. Decisions made for 11C-2b (owner, 2026-10-15)
+
+- **`--estimate-only`**: Check a huge world safely without running it.
+- **The seed is always typed (`--seed` or the expert file)**: No hidden default; the person always knows which world they made.
+- **`psutil` reads free memory on every system**: Rejected: skipping the memory check with a warning (memory would go unchecked on some machines) and refusing to run (would block all Mac users).
+- **The expert file must list exactly five fields**: Unknown or missing fields are refused, so a typo like `n_peopel` is caught instead of silently ignored. Machine limits still apply to expert files.
+- **The old command still works and gives byte-identical files**: Confirmed by test 15.
+- **Time estimates lean high**: In 11C-2a's test run on the owner's laptop, the estimate was 2.962 s and the real run 1.208 s, because the small calibration world spends more of its time on setup per payment. This only makes refusals more cautious.
