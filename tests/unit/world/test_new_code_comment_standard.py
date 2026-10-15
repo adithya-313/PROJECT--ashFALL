@@ -82,6 +82,9 @@ NEW_CODE_FILES: list[str] = [
     "world/world_configs.py",
     "world/layers.py",
     "tests/unit/world/test_world_layers.py",
+    # Level 11C-4 live mode module and test suite.
+    "world/live_mode.py",
+    "tests/unit/world/test_world_live_mode.py",
 ]
 
 

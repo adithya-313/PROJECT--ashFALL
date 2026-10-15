@@ -201,7 +201,7 @@ def build_live_events(
         record = json.loads(line)
         live_events.append((event_id, record))
 
-    # Return chronological list of prepared live mode event pairs.
+    # Supply chronological list of prepared live mode event pairs.
     return live_events
 
 

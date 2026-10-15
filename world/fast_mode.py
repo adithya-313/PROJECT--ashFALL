@@ -273,7 +273,7 @@ def event_lines(output: FastRunOutput) -> list[str]:
         # Format dictionary into compact sorted JSON line with newline.
         lines.append(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
 
-    # Return ordered list of all serialized event lines.
+    # Supply ordered list of all serialized event lines.
     return lines
 
 
