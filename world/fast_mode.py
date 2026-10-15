@@ -138,10 +138,7 @@ def run_fast_world(settings: FastRunSettings) -> FastRunOutput:
     device_rng, episode_rng = spawn_life_streams(settings.seed)
 
     # 4. Construct the temporal world plan containing clock, festival calendar, and failure settings.
-    if settings.range_name == "training":
-        plan = draw_world_plan(plan_rng, n_days=settings.n_days)
-    else:
-        plan = draw_world_plan(plan_rng, n_days=settings.n_days, range_name=settings.range_name)
+    plan = draw_world_plan(plan_rng, n_days=settings.n_days, range_name=settings.range_name)
 
     # 5. Read empirical world configuration bounds and device realism parameters.
     ranges = read_world_ranges()
@@ -367,11 +364,11 @@ def write_world_files(settings: FastRunSettings, out_dir: Path) -> Path:
             f"Output folder '{out_dir}' already exists and is not empty; nothing was written."
         )
 
-    # Ensure parent output directory hierarchy exists prior to writing output files.
-    out_dir.mkdir(parents=True, exist_ok=True)
-
     # Execute simulation lifecycle completely in memory before creating any disk files.
     output = run_fast_world(settings)
+
+    # Ensure parent output directory hierarchy exists prior to writing output files.
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     # Serialize chronological payment events and obtain file cryptographic digest.
     events_path = out_dir / "events.jsonl"
