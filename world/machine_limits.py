@@ -135,22 +135,22 @@ def find_problems(
         problems.append(f"time: about {round(estimate_minutes)} minutes, over the {limit_desc} limit")
 
     # 2. Check projected heap memory against allowable share of available host physical RAM.
-    memory_share = float(limits.get("memory_share", 0.5))
+    memory_share = float(limits["memory_share"])
     if estimate.memory_bytes > state.free_memory_bytes * memory_share:
         memory_mb = round(estimate.memory_bytes / 1_000_000.0)
         free_memory_mb = round(state.free_memory_bytes / 1_000_000.0)
-        share_desc = "half" if memory_share == 0.5 else f"{int(round(memory_share * 100))}%"
+        memory_percent = round(memory_share * 100)
         problems.append(
-            f"memory: needs about {memory_mb:,} MB, over {share_desc} of the {free_memory_mb:,} MB free"
+            f"memory: needs about {memory_mb:,} MB, over {memory_percent}% of the {free_memory_mb:,} MB free"
         )
 
     # 3. Check projected events file storage against allowable share of available partition disk space.
-    disk_share = float(limits.get("disk_share", 0.5))
+    disk_share = float(limits["disk_share"])
     if estimate.file_bytes > state.free_disk_bytes * disk_share:
         disk_mb = round(estimate.file_bytes / 1_000_000.0)
         free_disk_mb = round(state.free_disk_bytes / 1_000_000.0)
-        share_desc = "half" if disk_share == 0.5 else f"{int(round(disk_share * 100))}%"
-        problems.append(f"disk: needs about {disk_mb:,} MB, over {share_desc} of the {free_disk_mb:,} MB free")
+        disk_percent = round(disk_share * 100)
+        problems.append(f"disk: needs about {disk_mb:,} MB, over {disk_percent}% of the {free_disk_mb:,} MB free")
 
     # Pass back list of identified resource bottlenecks.
     return problems

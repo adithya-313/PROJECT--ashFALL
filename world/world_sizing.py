@@ -505,8 +505,8 @@ def largest_fitting_people(
 
     # 2. Extract policy thresholds for allowable memory and disk consumption.
     limits = sizing_config["machine_limits"]
-    mem_share = float(limits.get("memory_share", 0.5))
-    disk_share = float(limits.get("disk_share", 0.5))
+    mem_share = float(limits["memory_share"])
+    disk_share = float(limits["disk_share"])
 
     # 3. Calculate maximum allowable transaction count across all three operational constraints.
     max_pmts_time = max_minutes * 60.0 * profile.payments_per_second
