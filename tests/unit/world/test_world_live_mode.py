@@ -32,7 +32,6 @@ from core.config_validator import validate_file
 from world.fast_mode import FastRunSettings, event_lines, main, run_fast_world, write_events_file
 from world.live_mode import (
     HttpEventSender,
-    LiveReport,
     LiveSendError,
     LocalReceiver,
     build_live_events,
