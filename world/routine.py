@@ -9,10 +9,14 @@ Simulating monthly economic activity verifies that balance invariants and regula
 Providing authentic financial flows establishes a clear behavioral contrast between genuine citizens and mules.
 
 ISSUE IDs: E2 (spending amounts), A2 (merchant payments).
-TERM: routine item: A planned financial payment schedule entry representing routine life activities. For example, a scheduled salary deposit or monthly utility bill.
-TERM: chronological scheduling: Ordering events strictly by simulated minute timestamps so payments process in true temporal order. For example, processing a 9:00 AM transfer before a 10:00 AM transfer.
-TERM: mule look-alike camouflage: Inbound low-value transfers from varied accounts mimicking regular consumer interactions. For example, receiving 25 small peer-to-peer transfers across the month.
-TERM: salary window: The calendar day interval (days 1 to 5) during which employers disburse monthly wages. For example, paying employees on day 3 of the month.
+TERM: routine item: A planned financial payment schedule entry representing routine life activities.
+      For example, a scheduled salary deposit or monthly utility bill.
+TERM: chronological scheduling: Ordering events strictly by simulated minute timestamps so payments
+      process in true temporal order. For example, processing a 9:00 AM transfer before a 10:00 AM transfer.
+TERM: mule look-alike camouflage: Inbound low-value transfers from varied accounts mimicking regular
+      consumer interactions. For example, receiving 25 small peer-to-peer transfers across the month.
+TERM: salary window: The calendar day interval (days 1 to 5) during which employers disburse monthly wages.
+      For example, paying employees on day 3 of the month.
 """
 
 from dataclasses import dataclass
@@ -56,7 +60,8 @@ class RoutineItem:
         day_of_month: Calendar day (1 through 28) on which the transaction is scheduled to occur.
         amount_paise: Positive integer currency amount in paise to be transferred.
         counterparty_account_id: Account identifier of the merchant, employer, or peer counterparty.
-        is_inbound: Boolean flag where True indicates money entering the person's account, and False indicates outbound expense.
+        is_inbound: Boolean flag where True indicates money entering the person's account,
+            and False indicates outbound expense.
 
     Returns:
         Initialized RoutineItem instance.
@@ -174,7 +179,8 @@ def build_casual_and_lookalike_items(
 
     WHY: Implements daily consumer payments and provides genuine camouflage for look-alike accounts.
     Authentic payment networks contain high-volume casual shopping that introduces realistic transactional noise.
-    Mule look-alike camouflage challenges fraud detection models by testing whether they can separate genuine high-volume accounts from illicit mules.
+    Mule look-alike camouflage challenges fraud detection models by testing whether they can separate
+    genuine high-volume accounts from illicit mules.
 
     Args:
         person: Person instance whose profile governs purchase amounts and look-alike status.

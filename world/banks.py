@@ -8,9 +8,12 @@ Mule recruiters exploit banks with weaker identity verification, while faster ba
 Explicitly modeling institutional diversity allows fraud detection algorithms to evaluate multi-bank risk.
 
 ISSUE IDs: E4 (bank differences).
-TERM: KYC: Know Your Customer identity verification processes required when opening bank accounts. For example, verifying a national ID card and proof of residence.
-TERM: payments bank: A specialized, digital-focused banking institution with simplified account opening and deposit limits. For example, an app-based mobile wallet bank.
-TERM: hold delay factor: Multiplier relative to the fastest bank indicating how slowly an institution freezes suspicious funds. For example, taking 4 times longer to enact a regulatory hold.
+TERM: KYC: Know Your Customer identity verification processes required when opening bank accounts.
+      For example, verifying a national ID card and proof of residence.
+TERM: payments bank: A specialized, digital-focused banking institution with simplified account opening
+      and deposit limits. For example, an app-based mobile wallet bank.
+TERM: hold delay factor: Multiplier relative to the fastest bank indicating how slowly an institution freezes
+      suspicious funds. For example, taking 4 times longer to enact a regulatory hold.
 """
 
 from dataclasses import dataclass

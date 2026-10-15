@@ -3,13 +3,17 @@ WHAT: Pure currency conversion functions between rupees and integer paise.
 It provides consistent arithmetic to translate decimal currency into exact integer subunits and back.
 All financial modules throughout the simulation rely on these helpers to prevent fractional drift.
 
-WHY: Financial ledgers and banking protocols must store exact whole integers so multi-hop transfers never lose fractions.
+WHY: Financial ledgers and banking protocols must store exact whole integers so multi-hop transfers
+never lose fractions.
 Floating-point arithmetic introduces IEEE-754 precision errors that break balance assertions over time.
 Using integer paise ensures exact conservation of money across every simulated transaction.
 
-TERM: rupee: The primary unit of Indian currency, symbolized as INR or Rs. For example, a bottle of milk might cost 30 rupees.
-TERM: paise: The subunit of Indian currency where 1 rupee equals exactly 100 paise. For example, 50 paise is half a rupee.
-TERM: floating-point drift: Subtle rounding discrepancies caused by computer hardware approximating decimals. For example, 0.1 + 0.2 computing as 0.30000000000000004.
+TERM: rupee: The primary unit of Indian currency, symbolized as INR or Rs.
+      For example, a bottle of milk might cost 30 rupees.
+TERM: paise: The subunit of Indian currency where 1 rupee equals exactly 100 paise.
+      For example, 50 paise is half a rupee.
+TERM: floating-point drift: Subtle rounding discrepancies caused by computer hardware approximating decimals.
+      For example, 0.1 + 0.2 computing as 0.30000000000000004.
 """
 
 
@@ -19,7 +23,8 @@ def rupees_to_paise(rupees: float | int) -> int:
     This operation handles both floating-point numbers and integer rupee values cleanly.
     The resulting integer represents the exact number of paise without decimal precision loss.
 
-    WHY: Financial accounting requires integer precision to avoid accumulating fractional currency errors across payments.
+    WHY: Financial accounting requires integer precision to avoid accumulating fractional currency errors
+    across payments.
     Multi-hop transactions and ledger balance audits fail if fractional paise leak into balances.
     Converting to integer paise at the boundary guarantees exact arithmetic in all accounts.
 

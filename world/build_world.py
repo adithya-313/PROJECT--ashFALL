@@ -7,9 +7,14 @@ WHY: Constructs the full town simulation in a reproducible, seed-driven sequence
 Deterministic environment construction ensures that experiments and benchmarks can be precisely replicated.
 Cryptographic fingerprinting detects accidental statistical drift or unintended regressions during refactoring.
 
-TERM: world fingerprint: A unique SHA-256 cryptographic digest calculated over the serialized state of all entities in a world. For example, a 64-character hex hash guaranteeing exact bitwise reproducibility of a generated town.
-TERM: deterministic world generation: Constructing an entire simulated economy from a single integer seed so that every entity and balance is reproducible. For example, generating identical towns whenever seed=7 is passed.
-TERM: entity serialization: Converting structured objects (banks, shops, citizens, accounts) into standardized text lines for hashing. For example, formatting a person into a colon-delimited string record.
+TERM: world fingerprint: A unique SHA-256 cryptographic digest calculated over the serialized state of all
+      entities in a world. For example, a 64-character hex hash guaranteeing exact bitwise reproducibility
+      of a generated town.
+TERM: deterministic world generation: Constructing an entire simulated economy from a single integer seed
+      so that every entity and balance is reproducible. For example, generating identical towns whenever
+      seed=7 is passed.
+TERM: entity serialization: Converting structured objects (banks, shops, citizens, accounts) into standardized
+      text lines for hashing. For example, formatting a person into a colon-delimited string record.
 """
 
 import hashlib

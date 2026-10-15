@@ -26,7 +26,8 @@ class Persona:
     Args:
         name: Unique string name of the persona archetype, e.g. 'gig_worker'.
         spend_level: String categorical spending power tier, one of 'low', 'mid', or 'high'.
-        looks_like_mule_in_normal_life: Boolean flag indicating if legitimate daily routine receives many small payments.
+        looks_like_mule_in_normal_life: Boolean flag indicating if legitimate daily routine receives
+            many small payments.
     Example:
         persona = Persona("gig_worker", "low", True)
         assert persona.spend_level == "low" and persona.looks_like_mule_in_normal_life is True

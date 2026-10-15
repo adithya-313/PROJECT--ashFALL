@@ -3,13 +3,17 @@ WHAT: Geographical region count selection and uniform region assignment.
 It draws the total number of municipal sectors from configured parameter intervals and maps entities.
 Every person and shop in the simulation is assigned to a specific region to enable spatial tracking.
 
-WHY: Real-world financial systems and fraud networks exhibit localized geographic patterns and regional crime syndicates.
-Partitioning simulated entities into municipal sectors provides the spatial foundation needed for regional fraud modeling.
+WHY: Real-world financial systems and fraud networks exhibit localized geographic patterns
+and regional crime syndicates.
+Partitioning simulated entities into municipal sectors provides the spatial foundation needed
+for regional fraud modeling.
 Uniform assignment establishes an unbiased baseline prior to introducing localized demographic clustering in Level 12.
 
 ISSUE IDs: E3 (regions).
-TERM: region: A discrete municipal district or geographic zone within the simulated town (indexed 0 to n_regions - 1). For example, dividing a city into North, South, Central, and East sectors.
-TERM: discrete uniform distribution: A random selection where every integer outcome in a given range has equal probability. For example, rolling a fair 6-sided die.
+TERM: region: A discrete municipal district or geographic zone within the simulated town (indexed 0 to n_regions - 1).
+      For example, dividing a city into North, South, Central, and East sectors.
+TERM: discrete uniform distribution: A random selection where every integer outcome in a given range has equal
+      probability. For example, rolling a fair 6-sided die.
 """
 
 from typing import Any

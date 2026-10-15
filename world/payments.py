@@ -7,9 +7,14 @@ WHY: Guarantees that payment legs succeed completely or abort with zero side-eff
 Financial integrity requires that money cannot vanish from a payer without appearing in a payee account.
 Centralizing all transfers in one atomic engine ensures complete auditability and invariant preservation.
 
-TERM: atomic payment: A financial operation where both debit and credit succeed together or the entire transfer aborts without state change. For example, moving 500 rupees from Alice to Bob where either both accounts update or neither does.
-TERM: ledger resolution: Locating which specific bank holds custody of a given account identifier. For example, determining that account 'acc_01' is registered at Bank 2.
-TERM: payment validity check: Pre-execution verification confirming positive funds, non-null accounts, regulatory limits, and solvency. For example, checking that a payer has at least 1000 paise before executing a transfer.
+TERM: atomic payment: A financial operation where both debit and credit succeed together or the entire
+      transfer aborts without state change. For example, moving 500 rupees from Alice to Bob where either both
+      accounts update or neither does.
+TERM: ledger resolution: Locating which specific bank holds custody of a given account identifier.
+      For example, determining that account 'acc_01' is registered at Bank 2.
+TERM: payment validity check: Pre-execution verification confirming positive funds, non-null accounts,
+      regulatory limits, and solvency. For example, checking that a payer has at least 1000 paise before
+      executing a transfer.
 """
 
 from dataclasses import dataclass

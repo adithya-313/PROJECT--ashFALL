@@ -7,9 +7,12 @@ WHY: Simulation parameters must be grounded in explicit empirical assumptions an
 Centralizing configuration loading avoids hardcoded magic numbers scattered across domain files.
 Controlled bounded draws ensure reproducible experiments across training, test, and stress evaluation splits.
 
-TERM: parameter range: A lower and upper boundary [min, max] defining allowed values for a simulation setting. For example, a town having between 3 and 6 regions.
-TERM: configuration split: An evaluation category partition (such as training, test, or stress) that groups parameter intervals. For example, testing a model under wider stress bounds.
-TERM: uniform distribution: A random sampling where every value between the minimum and maximum has an equal likelihood of being chosen. For example, spinning an evenly balanced spinner.
+TERM: parameter range: A lower and upper boundary [min, max] defining allowed values for a simulation setting.
+      For example, a town having between 3 and 6 regions.
+TERM: configuration split: An evaluation category partition (such as training, test, or stress) that groups
+      parameter intervals. For example, testing a model under wider stress bounds.
+TERM: uniform distribution: A random sampling where every value between the minimum and maximum has an equal
+      likelihood of being chosen. For example, spinning an evenly balanced spinner.
 """
 
 from pathlib import Path

@@ -8,10 +8,14 @@ Authentic transaction distributions are critical for training fraud detectors to
 Enforcing regulatory UPI transaction limits simulates real banking infrastructure behavior accurately.
 
 ISSUE IDs: E2 (amount distribution, UPI limits).
-TERM: heavy-tailed: A statistical pattern where extreme high values have a significant probability. For example, millions of small grocery payments occurring alongside rare expensive vehicle purchases.
-TERM: lognormal distribution: A distribution whose logarithm is normally distributed, creating a heavy right tail. For example, personal wealth or transaction amounts where values are positive and right-skewed.
-TERM: UPI limit: The regulatory maximum amount allowed for a single Unified Payments Interface transfer leg. For example, a 100,000-rupee cap per single transaction leg.
-TERM: camouflage payment: Small routine payments received by an account to blend in with legitimate consumer traffic. For example, receiving 50 paise to mimic active everyday retail interactions.
+TERM: heavy-tailed: A statistical pattern where extreme high values have a significant probability.
+      For example, millions of small grocery payments occurring alongside rare expensive vehicle purchases.
+TERM: lognormal distribution: A distribution whose logarithm is normally distributed, creating a heavy right tail.
+      For example, personal wealth or transaction amounts where values are positive and right-skewed.
+TERM: UPI limit: The regulatory maximum amount allowed for a single Unified Payments Interface transfer leg.
+      For example, a 100,000-rupee cap per single transaction leg.
+TERM: camouflage payment: Small routine payments received by an account to blend in with legitimate consumer traffic.
+      For example, receiving 50 paise to mimic active everyday retail interactions.
 """
 
 from dataclasses import dataclass
