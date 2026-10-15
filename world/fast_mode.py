@@ -24,7 +24,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from world.background_config import read_background_realism
 from world.build_world import World, build_world, world_fingerprint
@@ -37,6 +37,9 @@ from world.episode_payments import plan_episode_payments
 from world.episodes import Episode, draw_episode_schedule
 from world.failures import PaymentEvent
 from world.world_plan import WorldPlan, draw_world_plan, spawn_life_streams, spawn_world_streams
+
+if TYPE_CHECKING:
+    from world.world_sizing import SizingDecision
 
 
 @dataclass(frozen=True)
@@ -138,10 +141,7 @@ def run_fast_world(settings: FastRunSettings) -> FastRunOutput:
     device_rng, episode_rng = spawn_life_streams(settings.seed)
 
     # 4. Construct the temporal world plan containing clock, festival calendar, and failure settings.
-    if settings.range_name == "training":
-        plan = draw_world_plan(plan_rng, n_days=settings.n_days)
-    else:
-        plan = draw_world_plan(plan_rng, n_days=settings.n_days, range_name=settings.range_name)
+    plan = draw_world_plan(plan_rng, n_days=settings.n_days, range_name=settings.range_name)
 
     # 5. Read empirical world configuration bounds and device realism parameters.
     ranges = read_world_ranges()
@@ -367,11 +367,11 @@ def write_world_files(settings: FastRunSettings, out_dir: Path) -> Path:
             f"Output folder '{out_dir}' already exists and is not empty; nothing was written."
         )
 
-    # Ensure parent output directory hierarchy exists prior to writing output files.
-    out_dir.mkdir(parents=True, exist_ok=True)
-
     # Execute simulation lifecycle completely in memory before creating any disk files.
     output = run_fast_world(settings)
+
+    # Ensure parent output directory hierarchy exists prior to writing output files.
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     # Serialize chronological payment events and obtain file cryptographic digest.
     events_path = out_dir / "events.jsonl"
@@ -389,21 +389,211 @@ def write_world_files(settings: FastRunSettings, out_dir: Path) -> Path:
     return manifest_path
 
 
+def _build_parser() -> argparse.ArgumentParser:
+    """
+    WHAT: Constructs and configures the command-line argument parser for fast-mode world simulation runs.
+    It registers options for preset templates, expert files, random seed, entity counts, horizon, and limits.
+    Flag definitions specify appropriate data types and documentation strings to assist operators in shells.
+
+    WHY: Separates argument parsing configuration from command-line execution and lifecycle control flow.
+    Isolating parser construction into a dedicated helper keeps main() compact and focused on orchestration.
+    Centralizing CLI parameter specifications enables unit tests to inspect flag definitions directly.
+
+    Args:
+        None: This builder routine takes no positional or keyword parameters.
+
+    Returns:
+        Configured ArgumentParser instance ready to parse command-line argument lists.
+
+    Example:
+        >>> parser = _build_parser()
+        >>> args = parser.parse_args(["--out", "run_dir", "--estimate-only"])
+        >>> (str(args.out), args.estimate_only)
+        ('run_dir', True)
+    """
+    parser = argparse.ArgumentParser(description="Run simulated world in fast mode and export events.")
+    parser.add_argument("--preset", type=str, default=None, help="Preset template name (tiny, small, medium, large).")
+    parser.add_argument("--expert", type=Path, default=None, help="Path to expert YAML configuration file.")
+    parser.add_argument("--seed", type=int, default=None, help="Master random seed integer.")
+    parser.add_argument("--people", type=int, default=None, help="Citizen population count override.")
+    parser.add_argument("--shops", type=int, default=None, help="Commercial shop count override.")
+    parser.add_argument("--days", type=int, default=None, help="Simulation duration in days override.")
+    parser.add_argument("--range-name", type=str, default=None, help="Dataset split name override.")
+    parser.add_argument("--out", type=Path, required=True, help="Target output folder path.")
+    parser.add_argument("--max-minutes", type=float, default=None, help="Maximum allowed runtime in minutes.")
+    parser.add_argument("--estimate-only", action="store_true", help="Estimate feasibility without running.")
+    return parser
+
+
+def _evaluate_capacity(
+    settings: FastRunSettings,
+    out_dir: Path,
+    sizing_config: dict[str, Any],
+    max_minutes: float | None,
+) -> "SizingDecision":
+    """
+    WHAT: Benchmarks host hardware and computes resource feasibility against operational machine limits.
+    It calibrates throughput and memory cost rates on the local machine before reading available resources.
+    The resulting SizingDecision is returned alongside printing diagnostic messages and recommendations.
+
+    WHY: Enforces simulation safety checks before committing to heavy computation or file generation.
+    Separating capacity evaluation into a focused helper keeps the CLI orchestrator modular and readable.
+    Executing calibration on the target machine guarantees that sizing decisions reflect real hardware speeds.
+
+    Args:
+        settings: FastRunSettings specifying citizen population, shop counts, and simulation horizon.
+        out_dir: Target filesystem path where simulation output artifacts would be exported.
+        sizing_config: Policy configuration dictionary loaded from config/world_sizing.yaml.
+        max_minutes: Optional operator runtime override in minutes, defaulting to config limit when None.
+
+    Returns:
+        SizingDecision container holding approval status, resource estimate, and diagnostic text.
+
+    Example:
+        >>> import contextlib, io, tempfile
+        >>> from pathlib import Path
+        >>> from world.estimates import read_sizing_config
+        >>> from world.fast_mode import FastRunSettings, _evaluate_capacity
+        >>> settings = FastRunSettings(101, 10, 4, 61, "training")
+        >>> with tempfile.TemporaryDirectory() as tmp_dir:
+        ...     buf = io.StringIO()
+        ...     with contextlib.redirect_stdout(buf):
+        ...         dec = _evaluate_capacity(settings, Path(tmp_dir), read_sizing_config(), 30.0)
+        >>> dec.fits
+        True
+    """
+    from world.estimates import calibrate_machine
+    from world.machine_limits import read_machine_state
+    from world.world_sizing import decide_run
+
+    # 3. Print calibration notice and benchmark hardware execution performance.
+    print("Calibrating on this machine...")
+    profile = calibrate_machine(sizing_config)
+
+    # 4. Read available host resources and evaluate sizing feasibility.
+    default_limit = float(sizing_config["machine_limits"]["max_minutes"])
+    effective_max_minutes = max_minutes if max_minutes is not None else default_limit
+    state = read_machine_state(out_dir)
+    decision = decide_run(settings, profile, state, sizing_config, effective_max_minutes)
+    print(decision.message)
+
+    return decision
+
+
+def _export_and_report(settings: FastRunSettings, out_dir: Path) -> int:
+    """
+    WHAT: Executes the complete fast-mode simulation and writes output artifacts to the target folder.
+    It serializes events to JSON Lines format, constructs the run manifest, and calculates cryptographic digests.
+    Summary lines reporting manifest path, event count, and SHA-256 digest are printed to standard output.
+
+    WHY: Isolates export orchestration and summary reporting into a dedicated, clean execution helper.
+    Encapsulating disk serialization keeps the top-level main function within strict length boundaries.
+    Providing immediate cryptographic confirmation enables shell scripts and operators to audit outputs.
+
+    Args:
+        settings: FastRunSettings specifying the validated simulation configuration.
+        out_dir: Target filesystem path where events and manifest files must be saved.
+
+    Returns:
+        Integer exit code 0 indicating successful simulation execution and export.
+
+    Example:
+        >>> import contextlib, io, tempfile
+        >>> from pathlib import Path
+        >>> from world.fast_mode import FastRunSettings, _export_and_report
+        >>> settings = FastRunSettings(101, 10, 4, 61, "training")
+        >>> with tempfile.TemporaryDirectory() as tmp_dir:
+        ...     buf = io.StringIO()
+        ...     with contextlib.redirect_stdout(buf):
+        ...         code = _export_and_report(settings, Path(tmp_dir) / "run")
+        >>> code
+        0
+    """
+    # 7. Write simulation files to disk and parse manifest metadata.
+    manifest_path = write_world_files(settings, out_dir)
+    manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    # Output manifest metadata and file digests for verification.
+    print(f"Manifest: {manifest_path}")
+    print(f"Events: {manifest_data['event_count']}")
+    print(f"SHA-256: {manifest_data['events_sha256']}")
+    return 0
+
+
+def _resolve_cli_settings(
+    args: argparse.Namespace,
+    sizing_config: dict[str, Any],
+) -> FastRunSettings | None:
+    """
+    WHAT: Resolves simulation settings from parsed command-line options and outputs diagnostic confirmation.
+    It passes options to the resolution engine, intercepting ValueErrors to output plain-English explanations.
+    On successful resolution, it prints the resolved population, shops, duration, split, and seed.
+
+    WHY: Decouples command-line parameter extraction and error handling from downstream execution flow.
+    Isolating parameter resolution keeps main() compact and focused on lifecycle orchestration.
+    Printing resolved dimensions provides immediate feedback verifying knob scaling and preset selection.
+
+    Args:
+        args: Parsed command-line Namespace containing candidate parameter flags.
+        sizing_config: Policy configuration dictionary loaded from config/world_sizing.yaml.
+
+    Returns:
+        Validated FastRunSettings instance, or None if parameter resolution encountered a ValueError.
+
+    Example:
+        >>> import argparse, contextlib, io
+        >>> from world.estimates import read_sizing_config
+        >>> from world.fast_mode import _resolve_cli_settings
+        >>> args = argparse.Namespace(
+        ...     seed=101, preset=None, people=60, shops=12,
+        ...     days=61, range_name="training", expert=None
+        ... )
+        >>> buf = io.StringIO()
+        >>> with contextlib.redirect_stdout(buf):
+        ...     s = _resolve_cli_settings(args, read_sizing_config())
+        >>> (s.n_people, s.n_shops)
+        (60, 12)
+    """
+    from world.world_sizing import resolve_settings
+
+    # 1. Resolve simulation parameters across expert, preset, and explicit pathways.
+    try:
+        settings = resolve_settings(
+            seed=args.seed,
+            preset=args.preset,
+            n_people=args.people,
+            n_shops=args.shops,
+            n_days=args.days,
+            range_name=args.range_name,
+            expert_path=args.expert,
+            sizing_config=sizing_config,
+        )
+    except ValueError as err:
+        print(str(err))
+        return None
+
+    # Print confirmed world dimensions for operator visibility.
+    people_info = f"{settings.n_people} people, {settings.n_shops} shops"
+    time_info = f"{settings.n_days} days, range '{settings.range_name}', seed {settings.seed}"
+    print(f"Resolved settings: {people_info}, {time_info}")
+    return settings
+
+
 def main(argv: list[str] | None = None) -> int:
     """
     WHAT: Command-line interface entry point for executing world simulations in fast mode.
-    It parses required arguments (--seed, --people, --shops, --days, --range-name, --out) without defaults.
-    On successful execution, it outputs the manifest path, event count, and events SHA-256 digest.
+    It parses parameters across preset, knob, and expert modes, verifies machine capacity, and runs simulation.
+    If resources are insufficient, it displays a plain-English refusal with actionable suggestions and exits 1.
 
-    WHY: Enables running world simulations directly from command shells, shell scripts, and build jobs.
-    Requiring explicit options prevents accidental runs with unintended default population or horizon scales.
-    Catching expected errors cleanly produces user-friendly diagnostic messages without tracebacks.
+    WHY: Enables operators to run calibrated full-world simulations safely from shells or automation scripts.
+    Pre-flight capacity checks protect developer laptops and servers against runaway memory and storage usage.
+    Providing clear parameter resolution and cryptographic digests ensures transparency and reproducibility.
 
     Args:
         argv: Optional list of command-line argument strings, defaulting to sys.argv when None.
 
     Returns:
-        Integer exit status code (0 for success, 1 on FileExistsError or ValueError).
+        Integer exit status code (0 for success or fitting estimate, 1 on refusal or configuration error).
 
     Example:
         >>> import contextlib, io, tempfile
@@ -418,34 +608,34 @@ def main(argv: list[str] | None = None) -> int:
         >>> code
         0
     """
-    # Configure command-line parser with required flags for all simulation parameters.
-    parser = argparse.ArgumentParser(description="Run simulated world in fast mode and export events.")
-    parser.add_argument("--seed", type=int, required=True, help="Random seed integer.")
-    parser.add_argument("--people", type=int, required=True, help="Citizen population count.")
-    parser.add_argument("--shops", type=int, required=True, help="Commercial shop count.")
-    parser.add_argument("--days", type=int, required=True, help="Simulation duration in days.")
-    parser.add_argument("--range-name", type=str, required=True, help="Dataset split name.")
-    parser.add_argument("--out", type=Path, required=True, help="Target output folder path.")
+    from world.estimates import read_sizing_config
 
-    # Parse arguments and execute simulation export, handling expected errors cleanly.
-    try:
-        args = parser.parse_args(argv)
-        settings = FastRunSettings(
-            seed=args.seed,
-            n_people=args.people,
-            n_shops=args.shops,
-            n_days=args.days,
-            range_name=args.range_name,
-        )
-        manifest_path = write_world_files(settings, args.out)
-        manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        print(f"Manifest: {manifest_path}")
-        print(f"Events: {manifest_data['event_count']}")
-        print(f"SHA-256: {manifest_data['events_sha256']}")
-        return 0
-    except (FileExistsError, ValueError) as err:
-        print(str(err))
+    # 1. Parse command-line arguments and resolve simulation parameters.
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    sizing_config = read_sizing_config()
+    settings = _resolve_cli_settings(args, sizing_config)
+    if settings is None:
         return 1
+
+    # 2. Reject existing non-empty output directories before performing calibration.
+    if args.out.exists() and any(args.out.iterdir()):
+        print(f"Output folder '{args.out}' already exists and is not empty; nothing was written.")
+        return 1
+
+    # 3 & 4. Calibrate host performance and evaluate machine limits.
+    decision = _evaluate_capacity(settings, args.out, sizing_config, args.max_minutes)
+
+    # 5. Handle estimate-only evaluation without writing simulation files.
+    if args.estimate_only:
+        return 0 if decision.fits else 1
+
+    # 6. Halt execution if the proposed world violates host limits.
+    if not decision.fits:
+        return 1
+
+    # 7. Execute full simulation and serialize events and manifest to disk.
+    return _export_and_report(settings, args.out)
 
 
 if __name__ == "__main__":

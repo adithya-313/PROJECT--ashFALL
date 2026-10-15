@@ -24,3 +24,24 @@ estimate_checks:
     may take at most 2 times the estimated time (other programs on the machine add
     noise). A 1000-person world must run at least half as many payments per second as
     the calibration world, which proves speed does not collapse as worlds grow.
+presets:
+  label: policy
+  tiny:   {n_people: 60,   n_shops: 12,  n_days: 61, range_name: training}
+  small:  {n_people: 300,  n_shops: 40,  n_days: 61, range_name: training}
+  medium: {n_people: 1000, n_shops: 120, n_days: 61, range_name: training}
+  large:  {n_people: 2000, n_shops: 250, n_days: 61, range_name: training}
+  reason: >-
+    Named world sizes chosen by the owner on 2026-10-15. All run 61 days
+    (September and October 2026, covering the festival season). tiny equals the golden
+    world of G2 and G3; shops are about one per eight people. Measured on 2026-10-15:
+    about 3,000 / 15,000 / 54,000 / 100,000 payments.
+machine_limits:
+  label: policy
+  max_minutes: 30
+  memory_share: 0.5
+  disk_share: 0.5
+  reason: >-
+    A world may use at most half of the free memory and half of the free disk,
+    measured when it starts, so the machine stays usable. The estimated run time may be
+    at most 30 minutes unless the person raises it for one run with --max-minutes. Long
+    enough for real experiments, short enough that a mistake is caught quickly.

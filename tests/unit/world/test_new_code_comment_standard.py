@@ -74,6 +74,10 @@ NEW_CODE_FILES: list[str] = [
     # Level 11C-2a sizing estimates module and test suite.
     "world/estimates.py",
     "tests/unit/world/test_world_estimates.py",
+    # Level 11C-2b machine limits, world sizing and sizing test suite.
+    "world/machine_limits.py",
+    "world/world_sizing.py",
+    "tests/unit/world/test_world_sizing.py",
 ]
 
 

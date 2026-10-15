@@ -309,6 +309,11 @@ def main(argv: list[str] | None = None) -> int:
     # Parse arguments and run estimation workflow, catching validation errors cleanly.
     try:
         args = parser.parse_args(argv)
+        # Validate that population and simulation horizon parameters are strictly positive integers before calibrating.
+        if args.people <= 0 or args.days <= 0:
+            raise ValueError(
+                f"World size parameters people ({args.people}) and days ({args.days}) must be positive integers."
+            )
         sizing_config = read_sizing_config()
         print("Calibrating on this machine...")
         profile = calibrate_machine(sizing_config)

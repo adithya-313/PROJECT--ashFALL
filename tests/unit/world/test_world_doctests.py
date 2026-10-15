@@ -23,6 +23,8 @@ DOCTEST_MODULES: list[str] = [
     "world.episodes",
     "world.fast_mode",
     "world.estimates",
+    "world.machine_limits",
+    "world.world_sizing",
 ]
 
 

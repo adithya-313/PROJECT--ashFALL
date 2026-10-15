@@ -10,3 +10,5 @@ PyYAML==6.0.3
 # pandas: a fresh install would get pandas 3.x, whose text columns make the pandera schema test fail. 2.3.3 is
 # the version the existing schema-validation CI job already uses.
 pandas==2.3.3
+# psutil: world/machine_limits.py reads free memory on Windows, Linux and macOS.
+psutil==7.2.2
