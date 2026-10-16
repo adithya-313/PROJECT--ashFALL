@@ -89,6 +89,9 @@ NEW_CODE_FILES: list[str] = [
     "world/world_card.py",
     "world/grounding.py",
     "tests/unit/world/test_world_stress.py",
+    # Level 11D-2 showcase chart modules and test suites.
+    "showcase/level_11_charts.py",
+    "tests/unit/showcase/test_level_11_charts.py",
 ]
 
 
