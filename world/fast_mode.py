@@ -233,6 +233,50 @@ def event_to_record(
     }
 
 
+def event_lines(output: FastRunOutput) -> list[str]:
+    """
+    WHAT: Serializes all chronological payment events from a simulation run into JSON Lines strings.
+    Each event dictionary is converted with sorted keys and compact separators into a newline-terminated string.
+    The order matches the exact sequence of events produced by fast mode.
+
+    WHY: Provides a single authoritative source of serialized event lines for both file output and live mode.
+    Sharing this logic guarantees that streaming live mode receives the exact same bytes as events.jsonl.
+    Serializing in memory allows calculating cryptographic digests or replaying envelopes without disk I/O.
+
+    Args:
+        output: FastRunOutput container holding the simulated payment events, telemetry, and clock.
+
+    Returns:
+        List of newline-terminated JSON strings representing the standardized events-v1 records.
+
+    Example:
+        >>> from world.fast_mode import FastRunSettings, run_fast_world, event_lines
+        >>> settings = FastRunSettings(seed=101, n_people=10, n_shops=4, n_days=61, range_name="training")
+        >>> output = run_fast_world(settings)
+        >>> lines = event_lines(output)
+        >>> len(lines)
+        499
+        >>> lines[0][:30]
+        '{"amount_paise":4844,"failure_'
+    """
+    # 1. Initialize container for serialized event JSON strings.
+    lines: list[str] = []
+
+    # 2. Iterate over events, semantic purposes, and device telemetry records.
+    for event, purpose, stamp in zip(
+        output.result.events,
+        output.result.event_purposes,
+        output.result.event_sender_devices,
+    ):
+        # Format transaction event into standard 14-field flat dictionary.
+        record = event_to_record(event, purpose, stamp, output.plan.clock)
+        # Format dictionary into compact sorted JSON line with newline.
+        lines.append(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
+
+    # Supply ordered list of all serialized event lines.
+    return lines
+
+
 def write_events_file(output: FastRunOutput, path: Path) -> str:
     """
     WHAT: Writes all chronological payment events from a simulation run to a JSON Lines file.
@@ -261,17 +305,13 @@ def write_events_file(output: FastRunOutput, path: Path) -> str:
         >>> digest[:8]
         '3b969c22'
     """
+    # Build the deterministic JSON lines for all simulated events.
+    lines = event_lines(output)
+
     # Open destination file with explicit UTF-8 encoding and standard Unix line endings.
     with open(path, "w", encoding="utf-8", newline="\n") as events_file:
-        # Iterate over parallel sequences of payment events, transaction purposes, and device telemetry stamps.
-        for event, purpose, stamp in zip(
-            output.result.events,
-            output.result.event_purposes,
-            output.result.event_sender_devices,
-        ):
-            record = event_to_record(event, purpose, stamp, output.plan.clock)
-            # Serialize the record with sorted keys and compact separators to ensure deterministic bytes.
-            events_file.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
+        for line in lines:
+            events_file.write(line)
 
     # Read back raw file bytes to calculate the authoritative SHA-256 cryptographic digest.
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -438,11 +478,166 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--shops", type=int, default=None, help="Commercial shop count override.")
     parser.add_argument("--days", type=int, default=None, help="Simulation duration in days override.")
     parser.add_argument("--range-name", type=str, default=None, help="Dataset split name override.")
-    parser.add_argument("--out", type=Path, required=True, help="Target output folder path.")
+    parser.add_argument("--out", type=Path, default=None, help="Target output folder path.")
     parser.add_argument("--max-minutes", type=float, default=None, help="Maximum allowed runtime in minutes.")
     parser.add_argument("--estimate-only", action="store_true", help="Estimate feasibility without running.")
     parser.add_argument("--layer", type=Path, action="append", default=[], help="Path to YAML layer overlay.")
+    parser.add_argument("--live", action="store_true", help="Replay simulated events to an HTTP receiver.")
+    parser.add_argument("--target", type=str, default=None, help="HTTP receiver endpoint URL.")
+    parser.add_argument("--speed", type=str, default=None, help="Replay speed factor (positive number or 'max').")
     return parser
+
+
+def _validate_cli_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    """
+    WHAT: Validates inter-dependent command-line flags for fast mode and live mode replay.
+    It asserts that --out is supplied unless --live is active, and verifies that --speed is present with --live.
+    Violations invoke parser.error to output standard usage messages and exit with status 2.
+
+    WHY: Decouples CLI option validation from workflow orchestration to keep main() compact and focused.
+    Validating early ensures invalid parameter combinations fail fast before loading configurations.
+    Standard error messages guide operators toward the correct flag combinations.
+
+    Args:
+        args: Parsed command-line argument Namespace.
+        parser: Active ArgumentParser used to emit formatted error messages.
+
+    Returns:
+        None.
+
+    Example:
+        >>> parser = _build_parser()
+        >>> args = parser.parse_args(["--out", "tmp"])
+        >>> _validate_cli_args(args, parser)
+    """
+    # 1. Require --out folder path whenever --live streaming mode is not active.
+    if not args.live and args.out is None:
+        parser.error("the following arguments are required: --out")
+
+    # 2. Require explicit --speed specification whenever --live streaming mode is requested.
+    if args.live and args.speed is None:
+        parser.error("--speed is required when --live is specified (number or 'max')")
+
+
+def _replay_to_receiver(
+    events: list[tuple[str, dict[str, Any]]],
+    target: str | None,
+    speed: float | None,
+    policy: Any,
+    output: FastRunOutput,
+) -> int:
+    """
+    WHAT: Dispatches event envelopes to either a specified target URL or an ephemeral LocalReceiver.
+    When targeting the local receiver, it verifies that received event payloads match fast mode in order.
+    It prints operational progress and payload match diagnostics, returning 0 on match and 1 on mismatch.
+
+    WHY: Decouples target selection and receiver verification from lifecycle coordination in _run_live_mode.
+    Isolating network dispatch ensures each helper stays well under the 30-line code limit.
+    Verifying received payloads against event_lines guarantees stream fidelity before completion.
+
+    Args:
+        events: Chronological list of (event_id, record) tuples built from the simulation run.
+        target: Optional destination receiver URL string, or None to spin up a local receiver.
+        speed: Simulation speed factor (simulated seconds per real second), or None for max speed.
+        policy: LivePolicy instance specifying retry counts, timeouts, and local host settings.
+        output: FastRunOutput container holding the authoritative simulation run results.
+
+    Returns:
+        Integer status code 0 on successful delivery and verification, or 1 on payload mismatch.
+
+    Example:
+        >>> import io, contextlib
+        >>> from world.fast_mode import FastRunSettings, run_fast_world, _replay_to_receiver
+        >>> from world.live_mode import LivePolicy, build_live_events
+        >>> settings = FastRunSettings(101, 10, 4, 61, "training")
+        >>> output = run_fast_world(settings)
+        >>> events = build_live_events(output)
+        >>> policy = LivePolicy("127.0.0.1", 4, 0.5, 2.0, 5.0)
+        >>> buf = io.StringIO()
+        >>> with contextlib.redirect_stdout(buf):
+        ...     code = _replay_to_receiver(events, None, None, policy, output)
+        >>> code
+        0
+    """
+    from world.live_mode import HttpEventSender, LocalReceiver, replay
+
+    # 1. Replay to explicit external target endpoint if provided.
+    if target is not None:
+        print(f"Sending to {target} because you asked.")
+        sender = HttpEventSender(target, policy)
+        replay(events, sender, speed, policy)
+        return 0
+
+    # 2. Replay to ephemeral local receiver and verify received payloads.
+    with LocalReceiver(policy) as receiver:
+        sender = HttpEventSender(receiver.url, policy)
+        report = replay(events, sender, speed, policy)
+        matches = receiver.records == [json.loads(line) for line in event_lines(output)]
+        match_str = "yes" if matches else "no"
+        print(
+            f"Sent {report.sent} of {report.total} events to {receiver.url}. "
+            f"Received payloads match fast mode: {match_str}"
+        )
+        return 0 if matches else 1
+
+
+def _run_live_mode(
+    settings: FastRunSettings,
+    args: argparse.Namespace,
+    configs: WorldConfigs | None = None,
+    layers: list[Layer] | None = None,
+) -> int:
+    """
+    WHAT: Replays simulated world events to an HTTP receiver according to live-mode CLI options.
+    It runs the fast world simulation, builds live event envelopes, and dispatches them with pacing and retries.
+    If no target is given, it verifies against an ephemeral local receiver; if --out is set, it also exports files.
+
+    WHY: Isolates live streaming orchestration from CLI parsing and capacity verification logic.
+    Encapsulating live mode into a dedicated helper keeps main() within the 30-line code limit.
+    Enforcing payload verification against the local receiver guarantees fast-mode byte parity.
+
+    Args:
+        settings: FastRunSettings specifying simulation parameters.
+        args: Parsed command-line Namespace containing live, target, speed, and out flags.
+        configs: Optional WorldConfigs holding layered simulation configuration dicts.
+        layers: Optional list of applied Layer instances for manifest recording.
+
+    Returns:
+        Integer exit code 0 on successful delivery and verification, or 1 on delivery error.
+
+    Example:
+        >>> import argparse, contextlib, io
+        >>> from world.fast_mode import FastRunSettings, _run_live_mode
+        >>> settings = FastRunSettings(101, 10, 4, 61, "training")
+        >>> args = argparse.Namespace(live=True, target=None, speed="max", out=None)
+        >>> buf = io.StringIO()
+        >>> with contextlib.redirect_stdout(buf):
+        ...     code = _run_live_mode(settings, args)
+        >>> code
+        0
+    """
+    from world.live_mode import LiveSendError, build_live_events, read_live_policy
+
+    # 1. Run simulation in memory and prepare live event envelopes.
+    output = run_fast_world(settings, configs=configs)
+    policy = read_live_policy()
+    events = build_live_events(output)
+    speed_val = None if args.speed.lower() == "max" else float(args.speed)
+
+    # 2. Dispatch events to target or local receiver, handling delivery errors.
+    try:
+        status = _replay_to_receiver(events, args.target, speed_val, policy, output)
+        if status != 0:
+            return status
+    except LiveSendError as err:
+        print(str(err))
+        return 1
+
+    # 3. If output folder is specified alongside --live, export files to disk as well.
+    if args.out is not None:
+        return _export_and_report(settings, args.out, configs=configs, layers=layers)
+
+    return 0
 
 
 def _evaluate_capacity(
@@ -640,9 +835,10 @@ def main(argv: list[str] | None = None) -> int:
     """
     from world.estimates import read_sizing_config
 
-    # 1. Parse command-line arguments.
+    # 1. Parse and validate command-line arguments.
     parser = _build_parser()
     args = parser.parse_args(argv)
+    _validate_cli_args(args, parser)
 
     # 2. Read baseline configuration and apply specified layer overlays.
     base_configs = read_world_configs()
@@ -663,7 +859,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     # 4. Reject existing non-empty output directories before performing calibration.
-    if args.out.exists() and any(args.out.iterdir()):
+    if args.out is not None and args.out.exists() and any(args.out.iterdir()):
         print(f"Output folder '{args.out}' already exists and is not empty; nothing was written.")
         return 1
 
@@ -671,13 +867,14 @@ def main(argv: list[str] | None = None) -> int:
     print(describe_effective_world(loaded_layers, changes, layered_configs))
 
     # 6. Calibrate host performance and evaluate machine limits against sizing policy.
-    decision = _evaluate_capacity(settings, args.out, sizing_config, args.max_minutes)
-    if args.estimate_only:
-        return 0 if decision.fits else 1
-    if not decision.fits:
-        return 1
+    check_dir = args.out if args.out is not None else Path(".")
+    decision = _evaluate_capacity(settings, check_dir, sizing_config, args.max_minutes)
+    if args.estimate_only or not decision.fits:
+        return 0 if (args.estimate_only and decision.fits) else 1
 
-    # 7. Execute full simulation with layered configs and serialize events and manifest to disk.
+    # 7. Execute simulation in live streaming mode or traditional disk export mode.
+    if args.live:
+        return _run_live_mode(settings, args, configs=layered_configs, layers=loaded_layers)
     return _export_and_report(settings, args.out, configs=layered_configs, layers=loaded_layers)
 
 
