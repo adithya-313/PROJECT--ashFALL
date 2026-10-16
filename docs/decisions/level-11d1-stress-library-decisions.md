@@ -30,7 +30,7 @@ Ranges must have low below high (core/config_validator.py check_range), so 'zero
 
 ## 4. Deferral of new-bank Scenario
 
-The `new-bank` stress test scenario is deliberately deferred to a later level. While adding a new banking institution into the ecosystem represents a realistic stress condition, full dynamic onboarding of an institution requires bank-failure resolution mechanics, inter-bank settlement adjustments, and core transaction routing reconfiguration that will be authored in later levels.
+new-bank is deferred because it needs world-builder code: three banks are built into the world builder today, so adding a fourth would change build_world and its golden fingerprint (FP). The Level 11 plan marks this stress test as optional.
 
 ## 5. World Card Schema and Base-Rate Field
 
