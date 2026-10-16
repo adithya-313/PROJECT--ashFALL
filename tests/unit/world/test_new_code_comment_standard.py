@@ -109,6 +109,10 @@ NEW_CODE_FILES: list[str] = [
     # Level 12a run identity module and test suite.
     "world/run_identity.py",
     "tests/unit/world/test_run_identity.py",
+    # Level 12a outside events, encumbrance book and their test suite.
+    "world/outside_events.py",
+    "world/encumbrance.py",
+    "tests/unit/world/test_outside_events_and_encumbrance.py",
 ]
 
 
