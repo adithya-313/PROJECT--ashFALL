@@ -113,6 +113,10 @@ NEW_CODE_FILES: list[str] = [
     "world/outside_events.py",
     "world/encumbrance.py",
     "tests/unit/world/test_outside_events_and_encumbrance.py",
+    # Level 12a interactive runner records, switch and fraud-off path, and their test suite.
+    "world/interactive_records.py",
+    "world/interactive_runner.py",
+    "tests/unit/world/test_interactive_runner_switch.py",
 ]
 
 
