@@ -20,6 +20,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from showcase.framework import validate_checks
+from showcase.reporting import to_json_bytes
 from showcase.level_11 import (
     LEVEL_NUMBER,
     LEVEL_TITLE,
@@ -132,6 +133,8 @@ def test_tiny_world_and_grounding_checks() -> None:
     assert "standard errors" in out3.key_number
     assert out3.evidence["attempts"] > 1000
     assert out3.evidence["chart_svg"].startswith("<svg")
+    # The framework writes evidence with orjson, which refuses non-string dictionary keys.
+    assert to_json_bytes(out3.evidence)
     out4 = asyncio.run(run_grounding_check(None))
     assert "33 parameters" in out4.key_number
     assert out4.evidence["total_parameters"] == 33

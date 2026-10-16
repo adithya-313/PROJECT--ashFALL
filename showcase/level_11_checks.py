@@ -217,7 +217,8 @@ def _run_festival_world(tiny_scaled: list[int]) -> dict[str, Any]:
     split = split_daily_counts(output.result.events, output.result.event_purposes, settings.n_days)
     uplift = measure_festival_uplift(split.calendar_scaled, other, fest, k_sigma)
     return {
-        "n_people": n_people, "n_shops": settings.n_shops, "predicted_ratios": ratios, "run_seconds": seconds,
+        "n_people": n_people, "n_shops": settings.n_shops, "run_seconds": seconds,
+        "predicted_ratios": {str(n): r for n, r in ratios.items()},
         "k_sigma": k_sigma, "c_d": split.total, "u_d": split.fixed_date, "s_d": split.calendar_scaled,
         "other_d": other, "fest_d": fest, "u_total": sum(split.fixed_date), "uplift": uplift,
     }
