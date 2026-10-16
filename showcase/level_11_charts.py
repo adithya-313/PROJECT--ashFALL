@@ -422,12 +422,39 @@ def _render_curve_polyline(
     return f'<polyline points="{" ".join(pts)}" fill="none" stroke="{stroke}" stroke-width="{stroke_w}"{dash_attr}/>'
 
 
+def _render_adoption_legend(right_x: float, top_y: float) -> str:
+    """
+    WHAT: Draws a two-line legend naming the solid curve (with stress layer) and the dashed curve (base run).
+    It anchors both labels to the right edge of the plot area, just below its top margin.
+
+    WHY: Check 7 overlays the base and layered adoption curves; without a legend the reader cannot tell them apart.
+
+    Args:
+        right_x: X coordinate of the plot's right edge.
+        top_y: Y coordinate of the plot's top edge.
+
+    Returns:
+        SVG text fragment with two text elements.
+
+    Example:
+        >>> legend = _render_adoption_legend(625, 20)
+        >>> "with stress layer" in legend and "base run" in legend
+        True
+    """
+    return (
+        f'<text x="{right_x}" y="{top_y + 12}" fill="#1A2B48" font-size="11" text-anchor="end">'
+        "solid: with stress layer</text>"
+        f'<text x="{right_x}" y="{top_y + 26}" fill="#6B778A" font-size="11" text-anchor="end">'
+        "dashed: base run</text>"
+    )
+
+
 def adoption_curve(
     days: list[int], adoption_shares: list[float], baseline_shares: list[float] | None = None
 ) -> str:
     """
     WHAT: Draws an SVG adoption curve charting the cumulative market share percentage of updated operating systems.
-    It plots the progressive rollout of mobile operating system updates over simulated calendar days.
+    It plots the daily share of phones on the newest OS generation over simulated calendar days.
     When baseline shares are provided, it overlays a secondary dashed reference curve for visual comparison.
 
     WHY: Visual proof for OS update wave stress check (Check 7) illustrating logistic adoption kinetics.
@@ -461,7 +488,7 @@ def adoption_curve(
         base_line = _render_curve_polyline(
             days, baseline_shares, "#6B778A", 1.6, "4,4", min_d, max_d, m_left, plot_w, m_top, plot_h
         )
-        parts.append(base_line)
+        parts.extend([base_line, _render_adoption_legend(width - m_right, m_top)])
     main_line = _render_curve_polyline(
         days, adoption_shares, "#1A2B48", 2.2, "", min_d, max_d, m_left, plot_w, m_top, plot_h
     )

@@ -136,6 +136,30 @@ def _build_domains_table_html() -> str:
     )
 
 
+def _check_figure_html(cr: Any) -> str:
+    """
+    WHAT: Returns the figure block shown inside one check's accordion entry, or an empty string.
+    It uses the SVG chart that the check stored under evidence["chart_svg"], wrapped in a figure div.
+
+    WHY: Checks 3, 6, 7 and 9 draw their charts from numbers measured in the run; the page must show them.
+    The SVG is built by showcase/level_11_charts.py from numbers only, so it carries no outside text to escape.
+
+    Args:
+        cr: CheckResult whose evidence may hold a chart_svg string.
+
+    Returns:
+        HTML string with the figure, or "" when the check has no chart.
+
+    Example:
+        >>> from showcase.framework import CheckResult
+        >>> cr = CheckResult("3. x", "normal", "p", "PASS", "k", "", {"chart_svg": "<svg></svg>"}, None, 0.1)
+        >>> _check_figure_html(cr)
+        '<div class="figure"><svg></svg></div>'
+    """
+    svg = cr.evidence.get("chart_svg") if isinstance(cr.evidence, dict) else None
+    return f'<div class="figure">{svg}</div>' if isinstance(svg, str) and svg.startswith("<svg") else ""
+
+
 def _format_single_check_html(idx: int, cr: Any) -> str:
     """
     WHAT: Formats an individual CheckResult record into an expandable passbook accordion entry HTML component.
@@ -161,7 +185,8 @@ def _format_single_check_html(idx: int, cr: Any) -> str:
         True
     """
     status_cls = "PASS" if cr.status == "PASS" else ("FAIL" if cr.status == "FAIL" else "NOT")
-    chart_html = f'<div class="figure">{cr.chart}</div>' if cr.chart else ""
+    # Check 5 still hands its table through cr.chart until the page builds the table itself.
+    chart_html = _check_figure_html(cr) or (f'<div class="figure">{cr.chart}</div>' if cr.chart else "")
     evidence_text = html.escape(str(cr.key_number))
     why_html = f'<div class="why">{html.escape(cr.explanation)}</div>' if cr.explanation else ""
     return (

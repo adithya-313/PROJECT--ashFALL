@@ -184,14 +184,16 @@ def _get_checks_5_to_8() -> list[CheckDefinition]:
     )
     c6 = CheckDefinition(
         "6. bank downtime partial degradation", "edge",
-        "A multi-hour bank downtime causes partial success rate degradation without collapsing unrelated bank transactions.",
-        run_bank_outage_check, "Bank downtime dropped the entire system to zero or failed to register.",
+        "Inside the first long bank outage, payments touching the outage bank partly succeed and partly fail with "
+        "bank downtime, while payments between the other banks have no bank downtime failures.",
+        run_bank_outage_check, "Bank downtime stopped all outage-bank payments, hit no payment, or reached other banks.",
         "scenarios/stress/bank-outage-long.yaml, world/failures.py"
     )
     c7 = CheckDefinition(
         "7. os update wave adoption curve and device stability", "edge",
-        "An exaggerated OS update wave raises OS adoption, and new-device flags stay within the k = 4 bound (issue R5).",
-        run_os_wave_check, "OS updates triggered new-device flags or adoption kinetics failed to accelerate.",
+        "With the OS update wave layer, more phones reach the newest OS and in sharper daily jumps than in the base run, "
+        "and new-device flags stay within four Poisson standard deviations of the base (issue R5).",
+        run_os_wave_check, "OS updates raised new-device flags, or the layer no longer speeds up OS adoption.",
         "scenarios/stress/os-update-wave.yaml, world/device_runtime.py"
     )
     c8 = CheckDefinition(

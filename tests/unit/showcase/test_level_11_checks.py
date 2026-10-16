@@ -16,6 +16,7 @@ TERM: CheckOutcome: The result data handed back by an individual check containin
 """
 
 import asyncio
+from types import SimpleNamespace
 from typing import Any
 
 from showcase.framework import validate_checks
@@ -28,6 +29,9 @@ from showcase.level_11 import (
     get_checks,
 )
 from showcase.level_11_checks import (
+    _count_window_outcomes,
+    _largest_daily_rise,
+    _newest_os_share_by_day,
     run_amendments_check,
     run_grounding_check,
     run_issue_register_check,
@@ -131,3 +135,37 @@ def test_tiny_world_and_grounding_checks() -> None:
     out4 = asyncio.run(run_grounding_check(None))
     assert "33 parameters" in out4.key_number
     assert out4.evidence["total_parameters"] == 33
+
+
+def test_outage_counts_and_os_adoption_helpers() -> None:
+    """
+    WHAT: Checks the check 6 window counter and the check 7 adoption helpers on hand-made events.
+    WHY: Check 6 and check 7 pass or fail on these counts, so each needs a result worked out by hand.
+
+    Returns:
+        None; fails with an assertion error if any count or share differs.
+
+    Example:
+        Outage on bank 2 for minutes 0-59: a failed bank_downtime payment from bank 2 (outage side),
+        a success between banks 0 and 1 (other side), and a payment at minute 99 (outside, ignored).
+        Adoption: person a moves from OS 3 to 4 on day 1, person b is already on 4: shares [0.5, 1.0].
+        Largest one-day rise of [0.2, 0.25, 0.5, 0.5] is 0.25.
+    """
+    inc = SimpleNamespace(start_minute=0, duration_minutes=60, bank_index=2)
+    events = [
+        SimpleNamespace(minute=5, from_bank_index=2, to_bank_index=0, status="failed", reason="bank_downtime"),
+        SimpleNamespace(minute=9, from_bank_index=0, to_bank_index=1, status="success", reason="ok"),
+        SimpleNamespace(minute=99, from_bank_index=2, to_bank_index=2, status="failed", reason="bank_downtime"),
+    ]
+    counts = _count_window_outcomes(events, inc)
+    assert counts == {
+        "outage_attempts": 1, "outage_successes": 0, "outage_downtime_failures": 1,
+        "other_attempts": 1, "other_successes": 1, "other_downtime_failures": 0,
+    }
+    people = [
+        SimpleNamespace(person_id="a", device=SimpleNamespace(os_generation=3)),
+        SimpleNamespace(person_id="b", device=SimpleNamespace(os_generation=4)),
+    ]
+    updates = [SimpleNamespace(person_id="a", minute=1500, os_generation_after=4)]
+    assert _newest_os_share_by_day(people, updates, 2) == [0.5, 1.0]
+    assert abs(_largest_daily_rise([0.2, 0.25, 0.5, 0.5]) - 0.25) < 1e-12
