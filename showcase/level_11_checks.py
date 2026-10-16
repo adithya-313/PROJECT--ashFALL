@@ -283,6 +283,70 @@ def _collect_seed_timings(seed: int, n_days: int) -> tuple[dict[str, int], list[
     return fests, outages, os_days
 
 
+class SideBySideChart(dict):
+    """
+    WHAT: Custom chart dictionary container encapsulating side-by-side comparison table markup.
+    It inherits from dict to maintain compatibility with framework CheckOutcome chart typing.
+    Its string representation returns the embedded HTML table for inline showcase page rendering.
+
+    WHY: Bridges framework reporting dictionary expectations with custom HTML table figure display.
+    Allows Check 5 to display side-by-side timing comparisons cleanly within passbook accordions.
+    Ensures that reporting.py can invoke dict.get('type') safely without encountering attribute errors.
+
+    Example:
+        >>> c = SideBySideChart("<table><tr><td>Day 1</td></tr></table>")
+        >>> c["type"] == "side_by_side" and "Day 1" in str(c)
+        True
+    """
+
+    def __init__(self, html_table: str) -> None:
+        """
+        WHAT: Initializes the chart dictionary with the side_by_side type identifier and HTML markup payload.
+        It populates internal dictionary mappings ensuring full structural compliance with the reporting framework.
+        Storing the table string internally allows subsequent string serialization for custom HTML page generation.
+
+        WHY: Bridges framework reporting dictionary expectations with custom HTML table figure display.
+        Allows Check 5 to display side-by-side timing comparisons cleanly within passbook accordions.
+        Ensures that reporting.py can invoke dict.get('type') safely without encountering attribute errors.
+
+        Args:
+            html_table: Formatted HTML table markup containing comparative scheduled event day rows.
+
+        Returns:
+            None. Initializes the dictionary instance in place.
+
+        Example:
+            >>> c = SideBySideChart("<table><tr><td>Day 1</td></tr></table>")
+            >>> c["type"] == "side_by_side" and "Day 1" in c["html"]
+            True
+        """
+        super().__init__(type="side_by_side", html=html_table)
+        self.html_table = html_table
+
+    def __str__(self) -> str:
+        """
+        WHAT: Serializes the chart dictionary to its encapsulated HTML table markup string representation.
+        It returns the pre-formatted HTML ledger table containing side-by-side seed timing comparisons.
+        This string representation is directly interpolated into passbook accordion figure containers.
+
+        WHY: Enables direct string interpolation into custom page HTML template figure element slots.
+        Allows the custom page renderer to embed rich tabular comparison markup without format conversion.
+        Conforms strictly to Python string formatting conventions used throughout showcase template renderers.
+
+        Args:
+            None. Operates directly on the encapsulated instance state.
+
+        Returns:
+            Raw HTML string representing the side-by-side scheduled timing comparison table.
+
+        Example:
+            >>> c = SideBySideChart("<table><tr><td>Content</td></tr></table>")
+            >>> str(c).startswith("<table>")
+            True
+        """
+        return self.html_table
+
+
 def _format_seed_timings_table(rows: list[tuple[str, int, int]]) -> str:
     """
     WHAT: Formats a side-by-side comparison table of scheduled timings between two simulation seeds.
@@ -364,7 +428,7 @@ async def run_seed_divergence_check(workspace: Any) -> CheckOutcome:
         "timings": rows, "sha256_seed_101": h1, "sha256_seed_102": h2,
         "events_seed_101": len(out1.result.events), "events_seed_102": len(out2.result.events),
     }
-    return CheckOutcome(key_number=key, evidence=evidence, chart=tbl)
+    return CheckOutcome(key_number=key, evidence=evidence, chart=SideBySideChart(tbl))
 
 
 def _calc_hourly_rates(events: list[Any], max_minute: int) -> tuple[list[float], list[float]]:

@@ -124,7 +124,8 @@ async def run_wedding_episode_check(workspace: Any) -> CheckOutcome:
     plan = draw_world_plan(p_rng, n_days=61)
     ranges = read_world_ranges()
     collector = world.people[0]
-    _, ep_rng = spawn_life_streams(101)
+    ep = Episode(collector.person_id, "wedding_or_medical_collection", 5 * 1440, 20 * 1440, 40)
+    ep_rng = type(p_rng)(type(p_rng.bit_generator)(101))
     ep_plan = plan_episode_payments(world, plan, [ep], ranges, ep_rng, "training")
     res = run_world(world, plan, r_rng, episode_payments=ep_plan.payments)
     inflows = [0.0] * 61
