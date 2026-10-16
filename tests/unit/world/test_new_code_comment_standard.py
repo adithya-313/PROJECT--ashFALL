@@ -104,6 +104,8 @@ NEW_CODE_FILES: list[str] = [
     "tests/unit/showcase/test_level_11_festival.py",
     # Level 12a frozen-anchor test guarding every value Level 11 pinned.
     "tests/unit/world/test_frozen_anchors.py",
+    # Level 12a showcase --part option test suite.
+    "tests/unit/test_showcase_part.py",
 ]
 
 
@@ -111,6 +113,10 @@ NEW_CODE_FILES: list[str] = [
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
     ("world/amounts.py", "lookalike_small_amount_paise"),
+    # Level 12a showcase --part option helpers added to older showcase files.
+    ("showcase/framework.py", "select_part_checks"),
+    ("showcase/__main__.py", "check_part_argument"),
+    ("showcase/__main__.py", "report_folder"),
 ]
 
 
