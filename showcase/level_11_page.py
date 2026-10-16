@@ -451,7 +451,7 @@ def _build_limits_html() -> str:
     items = [
         "<b>Fixed Municipal Population</b>: Calibrated for municipal communities (60 to 1,000 entities); state-scale simulations with millions of citizens require distributed infrastructure.",
         "<b>Three-Bank Architecture</b>: Models three institutional archetypes (public, private, and payments bank); additional banks are deferred to avoid altering golden entity fingerprints.",
-        "<b>Offline In-Memory Execution</b>: Fast mode processes all transactions entirely in host memory; live HTTP streaming mode enables realistic distributed receiver integration.",
+        "<b>Offline In-Memory Execution</b>: Fast mode processes all transactions entirely in host memory; live HTTP streaming mode sends the same events to a separate receiver over HTTP.",
         "<b>Synthetic Entity Demographics</b>: Citizen personas and shopping routines model empirical rhythms, but individual entities do not represent real-world identifiable persons.",
     ]
     return "".join(f"<li>{item}</li>" for item in items)
@@ -479,7 +479,7 @@ def _build_records_table_html() -> str:
         ("Level 11D-1 Stress Library Decisions", "Stress test library design and world card schema", "docs/decisions/level-11d1-stress-library-decisions.md"),
         ("Level 11C-2 Machine Limits Decisions", "Capacity sizing heuristics and refusal rules", "docs/decisions/level-11c2-machine-limits-decisions.md"),
         ("Level 11C-4 Live Mode Decisions", "HTTP replay streaming and backoff policies", "docs/decisions/level-11c4-live-mode-decisions.md"),
-        ("Rules Baseline Specification", "Device rules and fraud evaluation invariants", "docs/research/rules_baseline_spec.md"),
+        ("Rules Baseline Specification", "Device rules and evaluation invariants", "docs/research/rules_baseline_spec.md"),
     ]
     rows = [
         f"<tr><td>{html.escape(name)}</td><td>{html.escape(topic)}</td>"
