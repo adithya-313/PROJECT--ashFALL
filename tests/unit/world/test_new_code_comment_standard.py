@@ -106,6 +106,9 @@ NEW_CODE_FILES: list[str] = [
     "tests/unit/world/test_frozen_anchors.py",
     # Level 12a showcase --part option test suite.
     "tests/unit/test_showcase_part.py",
+    # Level 12a run identity module and test suite.
+    "world/run_identity.py",
+    "tests/unit/world/test_run_identity.py",
 ]
 
 
