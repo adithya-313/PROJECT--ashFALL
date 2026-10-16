@@ -36,7 +36,7 @@ def test_every_stress_file_is_labelled() -> None:
     """
     WHAT: Asserts that all six stress-test YAML files parse via read_layer and define complete metadata blocks.
     It verifies that real_event, exaggeration, and takes_effect_from_level attributes are populated in every layer.
-    It checks that deferred layers declare their respective activation levels (Level 13 for registry and 12 for backlog).
+    It checks that deferred layers declare their respective activation levels (Level 13 and Level 12).
 
     WHY: Guarantees that no unlabelled or malformed stress tests exist within the scenarios repository.
     Enforcing explicit real-world event grounding and exaggeration ratios protects simulation credibility.
