@@ -60,14 +60,6 @@ class GroundingRow:
     training_range: list[Any]
     source: str
 
-    def __iter__(self):
-        """Enable tuple unpacking for compatibility with positional sequence consumers."""
-        yield self.config_name
-        yield self.setting
-        yield self.label
-        yield self.training_range
-        yield self.source
-
 
 def _format_source_entry(block: dict[str, Any]) -> str:
     """
