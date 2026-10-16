@@ -26,13 +26,13 @@ def test_register_has_all_31_ids():
     assert set(data.keys()) == issue_register.EXPECTED_IDS
 
 def test_status_counts():
-    """exactly {"built": 27, "planned": 3, "deferred": 1}."""
+    """exactly {"built": 28, "planned": 2, "deferred": 1}."""
     data = load_real()
     built = sum(1 for v in data.values() if v.get("status") == "built")
     planned = sum(1 for v in data.values() if v.get("status") == "planned")
     deferred = sum(1 for v in data.values() if v.get("status") == "deferred")
-    assert built == 27
-    assert planned == 3
+    assert built == 28
+    assert planned == 2
     assert deferred == 1
 
 def test_r9_is_deferred_with_a_reason():
@@ -80,14 +80,14 @@ def test_built_without_evidence_is_rejected():
 def test_planned_without_later_work_is_rejected():
     """planned must have later_work."""
     data = load_real()
-    data["R2"]["later_work"] = []
+    data["R7"]["later_work"] = []
     errors = issue_register.check_register(data, REPO_ROOT)
     assert any("must have non-empty later_work list" in err for err in errors)
 
 def test_bad_later_work_note_is_rejected():
     """note not starting with 'Level '."""
     data = load_real()
-    data["R2"]["later_work"] = ["Soon"]
+    data["R7"]["later_work"] = ["Soon"]
     errors = issue_register.check_register(data, REPO_ROOT)
     assert any("Bad later_work note" in err for err in errors)
 
