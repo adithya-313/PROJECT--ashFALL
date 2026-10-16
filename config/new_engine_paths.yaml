@@ -19,3 +19,4 @@ new_engine_paths:
     - features_m1/
     - models/mule_*
     - api/v1/
+    - scenarios/

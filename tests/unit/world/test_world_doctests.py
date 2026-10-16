@@ -28,6 +28,8 @@ DOCTEST_MODULES: list[str] = [
     "world.world_configs",
     "world.layers",
     "world.live_mode",
+    "world.world_card",
+    "world.grounding",
 ]
 
 

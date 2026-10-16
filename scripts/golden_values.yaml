@@ -45,7 +45,7 @@ g3:
 
 issues:
   expected:
-    summary: "OK: 31 issues checked (built 27, planned 3, deferred 1)"
+    summary: "OK: 31 issues checked (built 28, planned 2, deferred 1)"
   setup: python -B -m core.issue_register on config/issues.yaml
-  reason: Verifies all 31 research issues and their status invariants remain valid and registered.
+  reason: "R2 built in 11D-1 (stress-test library); previous value: OK: 31 issues checked (built 27, planned 3, deferred 1)"
   set_by: 11A/11B review catch-up (PR #42 / PR #50)

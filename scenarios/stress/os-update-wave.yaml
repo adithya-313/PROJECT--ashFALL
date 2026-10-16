@@ -1,0 +1,16 @@
+name: os-update-wave
+reason: Stress test simulating rapid and widespread OS update adoption waves across eligible mobile devices.
+stress_test:
+  real_event: "OS updates spread gradually: iOS adoption reached about two-thirds of devices months after release (global, February 2026); Android updates roll out in waves (Android update guidance)."
+  exaggeration: "Two or three waves where 90 to 100 percent of eligible phones update within 3 to 7 days, instead of one or two waves reaching 30 to 70 percent over 2 to 6 weeks."
+  takes_effect_from_level: null
+changes:
+  device_realism:
+    os_wave_count_per_world:
+      training: [2, 3]
+    os_wave_length_days:
+      training: [3, 7]
+      test: [3, 56]
+    os_wave_final_share_of_eligible:
+      training: [0.9, 1.0]
+      test: [0.15, 1.0]

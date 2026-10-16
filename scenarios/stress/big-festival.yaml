@@ -1,0 +1,11 @@
+name: big-festival
+reason: Stress test simulating an exceptionally large Diwali festival uplift far exceeding historical peaks.
+stress_test:
+  real_event: "Diwali 2025: the Diwali-eve record of 740 to 754 million UPI transactions was about 6 to 9 percent above that October's daily average of 695 million (NPCI-based reports, October 2025)."
+  exaggeration: "Festival uplift of 50 to 60 percent instead of the normal 5 to 25 percent, several times the reported 6 to 9 percent."
+  takes_effect_from_level: null
+changes:
+  background_realism:
+    festival_uplift_fraction:
+      training: [0.5, 0.6]
+      test: [0.02, 0.6]

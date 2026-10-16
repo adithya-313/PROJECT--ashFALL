@@ -1,0 +1,15 @@
+name: switch-outage
+reason: Stress test simulating a near-total central NPCI switch routing outage lasting several hours.
+stress_test:
+  real_event: "NPCI-side incidents are rare and partial: 95 to 180 minutes, with success rates dropping to about 50 to 80 percent (NPCI uptime dashboard, March to April 2025)."
+  exaggeration: "At least one incident a month where NPCI routes almost nothing (0 to 0.01 percent success) for 3 to 5 hours."
+  takes_effect_from_level: null
+changes:
+  failure_realism:
+    npci_incident_success_rate:
+      training: [0.0, 0.0001]
+      test: [0.0, 0.9]
+    npci_incident_count_per_30_days:
+      training: [1, 2]
+    npci_incident_duration_minutes:
+      training: [180, 300]

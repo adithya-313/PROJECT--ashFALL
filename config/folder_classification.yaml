@@ -19,6 +19,7 @@ folder_classification:
     - engine
     - decisions
     - features_m1
+    - scenarios
   not_engine:
     - .dvc
     - .github

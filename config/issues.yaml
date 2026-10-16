@@ -197,8 +197,10 @@ R1:
     - {kind: amendment, id: A-002}
 R2:
   title: "Stress-test library replaces scenario timelines"
-  status: planned
-  later_work: ["Level 11 Part 2: the labelled stress-test library"]
+  status: built
+  evidence:
+    - {kind: doc, file: scenarios/stress/README.md, text: "big-festival"}
+    - {kind: test, file: tests/unit/world/test_world_stress.py, name: test_every_stress_file_is_labelled}
 R3:
   title: "Held vs returned in evaluation"
   status: built
