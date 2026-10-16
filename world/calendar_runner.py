@@ -516,6 +516,10 @@ def run_world(
     # 1. Build lookup tables and initialize device history tracking.
     bank_map, p_by_id = _build_account_bank_map(world.ledgers), {p.person_id: p for p in world.people}
     p_by_acc, dev_state = {p.account_id: p for p in world.people}, start_device_runtime(world.people)
+    # Declared types for the three empty output lists filled while payments run.
+    events: list[PaymentEvent]
+    purposes: list[str]
+    stamps: list[DeviceStamp]
     events, purposes, stamps, counts = [], [], [], {"attempts": 0, "successes": 0, "failures": 0}
     dev_idx, new_devs = 0, 0
     # 2. Collect routine payments and merge with reindexed scheduled episode payments.

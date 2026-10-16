@@ -1,0 +1,61 @@
+# Configuration and parameters for Level 11 showcase ("A simulated India of everyday UPI payments").
+# Stores seed parameters, chart geometries, thresholds, and expected invariants with epistemic labels and reasons.
+
+tiny_world:
+  label: policy
+  seed: 101
+  n_people: 60
+  n_shops: 12
+  n_days: 61
+  range_name: training
+  reason: Canonical small world footprint used across golden benchmarks G2 and G3 to run deterministically in under 1 second.
+
+festival_world:
+  label: policy
+  seed: 101
+  n_days: 61
+  range_name: training
+  candidate_people: [1000, 2000, 4000, 8000]
+  people_per_shop: 5
+  min_planned_ratio: 8.0
+  reason: >-
+    Large enough that Poisson noise is small next to the planned festival uplift. Size rule fixed before
+    looking at results: the smallest candidate whose planned_excess / sqrt(expected_without), predicted from
+    the plan's multipliers and the tiny world's base rate, is at least 8. On seed 101 the predicted ratios are
+    1000 -> 5.11, 2000 -> 7.23, 4000 -> 10.23, 8000 -> 14.47, so the rule picks 4000 people and 800 shops.
+
+comparison_world:
+  label: policy
+  seed: 102
+  reason: Adjacent seed used to demonstrate divergence in timing and event distribution across independent world runs.
+
+chart_geometry:
+  label: policy
+  viewbox_width: 1000
+  viewbox_height: 300
+  margin_left: 50
+  margin_right: 20
+  margin_top: 30
+  margin_bottom: 40
+  bar_color: "#1A2B48"
+  bar_opacity: 0.22
+  line_color: "#1A2B48"
+  line_stroke_width: 2.4
+  window_fill: "#FBEBD6"
+  window_stroke: "#D9822B"
+  window_label_color: "#9A5A17"
+  window_label_font_size: 13
+  reason: Visual geometry and color palette matching the design guidelines for the Level 11 showcase index.html.
+
+expected_invariants:
+  label: policy
+  events_sha256: "24fc0e25009d79462d508f040a109620dd4308486cc78aee589393fe921f92fd"
+  amendments_count: 11
+  issues_built: 28
+  issues_planned: 2
+  issues_deferred: 1
+  grounding_total: 33
+  grounding_assumptions: 30
+  grounding_reported: 3
+  k_sigma: 4.0
+  reason: Baseline counts and tolerances pinned to prevent regressions and verify empirical grounding across the world engine.
