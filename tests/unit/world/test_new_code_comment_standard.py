@@ -102,6 +102,8 @@ NEW_CODE_FILES: list[str] = [
     "tests/unit/showcase/test_level_11_page.py",
     "showcase/level_11_festival.py",
     "tests/unit/showcase/test_level_11_festival.py",
+    # Level 12a frozen-anchor test guarding every value Level 11 pinned.
+    "tests/unit/world/test_frozen_anchors.py",
 ]
 
 

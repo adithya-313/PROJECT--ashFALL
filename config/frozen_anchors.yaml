@@ -1,0 +1,35 @@
+# Frozen anchors: the Level 11 values that later levels must never move (ground rule 27).
+#
+# TERM: frozen anchor = a number or hash that Level 11 pinned and that stays fixed forever, so any later
+#       change that moves it shows up as a failing test instead of a silent drift.
+# TERM: fraud-off world = the Level 11 world run with no fraud added, exactly as Level 11 shipped it.
+# TERM: SHA-256 hash = a 64-character fingerprint of some text; changing even one character of the text
+#       gives a completely different fingerprint.
+# TERM: canonical form = one fixed way of writing data (sorted keys, no spaces), so the same data always
+#       gives the same text, and therefore the same hash, on Windows and on Linux.
+#
+# Every value below was measured by running the code at commit 7757091 (see the Level 12a B-1 report).
+# Checked by: tests/unit/world/test_frozen_anchors.py
+
+frozen_anchors:
+  label: policy
+  reason: Ground rule 27. These values were pinned by Level 11 at commit 7757091 and are gathered here so one test guards them all. A change that moves any of them is reverted, never refreshed.
+  pinned_at_commit: "7757091"
+  fraud_off_events:
+    seed: 101
+    n_people: 60
+    n_shops: 12
+    n_days: 61
+    range_name: training
+    sha256: "24fc0e25009d79462d508f040a109620dd4308486cc78aee589393fe921f92fd"
+  level_11_register:
+    total_ids: 31
+    built: 28
+    planned: 2
+    deferred: 1
+  grounded_parameters:
+    total: 33
+    assumption: 30
+    reported: 3
+  stress_scenario_files: 6
+  golden_values_canonical_sha256: "324cecb443c646b07193463dbec15f0bdc2f36982199e0cfb601207d5d5d9757"
