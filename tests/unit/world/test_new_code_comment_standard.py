@@ -97,6 +97,9 @@ NEW_CODE_FILES: list[str] = [
     "showcase/level_11_checks.py",
     "showcase/level_11_checks_more.py",
     "tests/unit/showcase/test_level_11_checks.py",
+    # Level 11D-2 showcase page renderer and test suite.
+    "showcase/level_11_page.py",
+    "tests/unit/showcase/test_level_11_page.py",
 ]
 
 

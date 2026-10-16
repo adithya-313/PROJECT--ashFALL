@@ -47,6 +47,8 @@ def run_one_level(module: ModuleType, quick: bool, allow_not_run: bool) -> int:
         return 1
     print_checklist(result)
     write_level_report(result, out_dir)
+    if hasattr(module, "write_custom_page"):
+        module.write_custom_page(result, out_dir)
     print(plain_ascii(f"Report written to {out_dir / 'index.html'}"))
     return decide_exit_code(result, allow_not_run)
 

@@ -38,6 +38,7 @@ from showcase.level_11_checks_more import (
     run_switch_vs_registry_check,
     run_wedding_episode_check,
 )
+from showcase.level_11_page import write_custom_page
 
 LEVEL_NUMBER = 11
 LEVEL_TITLE = "A simulated India of everyday UPI payments"
