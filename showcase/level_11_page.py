@@ -321,7 +321,8 @@ def _build_stress_table_html() -> str:
         )
     return (
         '<table class="ledger"><thead><tr><th>Scenario</th><th>Real Event Grounding</th>'
-        f'<th>Exaggeration Ratio</th><th class="num">Active From</th></tr></thead><tbody>{"".join(rows)}</tbody></table>'
+        '<th>Exaggeration Ratio</th><th class="num">Active From</th></tr></thead>'
+        f'<tbody>{"".join(rows)}</tbody></table>'
     )
 
 
@@ -344,10 +345,18 @@ def _build_techniques_html() -> str:
         True
     """
     techniques = [
-        ("Independent Life Streams", "A single master seed spawns four orthogonal PRNG streams: world plan, payments, devices, and episodes. New features never disrupt older draw sequences.", "Check 5 and 11"),
-        ("Bit-for-Bit Determinism", "Given the same seed and parameters, the fast mode simulation produces identical JSON Lines byte sequences verified by SHA-256 digests.", "Check 11"),
-        ("Double-Entry Conservation", "Every transaction generates balanced debit and credit entries. Currency cannot be created or destroyed, and balances cannot drop negative.", "Check 13"),
-        ("Stackable Layer Isolation", "Configuration layers override only the specific parameters they name, leaving unmentioned ranges strictly identical to the baseline.", "Check 15"),
+        ("Independent Life Streams",
+         "A single master seed spawns four orthogonal PRNG streams: world plan, payments, devices, and "
+         "episodes. New features never disrupt older draw sequences.", "Check 5 and 11"),
+        ("Bit-for-Bit Determinism",
+         "Given the same seed and parameters, the fast mode simulation produces identical JSON Lines byte "
+         "sequences verified by SHA-256 digests.", "Check 11"),
+        ("Double-Entry Conservation",
+         "Every transaction generates balanced debit and credit entries. Currency cannot be created or "
+         "destroyed, and balances cannot drop negative.", "Check 13"),
+        ("Stackable Layer Isolation",
+         "Configuration layers override only the specific parameters they name, leaving unmentioned ranges "
+         "strictly identical to the baseline.", "Check 15"),
     ]
     cards = [
         f'<div class="technique"><h3>{html.escape(t)}</h3><p>{html.escape(p)}</p>'
@@ -449,10 +458,14 @@ def _build_limits_html() -> str:
         True
     """
     items = [
-        "<b>Fixed Municipal Population</b>: Calibrated for municipal communities (60 to 1,000 entities); state-scale simulations with millions of citizens require distributed infrastructure.",
-        "<b>Three-Bank Architecture</b>: Models three institutional archetypes (public, private, and payments bank); additional banks are deferred to avoid altering golden entity fingerprints.",
-        "<b>Offline In-Memory Execution</b>: Fast mode processes all transactions entirely in host memory; live HTTP streaming mode sends the same events to a separate receiver over HTTP.",
-        "<b>Synthetic Entity Demographics</b>: Citizen personas and shopping routines model empirical rhythms, but individual entities do not represent real-world identifiable persons.",
+        "<b>Fixed Municipal Population</b>: Calibrated for municipal communities (60 to 1,000 entities); state-scale "
+        "simulations with millions of citizens require distributed infrastructure.",
+        "<b>Three-Bank Architecture</b>: Models three institutional archetypes (public, private, and payments bank); "
+        "additional banks are deferred to avoid altering golden entity fingerprints.",
+        "<b>Offline In-Memory Execution</b>: Fast mode processes all transactions entirely in host memory; live HTTP "
+        "streaming mode sends the same events to a separate receiver over HTTP.",
+        "<b>Synthetic Entity Demographics</b>: Citizen personas and shopping routines model empirical rhythms, but "
+        "individual entities do not represent real-world identifiable persons.",
     ]
     return "".join(f"<li>{item}</li>" for item in items)
 
@@ -476,10 +489,14 @@ def _build_records_table_html() -> str:
         True
     """
     records = [
-        ("Level 11D-1 Stress Library Decisions", "Stress test library design and world card schema", "docs/decisions/level-11d1-stress-library-decisions.md"),
-        ("Level 11C-2 Machine Limits Decisions", "Capacity sizing heuristics and refusal rules", "docs/decisions/level-11c2-machine-limits-decisions.md"),
-        ("Level 11C-4 Live Mode Decisions", "HTTP replay streaming and backoff policies", "docs/decisions/level-11c4-live-mode-decisions.md"),
-        ("Rules Baseline Specification", "Device rules and evaluation invariants", "docs/research/rules_baseline_spec.md"),
+        ("Level 11D-1 Stress Library Decisions", "Stress test library design and world card schema",
+         "docs/decisions/level-11d1-stress-library-decisions.md"),
+        ("Level 11C-2 Machine Limits Decisions", "Capacity sizing heuristics and refusal rules",
+         "docs/decisions/level-11c2-machine-limits-decisions.md"),
+        ("Level 11C-4 Live Mode Decisions", "HTTP replay streaming and backoff policies",
+         "docs/decisions/level-11c4-live-mode-decisions.md"),
+        ("Rules Baseline Specification", "Device rules and evaluation invariants",
+         "docs/research/rules_baseline_spec.md"),
     ]
     rows = [
         f"<tr><td>{html.escape(name)}</td><td>{html.escape(topic)}</td>"
@@ -511,11 +528,16 @@ def _build_glossary_html() -> str:
         True
     """
     terms = [
-        ("Fast Mode", "A streamlined simulation execution pipeline running an entire world directly in memory without delays, generating months of payment logs in seconds."),
-        ("World Card", "A standardized summary document recording simulation environment settings, entity distributions, and transaction outcomes beside event logs."),
-        ("Empirical Grounding", "Connecting simulation parameters to published studies, regulatory reports, or explicit assumption records with full epistemic provenance."),
-        ("Partial Degradation", "An operational incident state where service drops noticeably while remaining functional, rather than collapsing to complete failure."),
-        ("Stress Test", "A deliberate extreme scenario exaggerating a real-world disruption to evaluate systemic resilience under severe operational shocks."),
+        ("Fast Mode", "A streamlined simulation execution pipeline running an entire world directly in memory without "
+        "delays, generating months of payment logs in seconds."),
+        ("World Card", "A standardized summary document recording simulation environment settings, entity "
+        "distributions, and transaction outcomes beside event logs."),
+        ("Empirical Grounding", "Connecting simulation parameters to published studies, regulatory reports, or "
+        "explicit assumption records with full epistemic provenance."),
+        ("Partial Degradation", "An operational incident state where service drops noticeably while remaining "
+        "functional, rather than collapsing to complete failure."),
+        ("Stress Test", "A deliberate extreme scenario exaggerating a real-world disruption to evaluate systemic "
+        "resilience under severe operational shocks."),
     ]
     elements = [f"<dt>{html.escape(t)}</dt><dd>{html.escape(d)}</dd>" for t, d in terms]
     return "".join(elements)
@@ -649,7 +671,8 @@ def render_level_11_html(level_result: LevelResult) -> str:
 def write_custom_page(level_result: LevelResult, out_dir: Path) -> None:
     """
     WHAT: Writes the rendered custom HTML report to disk at out_dir / index.html.
-    It invokes render_level_11_html to build the full standalone page and serializes UTF-8 bytes to the output directory.
+    It invokes render_level_11_html to build the full standalone page and serializes UTF-8 bytes to the output
+    directory.
     This function serves as the custom page hook recognized and dispatched by showcase.__main__.
 
     WHY: Provides the custom presentation hook required by the showcase architecture for rich reporting.

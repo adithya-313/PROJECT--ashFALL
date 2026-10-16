@@ -5,17 +5,19 @@ empirical grounding, seed divergence, bank outage partial degradation, OS update
 banking asymmetry, bit-for-bit repeatability, capacity limits, double-entry ledgers, live replay, and golden baselines.
 
 WHY: Provides a single deterministic command verifying the entire Level 11 world engine completely offline.
-Executing checks against canonical seeds guarantees that simulation mechanics behave reproducibly and match empirical data.
-Exposing both quick and full evaluation modes allows rapid local validation within 1 minute or exhaustive audits within 5.
+Executing checks against canonical seeds guarantees that simulation mechanics behave reproducibly and match empirical
+data.
+Exposing both quick and full evaluation modes allows rapid local validation within 1 minute or exhaustive audits within
+5.
 
-TERM: Level 11: The municipal world simulation engine generating realistic citizens, commercial shops, and UPI payment lifecycles.
+TERM: Level 11: The municipal world simulation engine generating realistic citizens, commercial shops, and UPI payment
+      lifecycles.
 TERM: fast mode: A streamlined simulation execution pipeline running an entire world directly in memory without delays.
 TERM: check: An automated verification routine evaluating an individual simulation property against strict assertions.
 TERM: precondition: A mandatory file or environment dependency required to exist before running showcase checks.
 """
 
 from pathlib import Path
-from typing import Any
 
 from showcase.framework import CheckDefinition
 from showcase.level_11_checks import (
@@ -38,7 +40,9 @@ from showcase.level_11_checks_more import (
     run_switch_vs_registry_check,
     run_wedding_episode_check,
 )
-from showcase.level_11_page import write_custom_page
+
+# The framework looks up write_custom_page on this module; the alias marks it as a deliberate re-export.
+from showcase.level_11_page import write_custom_page as write_custom_page
 
 LEVEL_NUMBER = 11
 LEVEL_TITLE = "A simulated India of everyday UPI payments"
@@ -82,7 +86,11 @@ async def find_missing_preconditions() -> list[str]:
         >>> isinstance(missing, list) and len(missing) == 0
         True
     """
-    return [f"{path.name} is missing - it is part of the Level 11 files" for path in REQUIRED_FILES if not path.exists()]
+    return [
+        f"{path.name} is missing - it is part of the Level 11 files"
+        for path in REQUIRED_FILES
+        if not path.exists()
+    ]
 
 
 def _get_checks_1_to_4() -> list[CheckDefinition]:
@@ -111,7 +119,8 @@ def _get_checks_1_to_4() -> list[CheckDefinition]:
     )
     c2 = CheckDefinition(
         "2. issue register status counts and copy rejection", "negative",
-        "The 31 research issues show 28 built, 2 planned and 1 deferred; broken copies without mandatory fields are refused.",
+        "The 31 research issues show 28 built, 2 planned and 1 deferred; broken copies without mandatory fields are "
+        "refused.",
         run_issue_register_check, "An issue was modified or lost from config/issues.yaml.",
         "config/issues.yaml, core/issue_register.py"
     )
@@ -119,12 +128,14 @@ def _get_checks_1_to_4() -> list[CheckDefinition]:
         "3. tiny world fast-mode simulation", "normal",
         "A tiny world of 60 people and 12 shops over 61 days runs end to end, and after removing weekend, month-start "
         "and fixed-date payments, festival days carry the extra payments the plan sets.",
-        run_tiny_world_check, "World building failed, or festival multipliers no longer reach calendar-scaled payments.",
+        run_tiny_world_check, "World building failed, or festival multipliers no longer reach calendar-scaled "
+        "payments.",
         "showcase/level_11_festival.py, world/festivals.py, world/rhythms.py, world/calendar_runner.py"
     )
     c4 = CheckDefinition(
         "4. empirical grounding table", "normal",
-        "Every parameter across background, failure and device realism is catalogued with an epistemic label and source citation.",
+        "Every parameter across background, failure and device realism is catalogued with an epistemic label and "
+        "source citation.",
         run_grounding_check, "A parameter lost its label, source citation or assumption rationale.",
         "world/grounding.py, config/background_realism.yaml"
     )
@@ -159,19 +170,21 @@ def _get_checks_5_to_8() -> list[CheckDefinition]:
         "6. bank downtime partial degradation", "edge",
         "Inside the first long bank outage, payments touching the outage bank partly succeed and partly fail with "
         "bank downtime, while payments between the other banks have no bank downtime failures.",
-        run_bank_outage_check, "Bank downtime stopped all outage-bank payments, hit no payment, or reached other banks.",
+        run_bank_outage_check, "Bank downtime stopped all outage-bank payments, hit no payment, or reached other "
+        "banks.",
         "scenarios/stress/bank-outage-long.yaml, world/failures.py"
     )
     c7 = CheckDefinition(
         "7. os update wave adoption curve and device stability", "edge",
-        "With the OS update wave layer, more phones reach the newest OS and in sharper daily jumps than in the base run, "
-        "and new-device flags stay within four Poisson standard deviations of the base (issue R5).",
+        "With the OS update wave layer, more phones reach the newest OS and in sharper daily jumps than in the "
+        "base run, and new-device flags stay within four Poisson standard deviations of the base (issue R5).",
         run_os_wave_check, "OS updates raised new-device flags, or the layer no longer speeds up OS adoption.",
         "scenarios/stress/os-update-wave.yaml, world/device_runtime.py"
     )
     c8 = CheckDefinition(
         "8. switch outage vs registry outage failure domains", "negative",
-        "A central switch outage fails all payments inside the window, while deferred registry outages cause zero event drift.",
+        "A central switch outage fails all payments inside the window, while deferred registry outages cause zero "
+        "event drift.",
         run_switch_vs_registry_check, "Central switch routing failed to fail or deferred scenario altered events.",
         "scenarios/stress/switch-outage.yaml, scenarios/stress/registry-outage.yaml"
     )
@@ -181,7 +194,8 @@ def _get_checks_5_to_8() -> list[CheckDefinition]:
 def _get_checks_9_to_12() -> list[CheckDefinition]:
     """
     WHAT: Constructs check definition descriptors for checks 9 through 12.
-    It builds CheckDefinition objects for wedding inflows, banking asymmetry, repeatability, and capacity sizing refusal.
+    It builds CheckDefinition objects for wedding inflows, banking asymmetry, repeatability, and capacity sizing
+    refusal.
     Each definition includes check name, category kind, proving statement, runner callable, and troubleshooting links.
 
     WHY: Modular helper ensuring the master check list assembly conforms to the 30-line code ceiling.
@@ -256,7 +270,8 @@ def _get_checks_13_to_16() -> list[CheckDefinition]:
     )
     c15 = CheckDefinition(
         "15. stress scenario parameter isolation", "normal",
-        "Every stress scenario layer modifies only its named parameters, leaving unmentioned domain settings identical.",
+        "Every stress scenario layer modifies only its named parameters, leaving unmentioned domain settings "
+        "identical.",
         run_layer_isolation_check, "A stress layer mutated unmentioned parameter blocks.",
         "scenarios/stress/README.md, world/layers.py"
     )

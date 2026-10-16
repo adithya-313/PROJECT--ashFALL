@@ -5,7 +5,8 @@ across pre-registration amendments, issue register tracking, tiny world simulati
 
 WHY: Verifies that showcase/level_11.py and its accompanying check runners conform strictly to framework contracts.
 Validating check definitions against framework rules prevents runtime coverage errors during showcase execution.
-Testing core check runners in isolation guarantees that assertions, key numbers, and evidence structures behave properly.
+Testing core check runners in isolation guarantees that assertions, key numbers, and evidence structures behave
+properly.
 
 TERM: CheckCoverage: Framework rules requiring minimum counts of normal, edge, and negative checks per level,
       e.g. enforcing at least one normal, two edge, and one negative check in every showcase.
@@ -17,10 +18,8 @@ TERM: CheckOutcome: The result data handed back by an individual check containin
 
 import asyncio
 from types import SimpleNamespace
-from typing import Any
 
 from showcase.framework import validate_checks
-from showcase.reporting import to_json_bytes
 from showcase.level_11 import (
     LEVEL_NUMBER,
     LEVEL_TITLE,
@@ -38,6 +37,7 @@ from showcase.level_11_checks import (
     run_issue_register_check,
     run_tiny_world_check,
 )
+from showcase.reporting import to_json_bytes
 
 
 def test_level_11_metadata_and_preconditions() -> None:
@@ -116,7 +116,8 @@ def test_amendments_and_issues_checks() -> None:
 def test_tiny_world_and_grounding_checks() -> None:
     """
     WHAT: Executes run_tiny_world_check and run_grounding_check in an async event loop.
-    It asserts that the tiny world produces payments and an SVG hero chart, and that the festival test reports its result.
+    It asserts that the tiny world produces payments and an SVG hero chart, and that the festival test reports its
+    result.
     It verifies that the empirical grounding check accounts for all 33 simulation parameters.
 
     WHY: Verifies execution of operational checks 3 and 4, ensuring fast-mode generation works cleanly.

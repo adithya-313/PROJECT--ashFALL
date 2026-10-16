@@ -9,16 +9,17 @@ Isolating graphic builders ensures styling changes remain decoupled from underly
 
 TERM: SVG: Scalable Vector Graphics, an XML-based format for describing two-dimensional vector graphics,
       e.g. rendering interactive charts with rect, polyline, and text elements directly in web pages.
-TERM: moving average: A calculation that averages data points within a sliding window to smooth out short-term fluctuations,
+TERM: moving average: A calculation that averages data points within a sliding window to smooth out short-term
+      fluctuations,
       e.g. calculating a 7-day rolling mean to highlight multi-week transaction volume trends.
-TERM: adoption curve: A visual curve tracing the percentage of entities adopting an innovation or software version over time,
+TERM: adoption curve: A visual curve tracing the percentage of entities adopting an innovation or software version over
+      time,
       e.g. charting the cumulative fraction of handsets updating to a new operating system release.
 TERM: hero chart: The primary high-level summary visual prominently displayed at the top of an analytical report,
       e.g. the full 61-day daily transaction volume chart showing festival peaks in the Level 11 overview.
 """
 
 from html import escape
-from typing import Any
 
 
 def _scale_coord(val: float, in_min: float, in_max: float, out_min: float, out_max: float) -> float:
@@ -214,7 +215,10 @@ def _render_moving_avg_polyline(
         f"{m_left + ((i + 0.5) / n) * plot_w:.1f},{m_top + plot_h - (val / max_c) * plot_h:.1f}"
         for i, val in enumerate(avg_counts)
     ]
-    return f'<polyline points="{" ".join(pts)}" fill="none" stroke="#1A2B48" stroke-width="2.4" stroke-linecap="round"/>'
+    return (
+        f'<polyline points="{" ".join(pts)}" fill="none" stroke="#1A2B48" '
+        'stroke-width="2.4" stroke-linecap="round"/>'
+    )
 
 
 def daily_bars_with_average(
@@ -226,7 +230,8 @@ def daily_bars_with_average(
     Shaded background rectangles annotate designated festival periods with distinct styling and text banners.
 
     WHY: Provides the principal overview graphic for the Level 11 showcase report, visualizing full-horizon activity.
-    Combining daily discrete volumes with continuous trend lines demonstrates both baseline stability and festival spikes.
+    Combining daily discrete volumes with continuous trend lines demonstrates both baseline stability and festival
+    spikes.
     Inline SVG allows immediate rendering in standalone offline HTML documents without external visual dependencies.
 
     Args:
@@ -270,7 +275,13 @@ def daily_bars_with_average(
 
 
 def _render_incident_band(
-    window: tuple[float, float, str], min_h: float, max_h: float, m_left: float, plot_w: float, m_top: float, plot_h: float
+    window: tuple[float, float, str],
+    min_h: float,
+    max_h: float,
+    m_left: float,
+    plot_w: float,
+    m_top: float,
+    plot_h: float,
 ) -> list[str]:
     """
     WHAT: Generates SVG rect and text elements highlighting an active downtime incident window.
@@ -596,7 +607,8 @@ def account_flow_with_window(
 ) -> str:
     """
     WHAT: Renders an SVG bar chart illustrating daily incoming funds into an account with an episode window highlight.
-    Daily inflow amounts are drawn as vertical bars, overlaid with a shaded background band marking the active burst event.
+    Daily inflow amounts are drawn as vertical bars, overlaid with a shaded background band marking the active burst
+    event.
     The visualization highlights sudden spikes in account velocity characteristic of weddings or chit fund collections.
 
     WHY: Visual proof for wedding collection check (Check 9) demonstrating distinct non-fraud transaction bursts.
@@ -633,7 +645,8 @@ def account_flow_with_window(
         f'<line x1="{m_left}" y1="{m_top + plot_h}" x2="{width - m_right}" y2="{m_top + plot_h}" stroke="#D3DCD7"/>'
     )
     parts.append(
-        f'<text x="{m_left - 6}" y="{m_top + 10}" fill="#6B778A" font-size="10" text-anchor="end">₹{int(max_flow):,}</text>'
+        f'<text x="{m_left - 6}" y="{m_top + 10}" fill="#6B778A" font-size="10" text-anchor="end">'
+        f'₹{int(max_flow):,}</text>'
     )
     parts.append(
         f'<text x="{m_left - 6}" y="{m_top + plot_h}" fill="#6B778A" font-size="10" text-anchor="end">₹0</text></svg>'

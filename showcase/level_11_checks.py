@@ -13,10 +13,12 @@ TERM: issue register: A structured inventory of architectural questions and task
       e.g. issues.yaml tracking 31 numbered foundational topics.
 TERM: fast mode: A self-contained simulation runtime producing entire multi-day world histories directly in memory,
       e.g. generating 61 days of transactions for 60 citizens in under a second.
-TERM: empirical grounding: Connecting simulation parameters to real-world reports, studies, or explicit assumption records,
+TERM: empirical grounding: Connecting simulation parameters to real-world reports, studies, or explicit assumption
+      records,
       e.g. linking technical decline rates to published NPCI monthly system metrics.
 TERM: partial degradation: An incident state where system performance drops significantly without collapsing to zero,
-      e.g. bank outage reducing overall transaction success rate while unaffected institutions process payments normally.
+      e.g. bank outage reducing overall transaction success rate while unaffected institutions process payments
+      normally.
 """
 
 import copy
@@ -29,7 +31,7 @@ from typing import Any
 
 from core import issue_register, level10_check
 from core.config_validator import load_yaml
-from showcase.framework import CheckOutcome, NotRun
+from showcase.framework import CheckOutcome
 from showcase.level_11_charts import adoption_curve, daily_bars_with_average, rate_line_with_window
 from showcase.level_11_festival import (
     calendar_parts,

@@ -105,7 +105,8 @@ def _build_sample_level_result() -> LevelResult:
 def test_render_level_11_html_replaces_all_placeholders() -> None:
     """
     WHAT: Tests that render_level_11_html substitutes all 31 template variables without leaving unpopulated tokens.
-    It passes a sample LevelResult fixture and scans the resulting HTML string with a regular expression for dollar tokens.
+    It passes a sample LevelResult fixture and scans the resulting HTML string with a regular expression for dollar
+    tokens.
     It verifies that all ten named section anchors and passbook accordion entries are present in the markup.
 
     WHY: Unpopulated template placeholders look unprofessional and indicate missing component renderers.

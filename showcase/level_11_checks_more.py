@@ -11,13 +11,13 @@ TERM: central switch outage: Complete technical failure of the central payment c
       e.g. NPCI core routing failure causing all attempted transactions to fail.
 TERM: deferred layer: A configuration scenario altering parameters not yet activated in the current simulation engine,
       e.g. registry-outage which takes effect from Level 13 and leaves Level 11 base events completely unchanged.
-TERM: double-entry ledger: Accounting record where every financial transaction is entered as matching debits and credits,
+TERM: double-entry ledger: Accounting record where every financial transaction is entered as matching debits and
+      credits,
       e.g. transferring money from sender account to recipient account while conserving total monetary supply.
 TERM: golden baseline: A cryptographically verified digest or transaction tally pinned from an audited run,
       e.g. golden hashes G1, G2, and G3 confirming zero unexpected code drift across revisions.
 """
 
-import copy
 import hashlib
 import json
 from pathlib import Path
@@ -159,7 +159,8 @@ async def run_bank_asymmetry_check(workspace: Any) -> CheckOutcome:
     It asserts that Bank 0 maintains the largest share while Bank 1 enforces the strictest identity verification.
 
     WHY: Empirical banking sectors feature stark disparities in operational scale, KYC rigor, and fraud response speed.
-    Mule networks disproportionately exploit banks with relaxed identity checks and sluggish administrative freeze latencies.
+    Mule networks disproportionately exploit banks with relaxed identity checks and sluggish administrative freeze
+    latencies.
     Verifying institutional diversity proves that Level 11 models realistic banking frictions and fraud vulnerabilities.
 
     Args:
@@ -180,14 +181,24 @@ async def run_bank_asymmetry_check(workspace: Any) -> CheckOutcome:
     assert b1.weak_kyc_share < b0.weak_kyc_share and b1.weak_kyc_share < b2.weak_kyc_share
     assert b1.hold_delay_factor < b0.hold_delay_factor and b1.hold_delay_factor < b2.hold_delay_factor
     key = (
-        f"3 banks differ: Bank 0 ({b0.customer_share:.1%} share, {b0.weak_kyc_share:.1%} weak KYC, {b0.hold_delay_factor:.2f}x hold), "
+        f"3 banks differ: Bank 0 ({b0.customer_share:.1%} share, {b0.weak_kyc_share:.1%} weak KYC, "
+        f"{b0.hold_delay_factor:.2f}x hold), "
         f"Bank 1 ({b1.customer_share:.1%} share, {b1.weak_kyc_share:.1%} weak KYC, {b1.hold_delay_factor:.2f}x hold), "
         f"Bank 2 ({b2.customer_share:.1%} share, {b2.weak_kyc_share:.1%} weak KYC, {b2.hold_delay_factor:.2f}x hold)"
     )
     evidence = {
-        "bank_0": {"kind": b0.kind, "share": b0.customer_share, "weak_kyc": b0.weak_kyc_share, "hold_delay": b0.hold_delay_factor},
-        "bank_1": {"kind": b1.kind, "share": b1.customer_share, "weak_kyc": b1.weak_kyc_share, "hold_delay": b1.hold_delay_factor},
-        "bank_2": {"kind": b2.kind, "share": b2.customer_share, "weak_kyc": b2.weak_kyc_share, "hold_delay": b2.hold_delay_factor},
+        "bank_0": {
+            "kind": b0.kind, "share": b0.customer_share,
+            "weak_kyc": b0.weak_kyc_share, "hold_delay": b0.hold_delay_factor,
+        },
+        "bank_1": {
+            "kind": b1.kind, "share": b1.customer_share,
+            "weak_kyc": b1.weak_kyc_share, "hold_delay": b1.hold_delay_factor,
+        },
+        "bank_2": {
+            "kind": b2.kind, "share": b2.customer_share,
+            "weak_kyc": b2.weak_kyc_share, "hold_delay": b2.hold_delay_factor,
+        },
     }
     return CheckOutcome(key_number=key, evidence=evidence)
 

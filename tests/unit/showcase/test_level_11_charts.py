@@ -4,7 +4,8 @@ It verifies XML structure validity, correct element dimensions, absence of NaN v
 across daily bars, bank downtime windows, OS adoption curves, account flows, and pipeline block diagrams.
 
 WHY: Self-contained showcase pages depend on standalone SVG strings rendering cleanly without client-side scripts.
-Validating XML syntax via ElementTree ensures no unescaped entity tags or malformed XML attributes break browser parsers.
+Validating XML syntax via ElementTree ensures no unescaped entity tags or malformed XML attributes break browser
+parsers.
 Testing boundary conditions such as empty sequences and single-element inputs prevents unexpected runtime exceptions.
 
 TERM: ElementTree: Standard Python library module for parsing, inspecting, and manipulating XML tree structures,
