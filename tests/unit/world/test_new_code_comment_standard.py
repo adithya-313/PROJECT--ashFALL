@@ -117,6 +117,10 @@ NEW_CODE_FILES: list[str] = [
     "world/interactive_records.py",
     "world/interactive_runner.py",
     "tests/unit/world/test_interactive_runner_switch.py",
+    # Level 12a fraud-on loop, runner state and their test suite.
+    "world/interactive_state.py",
+    "world/interactive_loop.py",
+    "tests/unit/world/test_interactive_runner_fraud_on.py",
 ]
 
 

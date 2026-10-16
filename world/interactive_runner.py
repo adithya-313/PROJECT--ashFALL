@@ -56,6 +56,7 @@ from world.device_schedule import draw_device_event_schedule
 from world.episode_payments import plan_episode_payments
 from world.episodes import Episode, draw_episode_schedule
 from world.fast_mode import FastRunSettings
+from world.interactive_loop import run_fraud_on
 from world.interactive_records import (
     FraudInputs,
     HookDecision,
@@ -65,6 +66,7 @@ from world.interactive_records import (
     RunnerSettings,
     allow_all,
 )
+from world.interactive_state import start_runner_state
 from world.payments import find_ledger_for_account
 from world.run_identity import REPO_ROOT, find_code_version, load_runner_config, make_payment_id, make_run_id
 from world.world_configs import WorldConfigs, read_world_configs
@@ -303,7 +305,12 @@ def run_interactive(
     config = runner_config if runner_config is not None else load_runner_config()
     if not settings.fraud_enabled:
         return run_fraud_off(world, plan, rng, device_events, episode_payments, run_id, config)
-    raise NotImplementedError("the fraud-on loop is not available in this version of the runner")
+    # Fraud on: the runner's own lookup tables, built the way run_world builds them unless the caller prepared them.
+    runner_state = state if state is not None else start_runner_state(world)
+    return run_fraud_on(
+        world, plan, rng, device_events, episode_payments, fraud_inputs=fraud_inputs, hook=hook, run_id=run_id,
+        runner_config=config, state=runner_state,
+    )
 
 
 def effective_config_for(fast_settings: FastRunSettings, configs: WorldConfigs | None) -> dict[str, Any]:
