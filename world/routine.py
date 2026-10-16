@@ -111,7 +111,8 @@ def build_bill_items(person: Person, utilities: list[Shop], rng: np.random.Gener
     for _ in range(BILLS_PER_MONTH):
         if utilities:
             # Sample utility merchant and billing day within configured monthly window.
-            u_shop = rng.choice(utilities)
+            # mypy: numpy's type stubs do not accept a list of objects here; the call is correct at runtime.
+            u_shop = rng.choice(utilities)  # type: ignore[arg-type]
             b_day = int(rng.integers(BILL_DAY_WINDOW[0], BILL_DAY_WINDOW[1], endpoint=True))
             items.append(
                 RoutineItem(person.person_id, "bill_out", b_day, BILL_MULTIPLE * med, u_shop.account_id, False)
@@ -157,7 +158,8 @@ def build_salaried_items(person: Person, shops: list[Shop], rng: np.random.Gener
     # Schedule monthly residential rent payment to a randomly chosen landlord.
     landlords = [s for s in shops if s.kind == "landlord"]
     if landlords:
-        landlord = rng.choice(landlords)
+        # mypy: numpy's type stubs do not accept a list of objects here; the call is correct at runtime.
+        landlord = rng.choice(landlords)  # type: ignore[arg-type]
         r_day = int(rng.integers(RENT_DAY_WINDOW[0], RENT_DAY_WINDOW[1], endpoint=True))
         items.append(
             RoutineItem(person.person_id, "rent_out", r_day, RENT_MULTIPLE * med, landlord.account_id, False)
@@ -202,7 +204,8 @@ def build_casual_and_lookalike_items(
 
     # Generate routine daily consumer retail purchases across local shops.
     for _ in range(EVERYDAY_PAYMENTS_PER_MONTH):
-        shop = rng.choice(shops)
+        # mypy: numpy's type stubs do not accept a list of objects here; the call is correct at runtime.
+        shop = rng.choice(shops)  # type: ignore[arg-type]
         amt = draw_amount_paise(person.amount_profile, rng)
         day = int(rng.integers(1, 28, endpoint=True))
         items.append(RoutineItem(person.person_id, "everyday_spend", day, amt, shop.account_id, False))
@@ -213,7 +216,8 @@ def build_casual_and_lookalike_items(
         small_amt = lookalike_small_amount_paise(med)
         others = [p for p in all_people if p.person_id != person.person_id]
         if others:
-            senders = rng.choice(others, size=LOOKALIKE_SMALL_INCOMING_PER_MONTH, replace=True)
+            # mypy: numpy's type stubs do not accept a list of objects here; the call is correct at runtime.
+            senders = rng.choice(others, size=LOOKALIKE_SMALL_INCOMING_PER_MONTH, replace=True)  # type: ignore[arg-type]
             for s in senders:
                 day = int(rng.integers(1, 28, endpoint=True))
                 items.append(RoutineItem(person.person_id, "lookalike_in", day, small_amt, s.account_id, True))
