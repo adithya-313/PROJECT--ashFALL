@@ -1,0 +1,11 @@
+name: bank-outage-long
+reason: Stress test simulating severe, extended bank downtime incidents lasting up to half a day.
+stress_test:
+  real_event: "May 2024 saw 31 bank downtime instances totalling over 47 hours, about 1.5 hours each (NPCI data via Economic Times, June 2024)."
+  exaggeration: "Each bank outage lasts 8 to 12 hours instead of 1 to 2 hours; success rate still dips partly (partial degradation), it does not fall to zero."
+  takes_effect_from_level: null
+changes:
+  failure_realism:
+    bank_downtime_duration_minutes:
+      training: [480, 720]
+      test: [30, 720]

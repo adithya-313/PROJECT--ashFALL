@@ -1,0 +1,17 @@
+name: complaint-backlog
+reason: Stress test simulating a massive backlog in fraud complaint processing resulting in multi-week reporting delays.
+stress_test:
+  real_event: "No published series on complaint backlogs was found; this is a what-if for complaint intake piling up."
+  exaggeration: "Scam complaints arrive after 40 to 60 days instead of 3 to 15, and unauthorised-debit complaints after 2 to 3 days instead of minutes to hours."
+  takes_effect_from_level: 12
+changes:
+  world_ranges:
+    complaint_delay_investment_scam_days:
+      training: [40, 60]
+      test: [1, 60]
+    complaint_delay_job_scam_days:
+      training: [40, 60]
+      test: [1, 60]
+    complaint_delay_unauthorised_debit_minutes:
+      training: [2880, 4320]
+      test: [5, 4320]

@@ -1,0 +1,14 @@
+name: registry-outage
+reason: Stress test simulating a failure of the shared fraud registry with minimal participation and extreme delays.
+stress_test:
+  real_event: "No published outage of the shared fraud registry (mock DPIP and I4C) was found; this is a what-if."
+  exaggeration: "The registry gives ashFALL almost nothing: at most 1 percent chance a bank takes part, and entries arrive after about 120 days. Payments still flow; only shared intelligence is lost."
+  takes_effect_from_level: 13
+changes:
+  world_ranges:
+    probability_a_bank_takes_part_in_dpip:
+      training: [0.0, 0.01]
+      test: [0.0, 1.0]
+    registry_entry_delay_days:
+      training: [119, 120]
+      test: [0.5, 120]
