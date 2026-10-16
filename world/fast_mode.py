@@ -37,6 +37,7 @@ from world.episode_payments import plan_episode_payments
 from world.episodes import Episode, draw_episode_schedule
 from world.failures import PaymentEvent
 from world.layers import Layer, apply_layers, describe_effective_world, read_layer
+from world.world_card import build_world_card, write_world_card
 from world.world_configs import WorldConfigs, read_world_configs
 from world.world_plan import WorldPlan, draw_world_plan, spawn_life_streams, spawn_world_streams
 
@@ -443,6 +444,10 @@ def write_world_files(
     manifest_path = out_dir / "manifest.json"
     manifest_text = json.dumps(manifest, sort_keys=True, indent=2) + "\n"
     manifest_path.write_text(manifest_text, encoding="utf-8", newline="\n")
+
+    # Build and write standardized world card files alongside simulation artifacts.
+    card = build_world_card(settings, output, layers=layers)
+    write_world_card(card, out_dir)
 
     # Pass back the filesystem path of the completed run manifest.
     return manifest_path
