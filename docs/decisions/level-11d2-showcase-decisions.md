@@ -14,7 +14,7 @@ The Level 11 showcase (`make show LEVEL=11` or `python -m showcase --level 11`) 
    If `write_custom_page` is removed or renamed, the framework falls back cleanly to the generic report without raising errors.
 
 3. **Dual Execution Modes (Quick vs Full)**:
-   - **Quick Mode** (`make show LEVEL=11 QUICK=1` or `python -m showcase --level 11 --quick --allow-not-run`): Runs checks 1 through 13 on tiny simulation parameters in ~11 seconds (budget: under 1 minute). Checks 14, 15, and 16 are marked `NOT RUN` with reason `"full mode only"`.
+   - **Quick Mode** (`make show LEVEL=11 QUICK=1` or `python -m showcase --level 11 --quick`): Runs all 16 checks, the same as full mode (budget: under 1 minute). Owner decision: the earlier "full mode only" path for checks 14-16 was removed, because a NOT RUN check fails the run and all 16 checks fit the quick budget.
    - **Full Mode** (`make show LEVEL=11` or `python -m showcase --level 11`): Runs all 16 checks, including full live loopback replay, all 6 stress scenario isolation checks, and all 4 golden fingerprint recomputations in ~22 seconds (budget: under 5 minutes).
 
 4. **Pure SVG Vector Telemetry**:

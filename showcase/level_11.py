@@ -17,7 +17,7 @@ TERM: precondition: A mandatory file or environment dependency required to exist
 from pathlib import Path
 from typing import Any
 
-from showcase.framework import CheckDefinition, CheckOutcome, NotRun
+from showcase.framework import CheckDefinition
 from showcase.level_11_checks import (
     run_amendments_check,
     run_bank_outage_check,
@@ -83,33 +83,6 @@ async def find_missing_preconditions() -> list[str]:
         True
     """
     return [f"{path.name} is missing - it is part of the Level 11 files" for path in REQUIRED_FILES if not path.exists()]
-
-
-async def skip_in_quick(workspace: Any) -> CheckOutcome:
-    """
-    WHAT: Sentinel check runner raising NotRun to indicate that a check is skipped in quick evaluation mode.
-    It provides an explicit explanatory reason indicating that the skipped check belongs exclusively to full mode.
-    The framework catches this exception and classifies the check outcome status as NOT RUN.
-
-    WHY: Decouples check skipping logic from closures to ensure every function maintains complete docstring metadata.
-    Enables quick mode execution under 1 minute by bypassing heavy multi-minute full audit procedures.
-    Conforms strictly to the framework contract for reporting skipped checks without throwing unhandled exceptions.
-
-    Args:
-        workspace: Optional showcase execution workspace environment container.
-
-    Returns:
-        CheckOutcome placeholder that is never returned due to raising the NotRun exception.
-
-    Example:
-        >>> import asyncio
-        >>> try:
-        ...     asyncio.run(skip_in_quick(None))
-        ... except NotRun as e:
-        ...     str(e.reason)
-        'full mode only'
-    """
-    raise NotRun("full mode only")
 
 
 def _get_checks_1_to_4() -> list[CheckDefinition]:
@@ -251,30 +224,24 @@ def _get_checks_9_to_12() -> list[CheckDefinition]:
     return [c9, c10, c11, c12]
 
 
-def _get_checks_13_to_16(quick: bool) -> list[CheckDefinition]:
+def _get_checks_13_to_16() -> list[CheckDefinition]:
     """
-    WHAT: Constructs check definition descriptors for checks 13 through 16 with conditional quick-mode skipping.
+    WHAT: Constructs check definition descriptors for checks 13 through 16.
     It builds CheckDefinition objects for double-entry ledgers, live replay, layer isolation, and golden fingerprints.
-    For checks 14 through 16, it configures skip_in_quick as the runner callable when quick mode is active.
+    Each definition includes check name, category kind, proving statement, runner callable, and troubleshooting links.
 
     WHY: Modular helper ensuring the master check list assembly conforms to the 30-line code ceiling.
-    Handles quick mode conditional skipping cleanly across extras 14, 15, and 16.
-    Links detailed failure diagnostics and target source files for each check definition.
-
-    Args:
-        quick: Boolean flag indicating True if quick evaluation mode is active.
+    All four checks run in both quick and full mode: together all 16 checks fit the 1-minute quick budget,
+    and a NOT RUN check would fail the quick run.
 
     Returns:
         List of CheckDefinition containers representing checks 13 through 16.
 
     Example:
-        >>> checks = _get_checks_13_to_16(quick=False)
+        >>> checks = _get_checks_13_to_16()
         >>> len(checks) == 4 and checks[0].name.startswith("13.")
         True
     """
-    fn14 = skip_in_quick if quick else run_live_replay_check
-    fn15 = skip_in_quick if quick else run_layer_isolation_check
-    fn16 = skip_in_quick if quick else run_golden_fingerprints_check
     c13 = CheckDefinition(
         "13. double-entry ledger invariants", "consistency",
         "Double-entry ledgers maintain non-negative balances, entry consistency, and total currency conservation.",
@@ -284,19 +251,19 @@ def _get_checks_13_to_16(quick: bool) -> list[CheckDefinition]:
     c14 = CheckDefinition(
         "14. live replay event stream fidelity", "consistency",
         "Live streaming mode replays fast-mode events across loopback HTTP with byte-identical payload fidelity.",
-        fn14, "Live mode altered payloads or failed loopback replay.",
+        run_live_replay_check, "Live mode altered payloads or failed loopback replay.",
         "world/live_mode.py, tests/unit/world/test_world_live_mode.py"
     )
     c15 = CheckDefinition(
         "15. stress scenario parameter isolation", "normal",
         "Every stress scenario layer modifies only its named parameters, leaving unmentioned domain settings identical.",
-        fn15, "A stress layer mutated unmentioned parameter blocks.",
+        run_layer_isolation_check, "A stress layer mutated unmentioned parameter blocks.",
         "scenarios/stress/README.md, world/layers.py"
     )
     c16 = CheckDefinition(
         "16. golden simulation fingerprints", "consistency",
         "The golden fingerprints FP, G1, G2 and G3 recompute in this run and match the stored values.",
-        fn16, "World topology, monthly routine, or calendar hashes drifted.",
+        run_golden_fingerprints_check, "World topology, monthly routine, or calendar hashes drifted.",
         "scripts/verify_world.py, scripts/golden_values.yaml"
     )
     return [c13, c14, c15, c16]
@@ -305,15 +272,15 @@ def _get_checks_13_to_16(quick: bool) -> list[CheckDefinition]:
 def get_checks(quick: bool) -> list[CheckDefinition]:
     """
     WHAT: Returns the ordered list of all 16 Level 11 showcase checks configured for the designated execution mode.
-    In quick mode, checks 1 through 13 run on the tiny world while extras 14 through 16 are marked as skipped.
-    In full mode, all 16 checks execute completely, providing comprehensive end-to-end audit validation.
+    Quick and full mode run the same 16 checks; the framework still passes the quick flag,
+    which this level accepts but does not need because all checks fit the quick budget.
 
     WHY: Supplies the showcase execution engine with the authoritative test suite for Level 11.
     Combining modular sublists ensures the master dispatcher satisfies the 30-line code ceiling.
     Validating checks against coverage standards guarantees an appropriate balance of normal, edge, and negative checks.
 
     Args:
-        quick: Boolean flag indicating True if quick evaluation mode is active.
+        quick: True in quick mode; the same 16 checks run either way.
 
     Returns:
         List of all 16 CheckDefinition instances in sequential execution order.
@@ -327,5 +294,5 @@ def get_checks(quick: bool) -> list[CheckDefinition]:
     all_checks.extend(_get_checks_1_to_4())
     all_checks.extend(_get_checks_5_to_8())
     all_checks.extend(_get_checks_9_to_12())
-    all_checks.extend(_get_checks_13_to_16(quick))
+    all_checks.extend(_get_checks_13_to_16())
     return all_checks
