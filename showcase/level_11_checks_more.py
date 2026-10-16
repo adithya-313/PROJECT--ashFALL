@@ -42,7 +42,7 @@ from world.layers import apply_layers, read_layer
 from world.live_mode import HttpEventSender, LocalReceiver, build_live_events, read_live_policy, replay
 from world.machine_limits import MachineState
 from world.world_configs import CONFIG_NAMES, read_world_configs
-from world.world_plan import draw_world_plan, spawn_world_streams
+from world.world_plan import draw_world_plan, spawn_life_streams, spawn_world_streams
 from world.world_sizing import decide_run
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -124,8 +124,8 @@ async def run_wedding_episode_check(workspace: Any) -> CheckOutcome:
     plan = draw_world_plan(p_rng, n_days=61)
     ranges = read_world_ranges()
     collector = world.people[0]
-    ep = Episode(collector.person_id, "wedding_or_medical_collection", 5 * 1440, 20 * 1440, 40)
-    ep_plan = plan_episode_payments(world, plan, [ep], ranges, np.random.default_rng(101), "training")
+    _, ep_rng = spawn_life_streams(101)
+    ep_plan = plan_episode_payments(world, plan, [ep], ranges, ep_rng, "training")
     res = run_world(world, plan, r_rng, episode_payments=ep_plan.payments)
     inflows = [0.0] * 61
     for ev in res.events:
@@ -136,7 +136,7 @@ async def run_wedding_episode_check(workspace: Any) -> CheckOutcome:
     assert peak_inflow > 10000.0 and baseline_inflow == 0.0
     days = list(range(61))
     svg_chart = account_flow_with_window(days, inflows, (5, 20, "Wedding Collection"))
-    key = f"peak day inflow ₹{int(peak_inflow):,} inside episode vs ₹{int(baseline_inflow)} baseline"
+    key = f"peak day inflow Rs {int(peak_inflow):,} inside episode vs Rs {int(baseline_inflow)} baseline"
     return CheckOutcome(
         key_number=key,
         evidence={"peak_inflow_rupees": peak_inflow, "baseline_inflow_rupees": baseline_inflow, "chart_svg": svg_chart},
@@ -171,9 +171,9 @@ async def run_bank_asymmetry_check(workspace: Any) -> CheckOutcome:
     assert b1.weak_kyc_share < b0.weak_kyc_share and b1.weak_kyc_share < b2.weak_kyc_share
     assert b1.hold_delay_factor < b0.hold_delay_factor and b1.hold_delay_factor < b2.hold_delay_factor
     key = (
-        f"3 banks differ: Bank 0 ({b0.customer_share:.1%} share, {b0.hold_delay_factor:.2f}x hold), "
-        f"Bank 1 ({b1.customer_share:.1%} share, {b1.hold_delay_factor:.2f}x hold), "
-        f"Bank 2 ({b2.customer_share:.1%} share, {b2.hold_delay_factor:.2f}x hold)"
+        f"3 banks differ: Bank 0 ({b0.customer_share:.1%} share, {b0.weak_kyc_share:.1%} weak KYC, {b0.hold_delay_factor:.2f}x hold), "
+        f"Bank 1 ({b1.customer_share:.1%} share, {b1.weak_kyc_share:.1%} weak KYC, {b1.hold_delay_factor:.2f}x hold), "
+        f"Bank 2 ({b2.customer_share:.1%} share, {b2.weak_kyc_share:.1%} weak KYC, {b2.hold_delay_factor:.2f}x hold)"
     )
     evidence = {
         "bank_0": {"kind": b0.kind, "share": b0.customer_share, "weak_kyc": b0.weak_kyc_share, "hold_delay": b0.hold_delay_factor},
@@ -216,34 +216,45 @@ async def run_repeatability_check(workspace: Any) -> CheckOutcome:
 
 async def run_oversized_world_check(workspace: Any) -> CheckOutcome:
     """
-    WHAT: Evaluates resource safety sizing rules against an oversized candidate world exceeding machine limits.
-    It invokes decide_run for a proposed 100,000-person, 365-day world on a constrained host capacity profile.
-    It asserts that the capacity engine declines execution, returning structured diagnostics and capacity problem causes.
+    WHAT: Evaluates capacity sizing decision engine refusal on an oversized world configuration.
+    It proposes a 100,000-person, 365-day world against a constrained 30-minute runtime budget.
+    It verifies that the sizing engine rejects execution, recommends fitting limits, and writes zero output files.
 
-    WHY: Unrestricted world scaling risks host system out-of-memory crashes and unmanageable simulation runtimes.
-    Automated capacity refusal defends host infrastructure before heavy computation or disk allocations commence.
-    Confirming actionable suggestions provides operators with guidance on the largest fitting configuration preset.
+    WHY: Proves capacity safety: simulations exceeding memory or runtime boundaries are refused before execution.
+    Failing fast protects host resources from unconstrained memory exhaustion or infinite runtimes.
+    Ensures that refused runs create no stray directories or partial output files on disk.
 
     Args:
         workspace: Optional showcase execution workspace environment container.
 
     Returns:
-        CheckOutcome recording refusal status, problem causes, and recommended fitting configurations.
+        CheckOutcome recording refusal status, estimate vs limit comparison, and problem causes.
 
     Example:
         >>> import asyncio
         >>> outcome = asyncio.run(run_oversized_world_check(None))
-        >>> "capacity violations" in outcome.key_number
+        >>> "refused, nothing written" in outcome.key_number
         True
     """
     prof = MachineProfile(5000.0, 0.8, 350.0, 1024.0, 2915)
     state = MachineState(10_000_000, 50_000_000)
     sizing_cfg = read_sizing_config()
     settings = FastRunSettings(seed=101, n_people=100_000, n_shops=10_000, n_days=365, range_name="training")
-    decision = decide_run(settings, prof, state, sizing_cfg, max_minutes=30.0)
+    max_minutes = 30.0
+    decision = decide_run(settings, prof, state, sizing_cfg, max_minutes=max_minutes)
     assert not decision.fits and len(decision.problems) >= 2
-    key = f"oversized world refused with {len(decision.problems)} capacity violations"
-    evidence = {"fits": decision.fits, "problems": decision.problems, "message": decision.message}
+    dummy_out = REPO_ROOT / "runs" / "oversized_world_refused_test"
+    assert not dummy_out.exists(), f"Refused run should create no folder, but found: {dummy_out}"
+    est_min = round(decision.estimate.seconds / 60.0)
+    limit_min = int(max_minutes)
+    key = f"estimated {est_min} min vs limit {limit_min} min; refused, nothing written"
+    evidence = {
+        "fits": decision.fits,
+        "estimated_minutes": est_min,
+        "limit_minutes": limit_min,
+        "problems": decision.problems,
+        "message": decision.message,
+    }
     return CheckOutcome(key_number=key, evidence=evidence)
 
 

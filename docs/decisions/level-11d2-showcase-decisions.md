@@ -27,22 +27,22 @@ The Level 11 showcase (`make show LEVEL=11` or `python -m showcase --level 11`) 
 
 | # | Check Name | Kind | Proves | Pass Criteria |
 |---|---|---|---|---|
-| 1 | pre-registration amendments and proof | edge | Amendments recorded openly; no new-engine file predates pre-registration | 11 amendments verified in evaluation.yaml; new-engine file timestamps valid |
-| 2 | issue register status counts and copy rejection | negative | 31 research issues categorized; broken copies rejected | 28 built, 2 planned, 1 deferred; copy missing fields raises ValueError |
-| 3 | tiny world fast-mode simulation | normal | 60 people, 12 shops, 61 days generate realistic transactions and festival uplifts | Fast mode runs without errors; >= 2,000 attempts; failures > 0; hero chart built |
-| 4 | empirical grounding table | normal | Parameter grounding across background, failure, and device realism | All 33 parameters categorized; labels count: 30 assumption, 3 reported |
-| 5 | independent seed divergence | edge | Distinct master seeds produce divergent, independent transaction schedules | Seed 101 != Seed 102 events count and SHA-256 digests diverge |
-| 6 | bank downtime partial degradation | edge | Bank downtime causes partial degradation without collapsing other banks | Success rate dips during outage; success rate > 0% (partial, not zero) |
-| 7 | os update wave adoption curve and device stability | edge | OS wave accelerates device adoption while preserving fraud rule R5 | Peak adoption >= 90%; R5 new-device evaluation within bound |
-| 8 | switch outage vs registry outage failure domains | negative | Central switch outage fails payments; deferred registry outage causes zero drift | Switch window success rate == 0%; registry outage event diff == 0 |
-| 9 | wedding collection episode money surge | edge | Social money surges generate large inflows without false fraud alerts | Peak day inflow > 5x non-episode baseline; no spurious alerts |
-| 10 | bank asymmetry in share and weak kyc | normal | Three financial institutions differ in reach, KYC rigor, and hold delays | Customer share, weak KYC share, and hold delay factors differ across banks |
-| 11 | deterministic bit-for-bit repeatability | consistency | Fast mode is bit-for-bit reproducible for identical seeds | Re-run produces identical SHA-256 (matches golden `24fc0e25009d...`) |
-| 12 | refusal of oversized world | negative | Worlds exceeding capacity are rejected with helpful guidance | World exceeding memory/runtime raises CapacityError with recommendations |
-| 13 | double-entry ledger invariants | consistency | Currency conservation and non-negative balances across accounts | No negative balances; total debits == total credits; tampered ledger caught |
-| 14 | live replay event stream fidelity | consistency | Live HTTP streaming mode replays fast-mode events byte-for-byte | All 2,915 events delivered to 127.0.0.1 matching event payload bytes |
-| 15 | stress scenario parameter isolation | normal | Stress scenario layers modify only declared parameters | All 6 stress scenarios leave unmentioned configuration parameters identical |
-| 16 | golden simulation fingerprints | consistency | Recomputes golden benchmarks in-process | FP, G1, G2, and G3 cryptographic digests match golden baselines |
+| 1 | pre-registration amendments and proof | consistency | Amendments to evaluation rules are recorded openly, and no new-engine file predates the pre-registration. | 11 amendments recorded; new-engine files all postdate evaluation.yaml |
+| 2 | issue register status counts and copy rejection | negative | The 31 research issues show 28 built, 2 planned and 1 deferred; broken copies without mandatory fields are refused. | 28 built, 2 planned, 1 deferred; broken copies with missing or unlisted IDs rejected |
+| 3 | tiny world fast-mode simulation | normal | A tiny world of 60 people and 12 shops over 61 days runs end to end, and payment volume rises inside festival windows. | Fast mode runs without errors; >= 2,000 attempts; festival uplift measured; hero chart built |
+| 4 | empirical grounding table | normal | Every parameter across background, failure and device realism is catalogued with an epistemic label and source citation. | All 33 parameters categorized; labels count: 30 assumption, 3 reported |
+| 5 | independent seed divergence | edge | Two different seeds place festivals, outages and OS update waves on different days. | Festival peak days, outage start days, and OS wave update days differ between seeds |
+| 6 | bank downtime partial degradation | edge | A multi-hour bank downtime causes partial success rate degradation without collapsing unrelated bank transactions. | Success rate dips during outage; success rate > 0% (partial, not zero) |
+| 7 | os update wave adoption curve and device stability | edge | An exaggerated OS update wave raises OS adoption, and new-device flags stay within the k = 4 bound (issue R5). | Peak adoption >= 90%; R5 new-device evaluation within bound |
+| 8 | switch outage vs registry outage failure domains | negative | A central switch outage fails all payments inside the window, while deferred registry outages cause zero event drift. | Switch window success rate == 0%; registry outage event diff == 0 |
+| 9 | wedding collection episode money surge | edge | An injected wedding collection episode shows up as incoming money on the host account, starting and ending inside its window. | Inflow concentrates inside the collection window; baseline inflow outside is 0 |
+| 10 | bank asymmetry in share and weak kyc | normal | The three banks differ in customer share, weak-KYC share and hold-response delay. | Customer share, weak KYC share, and hold delay factors differ across banks |
+| 11 | deterministic bit-for-bit repeatability | consistency | Identical seeds produce bit-for-bit identical payment event files matching golden SHA-256 24fc0e25... | Re-run produces identical SHA-256 (matches golden `24fc0e25009d...`) |
+| 12 | refusal of oversized world | negative | Proposed worlds exceeding host memory or runtime limits are safely refused with actionable capacity guidance. | World exceeding runtime is refused; estimate and limit reported; nothing written |
+| 13 | double-entry ledger invariants | consistency | Double-entry ledgers maintain non-negative balances, entry consistency, and total currency conservation. | No negative balances; total debits == total credits; tampered ledger caught |
+| 14 | live replay event stream fidelity | consistency | Live streaming mode replays fast-mode events across loopback HTTP with byte-identical payload fidelity. | All 2,915 events delivered to 127.0.0.1 matching event payload bytes |
+| 15 | stress scenario parameter isolation | normal | Every stress scenario layer modifies only its named parameters, leaving unmentioned domain settings identical. | All 6 stress scenarios leave unmentioned configuration parameters identical |
+| 16 | golden simulation fingerprints | consistency | The golden fingerprints FP, G1, G2 and G3 recompute in this run and match the stored values. | FP, G1, G2, and G3 cryptographic digests match stored baselines |
 
 ## 4. Test Suites and Standards Enforcement
 

@@ -45,10 +45,10 @@ LEVEL_TITLE = "A simulated India of everyday UPI payments"
 NEEDS_DATABASE = False
 
 WHAT_YOU_SAW = (
-    "A simulated India of everyday UPI payments: citizens with routines, commercial merchants, three asymmetric banks, "
-    "festivals, infrastructure outages, and episodic social money surges. Configuration parameters declare empirical grounding "
-    "sources, and stackable layers simulate severe stress scenarios with surgical precision. Double-entry ledgers conserve money "
-    "across all accounts, and independent random streams guarantee bit-for-bit repeatability across simulation runs."
+    "Level 11 builds a simulated world of everyday UPI payments: people, shops, three different banks, "
+    "festivals, outages, phone changes and life events such as a wedding collection. Every setting carries "
+    "a source label, stress tests are labelled layers, the bank ledgers balance, and the same seed gives "
+    "byte-identical output."
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -131,7 +131,7 @@ def _get_checks_1_to_4() -> list[CheckDefinition]:
         True
     """
     c1 = CheckDefinition(
-        "1. pre-registration amendments and proof", "edge",
+        "1. pre-registration amendments and proof", "consistency",
         "Amendments to evaluation rules are recorded openly, and no new-engine file predates the pre-registration.",
         run_amendments_check, "An amendment was lost or a new file predated evaluation rules.",
         "docs/research/amendments.md, config/evaluation.yaml"
@@ -144,7 +144,7 @@ def _get_checks_1_to_4() -> list[CheckDefinition]:
     )
     c3 = CheckDefinition(
         "3. tiny world fast-mode simulation", "normal",
-        "A tiny world of 60 people and 12 shops over 61 days generates realistic transactions and festival volume uplifts.",
+        "A tiny world of 60 people and 12 shops over 61 days runs end to end, and payment volume rises inside festival windows.",
         run_tiny_world_check, "World building or calendar runner payment generation failed.",
         "world/fast_mode.py, world/build_world.py"
     )
@@ -177,7 +177,7 @@ def _get_checks_5_to_8() -> list[CheckDefinition]:
     """
     c5 = CheckDefinition(
         "5. independent seed divergence", "edge",
-        "Different master seeds produce divergent, independent transaction schedules rather than static loops.",
+        "Two different seeds place festivals, outages and OS update waves on different days.",
         run_seed_divergence_check, "Random generator streams collapsed or became deterministic across seeds.",
         "world/world_plan.py, world/calendar_runner.py"
     )
@@ -189,7 +189,7 @@ def _get_checks_5_to_8() -> list[CheckDefinition]:
     )
     c7 = CheckDefinition(
         "7. os update wave adoption curve and device stability", "edge",
-        "A rapid OS rollout accelerates device adoption while preserving rule R5: updates do not trigger new-device fraud alerts.",
+        "An exaggerated OS update wave raises OS adoption, and new-device flags stay within the k = 4 bound (issue R5).",
         run_os_wave_check, "OS updates triggered new-device flags or adoption kinetics failed to accelerate.",
         "scenarios/stress/os-update-wave.yaml, world/device_runtime.py"
     )
@@ -222,13 +222,13 @@ def _get_checks_9_to_12() -> list[CheckDefinition]:
     """
     c9 = CheckDefinition(
         "9. wedding collection episode money surge", "edge",
-        "A genuine wedding collection episode generates a dramatic inflow surge into the host account without fraud alerts.",
+        "An injected wedding collection episode shows up as incoming money on the host account, starting and ending inside its window.",
         run_wedding_episode_check, "Episode payment planning or calendar dispatch failed.",
         "world/episode_payments.py, world/episodes.py"
     )
     c10 = CheckDefinition(
         "10. bank asymmetry in share and weak kyc", "normal",
-        "The three financial institutions differ significantly in customer reach, KYC verification rigor, and hold delays.",
+        "The three banks differ in customer share, weak-KYC share and hold-response delay.",
         run_bank_asymmetry_check, "Bank parameters became uniform or failed to reflect institutional categories.",
         "world/banks.py, config/world_ranges.yaml"
     )
@@ -291,7 +291,7 @@ def _get_checks_13_to_16(quick: bool) -> list[CheckDefinition]:
     )
     c16 = CheckDefinition(
         "16. golden simulation fingerprints", "consistency",
-        "All four golden benchmarks (FP, G1, G2, G3) recompute in-process and match audited cryptographic digests.",
+        "The golden fingerprints FP, G1, G2 and G3 recompute in this run and match the stored values.",
         fn16, "World topology, monthly routine, or calendar hashes drifted.",
         "scripts/verify_world.py, scripts/golden_values.yaml"
     )

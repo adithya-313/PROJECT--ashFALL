@@ -27,10 +27,14 @@ from typing import Any
 from core import issue_register, level10_check
 from showcase.framework import CheckOutcome, NotRun
 from showcase.level_11_charts import daily_bars_with_average, rate_line_with_window
+from world.background_config import read_background_realism
+from world.build_world import build_world
+from world.device_schedule import draw_device_event_schedule
 from world.fast_mode import FastRunSettings, event_lines, run_fast_world
 from world.grounding import count_by_label, grounding_rows
 from world.layers import apply_layers, read_layer
 from world.world_configs import read_world_configs
+from world.world_plan import draw_world_plan, spawn_life_streams, spawn_world_streams
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 AMENDMENTS_PATH = REPO_ROOT / "docs" / "research" / "amendments.md"
@@ -66,11 +70,12 @@ async def run_amendments_check(workspace: Any) -> CheckOutcome:
     assert count >= 11, f"Expected at least 11 amendments, found {count}"
     proof = level10_check.preregistration_proof()
     assert proof["result"] == "OK", f"Preregistration check failed: {proof['sentence']}"
-    key = f"{count} amendments recorded; {proof['result']}: {proof['sentence']}"
+    key = f"{count} amendments recorded; new-engine files all postdate evaluation.yaml"
     evidence = {
         "amendments_count": count,
         "amendment_ids": [line.split()[1] for line in amendments],
         "preregistration": proof,
+        "proof_sentence": proof["sentence"],
     }
     return CheckOutcome(key_number=key, evidence=evidence)
 
@@ -79,7 +84,7 @@ async def run_issue_register_check(workspace: Any) -> CheckOutcome:
     """
     WHAT: Audits the central research issue register in issues.yaml and verifies rejection of corrupted copies.
     It counts issues categorized as built, planned, and deferred, matching expected status invariants.
-    It then deletes a mandatory issue from a memory copy and asserts that issue_register.check_register catches it.
+    It then verifies that removing mandatory IDs and inserting unlisted IDs are both rejected by check_register.
 
     WHY: Verifies that the research foundation remains intact and that issues.yaml conforms to schema standards.
     Confirming that R2 has advanced to built status reflects the completion of the Level 11 stress library.
@@ -109,11 +114,54 @@ async def run_issue_register_check(workspace: Any) -> CheckOutcome:
     del bad_copy["G1"]
     bad_errors = issue_register.check_register(bad_copy, REPO_ROOT)
     assert any("Missing expected IDs" in err and "G1" in err for err in bad_errors)
+    unlisted_copy = copy.deepcopy(data)
+    unlisted_copy["R999"] = {"status": "planned", "title": "Unlisted test issue", "later_work": ["Level 99"]}
+    unlisted_errors = issue_register.check_register(unlisted_copy, REPO_ROOT)
+    assert any("Unknown IDs found in register" in err and "R999" in err for err in unlisted_errors)
     key = f"{built} built, {planned} planned, {deferred} deferred; broken copy rejected"
     return CheckOutcome(
         key_number=key,
-        evidence={"built": built, "planned": planned, "deferred": deferred, "corrupted_rejected": True},
+        evidence={
+            "built": built, "planned": planned, "deferred": deferred,
+            "corrupted_missing_rejected": True, "unlisted_id_rejected": True,
+        },
     )
+
+
+def _calc_festival_uplift(
+    daily_counts: list[int], festivals: list[Any], n_days: int
+) -> tuple[float, float]:
+    """
+    WHAT: Calculates average daily payment volumes inside and outside festival calendar windows.
+    It identifies all calendar days falling within any active festival duration span.
+    It returns the average transaction counts for festival days versus non-festival days.
+
+    WHY: Helper ensuring run_tiny_world_check satisfies the 30-line code ceiling constraint.
+    Provides verified numerical comparison of holiday payment uplift for showcase Check 3.
+
+    Args:
+        daily_counts: List of total transaction attempts per calendar day index.
+        festivals: List of Festival objects with peak_day, rise_days, and fade_days properties.
+        n_days: Total observation days in the simulation horizon.
+
+    Returns:
+        Tuple of (average payments per day in festivals, average payments per day outside festivals).
+
+    Example:
+        >>> avg_in, avg_out = _calc_festival_uplift([10, 20], [], 2)
+        >>> avg_in == 0.0 and avg_out == 15.0
+        True
+    """
+    fest_days = set()
+    for f in festivals:
+        s_d = max(f.peak_day - f.rise_days, 0)
+        e_d = min(f.peak_day + f.fade_days, n_days - 1)
+        fest_days.update(range(s_d, e_d + 1))
+    in_fest = [daily_counts[d] for d in fest_days]
+    out_fest = [daily_counts[d] for d in range(n_days) if d not in fest_days]
+    avg_in = sum(in_fest) / len(in_fest) if in_fest else 0.0
+    avg_out = sum(out_fest) / len(out_fest) if out_fest else 0.0
+    return avg_in, avg_out
 
 
 async def run_tiny_world_check(workspace: Any) -> CheckOutcome:
@@ -152,15 +200,15 @@ async def run_tiny_world_check(workspace: Any) -> CheckOutcome:
     ]
     svg_chart = daily_bars_with_average(daily_counts, dates, festivals)
     fails = sum(1 for e in events if e.status == "failed")
-    key = f"{len(events):,} attempts ({fails:,} failures) across {settings.n_days} days"
+    avg_in, avg_out = _calc_festival_uplift(daily_counts, output.plan.festivals, settings.n_days)
+    key = (
+        f"{len(events):,} attempts ({fails:,} failures) across {settings.n_days} days; "
+        f"avg {avg_in:.1f}/day in festival vs {avg_out:.1f}/day outside"
+    )
     evidence = {
-        "attempts": len(events),
-        "successes": len(events) - fails,
-        "failures": fails,
-        "days": settings.n_days,
-        "people": settings.n_people,
-        "shops": settings.n_shops,
-        "chart_svg": svg_chart,
+        "attempts": len(events), "successes": len(events) - fails, "failures": fails,
+        "days": settings.n_days, "people": settings.n_people, "shops": settings.n_shops,
+        "avg_in_festival": avg_in, "avg_outside_festival": avg_out, "chart_svg": svg_chart,
     }
     return CheckOutcome(key_number=key, evidence=evidence)
 
@@ -202,43 +250,121 @@ async def run_grounding_check(workspace: Any) -> CheckOutcome:
     return CheckOutcome(key_number=key, evidence=evidence)
 
 
+def _collect_seed_timings(seed: int, n_days: int) -> tuple[dict[str, int], list[int], list[int]]:
+    """
+    WHAT: Extracts festival peak days, bank outage start days, and OS update wave days for a simulation seed.
+    It builds a small world plan and device schedule under the given master seed across the observation horizon.
+    The resulting timings allow direct side-by-side comparison between divergent pseudo-random seeds.
+
+    WHY: Helper ensuring run_seed_divergence_check remains well under the 30-line code limit.
+    Isolates calendar plan timing extraction and device schedule generation from table formatting logic.
+
+    Args:
+        seed: Master integer random seed initializing pseudo-random number generator streams.
+        n_days: Total simulation horizon duration in full calendar days.
+
+    Returns:
+        Tuple of (festival peaks dictionary, bank outage start days list, OS update days list).
+
+    Example:
+        >>> fests, outages, os_days = _collect_seed_timings(101, 61)
+        >>> 'diwali' in fests and len(outages) > 0 and len(os_days) > 0
+        True
+    """
+    w = build_world(seed, 60, 12)
+    p_rng, _ = spawn_world_streams(seed)
+    plan = draw_world_plan(p_rng, n_days)
+    d_rng, _ = spawn_life_streams(seed)
+    bg = read_background_realism(REPO_ROOT / "config" / "device_realism.yaml")
+    dev_ev = draw_device_event_schedule(bg, d_rng, w.people, plan.festivals, plan.n_days)
+    fests = {f.name: f.peak_day for f in plan.festivals}
+    outages = [inc.start_minute // 1440 for inc in plan.incidents if inc.kind == "bank_downtime"]
+    os_days = sorted(set(e.minute // 1440 for e in dev_ev if e.kind == "os_update"))
+    return fests, outages, os_days
+
+
+def _format_seed_timings_table(rows: list[tuple[str, int, int]]) -> str:
+    """
+    WHAT: Formats a side-by-side comparison table of scheduled timings between two simulation seeds.
+    It renders HTML rows displaying the event label, seed 101 day, seed 102 day, and match status.
+    The table is wrapped in passbook ledger styling matching showcase presentation guidelines.
+
+    WHY: Modular helper ensuring run_seed_divergence_check satisfies the 30-line code ceiling.
+    Produces the rich side-by-side comparison required by the showcase specification for Check 5.
+
+    Args:
+        rows: List of (event label, seed 101 day, seed 102 day) tuples.
+
+    Returns:
+        HTML string containing complete table element for passbook figure display.
+
+    Example:
+        >>> tbl = _format_seed_timings_table([("Diwali", 30, 40)])
+        >>> '<table class="ledger">' in tbl and 'Day 30' in tbl
+        True
+    """
+    table_rows = [
+        f"<tr><td>{name}</td><td class=\"num\">Day {d1}</td>"
+        f'<td class="num">Day {d2}</td><td class="num">{"Differs" if d1 != d2 else "Identical"}</td></tr>'
+        for name, d1, d2 in rows
+    ]
+    return (
+        '<table class="ledger"><thead><tr><th>Scheduled Event</th>'
+        '<th class="num">Seed 101</th><th class="num">Seed 102</th>'
+        f'<th class="num">Status</th></tr></thead><tbody>{"".join(table_rows)}</tbody></table>'
+    )
+
+
 async def run_seed_divergence_check(workspace: Any) -> CheckOutcome:
     """
-    WHAT: Runs two independent world simulations using seed 101 and seed 102 to verify stochastic divergence.
-    It serializes event sequences from both runs and calculates their respective SHA-256 cryptographic digests.
-    It asserts that the digests differ, proving that varying master seeds alters simulated transaction paths.
+    WHAT: Runs two independent world simulations using seed 101 and seed 102 to verify timing divergence.
+    It compares festival peak days, outage start days, and OS update wave days side by side on the report page.
+    It verifies that random generator streams place scheduled lifecycle events on different calendar days.
 
     WHY: Validates that pseudo-random number generator streams govern transaction schedules rather than static loops.
-    Divergent event sequences across distinct seeds confirm that the engine supports robust Monte Carlo sampling.
-    Cryptographic verification ensures that distinct runs cannot collapse into identical synthetic histories.
+    Demonstrates that independent seeds produce divergent temporal paths across festivals, outages, and updates.
+    Conforms to the Level 11D-2 specification requirement for timing comparison and side-by-side presentation.
 
     Args:
         workspace: Optional showcase execution workspace environment container.
 
     Returns:
-        CheckOutcome recording event counts and distinct SHA-256 digests across both simulation seeds.
+        CheckOutcome recording differing timing tallies, side-by-side comparison table, and event hashes.
 
     Example:
         >>> import asyncio
         >>> outcome = asyncio.run(run_seed_divergence_check(None))
-        >>> "distinct SHA-256" in outcome.key_number
+        >>> "timings differ" in outcome.key_number
         True
     """
+    f1, o1, os1 = _collect_seed_timings(101, 61)
+    f2, o2, os2 = _collect_seed_timings(102, 61)
+    rows: list[tuple[str, int, int]] = [
+        ("Diwali peak", f1.get("diwali", 0), f2.get("diwali", 0)),
+        ("Festival 1 peak", f1.get("other_festival_1", 0), f2.get("other_festival_1", 0)),
+        ("Festival 2 peak", f1.get("other_festival_2", 0), f2.get("other_festival_2", 0)),
+        ("Outage 1 start", o1[0] if o1 else 0, o2[0] if o2 else 0),
+        ("Outage 2 start", o1[1] if len(o1) > 1 else 0, o2[1] if len(o2) > 1 else 0),
+        ("Outage 3 start", o1[2] if len(o1) > 2 else 0, o2[2] if len(o2) > 2 else 0),
+        ("Outage 4 start", o1[3] if len(o1) > 3 else 0, o2[3] if len(o2) > 3 else 0),
+        ("Outage 5 start", o1[4] if len(o1) > 4 else 0, o2[4] if len(o2) > 4 else 0),
+        ("OS update wave start", os1[0] if os1 else 0, os2[0] if os2 else 0),
+        ("OS update wave day 2", os1[1] if len(os1) > 1 else 0, os2[1] if len(os2) > 1 else 0),
+    ]
+    diffs = sum(1 for _, d1, d2 in rows if d1 != d2)
+    assert diffs >= 8, f"Expected at least 8 differing timings, found {diffs}"
     s1 = FastRunSettings(seed=101, n_people=60, n_shops=12, n_days=61, range_name="training")
     s2 = FastRunSettings(seed=102, n_people=60, n_shops=12, n_days=61, range_name="training")
-    out1 = run_fast_world(s1)
-    out2 = run_fast_world(s2)
+    out1, out2 = run_fast_world(s1), run_fast_world(s2)
     h1 = hashlib.sha256("".join(event_lines(out1)).encode("utf-8")).hexdigest()
     h2 = hashlib.sha256("".join(event_lines(out2)).encode("utf-8")).hexdigest()
-    assert h1 != h2, f"Seed 101 and seed 102 produced identical hashes: {h1}"
-    key = f"seed 101 ({len(out1.result.events)} events) vs seed 102 ({len(out2.result.events)} events); distinct SHA-256"
+    tbl = _format_seed_timings_table(rows)
+    key = f"{diffs} of {len(rows)} timings differ"
     evidence = {
-        "seed_101_events": len(out1.result.events),
-        "seed_101_sha256": h1,
-        "seed_102_events": len(out2.result.events),
-        "seed_102_sha256": h2,
+        "timings": rows, "sha256_seed_101": h1, "sha256_seed_102": h2,
+        "events_seed_101": len(out1.result.events), "events_seed_102": len(out2.result.events),
     }
-    return CheckOutcome(key_number=key, evidence=evidence)
+    return CheckOutcome(key_number=key, evidence=evidence, chart=tbl)
 
 
 def _calc_hourly_rates(events: list[Any], max_minute: int) -> tuple[list[float], list[float]]:
