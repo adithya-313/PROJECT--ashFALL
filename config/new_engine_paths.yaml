@@ -10,6 +10,8 @@
 new_engine_paths:
   label: policy
   reason: A fixed list is needed so the order check cannot miss new code, and the list is committed before any of it exists. evaluation/ and patterns/ are listed before any code exists in them (Level 12a task 2); evaluation/ will hold the truth loader and evaluation-only code, and patterns/ will hold gang pattern files.
+  issue_ids_v2: [K8]
+  derived_from: "policy; ground rule and Section 8"
   paths:
     - sim/
     - world/

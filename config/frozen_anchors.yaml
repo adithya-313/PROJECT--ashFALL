@@ -14,6 +14,8 @@
 frozen_anchors:
   label: policy
   reason: Ground rule 27. These values were pinned by Level 11 at commit 7757091 and are gathered here so one test guards them all. A change that moves any of them is reverted, never refreshed.
+  issue_ids_v2: [F1, F2, F3, F6]
+  derived_from: "measured on main at 7757091; ground rule 27"
   pinned_at_commit: "7757091"
   fraud_off_events:
     seed: 101

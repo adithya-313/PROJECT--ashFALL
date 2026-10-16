@@ -255,6 +255,7 @@ def test_evidence_path_that_does_not_exist_is_rejected() -> None:
         The message is "K1: file tests/unit/world/test_no_such_file.py not found".
     """
     register = real_register()
+    # The first evidence item may be a config block; the file check applies to every kind.
     register["issues"]["K1"]["evidence"][0]["file"] = "tests/unit/world/test_no_such_file.py"
     assert "K1: file tests/unit/world/test_no_such_file.py not found" in errors_of(register)
 
@@ -274,7 +275,9 @@ def test_test_function_that_does_not_exist_is_rejected() -> None:
         The message starts "K1: test function test_not_a_real_test not found in".
     """
     register = real_register()
-    register["issues"]["K1"]["evidence"][0]["name"] = "test_not_a_real_test"
+    # Pick the first evidence item that is a test, because only a test names a function.
+    test_item = next(item for item in register["issues"]["K1"]["evidence"] if item["kind"] == "test")
+    test_item["name"] = "test_not_a_real_test"
     assert "K1: test function test_not_a_real_test not found in" in errors_of(register)
 
 

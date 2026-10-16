@@ -32,6 +32,7 @@ issues:
     status: built
     levels: [12, 13, 14, 19, 21, 35, 36]
     evidence:
+      - {kind: config, file: config/interactive_runner.yaml, name: interactive_runner}
       - {kind: test, file: tests/unit/world/test_interactive_runner_switch.py, name: test_fraud_off_equals_level_11_run_everywhere}
       - {kind: test, file: tests/unit/world/test_interactive_runner_fraud_on.py, name: test_empty_fraud_plan_equals_level_11_everywhere}
   K2:
@@ -47,6 +48,7 @@ issues:
     levels: [12, 14, 16, 23, 32]
     parts: [12a]
     evidence:
+      - {kind: config, file: config/interactive_runner.yaml, name: interactive_runner}
       - {kind: test, file: tests/unit/world/test_run_identity.py, name: test_payment_ids_are_unique_and_well_formed}
       - {kind: test, file: tests/unit/world/test_interactive_events.py, name: test_lines_have_v1_fields_plus_two_ids_and_nothing_revealing}
     later_work: ["Level 14: payment_id, bank_id and side on the bank side (finding 14-2)", "Level 16: carry payment_id through labels", "Level 23: carry payment_id through the money tracer", "Level 32: carry payment_id through later levels"]
@@ -82,6 +84,8 @@ issues:
     parts: [12a, 13a]
     evidence:
       - {kind: test, file: tests/unit/test_folder_check.py, name: test_real_repo_is_fully_classified}
+      - {kind: config, file: config/folder_classification.yaml, name: folder_classification}
+      - {kind: config, file: config/new_engine_paths.yaml, name: new_engine_paths}
     later_work: ["Level 13: classify new top-level folders in 13a before adding them"]
   K9:
     title: "A docstring standard is enforced on registered new world files"
@@ -155,6 +159,7 @@ issues:
     levels: [12]
     parts: [12a]
     evidence:
+      - {kind: config, file: config/frozen_anchors.yaml, name: frozen_anchors}
       - {kind: test, file: tests/unit/world/test_frozen_anchors.py, name: test_level_11_issue_register_is_unchanged}
       - {kind: test, file: tests/unit/test_issue_register_v2.py, name: test_real_register_passes}
   F2:
@@ -164,6 +169,7 @@ issues:
     levels: [12]
     parts: [12a]
     evidence:
+      - {kind: config, file: config/frozen_anchors.yaml, name: frozen_anchors}
       - {kind: test, file: tests/unit/world/test_frozen_anchors.py, name: test_grounded_parameter_counts_are_unchanged}
   F3:
     title: "Exactly 6 stress files"
@@ -172,6 +178,7 @@ issues:
     levels: [12]
     parts: [12a]
     evidence:
+      - {kind: config, file: config/frozen_anchors.yaml, name: frozen_anchors}
       - {kind: test, file: tests/unit/world/test_frozen_anchors.py, name: test_stress_scenario_file_count_is_unchanged}
   F4:
     title: "Level 8 baselines compare API shape and Compose services for equality"
@@ -195,6 +202,7 @@ issues:
     levels: [12]
     parts: [12a]
     evidence:
+      - {kind: config, file: config/frozen_anchors.yaml, name: frozen_anchors}
       - {kind: doc, file: docs/research/amendments.md, text: "## A-016"}
       - {kind: test, file: tests/unit/world/test_frozen_anchors.py, name: test_level_11_issue_register_is_unchanged}
   12-1:
@@ -211,6 +219,7 @@ issues:
     levels: [12]
     parts: [12a]
     evidence:
+      - {kind: config, file: config/interactive_runner.yaml, name: interactive_runner}
       - {kind: test, file: tests/unit/world/test_outside_events_and_encumbrance.py, name: test_lien_reduces_what_can_be_spent}
       - {kind: test, file: tests/unit/world/test_interactive_runner_fraud_on.py, name: test_lien_blocks_exactly_the_chosen_debit}
   12-3:
@@ -288,6 +297,7 @@ issues:
     levels: [12]
     parts: [12a]
     evidence:
+      - {kind: config, file: config/interactive_runner.yaml, name: interactive_runner}
       - {kind: test, file: tests/unit/world/test_interactive_runner_fraud_on.py, name: test_genuine_draws_never_move}
   12-12:
     title: "Bulk-label lag exceeds the 2-month showcase world"

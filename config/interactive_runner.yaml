@@ -13,6 +13,8 @@
 interactive_runner:
   label: policy
   reason: Fraud-on worlds must leave Level 11's genuine payments exactly as they were. These settings fix which random streams the new components use, how same-minute items are ordered, and how runs and payments are named.
+  issue_ids_v2: [K1, K3, 12-2, 12-11]
+  derived_from: "policy; run id shape matches Level 11 live-mode event_id"
   random_stream_children:
     fraud_payment_failures: 4
     resumed_payment_failures: 5
