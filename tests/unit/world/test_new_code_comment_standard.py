@@ -123,6 +123,9 @@ NEW_CODE_FILES: list[str] = [
     "tests/unit/world/test_interactive_runner_fraud_on.py",
     # Level 12a tactic family and tactic cost config test suite.
     "tests/unit/test_tactic_families.py",
+    # Level 12a issue register v2 checker and its test suite.
+    "core/issue_register_v2.py",
+    "tests/unit/test_issue_register_v2.py",
     # Level 12a events-v2 line builder and its test suite.
     "world/interactive_events.py",
     "tests/unit/world/test_interactive_events.py",
