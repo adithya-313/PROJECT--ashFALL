@@ -143,7 +143,7 @@ async def run_wedding_episode_check(workspace: Any) -> CheckOutcome:
     peak_day = max(range(61), key=lambda d: inflows[d])
     svg_chart = account_flow_with_window(list(range(61)), inflows, (first_day, last_day, "Wedding Collection"))
     key = (
-        f"Rs {inside:,.2f} across {inside_count} payments on days {first_day}–{last_day}, "
+        f"Rs {inside:,.2f} across {inside_count} payments on days {first_day}-{last_day}, "
         f"Rs {outside:,.0f} outside; peak day {peak_day} Rs {inflows[peak_day]:,.2f}"
     )
     evidence = {"inside_rupees": inside, "inside_payments": inside_count, "outside_rupees": outside,

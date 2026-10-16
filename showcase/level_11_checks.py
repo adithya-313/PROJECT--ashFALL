@@ -710,7 +710,7 @@ async def run_os_wave_check(workspace: Any) -> CheckOutcome:
     assert stress["newest_os_share"][-1] > base["newest_os_share"][-1], "Layer did not raise final OS adoption"
     assert stress_rise > base_rise, "Layer waves are not more concentrated than base waves"
     key = (
-        f"new-device flags {stress['new_device_flags']} vs {base['new_device_flags']} (bound ±{bound:.1f}); "
+        f"new-device flags {stress['new_device_flags']} vs {base['new_device_flags']} (bound +/-{bound:.1f}); "
         f"newest OS {base['newest_os_share'][0]:.1%} to {base['newest_os_share'][-1]:.1%} base vs "
         f"{stress['newest_os_share'][-1]:.1%} with layer; "
         f"largest one-day rise {base_rise * 100:.1f} vs {stress_rise * 100:.1f} points"
