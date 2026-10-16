@@ -166,7 +166,7 @@ def _calc_festival_uplift(
         >>> avg_in == 0.0 and avg_out == 15.0
         True
     """
-    fest_days = set()
+    fest_days: set[int] = set()
     for f in festivals:
         s_d = max(f.peak_day - f.rise_days, 0)
         e_d = min(f.peak_day + f.fade_days, n_days - 1)
