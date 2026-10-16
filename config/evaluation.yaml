@@ -103,6 +103,32 @@ world_splits:
   - name: stress
     purpose: Extreme conditions.
 
+# Added for Level 12a (amendments A-013 and A-015). The pre-registered blocks above are unchanged.
+#
+# TERM: AUPRC = area under the precision-recall curve; 1.0 means a perfect ranking of fraud above genuine payments.
+# TERM: trivial world = a world where one single feature separates fraud so well that any model would look good.
+# TERM: fraud share = the fraction of payments in a world that are fraud; AUPRC is only meaningful beside it.
+trivial_world_check:
+  label: policy
+  issue_ids_v2: [12-6]
+  derived_from: "amendment A-013"
+  metric: best_single_feature_auprc
+  fail_threshold: 0.90
+  report_top_features: 3
+  report_alongside: fraud_share
+  run_on: validation_worlds
+  reason: PaySim was rejected in Level 9 because single features separated fraud almost perfectly. 0.90 marks "almost perfectly"; it is a policy decision, not a measurement. A failing world is fixed, never the threshold, and the check never runs on test or stress worlds (rule 17).
+
+validation_worlds:
+  label: policy
+  issue_ids_v2: [12-18]
+  derived_from: "amendment A-015"
+  ranges: training
+  seeds: independent of training seeds; disjointness enforced in 12f
+  used_for: tuning (ground rule 17)
+  counts: decided in 12f from measured run time
+  reason: Tuning needs a split of its own, otherwise it would happen on training or test worlds and leak into the final judgement.
+
 earlier_work_note: >-
   The v1 PaySim model, its data split and its thresholds (0.5, 0.42, 0.03)
   existed before this file. They are EXCLUDED from the pre-registered

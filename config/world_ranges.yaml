@@ -668,11 +668,13 @@ parameters:
   world_fraud_inflation_factor:
     label: assumption
     issue_ids: [E1]
+    issue_ids_v2: [12-7]
+    derived_from: "amendment A-012"
     unit: times
     training: [100, 2000]
     test: [50, 5000]
     stress: [10, 20000]
-    reason: "How many times more fraud a small simulated world holds than real life, so models have enough examples. It is recorded on each world card; no external figure exists."
+    reason: "The TARGET BAND for fraud pressure: how many times more fraud a small simulated world is aimed to hold than real life, so models have enough examples. No external figure exists. This range is not the measured value. The measured factor of a world is its complaints per 100,000 payments divided by 1.05 (real_world_complaints_per_100000_upi_payments, an upper-bound proxy), so it is a lower bound on the true inflation. It is measured in Level 12g and written onto fraud-on world cards (amendment A-012)."
 
   genuine_payment_median_amount_inr:
     label: assumption
