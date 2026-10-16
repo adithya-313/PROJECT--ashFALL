@@ -7,7 +7,7 @@
 2. **Every Fast-Mode Run Produces a World Card**:
    Every execution of fast mode writes both `world_card.json` (machine-readable structured schema) and `world_card.md` (human-readable Markdown summary) alongside `manifest.json` and `events.jsonl`. This documents the world configuration, bank differences, regional distribution, applied stress tests, failure breakdown by domain, and fraud base-rate status.
 3. **Strict Empirical Grounding of Real Events**:
-   Every stress scenario exaggerates a verified historical or operational event documented in the research dossier or public payment infrastructure reports (e.g., Diwali festive payment surges, major OS version rollout waves, multi-hour core banking downtimes, national switch routing interruptions, delayed bank registry onboarding, and customer dispute resolution backlogs).
+   Four stress tests exaggerate a reported real event, and two (registry-outage, complaint-backlog) are labelled what-ifs because no published figures were found.
 4. **Unified Grounding Table of Realism Parameters**:
    A dedicated module (`world/grounding.py`) audits every parameter across `background_realism.yaml`, `failure_realism.yaml`, and `device_realism.yaml`. It extracts provenance labels, training ranges, and citations, reporting parameter counts categorized by epistemic status (`assumption`, `reported`, `sourced`, `policy`).
 5. **Issue R2 Marked Built**:
@@ -19,14 +19,14 @@ Ranges must have low below high (core/config_validator.py check_range), so 'zero
 
 ## 3. Stress-Test Scenarios Catalog
 
-| Scenario File | Real Event | Exaggeration | Takes Effect |
-| :--- | :--- | :--- | :--- |
-| `scenarios/stress/big-festival.yaml` | Diwali / Dhanteras payment volume spike | 5x normal payment volume with 10x shop traffic | Immediate |
-| `scenarios/stress/os-update-wave.yaml` | Major Android / iOS release waves | Two or three waves where 90 to 100 percent of eligible phones update within 3 to 7 days, instead of one or two waves reaching 30 to 70 percent over 2 to 6 weeks | Immediate |
-| `scenarios/stress/bank-outage-long.yaml` | Major core banking technical outage (e.g., HDFC/SBI multi-hour incidents) | 24-hour total failure on Bank 0 (large public bank), compared to baseline 1-4 hour incidents | Immediate |
-| `scenarios/stress/switch-outage.yaml` | NPCI central switch technical decline incidents | At least one incident a month where NPCI routes almost nothing (0 to 0.01 percent success) for 3 to 5 hours | Immediate |
-| `scenarios/stress/registry-outage.yaml` | Bank onboarding delays in central intelligence registries (e.g. DPIP) | The registry gives ashFALL almost nothing: at most 1 percent chance a bank takes part, and entries arrive after about 120 days. Payments still flow; only shared intelligence is lost | Level 13 |
-| `scenarios/stress/complaint-backlog.yaml` | Post-festival fraud and unauthorized transaction reporting disputes | Citizens dispute payments for up to 90 days, keeping bank backlogs elevated | Level 16 |
+| File | Changed Settings with Training Ranges | Real Event | Exaggeration | Takes Effect From Level |
+| :--- | :--- | :--- | :--- | :--- |
+| `bank-outage-long.yaml` | `bank_downtime_duration_minutes`: [480, 720] | May 2024 saw 31 bank downtime instances totalling over 47 hours, about 1.5 hours each (NPCI data via Economic Times, June 2024). | Each bank outage lasts 8 to 12 hours instead of 1 to 2 hours; success rate still dips partly (partial degradation), it does not fall to zero. | now |
+| `big-festival.yaml` | `festival_uplift_fraction`: [0.5, 0.6] | Diwali 2025: the Diwali-eve record of 740 to 754 million UPI transactions was about 6 to 9 percent above that October's daily average of 695 million (NPCI-based reports, October 2025). | Festival uplift of 50 to 60 percent instead of the normal 5 to 25 percent, several times the reported 6 to 9 percent. | now |
+| `complaint-backlog.yaml` | `complaint_delay_investment_scam_days`: [40, 60]<br>`complaint_delay_job_scam_days`: [40, 60]<br>`complaint_delay_unauthorised_debit_minutes`: [2880, 4320] | No published series on complaint backlogs was found; this is a what-if for complaint intake piling up. | Scam complaints arrive after 40 to 60 days instead of 3 to 15, and unauthorised-debit complaints after 2 to 3 days instead of minutes to hours. | 12 |
+| `os-update-wave.yaml` | `os_wave_count_per_world`: [2, 3]<br>`os_wave_length_days`: [3, 7]<br>`os_wave_final_share_of_eligible`: [0.9, 1.0] | OS updates spread gradually: iOS adoption reached about two-thirds of devices months after release (global, February 2026); Android updates roll out in waves (Android update guidance). | Two or three waves where 90 to 100 percent of eligible phones update within 3 to 7 days, instead of one or two waves reaching 30 to 70 percent over 2 to 6 weeks. | now |
+| `registry-outage.yaml` | `probability_a_bank_takes_part_in_dpip`: [0.0, 0.01]<br>`registry_entry_delay_days`: [119, 120] | No published outage of the shared fraud registry (mock DPIP and I4C) was found; this is a what-if. | The registry gives ashFALL almost nothing: at most 1 percent chance a bank takes part, and entries arrive after about 120 days. Payments still flow; only shared intelligence is lost. | 13 |
+| `switch-outage.yaml` | `npci_incident_success_rate`: [0.0, 0.0001]<br>`npci_incident_count_per_30_days`: [1, 2]<br>`npci_incident_duration_minutes`: [180, 300] | NPCI-side incidents are rare and partial: 95 to 180 minutes, with success rates dropping to about 50 to 80 percent (NPCI uptime dashboard, March to April 2025). | At least one incident a month where NPCI routes almost nothing (0 to 0.01 percent success) for 3 to 5 hours. | now |
 
 ## 4. Deferral of new-bank Scenario
 
