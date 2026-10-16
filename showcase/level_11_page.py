@@ -136,10 +136,67 @@ def _build_domains_table_html() -> str:
     )
 
 
+def _cell_text(value: Any) -> str:
+    """
+    WHAT: Turns one table value into escaped cell text, showing None as "none".
+    It converts the value to a string and passes it through html.escape so no value can inject markup.
+
+    WHY: Check 5's table shows days that may be missing for one seed; "none" is clearer than an empty cell,
+    and escaping every cell keeps the page safe whatever text a row holds.
+
+    Args:
+        value: Any value for one table cell, or None.
+
+    Returns:
+        Escaped string for the cell.
+
+    Example:
+        >>> _cell_text(None), _cell_text(30), _cell_text("<b>")
+        ('none', '30', '&lt;b&gt;')
+    """
+    return html.escape("none" if value is None else str(value))
+
+
+def _build_seed_table_html(evidence: dict[str, Any]) -> str:
+    """
+    WHAT: Builds check 5's side-by-side table from the timing rows stored in its evidence.
+    Columns: timing name, the first seed's day, the second seed's day, and whether they differ (yes/no).
+    Every cell passes through html.escape; a missing timing shows as "none".
+
+    WHY: The key number "N of M timings differ" counts these same rows, so the table on screen always matches it.
+    Building HTML on the page, not inside the check, keeps check evidence as plain data.
+
+    Args:
+        evidence: Check 5 evidence with first_seed, second_seed and timings rows.
+
+    Returns:
+        HTML table string.
+
+    Example:
+        >>> ev = {"first_seed": 101, "second_seed": 102,
+        ...       "timings": [{"timing": "Diwali <peak>", "first_seed_day": 30,
+        ...                    "second_seed_day": None, "differs": True}]}
+        >>> table = _build_seed_table_html(ev)
+        >>> "Diwali &lt;peak&gt;" in table and 'num">none</td>' in table and ">yes<" in table
+        True
+    """
+    rows = "".join(
+        f'<tr><td>{_cell_text(r["timing"])}</td><td class="num">{_cell_text(r["first_seed_day"])}</td>'
+        f'<td class="num">{_cell_text(r["second_seed_day"])}</td><td>{"yes" if r["differs"] else "no"}</td></tr>'
+        for r in evidence["timings"]
+    )
+    return (
+        '<table class="ledger"><thead><tr><th>Timing</th>'
+        f'<th class="num">Seed {_cell_text(evidence["first_seed"])} day</th>'
+        f'<th class="num">Seed {_cell_text(evidence["second_seed"])} day</th><th>Differs</th></tr></thead>'
+        f"<tbody>{rows}</tbody></table>"
+    )
+
+
 def _check_figure_html(cr: Any) -> str:
     """
     WHAT: Returns the figure block shown inside one check's accordion entry, or an empty string.
-    It uses the SVG chart that the check stored under evidence["chart_svg"], wrapped in a figure div.
+    Check 5's evidence["timings"] becomes the side-by-side seed table; other checks show evidence["chart_svg"].
 
     WHY: Checks 3, 6, 7 and 9 draw their charts from numbers measured in the run; the page must show them.
     The SVG is built by showcase/level_11_charts.py from numbers only, so it carries no outside text to escape.
@@ -156,7 +213,10 @@ def _check_figure_html(cr: Any) -> str:
         >>> _check_figure_html(cr)
         '<div class="figure"><svg></svg></div>'
     """
-    svg = cr.evidence.get("chart_svg") if isinstance(cr.evidence, dict) else None
+    evidence = cr.evidence if isinstance(cr.evidence, dict) else {}
+    if isinstance(evidence.get("timings"), list):
+        return f'<div class="figure">{_build_seed_table_html(evidence)}</div>'
+    svg = evidence.get("chart_svg")
     return f'<div class="figure">{svg}</div>' if isinstance(svg, str) and svg.startswith("<svg") else ""
 
 
@@ -185,8 +245,7 @@ def _format_single_check_html(idx: int, cr: Any) -> str:
         True
     """
     status_cls = "PASS" if cr.status == "PASS" else ("FAIL" if cr.status == "FAIL" else "NOT")
-    # Check 5 still hands its table through cr.chart until the page builds the table itself.
-    chart_html = _check_figure_html(cr) or (f'<div class="figure">{cr.chart}</div>' if cr.chart else "")
+    chart_html = _check_figure_html(cr)
     evidence_text = html.escape(str(cr.key_number))
     why_html = f'<div class="why">{html.escape(cr.explanation)}</div>' if cr.explanation else ""
     return (

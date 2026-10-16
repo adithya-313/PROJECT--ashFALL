@@ -345,152 +345,98 @@ def _collect_seed_timings(seed: int, n_days: int) -> tuple[dict[str, int], list[
     return fests, outages, os_days
 
 
-class SideBySideChart(dict):
+def _nth_or_none(values: list[int], index: int) -> int | None:
     """
-    WHAT: Custom chart dictionary container encapsulating side-by-side comparison table markup.
-    It inherits from dict to maintain compatibility with framework CheckOutcome chart typing.
-    Its string representation returns the embedded HTML table for inline showcase page rendering.
-
-    WHY: Bridges framework reporting dictionary expectations with custom HTML table figure display.
-    Allows Check 5 to display side-by-side timing comparisons cleanly within passbook accordions.
-    Ensures that reporting.py can invoke dict.get('type') safely without encountering attribute errors.
-
-    Example:
-        >>> c = SideBySideChart("<table><tr><td>Day 1</td></tr></table>")
-        >>> c["type"] == "side_by_side" and "Day 1" in str(c)
-        True
-    """
-
-    def __init__(self, html_table: str) -> None:
-        """
-        WHAT: Initializes the chart dictionary with the side_by_side type identifier and HTML markup payload.
-        It populates internal dictionary mappings ensuring full structural compliance with the reporting framework.
-        Storing the table string internally allows subsequent string serialization for custom HTML page generation.
-
-        WHY: Bridges framework reporting dictionary expectations with custom HTML table figure display.
-        Allows Check 5 to display side-by-side timing comparisons cleanly within passbook accordions.
-        Ensures that reporting.py can invoke dict.get('type') safely without encountering attribute errors.
-
-        Args:
-            html_table: Formatted HTML table markup containing comparative scheduled event day rows.
-
-        Returns:
-            None. Initializes the dictionary instance in place.
-
-        Example:
-            >>> c = SideBySideChart("<table><tr><td>Day 1</td></tr></table>")
-            >>> c["type"] == "side_by_side" and "Day 1" in c["html"]
-            True
-        """
-        super().__init__(type="side_by_side", html=html_table)
-        self.html_table = html_table
-
-    def __str__(self) -> str:
-        """
-        WHAT: Serializes the chart dictionary to its encapsulated HTML table markup string representation.
-        It returns the pre-formatted HTML ledger table containing side-by-side seed timing comparisons.
-        This string representation is directly interpolated into passbook accordion figure containers.
-
-        WHY: Enables direct string interpolation into custom page HTML template figure element slots.
-        Allows the custom page renderer to embed rich tabular comparison markup without format conversion.
-        Conforms strictly to Python string formatting conventions used throughout showcase template renderers.
-
-        Args:
-            None. Operates directly on the encapsulated instance state.
-
-        Returns:
-            Raw HTML string representing the side-by-side scheduled timing comparison table.
-
-        Example:
-            >>> c = SideBySideChart("<table><tr><td>Content</td></tr></table>")
-            >>> str(c).startswith("<table>")
-            True
-        """
-        return self.html_table
-
-
-def _format_seed_timings_table(rows: list[tuple[str, int, int]]) -> str:
-    """
-    WHAT: Formats a side-by-side comparison table of scheduled timings between two simulation seeds.
-    It renders HTML rows displaying the event label, seed 101 day, seed 102 day, and match status.
-    The table is wrapped in passbook ledger styling matching showcase presentation guidelines.
-
-    WHY: Modular helper ensuring run_seed_divergence_check satisfies the 30-line code ceiling.
-    Produces the rich side-by-side comparison required by the showcase specification for Check 5.
+    WHAT: Returns values[index] when it exists, otherwise None.
+    WHY: A seed may schedule fewer outages or OS update days than another; a missing timing must show as missing,
+    not as day 0, so the side-by-side table does not invent a value.
 
     Args:
-        rows: List of (event label, seed 101 day, seed 102 day) tuples.
+        values: Sorted day numbers.
+        index: Zero-based position wanted.
 
     Returns:
-        HTML string containing complete table element for passbook figure display.
+        The day number, or None when the list is too short.
 
     Example:
-        >>> tbl = _format_seed_timings_table([("Diwali", 30, 40)])
-        >>> '<table class="ledger">' in tbl and 'Day 30' in tbl
-        True
+        >>> _nth_or_none([5, 9], 1), _nth_or_none([5, 9], 2)
+        (9, None)
     """
-    table_rows = [
-        f"<tr><td>{name}</td><td class=\"num\">Day {d1}</td>"
-        f'<td class="num">Day {d2}</td><td class="num">{"Differs" if d1 != d2 else "Identical"}</td></tr>'
-        for name, d1, d2 in rows
+    return values[index] if index < len(values) else None
+
+
+def _seed_timing_rows(first_seed: int, second_seed: int, n_days: int) -> list[dict[str, Any]]:
+    """
+    WHAT: Builds the side-by-side timing rows for two seeds: festival peaks, outage starts and OS update days.
+    Each row holds the timing name, the day for each seed (None when absent) and whether the two differ.
+
+    WHY: The page draws check 5's table from these rows and the key number counts them, so both always agree.
+
+    Args:
+        first_seed: The canonical seed (101).
+        second_seed: The comparison seed from config (102).
+        n_days: Simulation horizon in days.
+
+    Returns:
+        List of row dictionaries with keys timing, first_seed_day, second_seed_day and differs.
+
+    Example:
+        >>> rows = _seed_timing_rows(101, 102, 61)
+        >>> rows[0]
+        {'timing': 'Diwali peak', 'first_seed_day': 30, 'second_seed_day': 40, 'differs': True}
+    """
+    f1, o1, os1 = _collect_seed_timings(first_seed, n_days)
+    f2, o2, os2 = _collect_seed_timings(second_seed, n_days)
+    pairs: list[tuple[str, int | None, int | None]] = [
+        ("Diwali peak", f1.get("diwali"), f2.get("diwali")),
+        ("Festival 1 peak", f1.get("other_festival_1"), f2.get("other_festival_1")),
+        ("Festival 2 peak", f1.get("other_festival_2"), f2.get("other_festival_2")),
     ]
-    return (
-        '<table class="ledger"><thead><tr><th>Scheduled Event</th>'
-        '<th class="num">Seed 101</th><th class="num">Seed 102</th>'
-        f'<th class="num">Status</th></tr></thead><tbody>{"".join(table_rows)}</tbody></table>'
-    )
+    pairs += [(f"Outage {i + 1} start", _nth_or_none(o1, i), _nth_or_none(o2, i)) for i in range(5)]
+    pairs += [("OS update first day", _nth_or_none(os1, 0), _nth_or_none(os2, 0))]
+    pairs += [("OS update second day", _nth_or_none(os1, 1), _nth_or_none(os2, 1))]
+    return [
+        {"timing": name, "first_seed_day": d1, "second_seed_day": d2, "differs": d1 != d2}
+        for name, d1, d2 in pairs
+    ]
 
 
 async def run_seed_divergence_check(workspace: Any) -> CheckOutcome:
     """
-    WHAT: Runs two independent world simulations using seed 101 and seed 102 to verify timing divergence.
-    It compares festival peak days, outage start days, and OS update wave days side by side on the report page.
-    It verifies that random generator streams place scheduled lifecycle events on different calendar days.
+    WHAT: Compares seed 101 with the config's comparison seed on festival peaks, outage starts and OS update days.
+    It stores the timing rows in evidence; the page builds the side-by-side table from those same rows.
+    It also runs both worlds in fast mode and records each event file's SHA-256.
 
-    WHY: Validates that pseudo-random number generator streams govern transaction schedules rather than static loops.
-    Demonstrates that independent seeds produce divergent temporal paths across festivals, outages, and updates.
-    Conforms to the Level 11D-2 specification requirement for timing comparison and side-by-side presentation.
+    WHY: Different seeds must give different calendars; identical timings would mean the random streams collapsed.
 
     Args:
         workspace: Optional showcase execution workspace environment container.
 
     Returns:
-        CheckOutcome recording differing timing tallies, side-by-side comparison table, and event hashes.
+        CheckOutcome with "N of M timings differ", the timing rows and both event hashes.
 
     Example:
         >>> import asyncio
         >>> outcome = asyncio.run(run_seed_divergence_check(None))
-        >>> "timings differ" in outcome.key_number
-        True
+        >>> outcome.key_number
+        '10 of 10 timings differ'
     """
-    f1, o1, os1 = _collect_seed_timings(101, 61)
-    f2, o2, os2 = _collect_seed_timings(102, 61)
-    rows: list[tuple[str, int, int]] = [
-        ("Diwali peak", f1.get("diwali", 0), f2.get("diwali", 0)),
-        ("Festival 1 peak", f1.get("other_festival_1", 0), f2.get("other_festival_1", 0)),
-        ("Festival 2 peak", f1.get("other_festival_2", 0), f2.get("other_festival_2", 0)),
-        ("Outage 1 start", o1[0] if o1 else 0, o2[0] if o2 else 0),
-        ("Outage 2 start", o1[1] if len(o1) > 1 else 0, o2[1] if len(o2) > 1 else 0),
-        ("Outage 3 start", o1[2] if len(o1) > 2 else 0, o2[2] if len(o2) > 2 else 0),
-        ("Outage 4 start", o1[3] if len(o1) > 3 else 0, o2[3] if len(o2) > 3 else 0),
-        ("Outage 5 start", o1[4] if len(o1) > 4 else 0, o2[4] if len(o2) > 4 else 0),
-        ("OS update wave start", os1[0] if os1 else 0, os2[0] if os2 else 0),
-        ("OS update wave day 2", os1[1] if len(os1) > 1 else 0, os2[1] if len(os2) > 1 else 0),
-    ]
-    diffs = sum(1 for _, d1, d2 in rows if d1 != d2)
+    second_seed = int(load_yaml(SHOWCASE_CONFIG_PATH)["comparison_world"]["seed"])
+    rows = _seed_timing_rows(101, second_seed, 61)
+    diffs = sum(1 for row in rows if row["differs"])
     assert diffs >= 8, f"Expected at least 8 differing timings, found {diffs}"
     s1 = FastRunSettings(seed=101, n_people=60, n_shops=12, n_days=61, range_name="training")
-    s2 = FastRunSettings(seed=102, n_people=60, n_shops=12, n_days=61, range_name="training")
+    s2 = FastRunSettings(seed=second_seed, n_people=60, n_shops=12, n_days=61, range_name="training")
     out1, out2 = run_fast_world(s1), run_fast_world(s2)
     h1 = hashlib.sha256("".join(event_lines(out1)).encode("utf-8")).hexdigest()
     h2 = hashlib.sha256("".join(event_lines(out2)).encode("utf-8")).hexdigest()
-    tbl = _format_seed_timings_table(rows)
-    key = f"{diffs} of {len(rows)} timings differ"
+    assert h1 != h2, "Two seeds produced identical event files"
     evidence = {
-        "timings": rows, "sha256_seed_101": h1, "sha256_seed_102": h2,
-        "events_seed_101": len(out1.result.events), "events_seed_102": len(out2.result.events),
+        "first_seed": 101, "second_seed": second_seed, "timings": rows,
+        "sha256_first_seed": h1, "sha256_second_seed": h2,
+        "events_first_seed": len(out1.result.events), "events_second_seed": len(out2.result.events),
     }
-    return CheckOutcome(key_number=key, evidence=evidence, chart=SideBySideChart(tbl))
+    return CheckOutcome(key_number=f"{diffs} of {len(rows)} timings differ", evidence=evidence)
 
 
 def _calc_hourly_rates(events: list[Any], max_minute: int) -> tuple[list[float], list[float]]:

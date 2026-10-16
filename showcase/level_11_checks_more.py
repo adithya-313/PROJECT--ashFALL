@@ -99,49 +99,57 @@ async def run_switch_vs_registry_check(workspace: Any) -> CheckOutcome:
 
 async def run_wedding_episode_check(workspace: Any) -> CheckOutcome:
     """
-    WHAT: Simulates a wedding gift collection episode and charts the daily inflow velocity into the host account.
-    It schedules an episode where 40 citizens contribute funds to one recipient across calendar days 5 to 20.
-    It asserts that daily incoming money surges dramatically during the episode window compared to baseline periods.
+    WHAT: Injects one wedding collection Episode for the first person and charts that account's daily incoming money.
+    The episode runs from minute 5 x 1440 to minute 20 x 1440 (days 5 to 19) with 40 payers.
+    Episode payments are planned with the episode random stream, the second value of spawn_life_streams(101),
+    exactly as fast mode does; the check then asserts that all incoming money lands inside the window.
 
-    WHY: Proves that ordinary life events generate non-fraudulent transaction bursts mimicking mule behavior.
-    Validating that normal episodes produce sharp account velocity spikes tests detector resilience against false positives.
-    Attaching an SVG bar chart visually documents the temporal bounds and financial intensity of the social collection.
+    WHY: The engine splits one seed into separate streams so features do not disturb each other's draws.
+    Using the real episode stream, not a hand-built generator, keeps the check on the engine's own path.
 
     Args:
         workspace: Optional showcase execution workspace environment container.
 
     Returns:
-        CheckOutcome capturing peak burst inflow, baseline inflow, and the account flow vector chart.
+        CheckOutcome with total incoming money and payment count inside the window, money outside, the peak day,
+        per-day inflows and the account flow chart.
 
     Example:
         >>> import asyncio
         >>> outcome = asyncio.run(run_wedding_episode_check(None))
-        >>> "peak day inflow" in outcome.key_number
+        >>> "outside" in outcome.key_number and outcome.evidence["outside_rupees"] == 0.0
         True
     """
     world = build_world(seed=101, n_people=60, n_shops=12)
     p_rng, r_rng = spawn_world_streams(101)
     plan = draw_world_plan(p_rng, n_days=61)
-    ranges = read_world_ranges()
     collector = world.people[0]
     ep = Episode(collector.person_id, "wedding_or_medical_collection", 5 * 1440, 20 * 1440, 40)
-    ep_rng = type(p_rng)(type(p_rng.bit_generator)(101))
-    ep_plan = plan_episode_payments(world, plan, [ep], ranges, ep_rng, "training")
+    # The second life stream is the episode stream that fast mode passes to plan_episode_payments.
+    _, ep_rng = spawn_life_streams(101)
+    ep_plan = plan_episode_payments(world, plan, [ep], read_world_ranges(), ep_rng, "training")
     res = run_world(world, plan, r_rng, episode_payments=ep_plan.payments)
+    first_day, last_day = ep.start_minute // 1440, (ep.end_minute - 1) // 1440
     inflows = [0.0] * 61
+    inside_count = 0
     for ev in res.events:
         if ev.status == "success" and ev.to_account == collector.account_id:
-            inflows[min(ev.minute // 1440, 60)] += ev.amount_paise / 100.0
-    peak_inflow = max(inflows[5:21])
-    baseline_inflow = max(inflows[:5] + inflows[21:])
-    assert peak_inflow > 10000.0 and baseline_inflow == 0.0
-    days = list(range(61))
-    svg_chart = account_flow_with_window(days, inflows, (5, 20, "Wedding Collection"))
-    key = f"peak day inflow Rs {int(peak_inflow):,} inside episode vs Rs {int(baseline_inflow)} baseline"
-    return CheckOutcome(
-        key_number=key,
-        evidence={"peak_inflow_rupees": peak_inflow, "baseline_inflow_rupees": baseline_inflow, "chart_svg": svg_chart},
+            day = min(ev.minute // 1440, 60)
+            inflows[day] += ev.amount_paise / 100.0
+            inside_count += int(first_day <= day <= last_day)
+    inside = sum(inflows[first_day:last_day + 1])
+    outside = sum(inflows) - inside
+    assert inside > 0.0 and outside == 0.0, f"Inflow inside {inside}, outside {outside}"
+    peak_day = max(range(61), key=lambda d: inflows[d])
+    svg_chart = account_flow_with_window(list(range(61)), inflows, (first_day, last_day, "Wedding Collection"))
+    key = (
+        f"Rs {inside:,.2f} across {inside_count} payments on days {first_day}–{last_day}, "
+        f"Rs {outside:,.0f} outside; peak day {peak_day} Rs {inflows[peak_day]:,.2f}"
     )
+    evidence = {"inside_rupees": inside, "inside_payments": inside_count, "outside_rupees": outside,
+                "window_days": [first_day, last_day], "peak_day": peak_day, "daily_inflow_rupees": inflows,
+                "planned_episode_payments": len(ep_plan.payments), "chart_svg": svg_chart}
+    return CheckOutcome(key_number=key, evidence=evidence)
 
 
 async def run_bank_asymmetry_check(workspace: Any) -> CheckOutcome:

@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from showcase.framework import CheckResult, LevelResult
-from showcase.level_11_page import render_level_11_html, write_custom_page
+from showcase.level_11_page import _build_seed_table_html, render_level_11_html, write_custom_page
 
 
 def _make_sample_check(name: str, key_number: str, evidence: dict[str, Any] | None = None) -> CheckResult:
@@ -159,3 +159,29 @@ def test_write_custom_page_creates_file(tmp_path: Path) -> None:
     content = output_file.read_text(encoding="utf-8")
     assert content.startswith("<!DOCTYPE html>")
     assert "Level 11" in content
+
+
+def test_seed_table_matches_rows_and_escapes_cells() -> None:
+    """
+    WHAT: Checks that check 5's table has one row per timing, marks differences, and escapes every cell.
+    WHY: The key number "N of M timings differ" must match the table on screen, and no cell may inject markup.
+
+    Returns:
+        None; fails with an assertion error if a row is missing, mislabelled or unescaped.
+
+    Example:
+        Two rows: "Diwali peak" 30 vs 40 (differs, "yes") and "<b>x</b>" 5 vs 5 (same, "no").
+        The table has 2 body rows, one "yes", one "no", and shows "&lt;b&gt;x&lt;/b&gt;" for the second name.
+    """
+    evidence = {
+        "first_seed": 101, "second_seed": 102,
+        "timings": [
+            {"timing": "Diwali peak", "first_seed_day": 30, "second_seed_day": 40, "differs": True},
+            {"timing": "<b>x</b>", "first_seed_day": 5, "second_seed_day": 5, "differs": False},
+        ],
+    }
+    table = _build_seed_table_html(evidence)
+    assert table.count("<tr><td>") == 2
+    assert table.count(">yes<") == 1 and table.count(">no<") == 1
+    assert "&lt;b&gt;x&lt;/b&gt;" in table and "<b>x</b>" not in table
+    assert "Seed 101 day" in table and "Seed 102 day" in table

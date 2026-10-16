@@ -225,7 +225,8 @@ def _get_checks_9_to_12() -> list[CheckDefinition]:
     """
     c9 = CheckDefinition(
         "9. wedding collection episode money surge", "edge",
-        "An injected wedding collection episode shows up as incoming money on the host account, starting and ending inside its window.",
+        "An injected wedding collection episode, planned with the engine's episode random stream, brings money "
+        "into the host account only on days inside its window.",
         run_wedding_episode_check, "Episode payment planning or calendar dispatch failed.",
         "world/episode_payments.py, world/episodes.py"
     )
