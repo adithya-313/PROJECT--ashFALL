@@ -370,6 +370,11 @@ jobs:
       - name: Check the top-level folder classification
         run: python -m core.folder_check
 
+      # Fails if config/issues_v2.yaml is not valid: an ID missing or invented, a built issue whose evidence cannot be
+      # found, or a config issue_ids_v2 tag that names an unknown ID or has no derived_from.
+      - name: Check the version 2 issue register
+        run: python -m core.issue_register_v2
+
       # Run the fast folders. "-m not needs_stack" skips tests that need the Docker stack. The geo-velocity tests and
       # test_velocity_features.py (which the level-showcase job leaves out) DO run here: the geo tests now use a small
       # relative tolerance instead of exact bits, and requirements-test.txt installs fakeredis.
