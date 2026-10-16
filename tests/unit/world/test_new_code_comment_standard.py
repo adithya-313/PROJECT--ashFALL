@@ -121,6 +121,9 @@ NEW_CODE_FILES: list[str] = [
     "world/interactive_state.py",
     "world/interactive_loop.py",
     "tests/unit/world/test_interactive_runner_fraud_on.py",
+    # Level 12a events-v2 line builder and its test suite.
+    "world/interactive_events.py",
+    "tests/unit/world/test_interactive_events.py",
 ]
 
 
