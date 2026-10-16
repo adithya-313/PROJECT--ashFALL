@@ -17,6 +17,8 @@ TERM: nesting: The invariant requiring parameter ranges to satisfy training insi
       e.g. ensuring [low, high] for training is contained within test bounds.
 TERM: override: A targeted replacement of an existing parameter range value by a layer,
       e.g. updating training [30, 50] to [40, 45].
+TERM: stress test: An extreme scenario configuration testing system resilience against severe operational shocks,
+      e.g. simulating a complete central switch outage or an extended bank downtime.
 """
 
 import copy
@@ -48,6 +50,7 @@ class Layer:
         changes: Nested dictionary mapping configuration names to settings and range overrides.
         sha256: 64-character SHA-256 hexadecimal hash computed over the source file's raw bytes.
         path: Filesystem path string indicating where the layer file was loaded from.
+        stress_test: Optional dictionary documenting real-world grounding and exaggeration for stress tests.
 
     Returns:
         Layer dataclass instance holding parsed layer properties.
@@ -55,8 +58,8 @@ class Layer:
     Example:
         >>> h = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         >>> layer = Layer("l1", "test reason", {}, h, "p.yaml")
-        >>> (layer.name, layer.reason)
-        ('l1', 'test reason')
+        >>> (layer.name, layer.reason, layer.stress_test)
+        ('l1', 'test reason', None)
     """
 
     name: str
@@ -64,6 +67,7 @@ class Layer:
     changes: dict[str, Any]
     sha256: str
     path: str
+    stress_test: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -194,11 +198,72 @@ def _validate_layer_changes(changes: dict[str, Any], layer_name: str) -> None:
             _validate_setting_ranges(ranges_map, setting_name, layer_name)
 
 
+def _validate_stress_test(stress_test: Any, layer_name: str) -> None:
+    """
+    WHAT: Validates the optional stress_test metadata block within a configuration layer.
+    It verifies that the block is a dictionary with exact keys real_event, exaggeration, and takes_effect_from_level.
+    It enforces non-empty text strings for real_event and exaggeration, and checks that takes_effect_from_level
+    is null or a positive integer.
+
+    WHY: Guarantees that every stress test scenario is explicitly grounded against historical incidents
+    and quantifies its operational shock. Rejecting unknown keys by name ensures schema adherence across
+    the entire scenario stress-test library. Verifying activation level indicators prevents misconfigured
+    deferred scenario tests from running unexpectedly.
+
+    Args:
+        stress_test: The stress_test metadata mapping to inspect and validate.
+        layer_name: Identifier name of the parent layer for diagnostic error reporting.
+
+    Returns:
+        None upon successful structural and domain validation.
+
+    Raises:
+        ValueError: If stress_test structure, keys, or field values violate domain requirements.
+
+    Example:
+        >>> block = {"real_event": "2024 outage", "exaggeration": "10x longer", "takes_effect_from_level": None}
+        >>> _validate_stress_test(block, "sample-layer")
+    """
+    # 1. Enforce that stress_test is a dictionary mapping.
+    if not isinstance(stress_test, dict):
+        raise ValueError(f"Layer '{layer_name}': stress_test must be a dictionary mapping.")
+
+    # 2. Check for unexpected keys and missing required keys.
+    expected_keys = {"real_event", "exaggeration", "takes_effect_from_level"}
+    actual_keys = set(stress_test.keys())
+    extra_keys = sorted(actual_keys - expected_keys)
+    if extra_keys:
+        raise ValueError(f"Layer '{layer_name}': stress_test contains unknown key '{extra_keys[0]}'.")
+    missing_keys = sorted(expected_keys - actual_keys)
+    if missing_keys:
+        raise ValueError(f"Layer '{layer_name}': stress_test missing required key '{missing_keys[0]}'.")
+
+    # 3. Verify real_event is non-empty text.
+    real_event = stress_test["real_event"]
+    if not isinstance(real_event, str) or not real_event.strip():
+        raise ValueError(f"Layer '{layer_name}': stress_test 'real_event' must be non-empty text.")
+
+    # 4. Verify exaggeration is non-empty text.
+    exaggeration = stress_test["exaggeration"]
+    if not isinstance(exaggeration, str) or not exaggeration.strip():
+        raise ValueError(f"Layer '{layer_name}': stress_test 'exaggeration' must be non-empty text.")
+
+    # 5. Verify takes_effect_from_level is null or a positive integer.
+    level = stress_test["takes_effect_from_level"]
+    if level is not None:
+        if isinstance(level, bool) or not isinstance(level, int) or level <= 0:
+            raise ValueError(
+                f"Layer '{layer_name}': stress_test 'takes_effect_from_level' must be null or a positive integer."
+            )
+
+
 def read_layer(path: Path) -> Layer:
     """
     WHAT: Reads and validates a YAML layer file from disk and calculates its SHA-256 digest.
-    It verifies top-level keys ('name', 'reason', 'changes') and ensures name and reason are non-empty.
-    It delegates domain validation of parameter changes to _validate_layer_changes before returning a Layer.
+    It verifies top-level keys ('name', 'reason', 'changes', and optional 'stress_test') and ensures
+    name and reason are non-empty.
+    It validates changes against baseline domain parameters and inspects optional stress test metadata
+    before returning a Layer.
 
     WHY: Guarantees every layer read into memory is structurally sound, traceable, and cryptographically hashed.
     Hashing the file content upfront enables exact reproducibility tracking in simulation run manifests.
@@ -208,10 +273,10 @@ def read_layer(path: Path) -> Layer:
         path: Filesystem path to the YAML layer file to be loaded and validated.
 
     Returns:
-        Layer dataclass instance holding name, reason, changes dictionary, SHA-256 digest, and path.
+        Layer dataclass instance holding name, reason, changes dictionary, SHA-256 digest, path, and stress_test.
 
     Raises:
-        ValueError: If file structure, top-level keys, or layer changes violate validation rules.
+        ValueError: If file structure, top-level keys, layer changes, or stress metadata violate validation rules.
 
     Example:
         >>> import tempfile
@@ -222,8 +287,8 @@ def read_layer(path: Path) -> Layer:
         ...     _ = f.write("  background_realism:\\n    festival_peak_day_in_world:\\n      training: [40, 45]\\n")
         ...     demo_path = Path(f.name)
         >>> layer = read_layer(demo_path)
-        >>> (layer.name, layer.reason, len(layer.sha256))
-        ('demo', 'testing', 64)
+        >>> (layer.name, layer.reason, len(layer.sha256), layer.stress_test)
+        ('demo', 'testing', 64, None)
     """
     # 1. Read raw file bytes and compute cryptographic SHA-256 hash digest.
     raw_bytes = path.read_bytes()
@@ -234,9 +299,13 @@ def read_layer(path: Path) -> Layer:
     if not isinstance(data, dict):
         raise ValueError(f"Layer '{path}': content must be a YAML mapping.")
 
-    # 3. Enforce that top-level keys are exactly name, reason, and changes.
+    # 3. Enforce that top-level keys match allowed and required schemas.
     actual_keys = set(data.keys())
-    if actual_keys != {"name", "reason", "changes"}:
+    allowed_keys = {"name", "reason", "changes", "stress_test"}
+    extra_keys = sorted(actual_keys - allowed_keys)
+    if extra_keys:
+        raise ValueError(f"Layer '{path}': top-level keys contains unknown key '{extra_keys[0]}'.")
+    if not {"name", "reason", "changes"}.issubset(actual_keys):
         raise ValueError(f"Layer '{path}': top-level keys must be exactly name, reason, changes.")
 
     # 4. Enforce that name and reason are non-empty string records.
@@ -244,11 +313,23 @@ def read_layer(path: Path) -> Layer:
     if not isinstance(name, str) or not name.strip() or not isinstance(reason, str) or not reason.strip():
         raise ValueError(f"Layer '{path}': name and reason must be non-empty strings.")
 
-    # 5. Validate the structured changes mapping against baseline domain configurations.
+    # 5. Validate optional stress_test block when present.
+    stress_test = data.get("stress_test")
+    if stress_test is not None:
+        _validate_stress_test(stress_test, name)
+
+    # 6. Validate the structured changes mapping against baseline domain configurations.
     _validate_layer_changes(changes, name)
 
-    # 6. Assemble and return validated Layer record.
-    return Layer(name=name, reason=reason, changes=changes, sha256=sha256, path=str(path))
+    # 7. Assemble and return validated Layer record.
+    return Layer(
+        name=name,
+        reason=reason,
+        changes=changes,
+        sha256=sha256,
+        path=str(path),
+        stress_test=stress_test,
+    )
 
 
 def apply_layers(
@@ -326,6 +407,7 @@ def describe_effective_world(
     WHAT: Generates a human-readable textual summary of applied layers, overrides, and untouched settings.
     It lists layer names in application order, line-by-line transitions for every changed range,
     and the computed count of untouched settings compared to total simulation parameters.
+    For stress-test layers, it prints the exaggeration banner and any deferred activation level notice.
 
     WHY: Provides clear auditability for simulation operators before running full lifecycles.
     Displaying both steps when multiple layers modify the same range makes merge resolution explicit.
@@ -353,15 +435,25 @@ def describe_effective_world(
     names = ", ".join(layer.name for layer in layers) if layers else "none"
     lines = [f"Layers applied (in order): {names}"]
 
-    # 2. Append each individual range change record.
+    # 2. Append stress test exaggeration and deferred activation notices.
+    for layer in layers:
+        if layer.stress_test is not None:
+            lines.append(f"STRESS TEST {layer.name}: {layer.stress_test['exaggeration']}")
+            level = layer.stress_test.get("takes_effect_from_level")
+            if level is not None:
+                lines.append(
+                    f"Stress test {layer.name} takes effect from Level {level}; nothing changes in this world yet."
+                )
+
+    # 3. Append each individual range change record.
     for ch in changes:
         lines.append(f"  {ch.setting} ({ch.range_name}): {ch.before} -> {ch.after}   from {ch.layer_name}")
 
-    # 3. Compute total parameter entries across all four configuration domains.
+    # 4. Compute total parameter entries across all four configuration domains.
     total = sum(len(getattr(configs, name)["parameters"]) for name in CONFIG_NAMES)
     distinct_settings = len({(ch.config_name, ch.setting) for ch in changes})
     unchanged = total - distinct_settings
 
-    # 4. Append unchanged parameter summary line and join.
+    # 5. Append unchanged parameter summary line and join.
     lines.append(f"Everything else: unchanged ({unchanged} of {total} settings)")
     return "\n".join(lines)
