@@ -29,7 +29,7 @@ The Level 11 showcase (`make show LEVEL=11` or `python -m showcase --level 11`) 
 |---|---|---|---|---|
 | 1 | pre-registration amendments and proof | consistency | Amendments to evaluation rules are recorded openly, and no new-engine file predates the pre-registration. | 11 amendments recorded; new-engine files all postdate evaluation.yaml |
 | 2 | issue register status counts and copy rejection | negative | The 31 research issues show 28 built, 2 planned and 1 deferred; broken copies without mandatory fields are refused. | 28 built, 2 planned, 1 deferred; broken copies with missing or unlisted IDs rejected |
-| 3 | tiny world fast-mode simulation | normal | A tiny world of 60 people and 12 shops over 61 days runs end to end, and payment volume rises inside festival windows. | Fast mode runs without errors; >= 2,000 attempts; festival uplift measured; hero chart built |
+| 3 | tiny world fast-mode simulation | normal | A tiny world of 60 people and 12 shops over 61 days runs end to end, and after removing weekend, month-start and fixed-date payments, festival days carry the extra payments the plan sets. | Fast mode runs without errors; >= 2,000 attempts; festival uplift measured; hero chart built |
 | 4 | empirical grounding table | normal | Every parameter across background, failure and device realism is catalogued with an epistemic label and source citation. | All 33 parameters categorized; labels count: 30 assumption, 3 reported |
 | 5 | independent seed divergence | edge | Two different seeds place festivals, outages and OS update waves on different days. | Festival peak days, outage start days, and OS wave update days differ between seeds |
 | 6 | bank downtime partial degradation | edge | A multi-hour bank downtime causes partial success rate degradation without collapsing unrelated bank transactions. | Success rate dips during outage; success rate > 0% (partial, not zero) |
@@ -51,3 +51,20 @@ The showcase implementation is covered by unit tests adhering to project code st
 - `tests/unit/showcase/test_level_11_checks.py`: Tests Level 11 check metadata, execution list, check bounds, and individual check runners.
 - `tests/unit/showcase/test_level_11_page.py`: Tests HTML template placeholder substitution (all 31 replaced, 0 unpopulated) and file output writing.
 - `tests/unit/world/test_new_code_comment_standard.py`: Audits that all new showcase modules satisfy function length and technical docstring schema.
+
+## 5. Check 3: Festival Uplift After Removing Other Calendar Effects
+
+**Problem.** A plain inside-versus-outside comparison of daily counts on the tiny world (seed 101) gives 47.5 payments a day inside festival windows and 48.1 outside. The engine's daily rate is `festival_multiplier x month_start_multiplier x weekend_multiplier`, and on seed 101 the non-festival days happen to include month-start days and weekends. Changing the seed to one where the comparison happens to pass was rejected: that would be choosing the data to fit the claim.
+
+**First attempt, rejected.** Applying the multiplier model to all payments gave a festival excess of only 45-70% of the planned excess at every size (2,000 people: excess 686.7 vs planned 1,505.9). Only 4,000 people passed both tests, with 2,000 and 8,000 failing, so it was not used. The cause: only `everyday` and `lookalike_in` payments are scaled by `daily_multiplier` (`world/calendar_runner.py`). Salary, rent, bill and episode payments sit on fixed dates.
+
+**Method.** Each day's count is split into `c_d = u_d + s_d` using `RunResult.event_purposes`, which has one purpose per event. `run_world` raises an error for any purpose outside `PAYMENT_PURPOSES`, so the split covers every event. `s_d` is the `everyday` and `lookalike_in` count; `u_d` is everything else. `other_d` and `fest_d` come from the engine's own `month_start_multiplier`, `weekend_multiplier` and `festival_multiplier`. Then:
+
+- `base = C_n / S_n`, using non-festival days only (`C_n` = sum of `s_d`, `S_n` = sum of `other_d`);
+- `expected_without = base x S_f`, `observed = sum(s_d)` and `planned_excess = sum(base x other_d x (fest_d - 1))`, over festival days;
+- `se_excess = sqrt(observed + (S_f / S_n)^2 x C_n)`;
+- pass only if `excess > 4 x se_excess` and `|excess - planned_excess| <= 4 x se_excess`.
+
+**Size rule (policy, fixed before looking at results).** Take the smallest `n_people` in `[1000, 2000, 4000, 8000]` (shops = people / 5) whose predicted `planned_excess / sqrt(expected_without)` is at least 8. The prediction uses the plan's multipliers and the tiny world's base rate per person. Predicted ratios on seed 101: 1000 -> 5.11, 2000 -> 7.23, 4000 -> 10.23, 8000 -> 14.47, so the rule picks 4,000 people and 800 shops. The rule is stored under `festival_world` in `config/showcase_level_11.yaml`.
+
+**Measured result (seed 101, 4,000 people, 800 shops, 61 days).** base 2,963.33; observed 77,631; expected_without 74,594.9; excess 3,036.1; planned_excess 2,784.0; se_excess 363.7 (8.3 standard errors); fixed-date payments `u_d` total 15,773. Both tests pass. The tiny world's plain daily averages are still in the evidence as the plain daily view.

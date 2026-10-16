@@ -144,9 +144,10 @@ def _get_checks_1_to_4() -> list[CheckDefinition]:
     )
     c3 = CheckDefinition(
         "3. tiny world fast-mode simulation", "normal",
-        "A tiny world of 60 people and 12 shops over 61 days runs end to end, and payment volume rises inside festival windows.",
-        run_tiny_world_check, "World building or calendar runner payment generation failed.",
-        "world/fast_mode.py, world/build_world.py"
+        "A tiny world of 60 people and 12 shops over 61 days runs end to end, and after removing weekend, month-start "
+        "and fixed-date payments, festival days carry the extra payments the plan sets.",
+        run_tiny_world_check, "World building failed, or festival multipliers no longer reach calendar-scaled payments.",
+        "showcase/level_11_festival.py, world/festivals.py, world/rhythms.py, world/calendar_runner.py"
     )
     c4 = CheckDefinition(
         "4. empirical grounding table", "normal",

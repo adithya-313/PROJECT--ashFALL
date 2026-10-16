@@ -20,13 +20,22 @@ TERM: partial degradation: An incident state where system performance drops sign
 """
 
 import copy
+import dataclasses
 import hashlib
+import time
 from pathlib import Path
 from typing import Any
 
 from core import issue_register, level10_check
+from core.config_validator import load_yaml
 from showcase.framework import CheckOutcome, NotRun
 from showcase.level_11_charts import daily_bars_with_average, rate_line_with_window
+from showcase.level_11_festival import (
+    calendar_parts,
+    choose_festival_people,
+    measure_festival_uplift,
+    split_daily_counts,
+)
 from world.background_config import read_background_realism
 from world.build_world import build_world
 from world.device_schedule import draw_device_event_schedule
@@ -40,6 +49,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 AMENDMENTS_PATH = REPO_ROOT / "docs" / "research" / "amendments.md"
 BANK_OUTAGE_LAYER_PATH = REPO_ROOT / "scenarios" / "stress" / "bank-outage-long.yaml"
 OS_WAVE_LAYER_PATH = REPO_ROOT / "scenarios" / "stress" / "os-update-wave.yaml"
+SHOWCASE_CONFIG_PATH = REPO_ROOT / "config" / "showcase_level_11.yaml"
 
 
 async def run_amendments_check(workspace: Any) -> CheckOutcome:
@@ -164,51 +174,101 @@ def _calc_festival_uplift(
     return avg_in, avg_out
 
 
+def _run_festival_world(tiny_scaled: list[int]) -> dict[str, Any]:
+    """
+    WHAT: Sizes and runs the festival world, then measures festival uplift on its calendar-scaled payments.
+    The size comes from the config rule (smallest candidate whose predicted signal ratio reaches the minimum),
+    evaluated with the plan's multipliers and the tiny world's base rate before the larger world is run.
+
+    WHY: The tiny world is too small for a k = 4 festival test; Poisson noise there is larger than the rise.
+    Fixing the size by a written rule keeps the choice independent of the festival-day results.
+
+    Args:
+        tiny_scaled: Calendar-scaled payment counts per day from the 60-person tiny world.
+
+    Returns:
+        Dictionary of the chosen size, predicted ratios, run seconds, per-day lists and the FestivalUplift.
+
+    Example:
+        >>> from showcase.level_11_festival import split_daily_counts
+        >>> tiny = run_fast_world(FastRunSettings(seed=101, n_people=60, n_shops=12, n_days=61, range_name="training"))
+        >>> split = split_daily_counts(tiny.result.events, tiny.result.event_purposes, 61)
+        >>> _run_festival_world(split.calendar_scaled)["n_people"]
+        4000
+    """
+    cfg = load_yaml(SHOWCASE_CONFIG_PATH)
+    rule, k_sigma = cfg["festival_world"], float(cfg["expected_invariants"]["k_sigma"])
+    plan = draw_world_plan(spawn_world_streams(rule["seed"])[0], rule["n_days"], rule["range_name"])
+    other, fest = calendar_parts(plan, rule["n_days"])
+    n_people, ratios = choose_festival_people(
+        tiny_scaled, cfg["tiny_world"]["n_people"], rule["candidate_people"], other, fest, rule["min_planned_ratio"]
+    )
+    settings = FastRunSettings(
+        seed=rule["seed"], n_people=n_people, n_shops=n_people // rule["people_per_shop"],
+        n_days=rule["n_days"], range_name=rule["range_name"],
+    )
+    started = time.perf_counter()
+    output = run_fast_world(settings)
+    seconds = time.perf_counter() - started
+    # The plan depends only on the seed, so the sized world must have the same calendar used for sizing.
+    assert output.plan.festivals == plan.festivals, "Festival world plan differs from the sizing plan"
+    split = split_daily_counts(output.result.events, output.result.event_purposes, settings.n_days)
+    uplift = measure_festival_uplift(split.calendar_scaled, other, fest, k_sigma)
+    return {
+        "n_people": n_people, "n_shops": settings.n_shops, "predicted_ratios": ratios, "run_seconds": seconds,
+        "k_sigma": k_sigma, "c_d": split.total, "u_d": split.fixed_date, "s_d": split.calendar_scaled,
+        "other_d": other, "fest_d": fest, "u_total": sum(split.fixed_date), "uplift": uplift,
+    }
+
+
 async def run_tiny_world_check(workspace: Any) -> CheckOutcome:
     """
-    WHAT: Runs a complete fast-mode simulation of a tiny world and renders the hero volume chart.
-    It generates 61 days of transactions for 60 citizens and 12 shops under seed 101 in training mode.
-    It aggregates daily payment counts, derives festival spans, and draws an inline SVG vector visualization.
+    WHAT: Runs the tiny world end to end, draws its daily view, and tests the festival uplift on a sized world.
+    The tiny world (seed 101, 60 people, 12 shops, 61 days) supplies the hero chart and the plain daily averages.
+    The festival test removes weekend, month-start and fixed-date payments and compares the extra festival-day
+    payments with the plan at k = 4 standard errors.
 
-    WHY: Serves as the primary operational check proving that the simulation lifecycle executes without errors.
-    Visualizing transaction attempts and moving averages validates baseline stability and festival uplifts.
-    Generating summary metrics supplies vital data points for Section 1 and Section 3 of the showcase report.
+    WHY: A plain inside-versus-outside average hides the festival effect behind weekends and month starts.
+    Testing the isolated festival factor is the honest way to show that the calendar plan is applied.
 
     Args:
         workspace: Optional showcase execution workspace environment container.
 
     Returns:
-        CheckOutcome capturing total transaction attempts, failure counts, and the hero chart SVG string.
+        CheckOutcome with the festival excess, planned excess, standard errors, every per-day value and the chart.
 
     Example:
         >>> import asyncio
         >>> outcome = asyncio.run(run_tiny_world_check(None))
-        >>> "attempts" in outcome.key_number and outcome.evidence["chart_svg"].startswith("<svg")
+        >>> "standard errors" in outcome.key_number and outcome.evidence["chart_svg"].startswith("<svg")
         True
     """
     settings = FastRunSettings(seed=101, n_people=60, n_shops=12, n_days=61, range_name="training")
     output = run_fast_world(settings)
     events = output.result.events
-    daily_counts = [0] * settings.n_days
-    for ev in events:
-        day_idx = min(ev.minute // 1440, settings.n_days - 1)
-        daily_counts[day_idx] += 1
+    tiny = split_daily_counts(events, output.result.event_purposes, settings.n_days)
     dates = [output.plan.clock.to_datetime(d * 1440).date().isoformat() for d in range(settings.n_days)]
     festivals = [
         (max(f.peak_day - f.rise_days, 0), min(f.peak_day + f.fade_days, settings.n_days - 1), f.name)
         for f in output.plan.festivals
     ]
-    svg_chart = daily_bars_with_average(daily_counts, dates, festivals)
+    svg_chart = daily_bars_with_average(tiny.total, dates, festivals)
     fails = sum(1 for e in events if e.status == "failed")
-    avg_in, avg_out = _calc_festival_uplift(daily_counts, output.plan.festivals, settings.n_days)
+    avg_in, avg_out = _calc_festival_uplift(tiny.total, output.plan.festivals, settings.n_days)
+    big = _run_festival_world(tiny.calendar_scaled)
+    up = big["uplift"]
+    assert up.rise_is_real, f"Festival excess {up.excess:.1f} is not above {big['k_sigma']} x se {up.se_excess:.1f}"
+    assert up.size_matches_plan, f"Excess {up.excess:.1f} differs from planned {up.planned_excess:.1f} by > k se"
     key = (
-        f"{len(events):,} attempts ({fails:,} failures) across {settings.n_days} days; "
-        f"avg {avg_in:.1f}/day in festival vs {avg_out:.1f}/day outside"
+        f"festival days ({big['n_people']:,}-person world): {up.excess:,.0f} more payments than expected "
+        f"without festivals (planned {up.planned_excess:,.0f}; {up.excess / up.se_excess:.1f} standard errors)"
     )
     evidence = {
         "attempts": len(events), "successes": len(events) - fails, "failures": fails,
         "days": settings.n_days, "people": settings.n_people, "shops": settings.n_shops,
-        "avg_in_festival": avg_in, "avg_outside_festival": avg_out, "chart_svg": svg_chart,
+        "plain_daily_view": {"avg_in_festival": avg_in, "avg_outside_festival": avg_out},
+        "festival_world": {**{k: v for k, v in big.items() if k != "uplift"}, **dataclasses.asdict(up)},
+        "chart_svg": svg_chart,
     }
     return CheckOutcome(key_number=key, evidence=evidence)
 

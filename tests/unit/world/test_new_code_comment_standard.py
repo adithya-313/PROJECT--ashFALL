@@ -100,6 +100,8 @@ NEW_CODE_FILES: list[str] = [
     # Level 11D-2 showcase page renderer and test suite.
     "showcase/level_11_page.py",
     "tests/unit/showcase/test_level_11_page.py",
+    "showcase/level_11_festival.py",
+    "tests/unit/showcase/test_level_11_festival.py",
 ]
 
 

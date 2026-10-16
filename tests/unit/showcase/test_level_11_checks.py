@@ -111,7 +111,7 @@ def test_amendments_and_issues_checks() -> None:
 def test_tiny_world_and_grounding_checks() -> None:
     """
     WHAT: Executes run_tiny_world_check and run_grounding_check in an async event loop.
-    It asserts that the tiny world simulation produces payments, failures, and an SVG hero chart.
+    It asserts that the tiny world produces payments and an SVG hero chart, and that the festival test reports its result.
     It verifies that the empirical grounding check accounts for all 33 simulation parameters.
 
     WHY: Verifies execution of operational checks 3 and 4, ensuring fast-mode generation works cleanly.
@@ -125,7 +125,7 @@ def test_tiny_world_and_grounding_checks() -> None:
         >>> test_tiny_world_and_grounding_checks()
     """
     out3 = asyncio.run(run_tiny_world_check(None))
-    assert "attempts" in out3.key_number
+    assert "standard errors" in out3.key_number
     assert out3.evidence["attempts"] > 1000
     assert out3.evidence["chart_svg"].startswith("<svg")
     out4 = asyncio.run(run_grounding_check(None))

@@ -10,6 +10,20 @@ tiny_world:
   range_name: training
   reason: Canonical small world footprint used across golden benchmarks G2 and G3 to run deterministically in under 1 second.
 
+festival_world:
+  label: policy
+  seed: 101
+  n_days: 61
+  range_name: training
+  candidate_people: [1000, 2000, 4000, 8000]
+  people_per_shop: 5
+  min_planned_ratio: 8.0
+  reason: >-
+    Large enough that Poisson noise is small next to the planned festival uplift. Size rule fixed before
+    looking at results: the smallest candidate whose planned_excess / sqrt(expected_without), predicted from
+    the plan's multipliers and the tiny world's base rate, is at least 8. On seed 101 the predicted ratios are
+    1000 -> 5.11, 2000 -> 7.23, 4000 -> 10.23, 8000 -> 14.47, so the rule picks 4000 people and 800 shops.
+
 comparison_world:
   label: policy
   seed: 102
