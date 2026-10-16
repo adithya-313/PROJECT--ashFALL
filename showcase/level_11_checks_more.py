@@ -23,8 +23,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
 from core.config_validator import load_yaml
 from showcase.framework import CheckOutcome
 from showcase.level_11_charts import account_flow_with_window
