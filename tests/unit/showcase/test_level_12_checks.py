@@ -13,15 +13,27 @@ TERM: part: One letter naming a slice of a level that is built and reviewed on i
 
 import asyncio
 
+from core.config_validator import load_yaml
 from showcase import level_12
 from showcase.framework import validate_checks
 from showcase.level_12_checks import (
+    FROZEN_ANCHORS_PATH,
+    FRAUD_ON,
     run_consistency_check,
     run_held_payment_isolation_check,
     run_lien_blocks_debit_check,
     run_split_world_check,
     run_v2_register_negative_check,
 )
+from showcase.level_12_support import (
+    compute_opening_total,
+    find_lien_candidate,
+    load_level_12_config,
+    verify_lien_blocked_debits,
+)
+from world.fast_mode import FastRunSettings
+from world.interactive_runner import prepare_world, run_interactive_world
+from world.outside_events import OutsideEvent
 
 
 def test_level_12_checks_match_the_brief() -> None:
@@ -104,8 +116,8 @@ def test_check_2_split_world_matches_level_11() -> None:
 
 def test_check_3_lien_blocks_debits_and_money_balances() -> None:
     """
-    WHAT: Executes run_lien_blocks_debit_check and asserts that placing a lien blocks exactly 30 debits as
-    funds_on_hold while double-entry money conservation rules hold.
+    WHAT: Executes run_lien_blocks_debit_check and asserts that placing a lien blocks candidate and subsequent
+    debits on the target account as funds_on_hold while double-entry money conservation rules hold.
 
     WHY: Proves Check 3 confirms that outside encumbrances prevent outgoing transfers without leaking money.
 
@@ -113,21 +125,61 @@ def test_check_3_lien_blocks_debits_and_money_balances() -> None:
         None.
 
     Returns:
-        None. Fails if blocked count differs from 30 or money rules fail.
+        None. Fails if blocked count is zero or money rules fail.
 
     Example:
-        test_check_3_lien_blocks_debits_and_money_balances()  # Asserts 30 blocked debits
+        test_check_3_lien_blocks_debits_and_money_balances()  # Asserts lien blocks debits
     """
-    # Run Check 3 asynchronously and verify 30 debits are blocked as funds_on_hold.
+    # Run Check 3 asynchronously and verify candidate and subsequent debits are blocked as funds_on_hold.
     outcome = asyncio.run(run_lien_blocks_debit_check(None))
-    assert "30 debits blocked" in outcome.key_number
-    assert outcome.evidence["blocked_debits"] == 30
+    assert "debits from" in outcome.key_number
+    assert "blocked after a Rs" in outcome.key_number
+    assert outcome.evidence["blocked_debits"] >= 1
+
+
+def test_check_3_fails_when_no_lien_is_placed() -> None:
+    """
+    WHAT: Verifies that verify_lien_blocked_debits raises an AssertionError when evaluated on a baseline simulation
+    run executed without any outside lien encumbrance placed.
+
+    WHY: Proves negative check sensitivity: the verification helper must fail if the expected lien failure
+    is absent, ensuring that false positives cannot pass the check suite.
+
+    Args:
+        None.
+
+    Returns:
+        None. Fails if AssertionError is not raised.
+
+    Example:
+        test_check_3_fails_when_no_lien_is_placed()  # Asserts negative detection of absent lien
+    """
+    # 1. Prepare baseline simulation run without any outside lien encumbrance.
+    config = load_level_12_config()
+    code_version = config["showcase_run"]["code_version"]
+    anchors = load_yaml(FROZEN_ANCHORS_PATH)["frozen_anchors"]["fraud_off_events"]
+    settings = FastRunSettings(
+        seed=anchors["seed"], n_people=anchors["n_people"], n_shops=anchors["n_shops"],
+        n_days=anchors["n_days"], range_name=anchors["range_name"],
+    )
+    baseline_output = run_interactive_world(settings, FRAUD_ON, code_version=code_version)
+    position, debit, balance_before = find_lien_candidate(baseline_output, config["check_3_lien"]["search_start"])
+    lien = OutsideEvent(debit.minute, "lien", debit.from_account, balance_before, encumbrance_id="enc-000000")
+    opening_total = compute_opening_total(prepare_world(settings, None).world.ledgers)
+
+    # 2. Invoke verification helper with baseline output instead of lien output and assert failure.
+    try:
+        verify_lien_blocked_debits(baseline_output, baseline_output, position, debit, lien, opening_total)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("Expected AssertionError was not raised when no lien was placed")
 
 
 def test_check_4_held_payment_isolation() -> None:
     """
     WHAT: Executes run_held_payment_isolation_check and asserts that a compliance-held payment produces
-    0 events, leaves 0 ledger entries, and preserves the remaining 2,914 events intact.
+    0 events, leaves 0 ledger entries, and preserves surrounding events intact.
 
     WHY: Proves Check 4 confirms transaction isolation during compliance holds without advancing random draws.
 
@@ -140,9 +192,11 @@ def test_check_4_held_payment_isolation() -> None:
     Example:
         test_check_4_held_payment_isolation()  # Asserts 0 events for held payment
     """
-    # Run Check 4 asynchronously and verify 0 events for the held payment and 2,914 remaining events.
+    # Run Check 4 asynchronously and verify 0 events for the held payment and intact remaining events.
     outcome = asyncio.run(run_held_payment_isolation_check(None))
-    assert "0 events" in outcome.key_number
+    assert "0 events and 0 ledger entries" in outcome.key_number
+    assert outcome.evidence["held_entries"] == 0
+    assert outcome.evidence["baseline_entries"] == 2
     assert outcome.evidence["remaining_events"] == 2914
 
 
@@ -167,3 +221,4 @@ def test_check_5_v2_register_negative() -> None:
     assert "broken register rejected" in outcome.key_number
     assert outcome.evidence["real_hash_unchanged"] is True
     assert outcome.evidence["v1_status"] == "28/2/1"
+

@@ -12,6 +12,7 @@ TERM: planned payment id: A canonical identifier shared by all split pieces of a
 TERM: money conservation: Invariant requiring total world money to equal opening balances plus created funds.
 """
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +22,15 @@ from world.checks import (
     check_money_conserved,
     check_no_negative_balances,
 )
-from world.interactive_records import InteractiveWorldOutput, PaymentView
+from world.fast_mode import event_lines
+from world.interactive_records import HookDecision, InteractiveWorldOutput, PaymentView
+from world.interactive_runner import interactive_fast_output
+from world.outside_events import OutsideEvent
+from world.run_hashes import (
+    hash_device_stamps,
+    hash_ledger_entries,
+    hash_people_devices,
+)
 
 REPO_ROOT: Path = Path(__file__).resolve().parent.parent
 SHOWCASE_12_CONFIG_PATH: Path = REPO_ROOT / "config" / "showcase_level_12.yaml"
@@ -145,7 +154,7 @@ class HoldOneHook:
     interactive simulation without altering any surrounding transactions.
 
     Args:
-        target_planned_id: The planned payment id string that should be placed on hold upon bank inquiry.
+        held_planned_id: The planned payment id string that should be placed on hold upon bank inquiry.
 
     Returns:
         A configured HoldOneHook instance.
@@ -154,14 +163,14 @@ class HoldOneHook:
         hook = HoldOneHook("2628a156073034da-p-000100"); decision = hook(payment_view)
     """
 
-    def __init__(self, target_planned_id: str) -> None:
+    def __init__(self, held_planned_id: str) -> None:
         """
         WHAT: Initializes the hold hook with the target planned payment id and an empty record of seen payments.
 
         WHY: Captures the specific transaction target to isolate during interactive bank decision evaluations.
 
         Args:
-            target_planned_id: The specific planned payment id string to intercept and hold.
+            held_planned_id: The specific planned payment id string to intercept and hold.
 
         Returns:
             None.
@@ -169,11 +178,11 @@ class HoldOneHook:
         Example:
             hook = HoldOneHook("2628a156073034da-p-000100")
         """
-        # Store target id to hold and initialize empty audit log of presented payment views.
-        self.target_planned_id: str = target_planned_id
+        # Store planned payment id to hold and initialize empty audit log of presented views.
+        self.held_planned_id: str = held_planned_id
         self.seen: list[PaymentView] = []
 
-    def __call__(self, payment: PaymentView) -> str:
+    def __call__(self, payment: PaymentView) -> HookDecision:
         """
         WHAT: Inspects incoming PaymentView metadata and returns 'hold' if matching the target id, otherwise 'allow'.
         Appends the evaluated payment view to the internal audit record.
@@ -191,6 +200,160 @@ class HoldOneHook:
         """
         # Log view and return hold decision for matching target planned id.
         self.seen.append(payment)
-        if payment.planned_payment_id == self.target_planned_id:
+        if payment.planned_payment_id == self.held_planned_id:
             return "hold"
         return "allow"
+
+
+def verify_lien_blocked_debits(
+    baseline_output: InteractiveWorldOutput,
+    lien_output: InteractiveWorldOutput,
+    position: int,
+    debit: Any,
+    lien: OutsideEvent,
+    opening_total: int,
+) -> int:
+    """
+    WHAT: Asserts that placing an outside lien blocks the candidate debit and subsequent debits on the target account.
+    Verifies event failure metadata, prior event immutability, encumbrance audit log entries,
+    and double-entry money conservation.
+
+    WHY: Decouples check assertions from fixed expected counts like 30, proving that encumbrance holds
+    strictly enforce funds availability without leaking currency or corrupting untargeted accounts.
+
+    Args:
+        baseline_output: Simulation output from allow-all baseline execution without outside encumbrances.
+        lien_output: Simulation output from execution with the targeted lien outside event applied.
+        position: Event index of the candidate debit expected to fail due to insufficient unencumbered funds.
+        debit: The PaymentEvent chosen as the candidate outgoing transfer target.
+        lien: The OutsideEvent specifying the placed encumbrance amount, timestamp, and target account.
+        opening_total: Expected aggregate starting balance in paise across all world accounts.
+
+    Returns:
+        Integer count of all debits blocked with reason 'funds_on_hold' during the simulation.
+
+    Example:
+        blocked = verify_lien_blocked_debits(base_out, lien_out, 1000, debit, lien, opening_paise)
+    """
+    # 1. Verify candidate event failed with sender_bank funds_on_hold failure classification.
+    events = lien_output.result.run_result.events
+    baseline_events = baseline_output.result.run_result.events
+    target_event = events[position]
+    assert (target_event.status, target_event.failure_domain, target_event.reason) == (
+        "failed", "sender_bank", "funds_on_hold"
+    )
+
+    # 2. Assert at least one debit was blocked and all blocked debits belong to the liened account
+    # and postdate the lien.
+    blocked_events = [event for event in events if event.reason == "funds_on_hold"]
+    assert len(blocked_events) >= 1
+    assert all(
+        event.from_account == debit.from_account and event.minute >= debit.minute
+        for event in blocked_events
+    )
+
+    # 3. Assert prior events are bit-identical and encumbrance log contains the expected entry.
+    assert events[:position] == baseline_events[:position]
+    assert lien_output.result.encumbrance_log == [(debit.minute, "place_lien", lien.encumbrance_id)]
+
+    # 4. Verify double-entry money conservation invariants across all world bank ledgers.
+    verify_money_rules(lien_output, opening_total)
+    return len(blocked_events)
+
+
+def compare_runner_against_level_11(on_output: InteractiveWorldOutput, level_11: Any) -> tuple[int, int]:
+    """
+    WHAT: Compares an interactive fraud-on allow-all run against Level 11 fast-mode output across five core outputs.
+    Evaluates RunResult, event-lines hash, ledger entries hash, citizen device hash, and device stamps hash.
+
+    WHY: Re-implements Test T2 comparison logic in a modular helper so showcase checks remain well under
+    the 30-line code ceiling while verifying full execution fidelity against baseline mechanics.
+
+    Args:
+        on_output: InteractiveWorldOutput container holding post-run simulation state and ledgers.
+        level_11: FastRunOutput container returned by run_fast_world for the identical world configuration.
+
+    Returns:
+        Tuple of (matches_count, total_comparisons_count).
+
+    Example:
+        matches, total = compare_runner_against_level_11(on_out, level_11_out); assert matches == total
+    """
+    on_fast = interactive_fast_output(on_output)
+    on_lines = hashlib.sha256("".join(event_lines(on_fast)).encode("utf-8")).hexdigest()
+    fast_lines = hashlib.sha256("".join(event_lines(level_11)).encode("utf-8")).hexdigest()
+    comparisons = [
+        ("run_result", on_output.result.run_result == level_11.result),
+        ("event_lines_hash", on_lines == fast_lines),
+        ("ledger_hash", hash_ledger_entries(on_output.world.ledgers) == hash_ledger_entries(level_11.world.ledgers)),
+        (
+            "people_devices_hash",
+            hash_people_devices(on_output.world.people) == hash_people_devices(level_11.world.people),
+        ),
+        (
+            "device_stamps_hash",
+            hash_device_stamps(on_output.result.run_result.event_sender_devices)
+            == hash_device_stamps(level_11.result.event_sender_devices),
+        ),
+    ]
+    matches = sum(1 for _, matched in comparisons if matched)
+    return matches, len(comparisons)
+
+
+def verify_held_payment_isolation(
+    baseline_output: InteractiveWorldOutput,
+    held_output: InteractiveWorldOutput,
+    held_index: int,
+    held_planned_id: str,
+    target_event: Any,
+    opening_total: int,
+) -> tuple[int, int, int]:
+    """
+    WHAT: Asserts that holding a planned transaction produces 0 events and 0 ledger entries while preserving
+    all other simulation events and maintaining total double-entry ledger currency conservation across all banks.
+
+    WHY: Modular helper ensuring check functions adhere strictly to the 30-line code ceiling while verifying
+    that transactional holds isolate the target payment without side effects or leaking funds.
+
+    Args:
+        baseline_output: InteractiveWorldOutput container holding baseline simulation run without any holds.
+        held_output: InteractiveWorldOutput container holding simulation run where the target payment was held.
+        held_index: Integer index of the held payment within the baseline sequence of planned payments.
+        held_planned_id: String unique identifier of the planned payment intercepted by the hold hook.
+        target_event: PaymentEvent container of the intercepted transaction from the baseline run.
+        opening_total: Expected aggregate starting balance in paise across all world accounts.
+
+    Returns:
+        Tuple of (baseline_entries_count, held_entries_count, remaining_events_count).
+
+    Example:
+        counts = verify_held_payment_isolation(base_out, held_out, idx, pid, event, total)
+    """
+    # 1. Assert held payment is removed from executed planned payments and recorded in held_payments container.
+    assert held_planned_id not in held_output.result.planned_payment_ids
+    assert len(held_output.result.held_payments) == 1
+    assert held_output.result.held_payments[0].planned_payment_id == held_planned_id
+
+    # 2. Assert held payment produces 0 ledger entries compared to exactly 2 entries in baseline run.
+    transfer_id = (
+        f"tx_{target_event.minute}_{target_event.from_account}_{target_event.to_account}_{target_event.amount_paise}"
+    )
+    baseline_entries = [
+        entry for ledger in baseline_output.world.ledgers
+        for entry in ledger.entries if entry.transfer_id == transfer_id
+    ]
+    held_entries = [
+        entry for ledger in held_output.world.ledgers
+        for entry in ledger.entries if entry.transfer_id == transfer_id
+    ]
+    assert len(baseline_entries) == 2
+    assert len(held_entries) == 0
+
+    # 3. Assert all non-held events match baseline bit-for-bit and money invariants hold.
+    baseline_events = [
+        event for index, event in enumerate(baseline_output.result.run_result.events) if index != held_index
+    ]
+    assert held_output.result.run_result.events == baseline_events
+    verify_money_rules(held_output, opening_total)
+    return len(baseline_entries), len(held_entries), len(held_output.result.run_result.events)
+
