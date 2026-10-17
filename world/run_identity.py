@@ -21,7 +21,7 @@ TERM: timeout: the longest time we wait for another program before giving up, e.
 import hashlib
 import json
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -56,7 +56,7 @@ def load_runner_config(path: Path = RUNNER_CONFIG_PATH) -> dict[str, Any]:
     return load_yaml(path)["interactive_runner"]
 
 
-def _run_git(git_executable: str, repo_root: Path, arguments: list[str], timeout_seconds: float) -> str:
+def _run_git(git_executable: str, repo_root: Path, arguments: Sequence[str], timeout_seconds: float) -> str:
     """
     WHAT: Runs one read-only git command in repo_root and returns what it printed, without the trailing newline.
     It raises if git cannot be started, takes longer than the timeout, or reports an error.
@@ -92,6 +92,7 @@ def find_code_version(
     env_var: str | None = None,
     unknown: str | None = None,
     git_executable: str = "git",
+    run_git: Callable[[str, Path, Sequence[str], float], str] = _run_git,
 ) -> str:
     """
     WHAT: Works out which version of the code is running. First choice is the environment variable named in
@@ -109,6 +110,7 @@ def find_code_version(
         env_var: The environment variable to read; None means the name in config.
         unknown: The word recorded when nothing works; None means the word in config.
         git_executable: The git program to run; tests pass a missing path to simulate a machine without git.
+        run_git: The runner for git commands; defaults to _run_git, tests pass a stand-in callable.
 
     Returns:
         A short version string, e.g. "d41b176", "d41b176-dirty", "build-42" from the variable, or "unknown".
@@ -127,8 +129,8 @@ def find_code_version(
         return from_environment
     # 2. Ask git for the commit, then whether any tracked or new files have unsaved changes.
     try:
-        commit = _run_git(git_executable, repo_root, ["rev-parse", "--short", "HEAD"], timeout_seconds)
-        changes = _run_git(git_executable, repo_root, ["status", "--porcelain"], timeout_seconds)
+        commit = run_git(git_executable, repo_root, ["rev-parse", "--short", "HEAD"], timeout_seconds)
+        changes = run_git(git_executable, repo_root, ["status", "--porcelain"], timeout_seconds)
     except (OSError, subprocess.SubprocessError):
         # 3. No git, too slow, or not a repository: record the honest fallback instead of failing the run.
         return fallback

@@ -16,6 +16,9 @@ TERM: timeout: the longest wait for another program, after which we give up, e.g
 """
 
 import re
+import subprocess
+from collections.abc import Sequence
+from pathlib import Path
 
 from world.run_identity import (
     REPO_ROOT,
@@ -99,25 +102,141 @@ def test_missing_git_gives_unknown() -> None:
     assert version == config["unknown_code_version"]
 
 
+class StandinGit:
+    """
+    WHAT: A test double callable for git execution that returns predetermined command outputs or raises exceptions.
+    Records every invoked command's argument list so callers can verify invocation counts and parameters.
+
+    WHY: Decouples code version tests from real OS git processes and network drives, allowing instant, deterministic
+    simulation of timeouts, clean working trees, and dirty working trees without touching disk state.
+
+    Args:
+        responses: Sequence of string outputs to return in order, or an Exception to raise when invoked.
+
+    Returns:
+        A StandinGit instance ready to be passed to find_code_version as run_git.
+
+    Example:
+        standin = StandinGit(["abc1234", ""]); find_code_version({}, REPO_ROOT, 5, run_git=standin) returns "abc1234".
+    """
+
+    def __init__(self, responses: Sequence[str] | Exception) -> None:
+        """
+        WHAT: Initializes the stand-in git runner with preset responses or an exception to raise upon invocation.
+
+        WHY: Captures whether the test simulates successful sequential git queries or an abrupt process timeout.
+
+        Args:
+            responses: Preset outputs to yield on successive calls, or an exception to raise on call.
+
+        Returns:
+            None.
+
+        Example:
+            standin = StandinGit(["abc1234", ""])
+        """
+        # Store preset responses and initialize empty history of command arguments.
+        self._responses: list[str] = list(responses) if isinstance(responses, Sequence) else []
+        self._exception: Exception | None = responses if isinstance(responses, Exception) else None
+        self.calls: list[list[str]] = []
+
+    def __call__(self, executable: str, cwd: Path, args: Sequence[str], timeout: float) -> str:
+        """
+        WHAT: Records the invoked command arguments and either raises the configured exception
+        or returns the next response.
+
+        WHY: Implements the Callable[[str, Path, Sequence[str], float], str] protocol expected by find_code_version.
+
+        Args:
+            executable: Path or name of the git executable.
+            cwd: Working directory where git command is executed.
+            args: Sub-command arguments passed to git.
+            timeout: Timeout duration in seconds.
+
+        Returns:
+            The next scheduled string output for the command.
+
+        Example:
+            standin("git", Path("."), ["rev-parse", "HEAD"], 5.0)
+        """
+        # Record arguments for test assertions.
+        self.calls.append(list(args))
+        if self._exception is not None:
+            raise self._exception
+        return self._responses.pop(0)
+
+
 def test_git_timeout_gives_unknown() -> None:
     """
-    WHAT: Asks git with a timeout of one microsecond, which no program can meet, and checks "unknown" comes back.
+    WHAT: Injects a stand-in git callable that raises subprocess.TimeoutExpired and verifies fallback to "unknown".
+    Asserts that the stand-in was called exactly once and that no exception escapes.
 
-    WHY: A hung git (for example on a broken network drive) must not hang the world run. The timeout ends the wait
-    and the run falls back to "unknown" instead of failing.
+    WHY: When git hangs (for example on a broken network drive or busy lock), the world run must not hang or fail.
+    The timeout ends the wait and find_code_version falls back cleanly to the configured "unknown" version.
 
     Args:
         None.
 
     Returns:
-        None. The test fails if the timeout does not lead to "unknown".
+        None. The test fails if anything other than "unknown" is returned or the stand-in is called unexpectedly.
 
     Example:
-        find_code_version({}, REPO_ROOT, 0.000001) returns "unknown".
+        Passing a stand-in run_git that times out causes find_code_version({}, REPO_ROOT, 5) to return "unknown".
     """
-    # One microsecond is far shorter than any program needs to start.
+    # Create stand-in git runner configured to raise TimeoutExpired on the first call.
+    timeout_git = StandinGit(subprocess.TimeoutExpired(cmd="git", timeout=5.0))
     config = load_runner_config()
-    assert find_code_version({}, REPO_ROOT, 0.000001) == config["unknown_code_version"]
+    version = find_code_version({}, REPO_ROOT, 5.0, run_git=timeout_git)
+    assert version == config["unknown_code_version"]
+    assert len(timeout_git.calls) == 1
+
+
+def test_injected_git_clean_working_tree_gives_commit() -> None:
+    """
+    WHAT: Injects a stand-in git callable that returns commit "abc1234" for rev-parse and empty string "" for status,
+    verifying that find_code_version returns exactly "abc1234".
+
+    WHY: Confirms that when the working tree is clean (no modified or untracked files), find_code_version returns
+    the exact commit hash without appending a "-dirty" suffix.
+
+    Args:
+        None.
+
+    Returns:
+        None. The test fails if the returned version is not "abc1234".
+
+    Example:
+        A stand-in returning "abc1234" and "" causes find_code_version({}, REPO_ROOT, 5) to return "abc1234".
+    """
+    # Stand-in yields "abc1234" on rev-parse and empty string on porcelain status.
+    clean_git = StandinGit(["abc1234", ""])
+    version = find_code_version({}, REPO_ROOT, 5.0, run_git=clean_git)
+    assert version == "abc1234"
+    assert len(clean_git.calls) == 2
+
+
+def test_injected_git_dirty_working_tree_gives_commit_dirty() -> None:
+    """
+    WHAT: Injects a stand-in git callable that returns commit "abc1234" for rev-parse and " M world/x.py" for status,
+    verifying that find_code_version appends the "-dirty" suffix to produce "abc1234-dirty".
+
+    WHY: Confirms that unsaved changes in the repository are properly flagged with the "-dirty" suffix so that runs
+    built with uncommitted modifications are distinguished from pure commits.
+
+    Args:
+        None.
+
+    Returns:
+        None. The test fails if the returned version is not "abc1234-dirty".
+
+    Example:
+        A stand-in returning "abc1234" and " M world/x.py" returns "abc1234-dirty".
+    """
+    # Stand-in yields "abc1234" on rev-parse and non-empty status on porcelain status.
+    dirty_git = StandinGit(["abc1234", " M world/x.py"])
+    version = find_code_version({}, REPO_ROOT, 5.0, run_git=dirty_git)
+    assert version == "abc1234-dirty"
+    assert len(dirty_git.calls) == 2
 
 
 def test_run_id_changes_when_any_input_changes() -> None:
