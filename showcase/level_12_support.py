@@ -122,7 +122,7 @@ def find_lien_candidate(output: InteractiveWorldOutput, search_start: int) -> tu
         Tuple of (event index, candidate PaymentEvent, sender balance before debit in paise).
 
     Example:
-        pos, debit_event, balance_before = find_lien_candidate(baseline_output, 1000)
+        position, debit_event, balance_before = find_lien_candidate(baseline_output, 1000)
     """
     # Scan events sequentially to find candidate debit and recompute prior balance from entry history.
     ledgers = output.world.ledgers
@@ -327,7 +327,7 @@ def verify_held_payment_isolation(
         Tuple of (baseline_entries_count, held_entries_count, remaining_events_count).
 
     Example:
-        counts = verify_held_payment_isolation(base_out, held_out, idx, pid, event, total)
+        counts = verify_held_payment_isolation(base_out, held_out, held_index, held_planned_id, event, total)
     """
     # 1. Assert held payment is removed from executed planned payments and recorded in held_payments container.
     assert held_planned_id not in held_output.result.planned_payment_ids
