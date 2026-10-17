@@ -113,9 +113,11 @@ def test_fraud_off_adds_ids_and_device_events_in_memory() -> None:
     # Payment ids: one per event, all different, all the right shape.
     assert len(result.payment_ids) == event_count and len(set(result.payment_ids)) == event_count
     assert all(re.fullmatch(r"[0-9a-f]{16}-\d{6}", payment_id) for payment_id in result.payment_ids)
-    # Planned payment ids and sources line up with the events too.
+    # Planned payment ids, sources and resumed flags line up with the events too.
     assert len(result.planned_payment_ids) == event_count
     assert result.event_sources == ["planned"] * event_count
+    assert result.events_resumed == [False] * event_count
+    assert len(result.events_resumed) == event_count
     # Every scheduled device event was applied, matching Level 11's own count.
     assert result.applied_device_events == list(output.device_events)
     assert result.run_result.device_counts["events_applied"] == len(output.device_events)

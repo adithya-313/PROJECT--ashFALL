@@ -263,7 +263,8 @@ def run_fraud_off(
     payment_ids = [make_payment_id(run_id, position, digits) for position in range(len(result.events))]
     return InteractiveRunResult(
         run_result=result, payment_ids=payment_ids, planned_payment_ids=planned_ids,
-        event_sources=["planned"] * len(result.events), applied_device_events=list(device_events), run_id=run_id,
+        event_sources=["planned"] * len(result.events), events_resumed=[False] * len(result.events),
+        applied_device_events=list(device_events), run_id=run_id,
     )
 
 

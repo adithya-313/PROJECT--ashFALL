@@ -596,11 +596,69 @@ def test_held_payment_moves_nothing_until_resumed(monkeypatch: pytest.MonkeyPatc
         original.minute, original.minute + MINUTES_PER_DAY]
     position = resumed_result.planned_payment_ids.index(target_id)
     assert resumed_result.planned_payment_ids.count(target_id) == 1
-    assert resumed_result.event_sources[position] == "resumed"
+    assert resumed_result.event_sources[position] == "planned"
+    assert resumed_result.events_resumed[position] is True
+    assert len(resumed_result.events_resumed) == len(resumed_result.run_result.events)
     assert resumed_result.run_result.events[position].minute == original.minute + MINUTES_PER_DAY
     assert resumed_result.run_result.event_sender_devices[position] == original_stamp
     assert len(recorders["resumed_payment_failures"].calls) >= 1
     assert_money_rules_hold(resumed_run, TINY)
+
+
+def test_held_fraud_payment_keeps_origin_when_resumed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    WHAT: Injects one fraud payment, holds it with a ScriptedHook the first time it is processed, then resumes it one
+    day later with a resume_payment outside event. Asserts that the recorded event carries source "fraud", that
+    events_resumed is True, that failure draws come from child 5, that run-stream calls match the baseline call for
+    call, and that money rules hold.
+
+    WHY: Proves that first_look and resume preserve the true origin ("fraud") even when the stream source becomes
+    "resumed", that child 5 is used for draws, and that genuine run-stream draws never move.
+
+    Args:
+        monkeypatch: pytest helper used to record calls across runner streams.
+
+    Returns:
+        None. Fails if the resumed event drops origin "fraud" or alters genuine draws.
+
+    Example:
+        A held fraud payment resumed at minute m + 1440 has event_sources[pos] == "fraud" and events_resumed == True.
+    """
+    # 1. Prepare one fraud payment between real accounts and find its planned payment id.
+    events = baseline(TINY).result.run_result.events
+    other = next(ev for ev in events[500:] if ev.from_account.startswith("acc_person"))
+    fraud = PlannedPayment(other.minute, other.from_account, events[0].to_account, 1000, 0, "everyday")
+    prev = run_fraud_on_world(TINY, FraudInputs(payments=(fraud,)))
+    match_pos = next(i for i, ev in enumerate(prev.result.run_result.events)
+                     if ev.minute == fraud.minute and ev.amount_paise == 1000)
+    target_id = prev.result.planned_payment_ids[match_pos]
+
+    # 2. Record genuine Level 11 run stream calls as the baseline.
+    lvl11 = prepare_world(TINY, None)
+    base_rec = CallRecorder(lvl11.run_rng)
+    run_world(lvl11.world, lvl11.plan, base_rec,
+              device_events=lvl11.device_events, episode_payments=lvl11.episode_payments)
+
+    # 3. Execute the fraud run with the fraud payment held then resumed, recording streams.
+    streams = record_streams(monkeypatch)
+    r_world = prepare_world(TINY, None)
+    r_rec = CallRecorder(r_world.run_rng)
+    hook = ScriptedHook(hold_ids={target_id}, hold_first_time_only=True)
+    resume = OutsideEvent(fraud.minute + MINUTES_PER_DAY, "resume_payment", planned_payment_id=target_id)
+    result = run_interactive(
+        r_world.world, r_world.plan, r_rec, r_world.device_events, r_world.episode_payments,
+        settings=FRAUD_ON, fraud_inputs=FraudInputs(payments=(fraud,), outside_events=(resume,)),
+        hook=hook, run_id=baseline(TINY).result.run_id, runner_config=load_runner_config(),
+    )
+
+    # 4. Assert origin is preserved, resumed flag is True, draw is from child 5, and money rules hold.
+    pos = result.planned_payment_ids.index(target_id)
+    assert result.event_sources[pos] == "fraud" and result.events_resumed[pos] is True
+    assert len(result.events_resumed) == len(result.run_result.events)
+    assert len(streams["resumed_payment_failures"].calls) >= 1 and r_rec.calls == base_rec.calls
+    out = InteractiveWorldOutput(
+        r_world.world, r_world.plan, [], {}, tuple(r_world.device_events), result, {}, TEST_CODE_VERSION)
+    assert_money_rules_hold(out, TINY)
 
 
 def test_declined_payment_records_every_piece_and_moves_nothing() -> None:

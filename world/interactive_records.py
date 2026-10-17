@@ -14,8 +14,10 @@ TERM: decline: the bank refuses the payment; it is recorded as failed and no mon
 TERM: planned payment id: the name of one payment as the world planned it, shared by all its pieces when it is split
       over the per-payment limit, e.g. "66db9aa439b092ee-p-000017".
 TERM: payment id: the name of one recorded event, e.g. "66db9aa439b092ee-000042" for the 43rd event.
-TERM: event source: whether an event came from the world's own plan ("planned"), from the fraud inputs ("fraud"),
-      or from a held payment let go ahead ("resumed"); known to the world only, never shown to a bank.
+TERM: event source: whether an event's true origin was the world's own plan ("planned") or fraud inputs ("fraud");
+      known to the world only, never shown to a bank.
+TERM: resumed: an event whose execution was held by the bank and resumed later by an outside event;
+      recorded in events_resumed.
 TERM: frozen: a record whose fields cannot be changed after it is made.
 """
 
@@ -135,9 +137,9 @@ def allow_all(payment: PaymentView) -> HookDecision:
 class InteractiveRunResult:
     """
     WHAT: Everything one interactive run produced. run_result is shaped exactly like Level 11's RunResult; the other
-    lists line up with run_result.events one to one (payment ids, planned payment ids, event sources), followed by the
-    device events that were applied, the payments still held at the end, the lien and hold log, the run id and the
-    money created by accounts opened during the run.
+    lists line up with run_result.events one to one (payment ids, planned payment ids, event sources, events resumed),
+    followed by the device events that were applied, the payments still held at the end, the lien and hold log,
+    the run id and the money created by accounts opened during the run.
 
     WHY: Keeping Level 11's part unchanged lets every Level 11 check and hash read it as before. The extra lists sit
     beside it, so nothing Level 11 reads gains a new field.
@@ -146,7 +148,8 @@ class InteractiveRunResult:
         run_result: Level 11-shaped result: events, counts, purposes, sender device stamps, device counts.
         payment_ids: One per event, e.g. "66db9aa439b092ee-000000" for the first.
         planned_payment_ids: One per event; all pieces of one split payment share it.
-        event_sources: One per event: "planned", "fraud" or "resumed". World side only.
+        event_sources: One per event: "planned" or "fraud". World side only.
+        events_resumed: One boolean per event: True if the payment was held and resumed, False otherwise.
         applied_device_events: The device events applied during the run, in order.
         held_payments: Payments held by the hook and never resumed.
         encumbrance_log: (minute, action, encumbrance id) for every lien or hold placed or released.
@@ -157,14 +160,15 @@ class InteractiveRunResult:
         A frozen InteractiveRunResult.
 
     Example:
-        A fraud-off tiny-world run (seed 101) has 2,915 events, so payment_ids, planned_payment_ids and
-        event_sources each hold 2,915 entries.
+        A fraud-off tiny-world run (seed 101) has 2,915 events, so payment_ids, planned_payment_ids,
+        event_sources and events_resumed each hold 2,915 entries.
     """
 
     run_result: RunResult
     payment_ids: list[str]
     planned_payment_ids: list[str]
     event_sources: list[str]
+    events_resumed: list[bool]
     applied_device_events: list[DeviceEvent]
     held_payments: list[PaymentView] = field(default_factory=list)
     encumbrance_log: list[tuple[int, str, str]] = field(default_factory=list)

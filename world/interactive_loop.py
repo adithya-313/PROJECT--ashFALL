@@ -19,6 +19,8 @@ TERM: fraud stream / resumed stream: children 4 and 5; fraud and resumed payment
 TERM: stamp: the record of the sender's phone for one payment; taken once per payment, shared by all its pieces.
 TERM: funds_on_hold: the failure reason when a lien or debit hold blocks a debit the balance could otherwise pay.
 TERM: declined_by_bank: the failure reason when the hook declined the payment.
+TERM: event source: whether an event truly came from the world's plan ("planned") or fraud inputs ("fraud").
+TERM: resumed payment: a held payment released by an outside event; draws from child 5, with events_resumed True.
 """
 
 import dataclasses
@@ -66,8 +68,9 @@ SENDER_BANK_DOMAIN: str = "sender_bank"
 @dataclass(frozen=True)
 class QueuedPayment:
     """
-    WHAT: One payment waiting on the queue: the payment itself, where it came from ("planned", "fraud" or "resumed"),
-    and, once it has been seen the first time, its planned payment id and its sender stamp.
+    WHAT: One payment waiting on the queue: the payment itself, its stream source ("planned", "fraud" or "resumed"),
+    where it truly came from ("planned" or "fraud"), and, once it has been seen the first time, its planned payment id
+    and its sender stamp.
 
     WHY: A held payment that is later resumed must keep its first name and its first stamp, so the phone it was made
     from is not marked "new" twice. Carrying both on the queued item makes that automatic.
@@ -75,6 +78,7 @@ class QueuedPayment:
     Args:
         payment: The PlannedPayment (minute, accounts, amount, order number, purpose).
         source: "planned", "fraud" or "resumed".
+        origin: "planned" or "fraud": where the payment truly came from.
         planned_payment_id: Its name after the first time it is seen, else None.
         stamp: Its sender stamp after the first time it is seen, else None.
 
@@ -82,12 +86,13 @@ class QueuedPayment:
         A frozen QueuedPayment.
 
     Example:
-        QueuedPayment(payment, "fraud") before it is first seen; QueuedPayment(payment, "resumed", "run-p-000004",
-        stamp) when a held payment comes back.
+        QueuedPayment(payment, "fraud", "fraud") before it is first seen;
+        QueuedPayment(payment, "resumed", "fraud", "run-p-000004", stamp) when a held fraud payment comes back.
     """
 
     payment: PlannedPayment
     source: str
+    origin: str
     planned_payment_id: str | None = None
     stamp: DeviceStamp | None = None
 
@@ -145,6 +150,7 @@ class LoopContext:
     payment_ids: list[str] = field(default_factory=list)
     planned_payment_ids: list[str] = field(default_factory=list)
     event_sources: list[str] = field(default_factory=list)
+    events_resumed: list[bool] = field(default_factory=list)
     applied_device_events: list[DeviceEvent] = field(default_factory=list)
 
 
@@ -219,12 +225,18 @@ def queue_initial_items(context: LoopContext, planned: Sequence[PlannedPayment],
     """
     # Genuine and episode payments, in Level 11's order.
     for payment in planned:
-        push(context, payment.minute, "planned_payments", payment.creation_index, QueuedPayment(payment, "planned"))
+        push(
+            context, payment.minute, "planned_payments", payment.creation_index,
+            QueuedPayment(payment=payment, source="planned", origin="planned"),
+        )
     # Fraud payments, in the order given.
     for order, payment in enumerate(fraud_inputs.payments):
         if payment.purpose not in PAYMENT_PURPOSES:
             raise ValueError(f"fraud payment purpose '{payment.purpose}' is not one of {', '.join(PAYMENT_PURPOSES)}")
-        push(context, payment.minute, "fraud_payments", order, QueuedPayment(payment, "fraud"))
+        push(
+            context, payment.minute, "fraud_payments", order,
+            QueuedPayment(payment=payment, source="fraud", origin="fraud"),
+        )
     # Outside events, checked as they are queued.
     for order, event in enumerate(fraud_inputs.outside_events):
         validate_outside_event(event)
@@ -264,7 +276,10 @@ def apply_outside_event(context: LoopContext, event: OutsideEvent) -> None:
             raise ValueError(f"payment {planned_payment_id} is not held, so it cannot be resumed")
         held = context.held.pop(planned_payment_id)
         resumed_payment = dataclasses.replace(held.payment, minute=event.minute)
-        resumed = QueuedPayment(resumed_payment, "resumed", held.planned_payment_id, held.stamp)
+        resumed = QueuedPayment(
+            payment=resumed_payment, source="resumed", origin=held.origin,
+            planned_payment_id=held.planned_payment_id, stamp=held.stamp,
+        )
         push(context, event.minute, "resumed_payments", context.insertion_sequence, resumed)
 
 
@@ -347,7 +362,7 @@ def first_look(context: LoopContext, queued: QueuedPayment) -> QueuedPayment:
     owner = context.state.people_by_account.get(queued.payment.from_account)
     stamp = stamp_sender_device(owner, context.state.device_state)
     context.new_devices += int(stamp.is_new_device)
-    return QueuedPayment(queued.payment, queued.source, planned_payment_id, stamp)
+    return dataclasses.replace(queued, planned_payment_id=planned_payment_id, stamp=stamp)
 
 
 def ask_hook(context: LoopContext, queued: QueuedPayment) -> HookDecision:
@@ -503,7 +518,8 @@ def record_event(context: LoopContext, event: PaymentEvent, queued: QueuedPaymen
     _record_event_counts(event, context.counts)
     context.payment_ids.append(make_payment_id(context.run_id, position, context.digits))
     context.planned_payment_ids.append(str(queued.planned_payment_id))
-    context.event_sources.append(queued.source)
+    context.event_sources.append(queued.origin)
+    context.events_resumed.append(queued.source == "resumed")
 
 
 def process_payment(context: LoopContext, queued: QueuedPayment) -> None:
@@ -576,9 +592,16 @@ def finish_run(context: LoopContext, money_created_paise: int) -> InteractiveRun
     held = [PaymentView(str(item.planned_payment_id), item.payment.minute, item.payment.from_account,
                         item.payment.to_account, item.payment.amount_paise) for item in context.held.values()]
     return InteractiveRunResult(
-        RunResult(events, context.counts, purposes, stamps, device_counts), context.payment_ids,
-        context.planned_payment_ids, context.event_sources, context.applied_device_events, held,
-        list(context.book.log), context.run_id, money_created_paise,
+        run_result=RunResult(events, context.counts, purposes, stamps, device_counts),
+        payment_ids=context.payment_ids,
+        planned_payment_ids=context.planned_payment_ids,
+        event_sources=context.event_sources,
+        events_resumed=context.events_resumed,
+        applied_device_events=context.applied_device_events,
+        held_payments=held,
+        encumbrance_log=list(context.book.log),
+        run_id=context.run_id,
+        money_created_paise=money_created_paise,
     )
 
 
