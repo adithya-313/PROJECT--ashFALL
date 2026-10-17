@@ -1,6 +1,6 @@
 # Configuration and parameters for Level 12 showcase (World engine II: a world that can react).
 #
-# TERM: split payment: a payment whose amount exceeds the regulatory UPI limit and is split into two or more pieces.
+# TERM: split payment: a payment whose amount exceeds the world's per-payment UPI limit (drawn once per world inside the official ceiling) and is split into two or more pieces.
 # TERM: equivalence: fraud-off and fraud-on allow-all execution produces identical events, hashes, and ledgers.
 # TERM: seed scan: systematic evaluation across candidate seeds to find world configurations satisfying
 #       specific criteria.

@@ -426,24 +426,27 @@ def test_split_world_has_genuine_splits_and_same_ids_on_both_paths() -> None:
         unique payment ids.
     """
     # 1. Run the split world under both fraud-off and fraud-on allow-all execution paths.
-    off_out = run_interactive_world(SPLIT, code_version=TEST_CODE_VERSION)
-    on_out = run_fraud_on_world(SPLIT)
-    p_ids = on_out.result.planned_payment_ids
+    fraud_off_output = run_interactive_world(SPLIT, code_version=TEST_CODE_VERSION)
+    fraud_on_output = run_fraud_on_world(SPLIT)
+    planned_ids = fraud_on_output.result.planned_payment_ids
 
     # 2. Count split payments where multiple events share a single planned payment id.
-    counts = Counter(p_ids)
-    splits = [pid for pid, c in counts.items() if c > 1]
-    assert len(splits) >= SPLIT_CONFIG["min_split_payments"]
+    counts = Counter(planned_ids)
+    split_planned_ids = [planned_id for planned_id, piece_count in counts.items() if piece_count > 1]
+    assert len(split_planned_ids) >= SPLIT_CONFIG["min_split_payments"]
 
     # 3. Assert events minus planned payments equals extra pieces counted from frequency differences.
-    extra_pieces = sum(c - 1 for c in counts.values())
-    assert len(on_out.result.run_result.events) - len(counts) == extra_pieces
+    extra_pieces = sum(piece_count - 1 for piece_count in counts.values())
+    assert len(fraud_on_output.result.run_result.events) - len(counts) == extra_pieces
 
     # 4. Assert planned payment ids are identical across both paths, and payment ids are distinct.
-    assert on_out.result.planned_payment_ids == off_out.result.planned_payment_ids
-    for pid in splits:
-        piece_pids = [on_out.result.payment_ids[i] for i, p in enumerate(p_ids) if p == pid]
-        assert len(piece_pids) == counts[pid] and len(set(piece_pids)) == counts[pid]
+    assert fraud_on_output.result.planned_payment_ids == fraud_off_output.result.planned_payment_ids
+    for planned_id in split_planned_ids:
+        piece_payment_ids = [
+            fraud_on_output.result.payment_ids[i] for i, candidate_id in enumerate(planned_ids)
+            if candidate_id == planned_id
+        ]
+        assert len(piece_payment_ids) == counts[planned_id] and len(set(piece_payment_ids)) == counts[planned_id]
 
 
 def busy_fraud_inputs(settings: FastRunSettings) -> tuple[FraudInputs, ScriptedHook]:
@@ -671,43 +674,45 @@ def test_held_fraud_payment_keeps_origin_when_resumed(monkeypatch: pytest.Monkey
         None. Fails if the resumed event drops origin "fraud" or alters genuine draws.
 
     Example:
-        A held fraud payment resumed at minute m + 1440 has event_sources[pos] == "fraud" and events_resumed == True.
+        A held fraud payment resumed at minute m + 1440 has event_sources[position] == "fraud"
+        and events_resumed is True.
     """
     # 1. Prepare one fraud payment between real accounts and find its planned payment id.
     events = baseline(TINY).result.run_result.events
-    other = next(ev for ev in events[500:] if ev.from_account.startswith("acc_person"))
-    fraud = PlannedPayment(other.minute, other.from_account, events[0].to_account, 1000, 0, "everyday")
-    prev = run_fraud_on_world(TINY, FraudInputs(payments=(fraud,)))
-    match_pos = next(i for i, ev in enumerate(prev.result.run_result.events)
-                     if ev.minute == fraud.minute and ev.amount_paise == 1000)
-    target_id = prev.result.planned_payment_ids[match_pos]
+    sender_event = next(event for event in events[500:] if event.from_account.startswith("acc_person"))
+    fraud = PlannedPayment(sender_event.minute, sender_event.from_account, events[0].to_account, 1000, 0, "everyday")
+    first_run = run_fraud_on_world(TINY, FraudInputs(payments=(fraud,)))
+    fraud_position = next(i for i, event in enumerate(first_run.result.run_result.events)
+                          if event.minute == fraud.minute and event.amount_paise == 1000)
+    target_id = first_run.result.planned_payment_ids[fraud_position]
 
     # 2. Record genuine Level 11 run stream calls as the baseline.
-    lvl11 = prepare_world(TINY, None)
-    base_rec = CallRecorder(lvl11.run_rng)
-    run_world(lvl11.world, lvl11.plan, base_rec,
-              device_events=lvl11.device_events, episode_payments=lvl11.episode_payments)
+    level_11_world = prepare_world(TINY, None)
+    level_11_recorder = CallRecorder(level_11_world.run_rng)
+    run_world(level_11_world.world, level_11_world.plan, level_11_recorder,
+              device_events=level_11_world.device_events, episode_payments=level_11_world.episode_payments)
 
     # 3. Execute the fraud run with the fraud payment held then resumed, recording streams.
     streams = record_streams(monkeypatch)
-    r_world = prepare_world(TINY, None)
-    r_rec = CallRecorder(r_world.run_rng)
+    runner_world = prepare_world(TINY, None)
+    runner_recorder = CallRecorder(runner_world.run_rng)
     hook = ScriptedHook(hold_ids={target_id}, hold_first_time_only=True)
     resume = OutsideEvent(fraud.minute + MINUTES_PER_DAY, "resume_payment", planned_payment_id=target_id)
+    fraud_inputs = FraudInputs(payments=(fraud,), outside_events=(resume,))
     result = run_interactive(
-        r_world.world, r_world.plan, r_rec, r_world.device_events, r_world.episode_payments,
-        settings=FRAUD_ON, fraud_inputs=FraudInputs(payments=(fraud,), outside_events=(resume,)),
+        runner_world.world, runner_world.plan, runner_recorder, runner_world.device_events,
+        runner_world.episode_payments, settings=FRAUD_ON, fraud_inputs=fraud_inputs,
         hook=hook, run_id=baseline(TINY).result.run_id, runner_config=load_runner_config(),
     )
 
     # 4. Assert origin is preserved, resumed flag is True, draw is from child 5, and money rules hold.
-    pos = result.planned_payment_ids.index(target_id)
-    assert result.event_sources[pos] == "fraud" and result.events_resumed[pos] is True
+    position = result.planned_payment_ids.index(target_id)
+    assert result.event_sources[position] == "fraud" and result.events_resumed[position] is True
     assert len(result.events_resumed) == len(result.run_result.events)
-    assert len(streams["resumed_payment_failures"].calls) >= 1 and r_rec.calls == base_rec.calls
-    out = InteractiveWorldOutput(
-        r_world.world, r_world.plan, [], {}, tuple(r_world.device_events), result, {}, TEST_CODE_VERSION)
-    assert_money_rules_hold(out, TINY)
+    assert len(streams["resumed_payment_failures"].calls) >= 1 and runner_recorder.calls == level_11_recorder.calls
+    world_output = InteractiveWorldOutput(
+        runner_world.world, runner_world.plan, [], {}, tuple(runner_world.device_events), result, {}, TEST_CODE_VERSION)
+    assert_money_rules_hold(world_output, TINY)
 
 
 def test_declined_payment_records_every_piece_and_moves_nothing() -> None:
