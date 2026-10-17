@@ -1,0 +1,40 @@
+# Configuration and parameters for Level 12 showcase (World engine II: a world that can react).
+#
+# TERM: split payment: a payment whose amount exceeds the regulatory UPI limit and is split into two or more pieces.
+# TERM: equivalence: fraud-off and fraud-on allow-all execution produces identical events, hashes, and ledgers.
+# TERM: seed scan: systematic evaluation across candidate seeds to find world configurations satisfying
+#       specific criteria.
+
+split_world:
+  label: policy
+  issue_ids_v2: [K1, K3]
+  derived_from: >-
+    seed scan, B-4: seeds 1-12 at 120 people, 20 shops, 61 days, training; seed 1 is the first with at least
+    3 genuine split payments (21)
+  seed: 1
+  n_people: 120
+  n_shops: 20
+  n_days: 61
+  range_name: training
+  min_split_payments: 3
+  min_split_payments_reason: >-
+    At least three split payments demonstrates that payment splitting is repeatedly exercised rather than
+    occurring as an isolated edge case.
+  reason: >-
+    First seed in the systematic scan of seeds 1-12 that yields multiple split payments under training UPI limits
+    to verify fraud-on and fraud-off parity.
+
+showcase_run:
+  label: policy
+  code_version: "showcase-12a"
+  reason: "Fixed code version recorded for Level 12a showcase runs so run ids and payment ids remain stable across git states."
+
+check_3_lien:
+  label: policy
+  search_start: 1000
+  reason: "Position 1000 is approximately one third into the run, ensuring real prior transactions occur before placing a lien."
+
+check_4_hold:
+  label: policy
+  target_index: 100
+  reason: "Baseline planned payment index 100 is an early successful debit that cleanly demonstrates isolation when held."

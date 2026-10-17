@@ -23,6 +23,7 @@ TERM: paise: Rs 1 = 100 paise.
 import functools
 import hashlib
 import inspect
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -53,6 +54,11 @@ from world.run_identity import REPO_ROOT, load_runner_config
 FROZEN = load_yaml(REPO_ROOT / "config" / "frozen_anchors.yaml")["frozen_anchors"]["fraud_off_events"]
 TINY = FastRunSettings(FROZEN["seed"], FROZEN["n_people"], FROZEN["n_shops"], FROZEN["n_days"], FROZEN["range_name"])
 SECOND = FastRunSettings(seed=42, n_people=80, n_shops=15, n_days=61, range_name="training")
+SPLIT_CONFIG = load_yaml(REPO_ROOT / "config" / "showcase_level_12.yaml")["split_world"]
+SPLIT = FastRunSettings(
+    SPLIT_CONFIG["seed"], SPLIT_CONFIG["n_people"], SPLIT_CONFIG["n_shops"], SPLIT_CONFIG["n_days"],
+    SPLIT_CONFIG["range_name"],
+)
 TEST_CODE_VERSION = "test-version"
 FRAUD_ON = RunnerSettings(fraud_enabled=True)
 MINUTES_PER_DAY = 1440
@@ -364,7 +370,9 @@ def test_level_11_private_helpers_keep_their_parameters() -> None:
         assert actual == parameters, f"Level 11 helper {name} changed its parameters to {actual}; update the runner."
 
 
-@pytest.mark.parametrize("settings", [TINY, SECOND], ids=["seed101_60x12", "seed42_80x15"])
+@pytest.mark.parametrize(
+    "settings", [TINY, SECOND, SPLIT], ids=["seed101_60x12", "seed42_80x15", "seed1_120x20_splits"]
+)
 def test_empty_fraud_plan_equals_level_11_everywhere(settings: FastRunSettings) -> None:
     """
     WHAT: Test T2. Runs each world with the switch on, no fraud and the allow-all bank, and compares it with Level 11's
@@ -395,6 +403,47 @@ def test_empty_fraud_plan_equals_level_11_everywhere(settings: FastRunSettings) 
     assert hash_people_devices(runner.world.people) == hash_people_devices(level_11.world.people)
     assert hash_device_stamps(runner.result.run_result.event_sender_devices) == hash_device_stamps(
         level_11.result.event_sender_devices)
+
+
+def test_split_world_has_genuine_splits_and_same_ids_on_both_paths() -> None:
+    """
+    WHAT: Runs the split-world benchmark (seed 1 at 120 people, 20 shops, 61 days) under both fraud-off and fraud-on
+    paths. Asserts that the world contains at least min_split_payments split payments, that events minus unique planned
+    payments equals the extra split pieces counted both ways, that planned_payment_ids match identically across both
+    paths, and that all pieces of each split payment share one planned payment id but possess distinct payment ids.
+
+    WHY: Verifies requirement F-b: confirming that payment splitting over regulatory limits functions identically across
+    the fraud switch boundary without shifting planned payment identities or duplicate payment ids.
+
+    Args:
+        None.
+
+    Returns:
+        None. Fails if split payment counts fall below threshold or IDs diverge.
+
+    Example:
+        On the seed-1 split world, 21 payments split into 42 events, each sharing its planned id with
+        unique payment ids.
+    """
+    # 1. Run the split world under both fraud-off and fraud-on allow-all execution paths.
+    off_out = run_interactive_world(SPLIT, code_version=TEST_CODE_VERSION)
+    on_out = run_fraud_on_world(SPLIT)
+    p_ids = on_out.result.planned_payment_ids
+
+    # 2. Count split payments where multiple events share a single planned payment id.
+    counts = Counter(p_ids)
+    splits = [pid for pid, c in counts.items() if c > 1]
+    assert len(splits) >= SPLIT_CONFIG["min_split_payments"]
+
+    # 3. Assert events minus planned payments equals extra pieces counted from frequency differences.
+    extra_pieces = sum(c - 1 for c in counts.values())
+    assert len(on_out.result.run_result.events) - len(counts) == extra_pieces
+
+    # 4. Assert planned payment ids are identical across both paths, and payment ids are distinct.
+    assert on_out.result.planned_payment_ids == off_out.result.planned_payment_ids
+    for pid in splits:
+        piece_pids = [on_out.result.payment_ids[i] for i, p in enumerate(p_ids) if p == pid]
+        assert len(piece_pids) == counts[pid] and len(set(piece_pids)) == counts[pid]
 
 
 def busy_fraud_inputs(settings: FastRunSettings) -> tuple[FraudInputs, ScriptedHook]:
