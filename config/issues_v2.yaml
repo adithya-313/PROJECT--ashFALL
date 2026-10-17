@@ -35,6 +35,8 @@ issues:
       - {kind: config, file: config/interactive_runner.yaml, name: interactive_runner}
       - {kind: test, file: tests/unit/world/test_interactive_runner_switch.py, name: test_fraud_off_equals_level_11_run_everywhere}
       - {kind: test, file: tests/unit/world/test_interactive_runner_fraud_on.py, name: test_empty_fraud_plan_equals_level_11_everywhere}
+      - {kind: test, file: tests/unit/world/test_interactive_runner_fraud_on.py, name: test_split_world_has_genuine_splits_and_same_ids_on_both_paths}
+      - {kind: test, file: tests/unit/showcase/test_level_12_checks.py, name: test_check_2_split_world_matches_level_11}
   K2:
     title: "events-v1 carries simulator-only fields"
     origin: revision_2
@@ -51,6 +53,7 @@ issues:
       - {kind: config, file: config/interactive_runner.yaml, name: interactive_runner}
       - {kind: test, file: tests/unit/world/test_run_identity.py, name: test_payment_ids_are_unique_and_well_formed}
       - {kind: test, file: tests/unit/world/test_interactive_events.py, name: test_lines_have_v1_fields_plus_two_ids_and_nothing_revealing}
+      - {kind: test, file: tests/unit/world/test_interactive_runner_fraud_on.py, name: test_split_world_has_genuine_splits_and_same_ids_on_both_paths}
     later_work: ["Level 14: payment_id, bank_id and side on the bank side (finding 14-2)", "Level 16: carry payment_id through labels", "Level 23: carry payment_id through the money tracer", "Level 32: carry payment_id through later levels"]
   K4:
     title: "The world has no database"
@@ -222,6 +225,7 @@ issues:
       - {kind: config, file: config/interactive_runner.yaml, name: interactive_runner}
       - {kind: test, file: tests/unit/world/test_outside_events_and_encumbrance.py, name: test_lien_reduces_what_can_be_spent}
       - {kind: test, file: tests/unit/world/test_interactive_runner_fraud_on.py, name: test_lien_blocks_exactly_the_chosen_debit}
+      - {kind: test, file: tests/unit/showcase/test_level_12_checks.py, name: test_check_3_lien_blocks_debits_and_money_balances}
   12-3:
     title: "Nothing creates liens until Levels 13 and 21"
     origin: revision_2
@@ -366,6 +370,7 @@ issues:
     parts: [12a]
     evidence:
       - {kind: test, file: tests/unit/test_showcase_part.py, name: test_part_a_runs_only_part_a_checks}
+      - {kind: test, file: tests/unit/showcase/test_level_12_checks.py, name: test_level_12_checks_match_the_brief}
   13-2:
     title: "Raw identifiers could leak through logs, topics and traces"
     origin: revision_2
