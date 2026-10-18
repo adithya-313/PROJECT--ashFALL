@@ -146,6 +146,8 @@ NEW_CODE_FILES: list[str] = [
     # Level 12b static truth import guard and test suite.
     "core/truth_import_check.py",
     "tests/unit/test_truth_import_check.py",
+    # Level 12b truth environment separation test suite.
+    "tests/unit/test_truth_env_separation.py",
 ]
 
 
