@@ -69,6 +69,7 @@ from world.interactive_records import (
 from world.interactive_state import start_runner_state
 from world.payments import find_ledger_for_account
 from world.run_identity import REPO_ROOT, find_code_version, load_runner_config, make_payment_id, make_run_id
+from world.truth_records import TruthFacts
 from world.world_configs import WorldConfigs, read_world_configs
 from world.world_plan import WorldPlan, draw_world_plan, spawn_life_streams, spawn_world_streams
 
@@ -266,6 +267,7 @@ def run_fraud_off(
         event_sources=["planned"] * len(result.events), events_resumed=[False] * len(result.events),
         applied_device_events=list(device_events),
         event_fraud_input_index=[None] * len(result.events), run_id=run_id,
+        truth=TruthFacts(),
     )
 
 

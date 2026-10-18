@@ -137,6 +137,9 @@ NEW_CODE_FILES: list[str] = [
     # Level 12b hidden truth store records module and test suite.
     "world/truth_records.py",
     "tests/unit/world/test_truth_records.py",
+    # Level 12b hidden truth store writer and test suite.
+    "world/truth_writer.py",
+    "tests/unit/world/test_truth_writer.py",
 ]
 
 
@@ -148,6 +151,8 @@ NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
     ("showcase/framework.py", "select_part_checks"),
     ("showcase/__main__.py", "check_part_argument"),
     ("showcase/__main__.py", "report_folder"),
+    # Level 12b events-v2 writer function.
+    ("world/interactive_events.py", "write_events_v2_file"),
 ]
 
 

@@ -15,7 +15,9 @@ TERM: planned payment id: the name shared by all pieces of one payment, e.g. "<r
 TERM: JSON line: one record written as compact JSON text with sorted keys, ending in a newline.
 """
 
+import hashlib
 import json
+from pathlib import Path
 
 from world.fast_mode import event_to_record
 from world.interactive_records import InteractiveWorldOutput
@@ -55,3 +57,38 @@ def interactive_event_lines(output: InteractiveWorldOutput) -> list[str]:
         record["planned_payment_id"] = result.planned_payment_ids[position]
         lines.append(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
     return lines
+ 
+ 
+def write_events_v2_file(output: InteractiveWorldOutput, path: Path) -> str:
+    """
+    WHAT: Writes all chronological payment events from an interactive simulation run to an events-v2 JSON Lines file.
+    Each line is serialized with 16 keys, sorted keys and compact separators into a newline-terminated line.
+    After completing writing, it reads back the file bytes and calculates its SHA-256 cryptographic digest.
+
+    WHY: Emits transaction events in a standard JSON Lines representation containing both payment_id and
+    planned_payment_id for downstream tracking without leaking ground-truth fraud simulation labels.
+    Enforcing explicit UTF-8 encoding and LF newlines ensures bit-for-bit identical outputs across operating systems.
+    Returning the SHA-256 digest allows immediate verification of file content and inclusion in the manifest.
+
+    Args:
+        output: InteractiveWorldOutput container holding simulated payment events, telemetry, clock, and payment IDs.
+        path: Destination filesystem Path where the events-v2 file will be written.
+
+    Returns:
+        Hexadecimal string representing the SHA-256 cryptographic digest of the written events file.
+
+    Example:
+        # Given an interactive run output:
+        # digest = write_events_v2_file(output, Path("runs/test/events.jsonl"))
+        # assert len(digest) == 64
+    """
+    # 1. Build deterministic JSON lines for all simulated events with 16 fields.
+    lines = interactive_event_lines(output)
+
+    # 2. Open destination file with explicit UTF-8 encoding and standard Unix line endings.
+    with open(path, "w", encoding="utf-8", newline="\n") as events_file:
+        for line in lines:
+            events_file.write(line)
+
+    # 3. Read back raw file bytes to calculate authoritative SHA-256 cryptographic digest.
+    return hashlib.sha256(path.read_bytes()).hexdigest()

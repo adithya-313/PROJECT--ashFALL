@@ -57,7 +57,7 @@ from world.interactive_records import (
 from world.interactive_state import RunnerState
 from world.outside_events import OutsideEvent, validate_outside_event
 from world.run_identity import make_payment_id
-from world.truth_records import validate_truth_facts
+from world.truth_records import TruthFacts, validate_truth_facts
 from world.world_plan import WorldPlan
 
 # The failure reasons this runner adds; both are failures of the sender's bank.
@@ -157,6 +157,7 @@ class LoopContext:
     events_resumed: list[bool] = field(default_factory=list)
     applied_device_events: list[DeviceEvent] = field(default_factory=list)
     event_fraud_input_index: list[int | None] = field(default_factory=list)
+    truth: TruthFacts = field(default_factory=TruthFacts)
 
 
 def build_component_streams(seed: int, children: dict[str, int]) -> dict[str, np.random.Generator]:
@@ -248,6 +249,7 @@ def queue_initial_items(context: LoopContext, planned: Sequence[PlannedPayment],
         push(context, event.minute, "outside_events", order, event)
     # Hidden truth facts, validated against planned fraud payments before the loop begins.
     validate_truth_facts(fraud_inputs.truth, len(fraud_inputs.payments))
+    context.truth = fraud_inputs.truth
 
 
 def apply_outside_event(context: LoopContext, event: OutsideEvent) -> None:
@@ -612,6 +614,7 @@ def finish_run(context: LoopContext, money_created_paise: int) -> InteractiveRun
         encumbrance_log=list(context.book.log),
         run_id=context.run_id,
         money_created_paise=money_created_paise,
+        truth=context.truth,
     )
 
 

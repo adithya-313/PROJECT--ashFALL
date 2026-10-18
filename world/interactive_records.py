@@ -161,6 +161,7 @@ class InteractiveRunResult:
         encumbrance_log: (minute, action, encumbrance id) for every lien or hold placed or released.
         run_id: The run's name, e.g. "66db9aa439b092ee".
         money_created_paise: Opening balances of accounts registered during the run, in paise.
+        truth: Hidden truth facts (roles, device control spans, payment stories) associated with the run.
 
     Returns:
         A frozen InteractiveRunResult.
@@ -181,6 +182,7 @@ class InteractiveRunResult:
     encumbrance_log: list[tuple[int, str, str]] = field(default_factory=list)
     run_id: str = ""
     money_created_paise: int = 0
+    truth: TruthFacts = field(default_factory=TruthFacts)
 
 
 @dataclass(frozen=True)
