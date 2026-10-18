@@ -162,7 +162,7 @@ def load_truth_config(path: Path = TRUTH_CONFIG_PATH) -> dict[str, Any]:
         Dictionary mapping truth configuration block names to validated values.
 
     Example:
-        allowed = load_truth_config()["truth_store"]["allowed_roles"]  # ["mule", "collector", ...]
+        allowed = list(load_truth_config()["truth_store"]["roles"].keys())  # ["mule", "collector", ...]
     """
     # Load and parse the validated truth store configuration block.
     return load_yaml(path)
@@ -370,7 +370,7 @@ def validate_truth_facts(
     # 1. Resolve permitted role taxonomy from truth_store.yaml if not explicitly supplied.
     if allowed_roles is None:
         truth_config = load_truth_config()
-        allowed_roles = truth_config["truth_store"]["allowed_roles"]
+        allowed_roles = list(truth_config["truth_store"]["roles"].keys())
 
     # 2. Validate individual role spans for schema compliance, non-negative bounds, and mule depth.
     for role_span in truth.roles:
@@ -380,8 +380,8 @@ def validate_truth_facts(
     validate_no_overlapping_role_spans(truth.roles)
 
     # 3. Validate device control spans for temporal consistency and mutual exclusion.
-    for dev_span in truth.device_control:
-        validate_time_span(dev_span)
+    for device_span in truth.device_control:
+        validate_time_span(device_span)
     validate_no_overlapping_device_control_spans(truth.device_control)
 
     # 4. Validate that transaction narratives strictly match the count of fraud payments.

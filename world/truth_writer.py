@@ -88,6 +88,9 @@ def _build_payment_story_rows(result: Any, truth: TruthFacts) -> list[dict[str, 
     Returns:
         Ordered list of dictionary records, exactly one per simulated transaction event.
 
+    Raises:
+        ValueError: If a fraud event possesses an event_fraud_input_index that is None or out of range.
+
     Example:
         # For a run with 2,915 planned events and 0 fraud events:
         # story_rows = _build_payment_story_rows(output.result, TruthFacts())
@@ -95,32 +98,35 @@ def _build_payment_story_rows(result: Any, truth: TruthFacts) -> list[dict[str, 
     """
     # 1. Iterate through simulated events and construct one story row per event in order.
     story_rows: list[dict[str, Any]] = []
-    for pos, origin in enumerate(result.event_sources):
+    for position, origin in enumerate(result.event_sources):
         story = None
+        payment_id = result.payment_ids[position]
         if origin == "fraud":
-            idx = result.event_fraud_input_index[pos]
-            if idx is not None and idx < len(truth.payment_stories):
-                story = truth.payment_stories[idx]
+            input_index = result.event_fraud_input_index[position]
+            if input_index is None or input_index < 0 or input_index >= len(truth.payment_stories):
+                raise ValueError(
+                    f"Fraud event '{payment_id}' has invalid event_fraud_input_index: {input_index} "
+                    f"(expected 0 <= index < {len(truth.payment_stories)})"
+                )
+            story = truth.payment_stories[input_index]
         story_rows.append({
             "block": story.block if story else None,
             "description": story.description if story else None,
             "gang_id": story.gang_id if story else None,
             "layer": story.layer if story else None,
             "origin": origin,
-            "payment_id": result.payment_ids[pos],
-            "planned_payment_id": result.planned_payment_ids[pos],
-            "resumed": result.events_resumed[pos],
+            "payment_id": payment_id,
+            "planned_payment_id": result.planned_payment_ids[position],
+            "resumed": result.events_resumed[position],
         })
     return story_rows
 
 
-def build_truth_rows(
-    output: InteractiveWorldOutput, truth: TruthFacts | None = None
-) -> dict[str, list[dict[str, Any]]]:
+def build_truth_rows(output: InteractiveWorldOutput) -> dict[str, list[dict[str, Any]]]:
     """
     WHAT: Assembles dictionaries representing records to write into roles.jsonl, device_control.jsonl,
-    and payment_stories.jsonl from an interactive simulation run. Validates that all truth account IDs
-    exist in the world's ledgers and that fraud events are accompanied by non-empty payment stories.
+    and payment_stories.jsonl from an interactive simulation run using output.result.truth. Validates that
+    all truth account IDs exist in the world's ledgers and that fraud events have payment stories.
 
     WHY: Decouples record structuring and semantic integrity validation from disk serialization.
     Ensures that every simulated transaction event possesses a corresponding story row and that no
@@ -128,7 +134,6 @@ def build_truth_rows(
 
     Args:
         output: InteractiveWorldOutput containing simulation ledgers, events, and identifiers.
-        truth: Optional TruthFacts instance; if None, defaults to output.result.truth.
 
     Returns:
         Dictionary mapping artifact keys ('roles', 'device_control', 'payment_stories') to row lists.
@@ -141,13 +146,13 @@ def build_truth_rows(
         # rows = build_truth_rows(output)
         # len(rows['payment_stories']) == 2915 and rows['payment_stories'][0]['gang_id'] is None
     """
-    # 1. Determine active truth facts and validate account presence in world ledgers.
-    active_truth = truth if truth is not None else getattr(output.result, "truth", TruthFacts())
+    # 1. Retrieve active truth facts from output.result.truth and validate account presence in ledgers.
+    active_truth = output.result.truth
     _validate_truth_accounts(output, active_truth)
 
     # 2. Reject fraud events that lack explanatory payment stories.
     result = output.result
-    if any(s == "fraud" for s in result.event_sources) and len(active_truth.payment_stories) == 0:
+    if any(source == "fraud" for source in result.event_sources) and len(active_truth.payment_stories) == 0:
         raise ValueError(
             "Fraud events exist in the run result but payment_stories is empty; "
             "fraud cannot be written without stories."
@@ -155,20 +160,20 @@ def build_truth_rows(
 
     # 3. Format roles, device control, and sequential transaction story rows.
     roles_rows = [
-        {"account_id": r.account_id, "depth": r.depth, "gang_id": r.gang_id,
-         "role": r.role, "valid_from": r.valid_from, "valid_to": r.valid_to}
-        for r in active_truth.roles
+        {"account_id": role_span.account_id, "depth": role_span.depth, "gang_id": role_span.gang_id,
+         "role": role_span.role, "valid_from": role_span.valid_from, "valid_to": role_span.valid_to}
+        for role_span in active_truth.roles
     ]
-    dc_rows = [
-        {"account_id": d.account_id, "device_id": d.device_id, "emulator": d.emulator,
-         "gang_id": d.gang_id, "linked_number_switch": d.linked_number_switch,
-         "remote_access": d.remote_access, "sim_swap": d.sim_swap,
-         "valid_from": d.valid_from, "valid_to": d.valid_to}
-        for d in active_truth.device_control
+    device_control_rows = [
+        {"account_id": device_span.account_id, "device_id": device_span.device_id, "emulator": device_span.emulator,
+         "gang_id": device_span.gang_id, "linked_number_switch": device_span.linked_number_switch,
+         "remote_access": device_span.remote_access, "sim_swap": device_span.sim_swap,
+         "valid_from": device_span.valid_from, "valid_to": device_span.valid_to}
+        for device_span in active_truth.device_control
     ]
     story_rows = _build_payment_story_rows(result, active_truth)
 
-    return {"device_control": dc_rows, "payment_stories": story_rows, "roles": roles_rows}
+    return {"device_control": device_control_rows, "payment_stories": story_rows, "roles": roles_rows}
 
 
 def _write_single_truth_file(run_dir: Path, filename: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -204,12 +209,10 @@ def _write_single_truth_file(run_dir: Path, filename: str, rows: list[dict[str, 
     return {"row_count": len(rows), "sha256": sha256}
 
 
-def write_truth_files(
-    output: InteractiveWorldOutput, truth_root: Path, truth: TruthFacts | None = None
-) -> Path:
+def write_truth_files(output: InteractiveWorldOutput, truth_root: Path) -> Path:
     """
     WHAT: Writes roles.jsonl, device_control.jsonl, payment_stories.jsonl, and manifest.json into a run-specific
-    directory under truth_root. Refuses to overwrite non-empty existing run directories.
+    directory under truth_root using output.result.truth. Refuses to overwrite non-empty existing run directories.
 
     WHY: Ground rule 15 requires truth to be stored as discrete, append-only file artifacts with cryptographic
     digests. Refusing non-empty folders prevents accidental corruption of previous evaluation records.
@@ -217,7 +220,6 @@ def write_truth_files(
     Args:
         output: InteractiveWorldOutput holding world state, run results, and run identity.
         truth_root: Filesystem Path representing the root folder under which run truth folders are placed.
-        truth: Optional TruthFacts instance overriding output.result.truth.
 
     Returns:
         Filesystem Path to the created run truth directory containing the truth artifacts.
@@ -238,9 +240,9 @@ def write_truth_files(
     run_dir.mkdir(parents=True, exist_ok=True)
 
     # 2. Build row dictionaries and load truth store file name configuration.
-    rows_by_file = build_truth_rows(output, truth=truth)
-    cfg = load_yaml(REPO_ROOT / "config" / "truth_store.yaml")["truth_store"]
-    file_names = cfg["file_names"]
+    rows_by_file = build_truth_rows(output)
+    truth_config = load_yaml(REPO_ROOT / "config" / "truth_store.yaml")["truth_store"]
+    file_names = truth_config["file_names"]
 
     # 3. Write each JSON Lines artifact and gather manifest entries.
     file_manifests = {
@@ -252,7 +254,7 @@ def write_truth_files(
     manifest = {
         "code_version": output.code_version,
         "files": file_manifests,
-        "format": cfg["format"],
+        "format": truth_config["format"],
         "run_id": output.result.run_id,
     }
     manifest_path = run_dir / file_names["manifest"]
@@ -282,8 +284,8 @@ def truth_root_from_env(env: Mapping[str, str]) -> Path:
         truth_root_from_env({"ASHFALL_TRUTH_DIR": "runs/truth"}) == Path("runs/truth")
     """
     # 1. Look up designated truth store environment variable name from policy configuration.
-    cfg = load_yaml(REPO_ROOT / "config" / "truth_store.yaml")["truth_store"]
-    env_var_name = cfg["env_var"]
+    truth_config = load_yaml(REPO_ROOT / "config" / "truth_store.yaml")["truth_store"]
+    env_var_name = truth_config["env_var"]
 
     # 2. Extract and validate value from environment mapping.
     raw_val = env.get(env_var_name, "").strip()

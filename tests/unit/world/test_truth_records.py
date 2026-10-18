@@ -13,9 +13,12 @@ TERM: mule depth: distance in payment hops from the initial compromised victim t
 TERM: payment story: explanatory metadata attributing a fraud transaction to a gang, block, layer, and description.
 """
 
+import re
+
 import pytest
 
 from core.config_validator import load_yaml
+from world.calendar_runner import PlannedPayment
 from world.fast_mode import FastRunSettings
 from world.interactive_records import FraudInputs, RunnerSettings
 from world.interactive_runner import SWITCH_OFF_MESSAGE, run_interactive_world
@@ -58,7 +61,7 @@ def test_role_must_be_in_config() -> None:
         validate_role_in_config(RoleSpan('acc_1', 'mule', ...), ['mule', ...])  # Passes
     """
     # 1. Load the canonical list of allowed roles from configuration.
-    allowed = load_truth_config()["truth_store"]["allowed_roles"]
+    allowed = list(load_truth_config()["truth_store"]["roles"].keys())
     valid_span = RoleSpan("acc_001", "mule", "gang_alpha", 1, 0, 1440)
     invalid_span = RoleSpan("acc_001", "operator", "gang_alpha", 1, 0, 1440)
 
@@ -275,10 +278,122 @@ def test_validate_truth_facts_composite() -> None:
     """
     # 1. Build a valid composite TruthFacts object with one role, device span, and story matching 1 payment.
     role = RoleSpan("acc_person_000001", "mule", "gang_alpha", 1, 0, 1440)
-    dev = DeviceControlSpan("dev_00001", "acc_person_000001", "gang_alpha", 0, 1440, False, False, False, False)
+    device_span = DeviceControlSpan(
+        "dev_00001", "acc_person_000001", "gang_alpha", 0, 1440, False, False, False, False
+    )
     story = PaymentStory("gang_alpha", "route", 1, "Dispersal transfer")
-    truth = TruthFacts(roles=(role,), device_control=(dev,), payment_stories=(story,))
+    truth = TruthFacts(roles=(role,), device_control=(device_span,), payment_stories=(story,))
 
     # 2. Assert validation succeeds with default config loading and payment count 1.
     validate_truth_facts(truth, payment_count=1)
+
+
+@pytest.mark.parametrize(
+    ("bad_truth", "error_match"),
+    [
+        (
+            TruthFacts(
+                roles=(RoleSpan("acc_person_000001", "operator", "gang_alpha", 1, 0, 100),),
+                payment_stories=(PaymentStory("gang_alpha", "route", 1, "legit story"),),
+            ),
+            "RoleSpan for account 'acc_person_000001' has invalid role 'operator'",
+        ),
+        (
+            TruthFacts(
+                roles=(RoleSpan("acc_person_000001", "mule", "gang_alpha", 1, 100, 100),),
+                payment_stories=(PaymentStory("gang_alpha", "route", 1, "legit story"),),
+            ),
+            "Span for 'acc_person_000001' has valid_to (100) less than or equal to valid_from (100)",
+        ),
+        (
+            TruthFacts(
+                roles=(RoleSpan("acc_person_000001", "mule", "gang_alpha", 1, -10, 100),),
+                payment_stories=(PaymentStory("gang_alpha", "route", 1, "legit story"),),
+            ),
+            "Span for 'acc_person_000001' has negative valid_from: -10",
+        ),
+        (
+            TruthFacts(
+                roles=(RoleSpan("acc_person_000001", "mule", "gang_alpha", None, 0, 100),),
+                payment_stories=(PaymentStory("gang_alpha", "route", 1, "legit story"),),
+            ),
+            "RoleSpan for mule account 'acc_person_000001' requires depth >= 1, got None",
+        ),
+        (
+            TruthFacts(
+                roles=(RoleSpan("acc_person_000001", "victim", "gang_alpha", 2, 0, 100),),
+                payment_stories=(PaymentStory("gang_alpha", "route", 1, "legit story"),),
+            ),
+            "RoleSpan for non-mule account 'acc_person_000001' (role 'victim') must have depth None, got 2",
+        ),
+        (
+            TruthFacts(
+                roles=(
+                    RoleSpan("acc_person_000001", "mule", "gang_alpha", 1, 0, 100),
+                    RoleSpan("acc_person_000001", "collector", "gang_alpha", None, 50, 150),
+                ),
+                payment_stories=(PaymentStory("gang_alpha", "route", 1, "legit story"),),
+            ),
+            "Overlapping role spans for account 'acc_person_000001': [0, 100) and [50, 150)",
+        ),
+        (
+            TruthFacts(
+                device_control=(
+                    DeviceControlSpan(
+                        "dev_001", "acc_person_000001", "gang_alpha", 0, 100, False, False, False, False
+                    ),
+                    DeviceControlSpan(
+                        "dev_001", "acc_person_000001", "gang_alpha", 50, 150, True, False, False, False
+                    ),
+                ),
+                payment_stories=(PaymentStory("gang_alpha", "route", 1, "legit story"),),
+            ),
+            "Overlapping device control spans for device 'dev_001' and account "
+            "'acc_person_000001': [0, 100) and [50, 150)",
+        ),
+        (
+            TruthFacts(
+                payment_stories=(
+                    PaymentStory("gang_alpha", "route", 1, "first story"),
+                    PaymentStory("gang_alpha", "route", 2, "extra story"),
+                ),
+            ),
+            "payment_stories has length 2; must be empty or match fraud payments count (1)",
+        ),
+    ],
+)
+def test_runner_refuses_invalid_truth_facts(bad_truth: TruthFacts, error_match: str) -> None:
+    """
+    WHAT: Asserts that run_interactive_world with fraud enabled strictly rejects invalid TruthFacts
+    specifications across role taxonomy, temporal bounds, mule depths, span overlaps, and story counts.
+
+    WHY: Truth facts are validated before runner loop execution begins; any malformed or inconsistent truth
+    invariant must halt the runner immediately with a descriptive ValueError naming the bad record.
+
+    Args:
+        bad_truth: TruthFacts instance containing an intentional schema violation.
+        error_match: Substring expected within the raised ValueError message.
+
+    Returns:
+        None. Fails if execution proceeds or the raised exception message does not match.
+
+    Example:
+        # Calling run_interactive_world with an invalid role raises ValueError.
+        # with pytest.raises(ValueError, match="invalid role"): ...
+    """
+    # 1. Configure a small valid fraud payment to pair with the invalid truth facts.
+    fraud_payment = PlannedPayment(
+        minute=10,
+        from_account="acc_person_000001",
+        to_account="acc_person_000002",
+        amount_paise=5000,
+        creation_index=0,
+        purpose="everyday",
+    )
+    inputs = FraudInputs(payments=(fraud_payment,), truth=bad_truth)
+
+    # 2. Execute simulation and verify deterministic ValueError rejection naming the violation.
+    with pytest.raises(ValueError, match=re.escape(error_match)):
+        run_interactive_world(TINY, RunnerSettings(fraud_enabled=True), inputs, code_version=TEST_CODE_VERSION)
+
 

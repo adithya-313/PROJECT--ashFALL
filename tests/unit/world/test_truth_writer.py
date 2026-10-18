@@ -16,6 +16,7 @@ TERM: events-v2: Level 11 event line format plus payment_id and planned_payment_
 TERM: split payment: a payment exceeding UPI limit partitioned into multiple compliant transaction legs.
 """
 
+import dataclasses
 import hashlib
 import json
 from pathlib import Path
@@ -27,7 +28,8 @@ from world.calendar_runner import PlannedPayment
 from world.fast_mode import FastRunSettings
 from world.interactive_events import interactive_event_lines, write_events_v2_file
 from world.interactive_records import FraudInputs, RunnerSettings
-from world.interactive_runner import run_interactive_world
+from world.interactive_runner import prepare_world, run_interactive_world
+from world.payments import find_ledger_for_account
 from world.run_identity import REPO_ROOT
 from world.truth_records import DeviceControlSpan, PaymentStory, RoleSpan, TruthFacts
 from world.truth_writer import build_truth_rows, truth_root_from_env, write_truth_files
@@ -91,10 +93,14 @@ def test_fraud_event_carries_story_and_split_payment_shares_story_with_different
         None. Fails if split fraud events do not share the story or fail to receive unique payment IDs.
 
     Example:
-        # A 6,123,622 paise fraud transfer against a 6,122,622 limit creates 2 legs with same story.
+        # An oversized fraud transfer against the world's UPI limit creates 2 legs with the same story.
     """
-    # 1. Obtain UPI limit and configure an oversized fraud payment that will split into 2 legs.
-    bank_upi_limit = 6122622
+    # 1. Obtain UPI limit from prepared world ledgers and configure an oversized fraud payment that splits.
+    prepared = prepare_world(TINY, None)
+    sender_ledger = find_ledger_for_account(prepared.world.ledgers, "acc_person_000001")
+    assert sender_ledger is not None
+    bank_upi_limit = sender_ledger.upi_limit_paise
+
     fraud_payment = PlannedPayment(
         minute=10,
         from_account="acc_person_000001",
@@ -141,7 +147,7 @@ def test_truth_refusals_on_missing_stories_and_unknown_account() -> None:
         None. Fails if invalid accounts or story omissions are accepted without raising ValueError.
 
     Example:
-        # build_truth_rows raises ValueError if RoleSpan references 'acc_unknown'.
+        # build_truth_rows raises ValueError if RoleSpan references an unregistered account.
     """
     # 1. Execute run with a fraud payment but empty payment stories in truth facts.
     fraud_payment = PlannedPayment(10, "acc_person_000001", "acc_person_000002", 5000, 0, "everyday")
@@ -156,13 +162,62 @@ def test_truth_refusals_on_missing_stories_and_unknown_account() -> None:
     # 2. Execute genuine run and verify rejection of unknown account IDs in role spans.
     output_genuine = run_interactive_world(TINY, RunnerSettings(fraud_enabled=False), code_version=TEST_CODE_VERSION)
     unknown_role = RoleSpan("acc_nonexistent_person", "mule", "gang_1", 1, 0, None)
+    corrupted_roles_result = dataclasses.replace(
+        output_genuine.result, truth=TruthFacts(roles=(unknown_role,))
+    )
+    output_corrupted_roles = dataclasses.replace(output_genuine, result=corrupted_roles_result)
     with pytest.raises(ValueError, match="is not registered in the world's ledgers"):
-        build_truth_rows(output_genuine, truth=TruthFacts(roles=(unknown_role,)))
+        build_truth_rows(output_corrupted_roles)
 
     # 3. Verify rejection of unknown account IDs in device control spans.
-    unknown_device = DeviceControlSpan("dev_1", "acc_nonexistent_person", "gang_1", 0, None, False, False, False, False)
+    unknown_device = DeviceControlSpan(
+        "dev_1", "acc_nonexistent_person", "gang_1", 0, None, False, False, False, False
+    )
+    corrupted_dev_result = dataclasses.replace(
+        output_genuine.result, truth=TruthFacts(device_control=(unknown_device,))
+    )
+    output_corrupted_dev = dataclasses.replace(output_genuine, result=corrupted_dev_result)
     with pytest.raises(ValueError, match="is not registered in the world's ledgers"):
-        build_truth_rows(output_genuine, truth=TruthFacts(device_control=(unknown_device,)))
+        build_truth_rows(output_corrupted_dev)
+
+
+def test_fraud_event_with_invalid_fraud_input_index_raises_value_error() -> None:
+    """
+    WHAT: Asserts that build_truth_rows raises ValueError naming the payment_id when a fraud event
+    in the result has an event_fraud_input_index that is None or out of range.
+
+    WHY: A fraud event cannot enter truth records without a valid index pointing to its payment story;
+    missing or corrupt index mapping indicates internal runner inconsistency.
+
+    Args:
+        None.
+
+    Returns:
+        None. Fails if invalid fraud input indices are accepted or do not raise ValueError.
+
+    Example:
+        # build_truth_rows raises ValueError naming the payment_id if event_fraud_input_index is 99.
+    """
+    # 1. Execute run with a single fraud payment and story.
+    payment = PlannedPayment(10, "acc_person_000001", "acc_person_000002", 5000, 0, "everyday")
+    story = PaymentStory("gang_alpha", "route", 1, "test story")
+    output = run_interactive_world(
+        TINY, RunnerSettings(fraud_enabled=True),
+        FraudInputs(payments=(payment,), truth=TruthFacts(payment_stories=(story,))),
+        code_version=TEST_CODE_VERSION,
+    )
+
+    # 2. Corrupt event_fraud_input_index to 99 (out of range) for the fraud event.
+    fraud_position = output.result.event_sources.index("fraud")
+    corrupted_indices = list(output.result.event_fraud_input_index)
+    corrupted_indices[fraud_position] = 99
+    corrupted_result = dataclasses.replace(output.result, event_fraud_input_index=corrupted_indices)
+    corrupted_output = dataclasses.replace(output, result=corrupted_result)
+
+    # 3. Verify build_truth_rows raises ValueError naming the payment_id.
+    payment_id = output.result.payment_ids[fraud_position]
+    with pytest.raises(ValueError, match=f"Fraud event '{payment_id}' has invalid event_fraud_input_index: 99"):
+        build_truth_rows(corrupted_output)
 
 
 def test_truth_refusals_on_non_empty_folder_and_missing_env_var(tmp_path: Path) -> None:
