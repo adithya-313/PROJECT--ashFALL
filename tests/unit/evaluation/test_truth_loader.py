@@ -15,8 +15,7 @@ TERM: tamper detection: verifying cryptographic SHA-256 digests and row counts a
 TERM: direct caller guard: runtime inspection of calling module frame to block operational packages.
 """
 
-import importlib
-import sys
+import importlib.util
 from pathlib import Path
 
 import pytest
@@ -195,13 +194,12 @@ def test_caller_guard_blocks_operational_package(tmp_path: Path) -> None:
     )
     (api_dir / "caller.py").write_text(caller_code, encoding="utf-8")
 
-    # 3. Temporarily inject mock package root into sys.path and import mock api.caller.
-    sys.path.insert(0, str(pkg_root))
-    try:
-        mock_module = importlib.import_module("api.caller")
-        with pytest.raises(PermissionError, match="Operational package 'api' is forbidden"):
-            mock_module.try_load(tmp_path, run_dir.name)
-    finally:
-        sys.path.remove(str(pkg_root))
-        sys.modules.pop("api.caller", None)
-        sys.modules.pop("api", None)
+    # 3. Load caller module under package 'api.caller' using file spec.
+    spec = importlib.util.spec_from_file_location("api.caller", api_dir / "caller.py")
+    assert spec is not None and spec.loader is not None
+    mock_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mock_module)
+
+    # 4. Assert calling load_truth raises PermissionError naming operational package.
+    with pytest.raises(PermissionError, match="Operational package 'api' is forbidden"):
+        mock_module.try_load(tmp_path, run_dir.name)
