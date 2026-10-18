@@ -221,4 +221,5 @@ def test_check_5_v2_register_negative() -> None:
     assert "broken register rejected" in outcome.key_number
     assert outcome.evidence["real_hash_unchanged"] is True
     assert outcome.evidence["v1_status"] == "28/2/1"
+    assert "K1: built needs at least one evidence item" in outcome.evidence["captured_message"]
 

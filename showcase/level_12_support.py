@@ -13,9 +13,11 @@ TERM: money conservation: Invariant requiring total world money to equal opening
 """
 
 import hashlib
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from core import issue_register
 from core.config_validator import load_yaml
 from world.checks import (
     check_balances_equal_entry_sums,
@@ -356,4 +358,36 @@ def verify_held_payment_isolation(
     assert held_output.result.run_result.events == baseline_events
     verify_money_rules(held_output, opening_total)
     return len(baseline_entries), len(held_entries), len(held_output.result.run_result.events)
+
+
+def verify_v1_register_counts(repo_root: Path, register_path: Path) -> str:
+    """
+    WHAT: Validates and counts issues in the Level 11 issue register (config/issues.yaml).
+    Verifies that the register passes schema checks and preserves the frozen status counts
+    of 28 built, 2 planned, and 1 deferred requirement issues.
+
+    WHY: Guarantees that ongoing Level 12 modifications and register migrations do not
+    regress or alter the frozen Level 11 issue register invariants.
+
+    Args:
+        repo_root: Path to the repository root directory for schema validation.
+        register_path: Path to the Level 11 issues.yaml configuration file.
+
+    Returns:
+        String representing the status ratio formatted as 'built/planned/deferred'.
+
+    Example:
+        ratio = verify_v1_register_counts(repo_root=Path('.'), register_path=Path('config/issues.yaml'))
+    """
+    # 1. Load v1 register and assert schema validation passes with zero errors.
+    v1_data = issue_register.load_register(register_path)
+    v1_errors = issue_register.check_register(v1_data, repo_root)
+    assert not v1_errors, f"v1 issue register check failed: {v1_errors}"
+
+    # 2. Count status entries and assert exact frozen counts: 28 built, 2 planned, 1 deferred.
+    v1_counts = Counter(
+        entry.get("status") for entry in v1_data.values() if isinstance(entry, dict)
+    )
+    assert dict(v1_counts) == {"built": 28, "planned": 2, "deferred": 1}
+    return f"{v1_counts['built']}/{v1_counts['planned']}/{v1_counts['deferred']}"
 

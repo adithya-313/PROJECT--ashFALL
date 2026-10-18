@@ -13,7 +13,9 @@ TERM: hold: A temporary suspension of payment execution pending explicit adminis
 TERM: issue register: Architectural ledger tracking requirements, evidence, and operational statuses.
 """
 
+import contextlib
 import hashlib
+import io
 import tempfile
 from collections import Counter
 from pathlib import Path
@@ -21,7 +23,7 @@ from typing import Any
 
 import yaml
 
-from core import issue_register, issue_register_v2
+from core import issue_register_v2
 from core.config_validator import load_yaml
 from scripts.verify_world import check_fp, check_g1, check_g2, check_g3
 from showcase.framework import CheckOutcome
@@ -33,6 +35,7 @@ from showcase.level_12_support import (
     load_level_12_config,
     verify_held_payment_isolation,
     verify_lien_blocked_debits,
+    verify_v1_register_counts,
 )
 from world.fast_mode import FastRunSettings, event_lines, run_fast_world
 from world.interactive_records import FraudInputs, RunnerSettings
@@ -274,6 +277,7 @@ async def run_v2_register_negative_check(workspace: Any) -> CheckOutcome:
     initial_hash = hashlib.sha256(real_content).hexdigest()
 
     # 2. Mutate a temporary copy by stripping evidence from built issue K1 and verify rejection.
+    captured_stdout = io.StringIO()
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_v2_path = Path(temp_dir) / "issues_v2.yaml"
         temp_data = issue_register_v2.load_v2_register(ISSUES_V2_PATH)
@@ -282,24 +286,24 @@ async def run_v2_register_negative_check(workspace: Any) -> CheckOutcome:
         reloaded = issue_register_v2.load_v2_register(temp_v2_path)
         errors = issue_register_v2.check_register(reloaded, REPO_ROOT)
         assert errors == ["K1: built needs at least one evidence item"]
-        main_exit_code = issue_register_v2.main([str(temp_v2_path)])
+        with contextlib.redirect_stdout(captured_stdout):
+            main_exit_code = issue_register_v2.main([str(temp_v2_path)])
         assert main_exit_code == 1
+
+    captured_message = captured_stdout.getvalue().strip()
+    assert "K1: built needs at least one evidence item" in captured_message
 
     # 3. Assert real file hash is identical before and after temp validation.
     final_hash = hashlib.sha256(ISSUES_V2_PATH.read_bytes()).hexdigest()
     assert initial_hash == final_hash, "Real issues_v2.yaml file was modified"
 
     # 4. Verify v1 issue register remains at the frozen 28 built, 2 planned, 1 deferred invariant.
-    v1_data = issue_register.load_register(ISSUES_V1_PATH)
-    v1_errors = issue_register.check_register(v1_data, REPO_ROOT)
-    assert not v1_errors, f"v1 issue register check failed: {v1_errors}"
-    v1_counts = Counter(
-        entry.get("status") for entry in v1_data.values() if isinstance(entry, dict)
-    )
-    assert dict(v1_counts) == {"built": 28, "planned": 2, "deferred": 1}
-    v1_ratio = f"{v1_counts['built']}/{v1_counts['planned']}/{v1_counts['deferred']}"
+    v1_ratio = verify_v1_register_counts(REPO_ROOT, ISSUES_V1_PATH)
 
     key_number = f"broken register rejected; real v2 hash and v1 {v1_ratio} invariant intact"
-    evidence = {"errors_caught": len(errors), "real_hash_unchanged": True, "v1_status": v1_ratio}
+    evidence = {
+        "errors_caught": len(errors), "real_hash_unchanged": True, "v1_status": v1_ratio,
+        "captured_message": captured_message,
+    }
     return CheckOutcome(key_number=key_number, evidence=evidence)
 
