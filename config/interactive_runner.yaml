@@ -1,0 +1,30 @@
+# Settings for the Level 12a interactive runner (world/interactive_runner.py).
+#
+# TERM: interactive runner = the loop that runs a world when fraud is switched on; it can pause, hold or decline
+#       payments and apply outside events such as liens while the world runs.
+# TERM: random stream = one independent source of random numbers; two streams never share or shift each other's draws.
+# TERM: child = one of the numbered random streams split off a single seed; children 0-3 belong to Level 11.
+# TERM: tie-break order = which kind of item goes first when two items fall on the same minute.
+# TERM: run id = a short fingerprint of seed, settings and code version that names one run.
+# TERM: code version = which commit of the code produced a run, e.g. "d41b176", or "unknown" when it cannot be found.
+#
+# Checked by: python -m core.config_validator config/interactive_runner.yaml
+
+interactive_runner:
+  label: policy
+  reason: Fraud-on worlds must leave Level 11's genuine payments exactly as they were. These settings fix which random streams the new components use, how same-minute items are ordered, and how runs and payments are named.
+  issue_ids_v2: [K1, K3, 12-2, 12-11]
+  derived_from: "policy; run id shape matches Level 11 live-mode event_id"
+  random_stream_children:
+    fraud_payment_failures: 4
+    resumed_payment_failures: 5
+  random_stream_children_reason: Children 0-3 belong to Level 11 and must never be touched. Each new component gets its own child, so its draws can never shift another component's draws.
+  tie_break_order: [outside_events, planned_payments, fraud_payments, resumed_payments]
+  tie_break_order_reason: Outside events at minute m apply before any payment at m. Genuine and episode payments keep Level 11's order. Fraud and resumed payments come after genuine ones at the same minute, so an empty fraud plan cannot reorder anything.
+  run_id_hex_length: 16
+  position_digits: 6
+  id_shape_reason: The same shape as Level 11's live-mode event_id, 16 hex characters, a dash and a 6-digit position.
+  code_version_env_var: ASHFALL_CODE_VERSION
+  code_version_git_timeout_seconds: 5
+  unknown_code_version: unknown
+  code_version_reason: Containers have no git history, so the version can be passed in through an environment variable; on a laptop git answers within a short timeout; otherwise the run records "unknown" openly instead of guessing.

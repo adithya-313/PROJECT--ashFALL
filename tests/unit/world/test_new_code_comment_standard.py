@@ -102,6 +102,38 @@ NEW_CODE_FILES: list[str] = [
     "tests/unit/showcase/test_level_11_page.py",
     "showcase/level_11_festival.py",
     "tests/unit/showcase/test_level_11_festival.py",
+    # Level 12a frozen-anchor test guarding every value Level 11 pinned.
+    "tests/unit/world/test_frozen_anchors.py",
+    # Level 12a showcase --part option test suite.
+    "tests/unit/test_showcase_part.py",
+    # Level 12a run identity module and test suite.
+    "world/run_identity.py",
+    "tests/unit/world/test_run_identity.py",
+    # Level 12a outside events, encumbrance book and their test suite.
+    "world/outside_events.py",
+    "world/encumbrance.py",
+    "tests/unit/world/test_outside_events_and_encumbrance.py",
+    # Level 12a interactive runner records, switch and fraud-off path, and their test suite.
+    "world/interactive_records.py",
+    "world/interactive_runner.py",
+    "tests/unit/world/test_interactive_runner_switch.py",
+    # Level 12a fraud-on loop, runner state and their test suite.
+    "world/interactive_state.py",
+    "world/interactive_loop.py",
+    "tests/unit/world/test_interactive_runner_fraud_on.py",
+    # Level 12a tactic family and tactic cost config test suite.
+    "tests/unit/test_tactic_families.py",
+    # Level 12a issue register v2 checker and its test suite.
+    "core/issue_register_v2.py",
+    "tests/unit/test_issue_register_v2.py",
+    # Level 12a events-v2 line builder and its test suite.
+    "world/interactive_events.py",
+    "tests/unit/world/test_interactive_events.py",
+    # Level 12a showcase checks and runner modules.
+    "showcase/level_12_support.py",
+    "showcase/level_12_checks.py",
+    "showcase/level_12.py",
+    "tests/unit/showcase/test_level_12_checks.py",
 ]
 
 
@@ -109,6 +141,10 @@ NEW_CODE_FILES: list[str] = [
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
     ("world/amounts.py", "lookalike_small_amount_paise"),
+    # Level 12a showcase --part option helpers added to older showcase files.
+    ("showcase/framework.py", "select_part_checks"),
+    ("showcase/__main__.py", "check_part_argument"),
+    ("showcase/__main__.py", "report_folder"),
 ]
 
 

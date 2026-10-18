@@ -286,6 +286,11 @@ jobs:
             exit 1
           fi
 
+      # Dry-run make show with LEVEL=12 and PART=a to verify the Makefile passes --part through to the showcase CLI.
+      # Runs on the Linux CI runner where make is installed, ensuring part-filtered showcase runs work as intended.
+      - name: Check make passes PART through
+        run: make -n show LEVEL=12 PART=a | tee "$RUNNER_TEMP/make_dry_run.txt" && grep -q -- "--part a" "$RUNNER_TEMP/make_dry_run.txt"
+
       # Run every level showcase in quick mode (the Level 7 checks, including stopping the broker twice).
       - name: Run the showcase
         run: make show-all QUICK=1
@@ -369,6 +374,11 @@ jobs:
       # listed in config/new_engine_paths.yaml.
       - name: Check the top-level folder classification
         run: python -m core.folder_check
+
+      # Fails if config/issues_v2.yaml is not valid: an ID missing or invented, a built issue whose evidence cannot be
+      # found, or a config issue_ids_v2 tag that names an unknown ID or has no derived_from.
+      - name: Check the version 2 issue register
+        run: python -m core.issue_register_v2
 
       # Run the fast folders. "-m not needs_stack" skips tests that need the Docker stack. The geo-velocity tests and
       # test_velocity_features.py (which the level-showcase job leaves out) DO run here: the geo tests now use a small

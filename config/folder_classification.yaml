@@ -11,7 +11,9 @@
 
 folder_classification:
   label: policy
-  reason: A fixed list forces a decision about every new folder, so new-engine code cannot appear in a folder the order check does not watch.
+  reason: A fixed list forces a decision about every new folder, so new-engine code cannot appear in a folder the order check does not watch. evaluation and patterns are classified before any code exists in them (Level 12a task 2); evaluation/ will hold the truth loader and evaluation-only code, and patterns/ will hold gang pattern files.
+  issue_ids_v2: [K8]
+  derived_from: "policy; ground rule and Section 8"
   engine:
     - sim
     - world
@@ -20,6 +22,8 @@ folder_classification:
     - decisions
     - features_m1
     - scenarios
+    - evaluation
+    - patterns
   not_engine:
     - .dvc
     - .github

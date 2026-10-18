@@ -1,0 +1,44 @@
+# Units for what a mule tactic costs, and the two money anchors for it (amendment A-016).
+#
+# TERM: paise = one hundredth of a rupee; code stores money as whole paise so there are no rounding errors,
+#       e.g. Rs 4,000 is 400000 paise (the same as the ledger).
+# TERM: simulated minute = one tick of the world clock, not a real minute, e.g. a 10-minute payout window is 10 ticks.
+# TERM: probability per use = the chance, between 0 and 1, that using a tactic once gets it noticed,
+#       e.g. 0.1 means noticed in 1 use out of 10.
+# TERM: account-supplier fee = what a gang pays the person who supplies a mule account, as a share of the money
+#       moved through it.
+# TERM: operator share = the part of the stolen money the gang's operator keeps.
+#
+# The figures behind the two parameters come from the finding bengaluru_rented_mule_suppliers in
+# docs/research/mule_typologies.md. They are REPORTED, NOT CONFIRMED, so they are assumptions with ranges.
+# These two parameters live here and NOT in config/world_ranges.yaml, whose 79-parameter count is pinned.
+# Checked by: tests/unit/test_tactic_families.py and python -m core.config_validator config/tactic_costs.yaml
+
+tactic_cost_units:
+  label: policy
+  reason: Tactic costs had no units, so two tactics could not be compared on cost. Fixing the units now means every later cost is written in the same ones, and the ledger and the tactic costs agree.
+  issue_ids_v2: [12-9]
+  derived_from: "amendment A-016"
+  money_unit: INR
+  money_storage: paise
+  time_unit: simulated_minutes
+  risk_unit: probability_per_use
+  risk_values: set in Level 12b, labelled assumption
+
+  parameters:
+    account_supplier_fee_share:
+      label: assumption
+      unit: fraction of money moved
+      range: [0.03, 0.06]
+      based_on: docs/research/mule_typologies.md bengaluru_rented_mule_suppliers
+      issue_ids_v2: [12-9]
+      derived_from: "amendment A-016"
+      reason: Deccan Herald (Jul 2025) reported about Rs 4,000 per Rs 1 lakh, which is 4%. The source finding says this figure is reported and NOT confirmed, so it is an assumption with a range around 4%.
+    operator_share:
+      label: assumption
+      unit: fraction of money moved
+      range: [0.20, 0.30]
+      based_on: docs/research/mule_typologies.md bengaluru_rented_mule_suppliers
+      issue_ids_v2: [12-9]
+      derived_from: "amendment A-016"
+      reason: The reported 20 to 30% share is NOT confirmed by the source finding, which is why it is an assumption with a range and not a fact.

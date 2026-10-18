@@ -217,6 +217,9 @@ def make_result_json_data(level_result: LevelResult) -> dict[str, Any]:
             for r in level_result.check_results
         ],
     }
+    # A part run (--part a) says which part it was; whole-level runs keep exactly the keys they always had.
+    if level_result.part is not None:
+        stable["part"] = level_result.part
     run_info = {
         "finished_at": level_result.finished_at,
         "total_seconds": level_result.total_seconds,

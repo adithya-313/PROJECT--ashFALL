@@ -1,0 +1,740 @@
+# Issue register v2: the findings of Revision 2 of the project report (Section 27, 16 October 2026), plus the
+# Level 11 issues that later levels carry on. Level 11's own register, config/issues.yaml, is frozen and never edited.
+#
+# TERM: issue register = a list of every known problem with a status, so none is forgotten silently,
+#       e.g. "12-6" is "built" because the trivial-world check is written down in the evaluation config.
+# TERM: revision_2 = an ID first used in Revision 2, e.g. K1 or 12-7.
+# TERM: level_11 = an ID that already exists in config/issues.yaml, e.g. G1; its v1_status is copied from there.
+# TERM: evidence = a real thing that can be looked up to show the status is true: a config block, a test function,
+#       an amendment or a document text. The checker opens each one.
+# TERM: later_work = what a later level still has to do, written "Level N: what".
+#
+# status words
+#   built    = done and checked now (see evidence).
+#   partial  = part of it exists now (see evidence); later_work lists the rest.
+#   planned  = nothing exists yet; a later level owns it.
+#   deferred = deliberately not built; reason says why.
+#
+# Section 27 groups some findings on one row (for example 14-9, 14-11 and 14-12). Each ID has its own entry here
+# and shares the finding text.
+# Checked by: python -m core.issue_register_v2 and tests/unit/test_issue_register_v2.py
+
+meta:
+  label: policy
+  reason: A second register is needed because the Level 11 register has a fixed set of 31 IDs that a test pins, so new findings cannot be added to it. Keeping them apart leaves every Level 11 count untouched.
+  derived_from: "Project Report Revision 2, Section 27, 16 Oct 2026"
+  statuses: [built, partial, planned, deferred]
+
+issues:
+  K1:
+    title: "The world cannot react: payments are planned before the run; live mode replays a finished run"
+    origin: revision_2
+    status: built
+    levels: [12, 13, 14, 19, 21, 35, 36]
+    evidence:
+      - {kind: config, file: config/interactive_runner.yaml, name: interactive_runner}
+      - {kind: test, file: tests/unit/world/test_interactive_runner_switch.py, name: test_fraud_off_equals_level_11_run_everywhere}
+      - {kind: test, file: tests/unit/world/test_interactive_runner_fraud_on.py, name: test_empty_fraud_plan_equals_level_11_everywhere}
+      - {kind: test, file: tests/unit/world/test_interactive_runner_fraud_on.py, name: test_split_world_has_genuine_splits_and_same_ids_on_both_paths}
+      - {kind: test, file: tests/unit/showcase/test_level_12_checks.py, name: test_check_2_split_world_matches_level_11}
+  K2:
+    title: "events-v1 carries simulator-only fields"
+    origin: revision_2
+    status: planned
+    levels: [4, 14, 16, 18, 27, 29, 43]
+    later_work: ["Level 4: World-side only; bank-feed projection; ground rule 29"]
+  K3:
+    title: "No unique payment identity; transfer_id repeats for split legs"
+    origin: revision_2
+    status: partial
+    levels: [12, 14, 16, 23, 32]
+    parts: [12a]
+    evidence:
+      - {kind: config, file: config/interactive_runner.yaml, name: interactive_runner}
+      - {kind: test, file: tests/unit/world/test_run_identity.py, name: test_payment_ids_are_unique_and_well_formed}
+      - {kind: test, file: tests/unit/world/test_interactive_events.py, name: test_lines_have_v1_fields_plus_two_ids_and_nothing_revealing}
+      - {kind: test, file: tests/unit/world/test_interactive_runner_fraud_on.py, name: test_split_world_has_genuine_splits_and_same_ids_on_both_paths}
+    later_work: ["Level 14: payment_id, bank_id and side on the bank side (finding 14-2)", "Level 16: carry payment_id through labels", "Level 23: carry payment_id through the money tracer", "Level 32: carry payment_id through later levels"]
+  K4:
+    title: "The world has no database"
+    origin: revision_2
+    status: planned
+    levels: [4, 12]
+    later_work: ["Level 4: Truth as a file set; data contracts rewritten"]
+  K5:
+    title: "One shared .env across services"
+    origin: revision_2
+    status: planned
+    levels: [12, 39]
+    later_work: ["Level 12: Separate env file and mount for truth"]
+  K6:
+    title: "Account IDs repeat across worlds; velocity keys are not namespaced"
+    origin: revision_2
+    status: planned
+    levels: [15, 16]
+    later_work: ["Level 15: Ground rule 32"]
+  K7:
+    title: "Time zones disagree"
+    origin: revision_2
+    status: planned
+    levels: [13, 15, 25, 26]
+    later_work: ["Level 13: Ground rule 30; time contract in 13a"]
+  K8:
+    title: "New top-level folders fail CI unless classified"
+    origin: revision_2
+    status: partial
+    levels: [12, 13]
+    parts: [12a, 13a]
+    evidence:
+      - {kind: test, file: tests/unit/test_folder_check.py, name: test_real_repo_is_fully_classified}
+      - {kind: config, file: config/folder_classification.yaml, name: folder_classification}
+      - {kind: config, file: config/new_engine_paths.yaml, name: new_engine_paths}
+    later_work: ["Level 13: classify new top-level folders in 13a before adding them"]
+  K9:
+    title: "A docstring standard is enforced on registered new world files"
+    origin: revision_2
+    status: built
+    levels: [12]
+    parts: [12a]
+    evidence:
+      - {kind: test, file: tests/unit/world/test_new_code_comment_standard.py, name: test_function_lengths_and_docstrings}
+      - {kind: test, file: tests/unit/world/test_new_code_comment_standard.py, name: test_module_docstrings_define_technical_terms}
+  X1:
+    title: "ashFALL-side time is wall-clock where it must be event time"
+    origin: revision_2
+    status: planned
+    levels: [13, 14, 15, 16]
+    parts: [13a]
+    later_work: ["Level 13a: Clock moved to 13a; event-time columns in 0005"]
+  X2:
+    title: "The complaint path was defined twice"
+    origin: revision_2
+    status: planned
+    levels: [5, 13, 14]
+    later_work: ["Level 5: One path through the bank"]
+  X3:
+    title: "No channel for account events"
+    origin: revision_2
+    status: partial
+    levels: [12, 14, 15]
+    parts: [12a]
+    evidence:
+      - {kind: test, file: tests/unit/world/test_interactive_runner_switch.py, name: test_fraud_off_adds_ids_and_device_events_in_memory}
+    later_work: ["Level 14: POST /v1/account-events to receive account events", "Level 15: features read the runner device stream"]
+  X4:
+    title: "Who holds the hashing secret was unspecified"
+    origin: revision_2
+    status: planned
+    levels: [13, 33]
+    later_work: ["Level 13: Keyed hash; participation means holding the key"]
+  X5:
+    title: "Bank isolation relied on query filters only"
+    origin: revision_2
+    status: planned
+    levels: [14, 26]
+    later_work: ["Level 14: Row-level security with SET LOCAL"]
+  X6:
+    title: "Later levels needed extension points in a frozen world"
+    origin: revision_2
+    status: built
+    levels: [12]
+    parts: [12a]
+    evidence:
+      - {kind: test, file: tests/unit/world/test_interactive_runner_switch.py, name: test_fraud_off_reproduces_the_frozen_events_hash}
+      - {kind: test, file: tests/unit/world/test_interactive_runner_fraud_on.py, name: test_genuine_draws_never_move}
+  X7:
+    title: "Per-payment HTTP calls make large runs and replays slow"
+    origin: revision_2
+    status: planned
+    levels: [14, 16, 19, 24]
+    later_work: ["Level 14: In-process mode"]
+  X8:
+    title: "Wrong registry entries would have been generated twice"
+    origin: revision_2
+    status: planned
+    levels: [12, 13]
+    parts: [12e]
+    later_work: ["Level 12e: Errors only in 12e"]
+  F1:
+    title: "Exactly 28 built, 2 planned, 1 deferred; a fixed set of 31 IDs; config issue_ids limited to those IDs"
+    origin: revision_2
+    status: built
+    levels: [12]
+    parts: [12a]
+    evidence:
+      - {kind: config, file: config/frozen_anchors.yaml, name: frozen_anchors}
+      - {kind: test, file: tests/unit/world/test_frozen_anchors.py, name: test_level_11_issue_register_is_unchanged}
+      - {kind: test, file: tests/unit/test_issue_register_v2.py, name: test_real_register_passes}
+  F2:
+    title: "Exactly 33 grounded parameters (30 assumption, 3 reported)"
+    origin: revision_2
+    status: built
+    levels: [12]
+    parts: [12a]
+    evidence:
+      - {kind: config, file: config/frozen_anchors.yaml, name: frozen_anchors}
+      - {kind: test, file: tests/unit/world/test_frozen_anchors.py, name: test_grounded_parameter_counts_are_unchanged}
+  F3:
+    title: "Exactly 6 stress files"
+    origin: revision_2
+    status: built
+    levels: [12]
+    parts: [12a]
+    evidence:
+      - {kind: config, file: config/frozen_anchors.yaml, name: frozen_anchors}
+      - {kind: test, file: tests/unit/world/test_frozen_anchors.py, name: test_stress_scenario_file_count_is_unchanged}
+  F4:
+    title: "Level 8 baselines compare API shape and Compose services for equality"
+    origin: revision_2
+    status: built
+    levels: [13, 14, 20]
+    evidence:
+      - {kind: doc, file: scripts/update_baselines.py, text: "python scripts/update_baselines.py"}
+      - {kind: test, file: tests/baselines/test_regression_baselines.py, name: test_model_v1_metrics_match_the_baseline}
+    later_work: ["Level 13: refresh baselines on purpose with scripts/update_baselines.py", "Level 14: refresh baselines on purpose", "Level 20: refresh baselines on purpose"]
+  F5:
+    title: "The outbox writer type-imports from the /score router; CI runs mypy on api/"
+    origin: revision_2
+    status: planned
+    levels: [20]
+    later_work: ["Level 20: Level 20 moves TransactionRequest first"]
+  F6:
+    title: "Amendments are safe to append"
+    origin: revision_2
+    status: built
+    levels: [12]
+    parts: [12a]
+    evidence:
+      - {kind: config, file: config/frozen_anchors.yaml, name: frozen_anchors}
+      - {kind: doc, file: docs/research/amendments.md, text: "## A-016"}
+      - {kind: test, file: tests/unit/world/test_frozen_anchors.py, name: test_level_11_issue_register_is_unchanged}
+  12-1:
+    title: "A static truth record cannot describe rented or resold accounts"
+    origin: revision_2
+    status: planned
+    levels: [12]
+    parts: [12b]
+    later_work: ["Level 12b: Temporal truth with gang ownership and depth"]
+  12-2:
+    title: "Balances are checked in two places, with no available balance"
+    origin: revision_2
+    status: built
+    levels: [12]
+    parts: [12a]
+    evidence:
+      - {kind: config, file: config/interactive_runner.yaml, name: interactive_runner}
+      - {kind: test, file: tests/unit/world/test_outside_events_and_encumbrance.py, name: test_lien_reduces_what_can_be_spent}
+      - {kind: test, file: tests/unit/world/test_interactive_runner_fraud_on.py, name: test_lien_blocks_exactly_the_chosen_debit}
+      - {kind: test, file: tests/unit/showcase/test_level_12_checks.py, name: test_check_3_lien_blocks_debits_and_money_balances}
+  12-3:
+    title: "Nothing creates liens until Levels 13 and 21"
+    origin: revision_2
+    status: planned
+    levels: [12]
+    parts: [12d]
+    later_work: ["Level 12d: Labelled fixture liens through the same interface"]
+  12-4:
+    title: "The analyst needed a queue and a score that don't exist yet"
+    origin: revision_2
+    status: planned
+    levels: [12, 22]
+    parts: [12e]
+    later_work: ["Level 12e: Pure function now, wired in Level 22"]
+  12-5:
+    title: "Registry-report ownership with Level 13 was unclear"
+    origin: revision_2
+    status: planned
+    levels: [12]
+    parts: [12e]
+    later_work: ["Level 12e: World-emitted report events with a written contract"]
+  12-6:
+    title: "\"Almost perfectly\" had no number"
+    origin: revision_2
+    status: built
+    levels: [12]
+    parts: [12a]
+    evidence:
+      - {kind: amendment, id: A-013}
+      - {kind: config, file: config/evaluation.yaml, name: trivial_world_check}
+  12-7:
+    title: "The inflation factor had three meanings"
+    origin: revision_2
+    status: partial
+    levels: [12]
+    parts: [12a, 12g]
+    evidence:
+      - {kind: amendment, id: A-012}
+      - {kind: config, file: config/world_ranges.yaml, name: world_fraud_inflation_factor}
+    later_work: ["Level 12g: measure the factor and write it on fraud-on world cards"]
+  12-8:
+    title: "Held-out tactics overlapped training mechanisms"
+    origin: revision_2
+    status: partial
+    levels: [12]
+    parts: [12a, 12d]
+    evidence:
+      - {kind: amendment, id: A-014}
+      - {kind: config, file: config/tactic_families.yaml, name: tactic_families}
+      - {kind: test, file: tests/unit/test_tactic_families.py, name: test_held_out_names_match_evaluation_yaml}
+    later_work: ["Level 12b: register the numeric dividing lines as labelled building-block parameters", "Level 12d: validate the family boundaries"]
+  12-9:
+    title: "Tactic costs had no units"
+    origin: revision_2
+    status: built
+    levels: [12]
+    parts: [12a]
+    evidence:
+      - {kind: amendment, id: A-016}
+      - {kind: config, file: config/tactic_costs.yaml, name: tactic_cost_units}
+      - {kind: test, file: tests/unit/test_tactic_families.py, name: test_cost_parameters_are_assumptions_with_ranges_inside_zero_to_one}
+  12-10:
+    title: "Plugins could break determinism and are arbitrary code"
+    origin: revision_2
+    status: planned
+    levels: [12, 30]
+    parts: [12f]
+    later_work: ["Level 12f: World random stream only; never in bundles"]
+  12-11:
+    title: "Gang activity could shift genuine random draws, including failure draws"
+    origin: revision_2
+    status: built
+    levels: [12]
+    parts: [12a]
+    evidence:
+      - {kind: config, file: config/interactive_runner.yaml, name: interactive_runner}
+      - {kind: test, file: tests/unit/world/test_interactive_runner_fraud_on.py, name: test_genuine_draws_never_move}
+  12-12:
+    title: "Bulk-label lag exceeds the 2-month showcase world"
+    origin: revision_2
+    status: planned
+    levels: [12]
+    parts: [12e]
+    later_work: ["Level 12e: Labelled short-lag fixture or a 6-month world"]
+  12-13:
+    title: "Edge-case expectations depend on later levels"
+    origin: revision_2
+    status: planned
+    levels: [12, 29]
+    parts: [12g]
+    later_work: ["Level 12g: active_from_level"]
+  12-14:
+    title: "Latin hypercube sampling is thin across 30-plus parameters"
+    origin: revision_2
+    status: planned
+    levels: [12]
+    parts: [12f]
+    later_work: ["Level 12f: Stratified on key parameters"]
+  12-15:
+    title: "Rate checks on small worlds would be flaky"
+    origin: revision_2
+    status: planned
+    levels: [12]
+    parts: [12e]
+    later_work: ["Level 12e: Tolerances and minimum samples"]
+  12-16:
+    title: "The sanity report compared against PaySim"
+    origin: revision_2
+    status: planned
+    levels: [12]
+    parts: [12g]
+    later_work: ["Level 12g: IBM AML-Data only"]
+  12-17:
+    title: "Mule depth was not recorded; gang routing must obey the same limits"
+    origin: revision_2
+    status: planned
+    levels: [12]
+    parts: [12b, 12c]
+    later_work: ["Level 12b: Depth in truth; Level 11's split helper"]
+  12-18:
+    title: "Validation worlds were missing from the sampler though evaluation.yaml defines them"
+    origin: revision_2
+    status: partial
+    levels: [12, 16, 18]
+    parts: [12a, 12f]
+    evidence:
+      - {kind: amendment, id: A-015}
+      - {kind: config, file: config/evaluation.yaml, name: validation_worlds}
+    later_work: ["Level 12f: the sampler enforces seed disjointness and commits the counts", "Level 16: validation split in labels", "Level 18: validation split in model tuning"]
+  12-19:
+    title: "New mule accounts with new ID formats would reveal their role"
+    origin: revision_2
+    status: planned
+    levels: [12]
+    parts: [12c]
+    later_work: ["Level 12c: Existing formats; genuine accounts also open during runs"]
+  12-20:
+    title: "The showcase runner accepts only a level number"
+    origin: revision_2
+    status: built
+    levels: [12]
+    parts: [12a]
+    evidence:
+      - {kind: test, file: tests/unit/test_showcase_part.py, name: test_part_a_runs_only_part_a_checks}
+      - {kind: test, file: tests/unit/showcase/test_level_12_checks.py, name: test_level_12_checks_match_the_brief}
+  13-2:
+    title: "Raw identifiers could leak through logs, topics and traces"
+    origin: revision_2
+    status: planned
+    levels: [13]
+    parts: [13c]
+    later_work: ["Level 13c: Scan five places; redact at logging and tracing"]
+  13-3:
+    title: "Forwarding holds risked a duplicate tracer in the mock banks"
+    origin: revision_2
+    status: planned
+    levels: [13, 23]
+    parts: [13c]
+    later_work: ["Level 13c: Naive one-hop forwarding as the declared baseline"]
+  13-5:
+    title: "DPIP and the I4C registry were conflated"
+    origin: revision_2
+    status: planned
+    levels: [13]
+    parts: [13b]
+    later_work: ["Level 13b: Separate participation and feeds"]
+  13-9:
+    title: "Dispute actor and recycle delay unspecified"
+    origin: revision_2
+    status: planned
+    levels: [13]
+    parts: [13b]
+    later_work: ["Level 13b: Genuine customer via their bank; sourced delay"]
+  13-10:
+    title: "Dispute actor and recycle delay unspecified"
+    origin: revision_2
+    status: planned
+    levels: [13]
+    parts: [13b]
+    later_work: ["Level 13b: Genuine customer via their bank; sourced delay"]
+  13-11:
+    title: "Phase-2 scores and early Feedback calls unscoped"
+    origin: revision_2
+    status: planned
+    levels: [13]
+    parts: [13a]
+    later_work: ["Level 13a: Out of scope; Feedback from Level 21"]
+  13-12:
+    title: "Phase-2 scores and early Feedback calls unscoped"
+    origin: revision_2
+    status: planned
+    levels: [13]
+    parts: [13a]
+    later_work: ["Level 13a: Out of scope; Feedback from Level 21"]
+  13-14:
+    title: "Hold requests lacked complaint_id; mocks used rupees"
+    origin: revision_2
+    status: planned
+    levels: [13]
+    parts: [13a]
+    later_work: ["Level 13a: Contract fixes"]
+  13-15:
+    title: "Hold requests lacked complaint_id; mocks used rupees"
+    origin: revision_2
+    status: planned
+    levels: [13]
+    parts: [13a]
+    later_work: ["Level 13a: Contract fixes"]
+  13-16:
+    title: "Hold delay was about to be defined twice"
+    origin: revision_2
+    status: planned
+    levels: [13]
+    parts: [13c]
+    later_work: ["Level 13c: Reuse hold_delay_factor"]
+  13-17:
+    title: "too_late needs ledger state when the hold lands"
+    origin: revision_2
+    status: planned
+    levels: [13]
+    parts: [13c]
+    later_work: ["Level 13c: Computed from the encumbrance overlay"]
+  14-2:
+    title: "A cross-bank payment's two sides had no shared key"
+    origin: revision_2
+    status: planned
+    levels: [14]
+    parts: [14a]
+    later_work: ["Level 14a: payment_id, bank_id, side"]
+  14-4:
+    title: "Signature freshness against simulated time would reject replays"
+    origin: revision_2
+    status: planned
+    levels: [14]
+    parts: [14b]
+    later_work: ["Level 14b: Wall-clock transport time"]
+  14-6:
+    title: "Live mode had nowhere to send held payments before Level 22"
+    origin: revision_2
+    status: planned
+    levels: [14, 19]
+    parts: [14c]
+    later_work: ["Level 14c: Allow-only until Level 19"]
+  14-8:
+    title: "No payee type or channel for features"
+    origin: revision_2
+    status: planned
+    levels: [14]
+    parts: [14a, 14c]
+    later_work: ["Level 14a: Columns and projection"]
+  14-9:
+    title: "Idempotency, keys and error handling underspecified"
+    origin: revision_2
+    status: planned
+    levels: [14]
+    parts: [14a, 14b]
+    later_work: ["Level 14a: Per-bank scope and 409; hashed keys with rotation; fuzzing"]
+  14-10:
+    title: "Failed-payment visibility depends on the failure domain"
+    origin: revision_2
+    status: planned
+    levels: [14]
+    parts: [14c]
+    later_work: ["Level 14c: Encoded and tested"]
+  14-11:
+    title: "Idempotency, keys and error handling underspecified"
+    origin: revision_2
+    status: planned
+    levels: [14]
+    parts: [14a, 14b]
+    later_work: ["Level 14a: Per-bank scope and 409; hashed keys with rotation; fuzzing"]
+  14-12:
+    title: "Idempotency, keys and error handling underspecified"
+    origin: revision_2
+    status: planned
+    levels: [14]
+    parts: [14a, 14b]
+    later_work: ["Level 14a: Per-bank scope and 409; hashed keys with rotation; fuzzing"]
+  14-13:
+    title: "chk_source rejects UPI rows; \"migration 0002\" already used"
+    origin: revision_2
+    status: planned
+    levels: [14]
+    parts: [14a]
+    later_work: ["Level 14a: Migration 0005"]
+  14-14:
+    title: "Outbox schema \"1\" is locked; processed_events expects UUIDs"
+    origin: revision_2
+    status: planned
+    levels: [14]
+    parts: [14a]
+    later_work: ["Level 14a: Schema \"2\"; UUIDv5 IDs"]
+  14-15:
+    title: "Outbox schema \"1\" is locked; processed_events expects UUIDs"
+    origin: revision_2
+    status: planned
+    levels: [14]
+    parts: [14a]
+    later_work: ["Level 14a: Schema \"2\"; UUIDv5 IDs"]
+  14-16:
+    title: "Level 11's \"signed envelope\" is not actually signed"
+    origin: revision_2
+    status: planned
+    levels: [14]
+    parts: [14b]
+    later_work: ["Level 14b: Signing built in 14b"]
+  15-1:
+    title: "Velocity already uses event time; a 7-day window needs its own expiry"
+    origin: revision_2
+    status: planned
+    levels: [15]
+    parts: [15a]
+    later_work: ["Level 15a: Extend Level 4's code"]
+  15-2:
+    title: "The region feature broke bank visibility"
+    origin: revision_2
+    status: planned
+    levels: [15]
+    parts: [15b]
+    later_work: ["Level 15b: Same-bank payers only"]
+  15-3:
+    title: "Recompute by event time would flap on late events"
+    origin: revision_2
+    status: planned
+    levels: [15]
+    parts: [15c]
+    later_work: ["Level 15c: Recompute by arrival order"]
+  15-5:
+    title: "Routine life needed purpose labels the bank cannot see"
+    origin: revision_2
+    status: planned
+    levels: [15]
+    parts: [15b]
+    later_work: ["Level 15b: Recurrence heuristic"]
+  15-6:
+    title: "Label-based network features risk leakage and feedback loops"
+    origin: revision_2
+    status: planned
+    levels: [15, 18]
+    parts: [15b]
+    later_work: ["Level 15b: Read by arrival time; leakage checklist"]
+  15-7:
+    title: "Global event order; feature_log size"
+    origin: revision_2
+    status: planned
+    levels: [15]
+    parts: [15a, 15c]
+    later_work: ["Level 15a: Partition by bank and account; daily partitions and estimates"]
+  15-8:
+    title: "Global event order; feature_log size"
+    origin: revision_2
+    status: planned
+    levels: [15]
+    parts: [15a, 15c]
+    later_work: ["Level 15a: Partition by bank and account; daily partitions and estimates"]
+  15-9:
+    title: "Geo kernel fit; M1 versioning; device scope; world-computed novelty"
+    origin: revision_2
+    status: planned
+    levels: [15]
+    parts: [15b]
+    later_work: ["Level 15b: Stated honestly"]
+  15-10:
+    title: "Geo kernel fit; M1 versioning; device scope; world-computed novelty"
+    origin: revision_2
+    status: planned
+    levels: [15]
+    parts: [15b]
+    later_work: ["Level 15b: R8 inside M1"]
+  15-11:
+    title: "Geo kernel fit; M1 versioning; device scope; world-computed novelty"
+    origin: revision_2
+    status: planned
+    levels: [15]
+    parts: [15b]
+    later_work: ["Level 15b: Within-bank only"]
+  15-12:
+    title: "Geo kernel fit; M1 versioning; device scope; world-computed novelty"
+    origin: revision_2
+    status: planned
+    levels: [15]
+    parts: [15b]
+    later_work: ["Level 15b: Bank-computed novelty"]
+  G1:
+    title: "Mule origin; rented mules keep normal life"
+    origin: level_11
+    status: planned
+    levels: [12]
+    parts: [12c]
+    v1_status: built
+    later_work: ["Level 12c: gang worlds with rented mules keeping normal life"]
+  G2:
+    title: "Cash-out channels including ATM limits and genuine shops"
+    origin: level_11
+    status: planned
+    levels: [12]
+    parts: [12c]
+    v1_status: built
+    later_work: ["Level 12c: cash-out channels in gang worlds"]
+  G3:
+    title: "Mule lifecycle; heavy-tailed victims per mule"
+    origin: level_11
+    status: planned
+    levels: [12]
+    parts: [12c]
+    v1_status: built
+    later_work: ["Level 12c: mule lifecycle and heavy-tailed victims in gang worlds"]
+  G6:
+    title: "Scam-type payment schedules"
+    origin: level_11
+    status: planned
+    levels: [12]
+    parts: [12c]
+    v1_status: built
+    later_work: ["Level 12c: scam types in gang worlds"]
+  A2:
+    title: "Genuine shops downstream of mules"
+    origin: level_11
+    status: planned
+    levels: [12]
+    parts: [12c]
+    v1_status: built
+    later_work: ["Level 12c: harm to genuine accounts in gang worlds"]
+  G4:
+    title: "Fixed gang reactions; gang observation feed"
+    origin: level_11
+    status: planned
+    levels: [12]
+    parts: [12d]
+    v1_status: built
+    later_work: ["Level 12d: gang structure and tactics"]
+  G5:
+    title: "Account market shared by gangs"
+    origin: level_11
+    status: planned
+    levels: [12]
+    parts: [12d]
+    v1_status: built
+    later_work: ["Level 12d: gang tactics and held-out families"]
+  L1:
+    title: "Complaint delay by scam type"
+    origin: level_11
+    status: planned
+    levels: [12]
+    parts: [12e]
+    v1_status: built
+    later_work: ["Level 12e: report and lien timing"]
+  L2:
+    title: "Victim complaint share vs bank registry reporting"
+    origin: level_11
+    status: planned
+    levels: [12]
+    parts: [12e]
+    v1_status: built
+    later_work: ["Level 12e: lien behaviour"]
+  L4:
+    title: "Analyst accuracy depends on evidence, load and score"
+    origin: level_11
+    status: planned
+    levels: [12]
+    parts: [12e]
+    v1_status: built
+    later_work: ["Level 12e: lien limits"]
+  L5:
+    title: "Bulk-label events"
+    origin: level_11
+    status: planned
+    levels: [12]
+    parts: [12e]
+    v1_status: built
+    later_work: ["Level 12e: action types"]
+  A3:
+    title: "False complaints weighted to merchants"
+    origin: level_11
+    status: planned
+    levels: [12]
+    parts: [12e]
+    v1_status: built
+    later_work: ["Level 12e: analyst workload"]
+  E1:
+    title: "Base rate and inflation factor"
+    origin: level_11
+    status: partial
+    levels: [12]
+    parts: [12a, 12g]
+    v1_status: built
+    evidence:
+      - {kind: amendment, id: A-012}
+      - {kind: config, file: config/world_ranges.yaml, name: world_fraud_inflation_factor}
+    later_work: ["Level 12g: measure the factor and write it on fraud-on world cards"]
+  R7:
+    title: "Failed payments in the transaction feed"
+    origin: level_11
+    status: planned
+    levels: [14]
+    v1_status: planned
+    later_work: ["Level 14: bank APIs and transaction feed"]
+  R8:
+    title: "Device and routine-life feature fixes"
+    origin: level_11
+    status: planned
+    levels: [15]
+    v1_status: planned
+    later_work: ["Level 15: features"]
+  R9:
+    title: "Arms-race design changes"
+    origin: level_11
+    status: deferred
+    levels: [35]
+    v1_status: deferred
+    later_work: ["Level 35: decide whether arms-race design changes are built"]
+    reason: "Awaiting a decision before Level 35; nothing is built or planned until that decision is made."
