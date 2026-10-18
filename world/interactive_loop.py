@@ -57,6 +57,7 @@ from world.interactive_records import (
 from world.interactive_state import RunnerState
 from world.outside_events import OutsideEvent, validate_outside_event
 from world.run_identity import make_payment_id
+from world.truth_records import validate_truth_facts
 from world.world_plan import WorldPlan
 
 # The failure reasons this runner adds; both are failures of the sender's bank.
@@ -245,6 +246,8 @@ def queue_initial_items(context: LoopContext, planned: Sequence[PlannedPayment],
     for order, event in enumerate(fraud_inputs.outside_events):
         validate_outside_event(event)
         push(context, event.minute, "outside_events", order, event)
+    # Hidden truth facts, validated against planned fraud payments before the loop begins.
+    validate_truth_facts(fraud_inputs.truth, len(fraud_inputs.payments))
 
 
 def apply_outside_event(context: LoopContext, event: OutsideEvent) -> None:

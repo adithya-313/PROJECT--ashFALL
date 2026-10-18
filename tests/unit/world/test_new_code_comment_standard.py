@@ -134,6 +134,9 @@ NEW_CODE_FILES: list[str] = [
     "showcase/level_12_checks.py",
     "showcase/level_12.py",
     "tests/unit/showcase/test_level_12_checks.py",
+    # Level 12b hidden truth store records module and test suite.
+    "world/truth_records.py",
+    "tests/unit/world/test_truth_records.py",
 ]
 
 

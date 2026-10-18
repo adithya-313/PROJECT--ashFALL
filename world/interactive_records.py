@@ -30,6 +30,7 @@ from world.calendar_runner import PlannedPayment, RunResult
 from world.device_events import DeviceEvent
 from world.episodes import Episode
 from world.outside_events import OutsideEvent
+from world.truth_records import TruthFacts
 from world.world_plan import WorldPlan
 
 # The three answers a hook may give, and the same three as a tuple for checking answers at run time.
@@ -62,8 +63,8 @@ class RunnerSettings:
 @dataclass(frozen=True)
 class FraudInputs:
     """
-    WHAT: What fraud adds to a world: extra payments and outside events. Both are empty by default, and an empty
-    FraudInputs with an allow-all hook gives exactly Level 11's run.
+    WHAT: What fraud adds to a world: extra payments, outside events, and hidden truth facts.
+    All are empty by default, and an empty FraudInputs with an allow-all hook gives exactly Level 11's run.
 
     WHY: Fraud payments use the same PlannedPayment record as genuine ones and a purpose from Level 11's list, so the
     events they create look like any other event. Which payments are fraud is kept by the world, not in the purpose.
@@ -71,6 +72,7 @@ class FraudInputs:
     Args:
         payments: Extra payments, in the order they should be tried at equal minutes.
         outside_events: Liens, debit holds, releases and resumes to apply during the run.
+        truth: Hidden truth facts (roles, device control spans, payment stories) associated with the run.
 
     Returns:
         A frozen FraudInputs.
@@ -82,6 +84,7 @@ class FraudInputs:
 
     payments: tuple[PlannedPayment, ...] = ()
     outside_events: tuple[OutsideEvent, ...] = ()
+    truth: TruthFacts = field(default_factory=TruthFacts)
 
 
 @dataclass(frozen=True)
