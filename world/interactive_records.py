@@ -18,6 +18,7 @@ TERM: event source: whether an event's true origin was the world's own plan ("pl
       known to the world only, never shown to a bank.
 TERM: resumed: an event whose execution was held by the bank and resumed later by an outside event;
       recorded in events_resumed.
+TERM: fraud input index: the 0-based position of a fraud payment in FraudInputs.payments; None for planned payments.
 TERM: frozen: a record whose fields cannot be changed after it is made.
 """
 
@@ -137,9 +138,9 @@ def allow_all(payment: PaymentView) -> HookDecision:
 class InteractiveRunResult:
     """
     WHAT: Everything one interactive run produced. run_result is shaped exactly like Level 11's RunResult; the other
-    lists line up with run_result.events one to one (payment ids, planned payment ids, event sources, events resumed),
-    followed by the device events that were applied, the payments still held at the end, the lien and hold log,
-    the run id and the money created by accounts opened during the run.
+    lists line up with run_result.events one to one (payment ids, planned payment ids, event sources, events resumed,
+    and fraud input indices), followed by the device events that were applied, the payments still held at the end,
+    the lien and hold log, the run id and the money created by accounts opened during the run.
 
     WHY: Keeping Level 11's part unchanged lets every Level 11 check and hash read it as before. The extra lists sit
     beside it, so nothing Level 11 reads gains a new field.
@@ -151,6 +152,8 @@ class InteractiveRunResult:
         event_sources: One per event: "planned" or "fraud". World side only.
         events_resumed: One boolean per event: True if the payment was held and resumed, False otherwise.
         applied_device_events: The device events applied during the run, in order.
+        event_fraud_input_index: One per event: index in FraudInputs.payments for fraud events,
+            None for planned payments.
         held_payments: Payments held by the hook and never resumed.
         encumbrance_log: (minute, action, encumbrance id) for every lien or hold placed or released.
         run_id: The run's name, e.g. "66db9aa439b092ee".
@@ -161,7 +164,7 @@ class InteractiveRunResult:
 
     Example:
         A fraud-off tiny-world run (seed 101) has 2,915 events, so payment_ids, planned_payment_ids,
-        event_sources and events_resumed each hold 2,915 entries.
+        event_sources, events_resumed and event_fraud_input_index each hold 2,915 entries.
     """
 
     run_result: RunResult
@@ -170,6 +173,7 @@ class InteractiveRunResult:
     event_sources: list[str]
     events_resumed: list[bool]
     applied_device_events: list[DeviceEvent]
+    event_fraud_input_index: list[int | None] = field(default_factory=list)
     held_payments: list[PaymentView] = field(default_factory=list)
     encumbrance_log: list[tuple[int, str, str]] = field(default_factory=list)
     run_id: str = ""

@@ -898,3 +898,89 @@ def test_same_inputs_give_the_same_result() -> None:
     first = run_fraud_on_world(TINY, inputs, hook).result
     second = run_fraud_on_world(TINY, inputs, ScriptedHook(hook.hold_ids, hook.decline_ids)).result
     assert first == second
+
+
+def test_two_fraud_payments_carry_their_respective_input_indices() -> None:
+    """
+    WHAT: Runs a fraud-on world with two distinct fraud payments at minutes 600 and 700. Asserts that each event
+    resulting from fraud payment k carries fraud input index k, each planned event carries None, and the length
+    of event_fraud_input_index matches the total events list.
+
+    WHY: Ground rule 15 and Level 12b require each recorded payment event to unambiguously trace back to the exact
+    fraud input that generated it, enabling the truth writer to correlate events with gang payment stories.
+
+    Args:
+        None.
+
+    Returns:
+        None. Fails if indices do not match their respective fraud inputs or planned events.
+
+    Example:
+        Fraud payment 0 at minute 600 has index 0; fraud payment 1 at minute 700 has index 1.
+    """
+    # 1. Construct two fraud payments with valid purposes.
+    first_payment = PlannedPayment(600, "acc_person_000001", "acc_shop_0001", 1000, 0, "everyday")
+    second_payment = PlannedPayment(700, "acc_person_000002", "acc_shop_0001", 2000, 1, "everyday")
+    inputs = FraudInputs(payments=(first_payment, second_payment))
+
+    # 2. Execute fraud-on run and extract result event streams and indices.
+    output = run_fraud_on_world(TINY, inputs)
+    result = output.result
+    indices = result.event_fraud_input_index
+    sources = result.event_sources
+
+    # 3. Assert lengths match and each event maps to its expected input index.
+    assert len(indices) == len(result.run_result.events)
+    for index, (source, fraud_idx) in enumerate(zip(sources, indices, strict=True)):
+        if source == "fraud":
+            event = result.run_result.events[index]
+            expected_idx = 0 if event.minute == 600 else 1
+            assert fraud_idx == expected_idx
+        else:
+            assert fraud_idx is None
+
+
+def test_held_then_resumed_fraud_payment_keeps_its_input_index() -> None:
+    """
+    WHAT: Injects one fraud payment at index 0, holds it with ScriptedHook the first time it is processed, then resumes
+    it one day later with a resume_payment outside event. Asserts that the recorded resumed event retains its original
+    fraud input index of 0.
+
+    WHY: Proves that apply_outside_event and first_look faithfully propagate input_index across the queue-hold-resume
+    lifecycle, guaranteeing that truth records correlate resumed fraud events with their original payment stories.
+
+    Args:
+        None.
+
+    Returns:
+        None. Fails if the resumed event loses input_index or assigns None.
+
+    Example:
+        Fraud payment 0 held at minute m and resumed at m + 1440 has event_fraud_input_index[position] == 0.
+    """
+    # 1. Prepare one fraud payment between real accounts and find its planned payment id.
+    events = baseline(TINY).result.run_result.events
+    sender_event = next(event for event in events[500:] if event.from_account.startswith("acc_person"))
+    fraud = PlannedPayment(sender_event.minute, sender_event.from_account, events[0].to_account, 1000, 0, "everyday")
+    first_run = run_fraud_on_world(TINY, FraudInputs(payments=(fraud,)))
+    fraud_position = next(i for i, event in enumerate(first_run.result.run_result.events)
+                          if event.minute == fraud.minute and event.amount_paise == 1000)
+    target_id = first_run.result.planned_payment_ids[fraud_position]
+
+    # 2. Execute fraud-on run holding target_id on first look and resuming one day later.
+    runner_world = prepare_world(TINY, None)
+    hook = ScriptedHook(hold_ids={target_id}, hold_first_time_only=True)
+    resume = OutsideEvent(fraud.minute + MINUTES_PER_DAY, "resume_payment", planned_payment_id=target_id)
+    fraud_inputs = FraudInputs(payments=(fraud,), outside_events=(resume,))
+    result = run_interactive(
+        runner_world.world, runner_world.plan, runner_world.run_rng, runner_world.device_events,
+        runner_world.episode_payments, settings=FRAUD_ON, fraud_inputs=fraud_inputs,
+        hook=hook, run_id=baseline(TINY).result.run_id, runner_config=load_runner_config(),
+    )
+
+    # 3. Assert the resumed event is found and its fraud input index is 0.
+    position = result.planned_payment_ids.index(target_id)
+    assert result.event_sources[position] == "fraud"
+    assert result.events_resumed[position] is True
+    assert result.event_fraud_input_index[position] == 0
+
