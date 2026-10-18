@@ -140,6 +140,9 @@ NEW_CODE_FILES: list[str] = [
     # Level 12b hidden truth store writer and test suite.
     "world/truth_writer.py",
     "tests/unit/world/test_truth_writer.py",
+    # Level 12b evaluation truth loader and test suite.
+    "evaluation/truth.py",
+    "tests/unit/evaluation/test_truth_loader.py",
 ]
 
 
