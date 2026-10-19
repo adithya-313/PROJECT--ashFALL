@@ -151,6 +151,9 @@ NEW_CODE_FILES: list[str] = [
     # Level 12b tactic block catalogue and dividing lines module and test suite.
     "world/tactic_config.py",
     "tests/unit/world/test_tactic_config.py",
+    # Level 12b gang configuration module and validation test suite.
+    "world/gang_config.py",
+    "tests/unit/world/test_gang_config.py",
 ]
 
 
