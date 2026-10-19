@@ -16,7 +16,14 @@ import numpy as np
 
 from world.build_world import World
 from world.calendar_runner import PlannedPayment
+from world.tactic_config import (
+    get_disguise_jitter_range,
+    get_dwell_range,
+    get_route_amount_range,
+)
 from world.truth_records import PaymentStory, RoleSpan
+
+MINUTES_PER_DAY: int = 1440
 
 
 def acquire_mule_accounts(
@@ -83,7 +90,7 @@ def advance_warmup_clock(current_minute: int, days: int) -> int:
         # assert new_minute == 100 + 2 * 1440
     """
     # 1. Advance simulation clock by 1,440 minutes for each seasoning day.
-    minutes_elapsed = days * 1440
+    minutes_elapsed = days * MINUTES_PER_DAY
     return current_minute + minutes_elapsed
 
 
@@ -110,19 +117,22 @@ def draw_route_stream_amount(
         # amt = draw_route_stream_amount(1, 5000, rng)
         # assert amt == 500_000 and amt % 100_000 == 0
     """
-    # 1. Evaluate strength 1 fixed round-thousand transfers.
+    # 1. Read calibrated amount bounds dynamically from world ranges configuration.
+    min_amount, max_amount = get_route_amount_range()
+
+    # 2. Evaluate strength 1 fixed round-thousand transfers.
     if strength == 1:
         if amount_param_inr is not None:
             inr = (amount_param_inr // 1000) * 1000
         else:
-            inr = int(round(rng.uniform(2000.0, 50000.0) / 1000.0) * 1000)
+            inr = int(round(rng.uniform(min_amount, max_amount) / 1000.0) * 1000)
         return inr * 100
 
-    # 2. Evaluate strength 2 variable single-rupee transfers.
+    # 3. Evaluate strength 2 variable single-rupee transfers.
     if amount_param_inr is not None:
         inr = int(amount_param_inr)
     else:
-        inr = int(round(rng.uniform(2000.0, 50000.0)))
+        inr = int(round(rng.uniform(min_amount, max_amount)))
     return inr * 100
 
 
@@ -148,10 +158,11 @@ def draw_hop_dwell_minutes(
         # dwell = draw_hop_dwell_minutes(None, rng)
         # assert 5 <= dwell <= 60
     """
-    # 1. Use explicitly configured dwell or sample from calibrated training bounds [5, 60].
+    # 1. Use explicitly configured dwell or sample from calibrated training bounds.
     if dwell_param_minutes is not None:
         return dwell_param_minutes
-    return int(rng.integers(5, 61))
+    min_dwell, max_dwell = get_dwell_range()
+    return int(rng.integers(min_dwell, max_dwell + 1))
 
 
 def calculate_send_minute(
@@ -185,6 +196,8 @@ def calculate_send_minute(
         return receive_minute + hop_dwell
 
     # 2. Perturb dispatch minute inside the dwell interval when disguise is active.
-    limit = min(jitter_minutes if jitter_minutes is not None else 30, hop_dwell)
-    offset = int(rng.integers(0, limit + 1)) if limit > 0 else 0
+    min_jitter, max_jitter = get_disguise_jitter_range()
+    jitter_bound = jitter_minutes if jitter_minutes is not None else max_jitter
+    limit = min(jitter_bound, hop_dwell)
+    offset = int(rng.integers(min_jitter, limit + 1)) if limit >= min_jitter else 0
     return receive_minute + (hop_dwell - offset)

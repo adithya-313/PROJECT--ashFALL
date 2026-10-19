@@ -26,8 +26,16 @@ from world.tactic_blocks import (
     draw_hop_dwell_minutes,
     draw_route_stream_amount,
 )
-from world.tactic_config import get_block_risk_range, get_gang_payment_purpose
+from world.tactic_config import (
+    get_block_risk_range,
+    get_block_time_range,
+    get_disguise_jitter_range,
+    get_gang_payment_purpose,
+    get_supplier_fee_range,
+)
 from world.truth_records import PaymentStory, RoleSpan, TruthFacts
+
+MINUTES_PER_DAY: int = 1440
 
 
 class GangBudgetExceeded(ValueError):
@@ -389,9 +397,11 @@ def _calculate_route_costs(total_paise: int, max_dwell: int, rng: np.random.Gene
         # cost = _calculate_route_costs(1_000_000, 30, rng)
         # assert cost.money_paise > 0 and cost.time_minutes == 30
     """
-    fee_share = float(rng.uniform(0.03, 0.06))
+    min_fee, max_fee = get_supplier_fee_range()
+    fee_share = float(rng.uniform(min_fee, max_fee))
     money_cost = int(round(fee_share * total_paise))
-    route_risk = float(rng.uniform(*get_block_risk_range("route")))
+    min_risk, max_risk = get_block_risk_range("route")
+    route_risk = float(rng.uniform(min_risk, max_risk))
     return BlockCost(money_cost, max_dwell, route_risk)
 
 
@@ -424,8 +434,10 @@ def _plan_acquire_step(
     count = step.params_dict.get("count", 1)
     excluded = {config.source.account_id} | (reserved_accounts or set())
     acquired = acquire_mule_accounts(world, count, rng, excluded)
-    time_cost = int(rng.integers(60, 1441))
-    risk_cost = float(rng.uniform(*get_block_risk_range("acquire")))
+    min_time, max_time = get_block_time_range("acquire")
+    time_cost = int(rng.integers(min_time, max_time + 1))
+    min_risk, max_risk = get_block_risk_range("acquire")
+    risk_cost = float(rng.uniform(min_risk, max_risk))
     return acquired, clock_minute, BlockCost(0, time_cost, risk_cost)
 
 
@@ -452,8 +464,9 @@ def _plan_warmup_step(
     """
     days = step.params_dict.get("days", 1)
     new_clock = advance_warmup_clock(clock_minute, days)
-    risk_cost = float(rng.uniform(*get_block_risk_range("warm_up")))
-    return new_clock, BlockCost(0, days * 1440, risk_cost)
+    min_risk, max_risk = get_block_risk_range("warm_up")
+    risk_cost = float(rng.uniform(min_risk, max_risk))
+    return new_clock, BlockCost(0, days * MINUTES_PER_DAY, risk_cost)
 
 
 def _plan_disguise_step(
@@ -478,8 +491,10 @@ def _plan_disguise_step(
         # assert cost.money_paise == 0 and cost.time_minutes >= 0
     """
     jitter = step.params_dict.get("jitter_minutes")
-    time_cost = jitter if jitter is not None else int(rng.integers(0, 31))
-    risk_cost = float(rng.uniform(*get_block_risk_range("disguise")))
+    min_jitter, max_jitter = get_disguise_jitter_range()
+    time_cost = jitter if jitter is not None else int(rng.integers(min_jitter, max_jitter + 1))
+    min_risk, max_risk = get_block_risk_range("disguise")
+    risk_cost = float(rng.uniform(min_risk, max_risk))
     return BlockCost(0, time_cost, risk_cost)
 
 

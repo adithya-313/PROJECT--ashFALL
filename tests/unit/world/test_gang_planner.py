@@ -14,10 +14,14 @@ TERM: budget boundary: exact spending ceiling in money (paise), simulated time, 
 
 import numpy as np
 import pytest
+import yaml
 
+from core.config_validator import load_yaml
 from world.build_world import build_world
 from world.gang_config import BlockStep, FixtureSource, GangBudget, GangConfig
 from world.gang_planner import GangBudgetExceeded, plan_gang
+import world.tactic_config as tactic_config
+from world.tactic_config import TACTIC_COSTS_PATH, WORLD_RANGES_PATH
 
 GENEROUS_BUDGET = GangBudget(money_paise=50_000_000, time_minutes=50_000, max_risk=0.99)
 DEFAULT_SOURCE = FixtureSource("acc_collector_01", 0, 50_000_000, 100)
@@ -285,3 +289,65 @@ def test_budget_boundary_enforcement(test_world) -> None:
     low_risk = GangBudget(exact_money, exact_time, exact_risk - 1e-5)
     with pytest.raises(GangBudgetExceeded, match="budget exceeded for risk"):
         plan_gang(GangConfig("gang_budget", 1, low_risk, DEFAULT_SOURCE, steps), test_world, np.random.default_rng(42))
+
+
+def test_planner_follows_config_ranges(test_world, tmp_path, monkeypatch) -> None:
+    """
+    WHAT: Asserts that the gang planner derives dwell duration, transfer amount, and supplier fee
+    strictly from external configuration ranges rather than hardcoded or typed numerical values.
+    It writes temporary narrowed configuration files with dwell [7, 7], amount [3000, 3000], and fee [0.05, 0.05],
+    points the config resolvers at them via monkeypatching, and plans a multi-hop laundering campaign.
+
+    WHY: Project rules prohibit copying numerical bounds into source code; this test verifies that
+    modifying configuration ranges directly governs planner transfer sizes, hop delays, and fee accounting.
+
+    Args:
+        test_world: Pytest fixture providing a simulated 30-person World instance.
+        tmp_path: Pytest fixture providing a temporary directory for narrowed config copies.
+        monkeypatch: Pytest fixture for safely overriding module path constants during test execution.
+
+    Returns:
+        None. Fails if hop dwell deviates from 7, payment amount deviates from Rs 3,000, or fee is not 5%.
+
+    Example:
+        # test_planner_follows_config_ranges(test_world, tmp_path, monkeypatch)
+        # Hop dwells equal 7, amounts equal 300_000 paise, and money cost equals 15_000 paise.
+    """
+    # 1. Create narrowed world ranges YAML with dwell [7, 7] and amount [3000, 3000].
+    ranges_data = load_yaml(WORLD_RANGES_PATH)
+    ranges_data["parameters"]["minutes_money_stays_in_mule_account"]["training"] = [7, 7]
+    ranges_data["parameters"]["mule_transfer_amount_inr"]["training"] = [3000, 3000]
+    temp_ranges_path = tmp_path / "world_ranges.yaml"
+    with open(temp_ranges_path, "w", encoding="utf-8") as file_handle:
+        yaml.safe_dump(ranges_data, file_handle)
+
+    # 2. Create narrowed tactic costs YAML with supplier fee [0.05, 0.05].
+    costs_data = load_yaml(TACTIC_COSTS_PATH)
+    costs_data["tactic_cost_units"]["parameters"]["account_supplier_fee_share"]["range"] = [0.05, 0.05]
+    temp_costs_path = tmp_path / "tactic_costs.yaml"
+    with open(temp_costs_path, "w", encoding="utf-8") as file_handle:
+        yaml.safe_dump(costs_data, file_handle)
+
+    # 3. Monkeypatch tactic config path constants to point to temporary files.
+    monkeypatch.setattr(tactic_config, "WORLD_RANGES_PATH", temp_ranges_path)
+    monkeypatch.setattr(tactic_config, "TACTIC_COSTS_PATH", temp_costs_path)
+
+    # 4. Plan campaign with 3 layers and 1 stream.
+    steps = (
+        BlockStep("acquire", (("count", 3),)),
+        BlockStep("route", (("layers", 3), ("accounts_per_layer", 1))),
+    )
+    config = GangConfig("gang_ranges", 1, GENEROUS_BUDGET, DEFAULT_SOURCE, steps)
+    plan = plan_gang(config, test_world, np.random.default_rng(42))
+
+    # 5. Assert every hop dwell is 7 minutes.
+    assert plan.payments[1].minute - plan.payments[0].minute == 7
+    assert plan.payments[2].minute - plan.payments[1].minute == 7
+
+    # 6. Assert every payment amount is Rs 3,000 (300,000 paise).
+    assert all(pmt.amount_paise == 300_000 for pmt in plan.payments)
+
+    # 7. Assert money cost equals 0.05 x the routed amount.
+    routed_amount = sum(p.amount_paise for p in plan.payments if p.from_account == DEFAULT_SOURCE.account_id)
+    assert plan.totals.money_paise == int(round(0.05 * routed_amount))
+

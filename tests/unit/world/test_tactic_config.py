@@ -24,10 +24,17 @@ from world.tactic_config import (
     WORLD_RANGES_PATH,
     get_block_definition,
     get_block_risk_range,
+    get_block_time_range,
+    get_disguise_jitter_range,
+    get_dwell_range,
     get_gang_payment_purpose,
+    get_route_amount_range,
+    get_supplier_fee_range,
     load_tactic_blocks,
     load_tactic_costs,
+    load_world_ranges,
     resolve_dividing_line,
+    resolve_parameter_training_range,
 )
 
 
@@ -159,3 +166,41 @@ def test_config_validator_passes_on_both_tactic_yaml_files() -> None:
 
     # 3. Verify gang payment purpose resolves to everyday.
     assert get_gang_payment_purpose() == "everyday"
+
+
+def test_resolver_functions_read_ranges_from_config() -> None:
+    """
+    WHAT: Asserts that all range resolvers in world/tactic_config.py retrieve parameter bounds
+    dynamically from their backing YAML configurations without relying on hardcoded numerical values.
+    It checks dwell bounds [5, 60], transfer amount bounds [2000.0, 50000.0], supplier fee bounds [0.03, 0.06],
+    acquire time bounds [60, 1440], and disguise jitter bounds [0, 30] against their source configurations.
+
+    WHY: Project rules prohibit copying numerical bounds into source code; this test verifies that
+    resolver functions properly expose the configured parameter boundaries across all tactical dimensions.
+
+    Args:
+        None.
+
+    Returns:
+        None. Fails if any resolver returns incorrect bounds or fails to read from its configuration source.
+
+    Example:
+        # assert get_dwell_range() == (5, 60)
+        # assert get_route_amount_range() == (2000.0, 50000.0)
+        # assert get_supplier_fee_range() == (0.03, 0.06)
+    """
+    # 1. Verify dwell range matches world ranges training split for dwell.
+    assert get_dwell_range() == (5, 60)
+
+    # 2. Verify route amount range matches world ranges training split for transfer amount.
+    assert get_route_amount_range() == (2000.0, 50000.0)
+
+    # 3. Verify supplier fee range matches tactic costs configuration.
+    assert get_supplier_fee_range() == (0.03, 0.06)
+
+    # 4. Verify acquire block time range matches tactic blocks configuration.
+    assert get_block_time_range("acquire") == (60, 1440)
+
+    # 5. Verify disguise jitter range matches tactic blocks configuration.
+    assert get_disguise_jitter_range() == (0, 30)
+
