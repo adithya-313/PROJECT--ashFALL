@@ -1,0 +1,104 @@
+# Building blocks for composing gang tactics and campaigns (Level 12b B-2a).
+#
+# TERM: building block = an atomic step in a fraud tactic campaign (acquire, warm_up, route, disguise).
+# TERM: strength level = the level of sophistication and camouflage applied by a gang (strength 1 = fixed, strength 2 = camouflaged).
+# TERM: dwell = the duration in simulated minutes money stays in an account before being forwarded.
+# TERM: layer = the hop distance in a laundering payment chain from the source to terminal exit.
+# TERM: budget = maximum allowed expenditure in money, time, and cumulative risk for a gang campaign.
+# TERM: dividing line = boundary separating training tactics from held-out tactics to prevent data leakage.
+#
+# Checked by: python -m core.config_validator config/tactic_blocks.yaml
+
+tactic_blocks:
+  label: policy
+  reason: "Catalogue of procedural building blocks used to specify gang laundering operations and attack tactics."
+  issue_ids_v2: [12-8, 12-9]
+  derived_from: "amendment A-014; amendment A-016"
+  blocks:
+    acquire:
+      label: assumption
+      reason: "No published figure; building block models account acquisition for comparison per amendment A-016."
+      meaning: "Recruit or rent mule accounts from ordinary persons"
+      allowed_strengths: [1, 2]
+      time_minutes_per_use: [60, 1440]
+      parameters:
+        count:
+          label: assumption
+          world_ranges_reference: mules_per_gang
+          split: training
+          reason: "Number of mule accounts acquired by a gang per campaign, referenced from config/world_ranges.yaml"
+    warm_up:
+      label: assumption
+      reason: "No published figure; building block models account seasoning for comparison per amendment A-016."
+      meaning: "Age or season acquired accounts before moving illicit funds"
+      allowed_strengths: [1, 2]
+      time_minutes_per_use: "days x 1440"
+      parameters:
+        days:
+          label: assumption
+          world_ranges_reference: mule_warmup_days
+          split: training
+          reason: "Number of days spent letting acquired accounts season before routing, referenced from config/world_ranges.yaml"
+    route:
+      label: assumption
+      reason: "No published figure; building block models layered forwarding for comparison per amendment A-016."
+      meaning: "Move money through layered mule accounts to obscure the audit trail"
+      allowed_strengths: [1, 2]
+      time_minutes_per_use: "hop dwell"
+      parameters:
+        layers:
+          label: assumption
+          range: [1, 5]
+          reason: "Number of hops in the laundering chain from collector to exit"
+        accounts_per_layer:
+          label: assumption
+          range: [1, 10]
+          reason: "Number of mule accounts per layer"
+        dwell_minutes:
+          label: assumption
+          world_ranges_reference: minutes_money_stays_in_mule_account
+          split: training
+          reason: "Dwell time money stays in intermediary mule account before forwarding, referenced from config/world_ranges.yaml"
+        amount_inr:
+          label: assumption
+          world_ranges_reference: mule_transfer_amount_inr
+          split: training
+          reason: "Transfer amount per hop, referenced from config/world_ranges.yaml"
+    disguise:
+      label: assumption
+      reason: "No published figure; building block models timing camouflage for comparison per amendment A-016."
+      meaning: "Perturb payment timings inside the dwell window to camouflage against detection"
+      allowed_strengths: [2]
+      time_minutes_per_use: [0, 30]
+      parameters:
+        jitter_minutes:
+          label: assumption
+          range: [0, 30]
+          reason: "Random minute offset applied to payment timings within dwell window"
+
+held_out_dividing_lines:
+  label: policy
+  reason: "Dividing lines derived from world ranges to separate training tactics from held-out tactics per amendment A-014."
+  issue_ids_v2: [12-8]
+  derived_from: "amendment A-014; config/world_ranges.yaml"
+  training_max_dwell_minutes:
+    label: policy
+    parameter_reference: minutes_money_stays_in_mule_account
+    bound: upper
+    split: training
+    reason: "Upper bound of minutes_money_stays_in_mule_account training range; training routes must forward within this."
+  slow_drip_max_amount_inr:
+    label: policy
+    parameter_reference: mule_transfer_amount_inr
+    bound: lower
+    split: training
+    reason: "Lower bound of mule_transfer_amount_inr training range; training routes never send below it."
+  training_devices_retired_on_schedule:
+    label: policy
+    value: false
+    reason: "A rule; training tactics do not retire devices strictly on schedule; used in B-2b."
+
+gang_payment_purpose:
+  label: policy
+  purpose: everyday
+  reason: "Real scam purposes are decided in Level 12c; Level 12b uses the valid runner purpose everyday."

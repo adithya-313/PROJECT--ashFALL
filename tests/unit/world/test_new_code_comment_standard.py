@@ -148,6 +148,9 @@ NEW_CODE_FILES: list[str] = [
     "tests/unit/test_truth_import_check.py",
     # Level 12b truth environment separation test suite.
     "tests/unit/test_truth_env_separation.py",
+    # Level 12b tactic block catalogue and dividing lines module and test suite.
+    "world/tactic_config.py",
+    "tests/unit/world/test_tactic_config.py",
 ]
 
 
