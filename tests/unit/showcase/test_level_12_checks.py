@@ -53,14 +53,15 @@ def test_level_12_checks_match_the_brief() -> None:
     Example:
         test_level_12_checks_match_the_brief()  # Verifies 5 checks matching specification
     """
-    # 1. Retrieve checks in quick and full modes and verify length and part tags.
+    # 1. Retrieve checks in quick and full modes and verify length and part tags for Part A.
     checks = level_12.get_checks(quick=True)
-    assert len(checks) == 5
-    assert all(check.part == "a" for check in checks)
+    part_a_checks = [check for check in checks if check.part == "a"]
+    assert len(part_a_checks) == 5
+    assert all(check.part == "a" for check in part_a_checks)
 
-    # 2. Assert check kinds follow the exact brief sequence.
+    # 2. Assert check kinds follow the exact brief sequence for Part A.
     expected_kinds = ["consistency", "normal", "edge", "edge", "negative"]
-    assert [check.kind for check in checks] == expected_kinds
+    assert [check.kind for check in part_a_checks] == expected_kinds
 
     # 3. Verify framework coverage rules pass and preconditions are met.
     validate_checks(checks)

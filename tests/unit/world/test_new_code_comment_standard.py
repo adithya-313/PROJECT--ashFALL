@@ -165,6 +165,10 @@ NEW_CODE_FILES: list[str] = [
     "tests/unit/world/test_gang_devices.py",
     # Level 12b gang device stream test suite.
     "tests/unit/world/test_gang_device_stream.py",
+    # Level 12b showcase checks and runner modules.
+    "showcase/level_12_support_b.py",
+    "showcase/level_12_checks_b.py",
+    "tests/unit/showcase/test_level_12_checks_b.py",
 ]
 
 
