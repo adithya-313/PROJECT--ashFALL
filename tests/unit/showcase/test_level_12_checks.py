@@ -38,8 +38,8 @@ from world.outside_events import OutsideEvent
 
 def test_level_12_checks_match_the_brief() -> None:
     """
-    WHAT: Verifies that Level 12 exports 5 checks with part 'a' in exact brief order: consistency, normal,
-    edge, edge, negative. Confirms validate_checks succeeds and find_missing_preconditions returns no errors.
+    WHAT: Verifies that Level 12 exports 10 checks across parts 'a' and 'b' in quick and full modes.
+    Confirms part-a check kinds match the brief, validate_checks succeeds, and find_missing_preconditions passes.
 
     WHY: Enforces showcase framework contract requirements and guarantees that the level definition satisfies
     the mandatory coverage rules (at least 1 normal, 2 edge, and 1 negative check).
@@ -51,20 +51,23 @@ def test_level_12_checks_match_the_brief() -> None:
         None. Fails if check counts, order, categories, or preconditions diverge.
 
     Example:
-        test_level_12_checks_match_the_brief()  # Verifies 5 checks matching specification
+        test_level_12_checks_match_the_brief()  # Verifies 10 checks matching specification
     """
-    # 1. Retrieve checks in quick and full modes and verify length and part tags for Part A.
-    checks = level_12.get_checks(quick=True)
-    part_a_checks = [check for check in checks if check.part == "a"]
-    assert len(part_a_checks) == 5
-    assert all(check.part == "a" for check in part_a_checks)
+    # 1. Retrieve checks in quick and full modes and verify length and part sequences.
+    quick_checks = level_12.get_checks(quick=True)
+    full_checks = level_12.get_checks(quick=False)
+    assert len(quick_checks) == 10
+    assert len(full_checks) == 10
+    assert [check.part for check in quick_checks[:5]] == ["a"] * 5
+    assert [check.part for check in quick_checks[5:]] == ["b"] * 5
 
     # 2. Assert check kinds follow the exact brief sequence for Part A.
+    part_a_checks = quick_checks[:5]
     expected_kinds = ["consistency", "normal", "edge", "edge", "negative"]
     assert [check.kind for check in part_a_checks] == expected_kinds
 
     # 3. Verify framework coverage rules pass and preconditions are met.
-    validate_checks(checks)
+    validate_checks(quick_checks)
     missing = asyncio.run(level_12.find_missing_preconditions())
     assert not missing, f"Missing preconditions: {missing}"
 
