@@ -15,7 +15,9 @@ TERM: dividing line: boundary separating training tactics from held-out tactics 
 """
 
 import pytest
+import yaml
 
+from core.config_validator import load_yaml
 from world.gang_config import (
     BlockStep,
     FixtureSource,
@@ -24,7 +26,8 @@ from world.gang_config import (
     gang_config_to_plain,
     validate_gang_config,
 )
-from world.tactic_config import resolve_dividing_line
+import world.tactic_config as tactic_config
+from world.tactic_config import TACTIC_BLOCKS_PATH, resolve_dividing_line
 
 DEFAULT_BUDGET = GangBudget(money_paise=1_000_000, time_minutes=5000, max_risk=0.1)
 DEFAULT_SOURCE = FixtureSource("acc_collector_01", 0, 10_000_000, 100)
@@ -272,3 +275,42 @@ def test_gang_config_to_plain_serializes_canonical_dictionary() -> None:
     assert plain["source"]["account_id"] == "acc_collector_01"
     assert len(plain["steps"]) == 2
     assert plain["steps"][0] == {"block": "acquire", "params": [("count", 4)]}
+
+
+def test_take_control_devices_range_follows_config(tmp_path, monkeypatch) -> None:
+    """
+    WHAT: Asserts that take_control devices validation bounds are read dynamically from configuration.
+    It writes a temporary narrowed tactic_blocks.yaml with devices range [2, 2], points tactic_config at it,
+    and checks that devices=1 is refused while devices=2 is accepted.
+
+    WHY: Project rules prohibit hardcoding numerical bounds into validation logic; this test proves that
+    updating the configuration file directly controls validator acceptance thresholds.
+
+    Args:
+        tmp_path: Pytest temporary directory fixture.
+        monkeypatch: Pytest monkeypatch fixture to override TACTIC_BLOCKS_PATH.
+
+    Returns:
+        None. Fails if devices=1 is accepted or devices=2 is refused under range [2, 2].
+
+    Example:
+        # With range [2, 2], validate_gang_config refuses devices=1 and accepts devices=2.
+    """
+    # 1. Create narrowed tactic_blocks.yaml with devices range [2, 2].
+    blocks_data = load_yaml(TACTIC_BLOCKS_PATH)
+    blocks_data["tactic_blocks"]["blocks"]["take_control"]["parameters"]["devices"]["range"] = [2, 2]
+    temp_blocks_path = tmp_path / "tactic_blocks.yaml"
+    with open(temp_blocks_path, "w", encoding="utf-8") as file_handle:
+        yaml.safe_dump(blocks_data, file_handle)
+
+    # 2. Monkeypatch TACTIC_BLOCKS_PATH in tactic_config.
+    monkeypatch.setattr(tactic_config, "TACTIC_BLOCKS_PATH", temp_blocks_path)
+
+    # 3. Assert devices=1 is refused.
+    steps_1 = (BlockStep("acquire", (("count", 2),)), BlockStep("take_control", (("devices", 1),)))
+    with pytest.raises(ValueError, match=r"take_control devices must be an integer in \[2, 2\], got 1"):
+        validate_gang_config(GangConfig("gang_dev1", 1, DEFAULT_BUDGET, DEFAULT_SOURCE, steps_1))
+
+    # 4. Assert devices=2 is accepted.
+    steps_2 = (BlockStep("acquire", (("count", 2),)), BlockStep("take_control", (("devices", 2),)))
+    validate_gang_config(GangConfig("gang_dev2", 1, DEFAULT_BUDGET, DEFAULT_SOURCE, steps_2))

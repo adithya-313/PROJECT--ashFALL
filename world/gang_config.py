@@ -18,7 +18,11 @@ TERM: dividing line: boundary separating training tactics from held-out tactics 
 from dataclasses import dataclass
 from typing import Any
 
-from world.tactic_config import get_block_definition, resolve_dividing_line
+from world.tactic_config import (
+    get_block_definition,
+    get_take_control_devices_range,
+    resolve_dividing_line,
+)
 
 
 @dataclass(frozen=True)
@@ -321,9 +325,9 @@ def _validate_route_parameters(gang_id: str, steps: tuple[BlockStep, ...]) -> No
 
 def _validate_take_control_parameters(gang_id: str, steps: tuple[BlockStep, ...]) -> None:
     """
-    WHAT: Asserts take_control steps configure devices count within [1, 5] and strict boolean compromise flags.
+    WHAT: Asserts take_control steps configure devices count within configured bounds and strict boolean compromise flags.
 
-    WHY: Decision E1 models device takeover with 1 to 5 devices and strict boolean flags per Decision E6.
+    WHY: Decision E1 models device takeover with devices bounded by config and strict boolean flags per Decision E6.
 
     Args:
         gang_id: Gang identifier for error diagnostics.
@@ -336,6 +340,8 @@ def _validate_take_control_parameters(gang_id: str, steps: tuple[BlockStep, ...]
         # Non-boolean sim_swap raises ValueError.
         # _validate_take_control_parameters("gang_a", (BlockStep("take_control", (("sim_swap", "yes"),)),))
     """
+    # 1. Fetch allowed devices range from tactic blocks configuration.
+    min_devices, max_devices = get_take_control_devices_range()
     boolean_flags = ("sim_swap", "linked_number_switch", "emulator", "remote_access")
     for step in steps:
         if step.block != "take_control":
@@ -343,9 +349,9 @@ def _validate_take_control_parameters(gang_id: str, steps: tuple[BlockStep, ...]
         params = step.params_dict
         if "devices" in params:
             devices_count = params["devices"]
-            if not isinstance(devices_count, int) or isinstance(devices_count, bool) or not (1 <= devices_count <= 5):
+            if not isinstance(devices_count, int) or isinstance(devices_count, bool) or not (min_devices <= devices_count <= max_devices):
                 raise ValueError(
-                    f"Gang '{gang_id}' take_control devices must be an integer in [1, 5], got {devices_count}."
+                    f"Gang '{gang_id}' take_control devices must be an integer in [{min_devices}, {max_devices}], got {devices_count}."
                 )
         for flag in boolean_flags:
             if flag in params and not isinstance(params[flag], bool):

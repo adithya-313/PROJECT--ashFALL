@@ -422,3 +422,25 @@ def get_gang_device_event_kinds(config_path: Path | None = None) -> list[str]:
     kinds = section.get("device_event_kinds", [])
     return [str(item) for item in kinds]
 
+
+def get_take_control_devices_range(config_path: Path | None = None) -> tuple[int, int]:
+    """
+    WHAT: Retrieves the [min, max] device count range for take_control from config/tactic_blocks.yaml.
+
+    WHY: Used by gang configuration validation to ensure device counts lie within configured bounds without hardcoding.
+
+    Args:
+        config_path: Optional path override for tactic_blocks.yaml.
+
+    Returns:
+        Two-element integer tuple (min_devices, max_devices).
+
+    Example:
+        # min_devices, max_devices = get_take_control_devices_range()
+        # assert min_devices == 1 and max_devices == 5
+    """
+    # 1. Fetch devices parameter range from take_control block definition.
+    definition = get_block_definition("take_control", config_path)
+    devices_range = definition["parameters"]["devices"]["range"]
+    return int(devices_range[0]), int(devices_range[1])
+
