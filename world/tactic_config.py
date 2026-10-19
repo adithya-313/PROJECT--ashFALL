@@ -375,3 +375,50 @@ def get_gang_payment_purpose(config_path: Path | None = None) -> str:
     # 1. Extract purpose string from gang_payment_purpose policy section.
     policy = load_tactic_blocks(config_path).get("gang_payment_purpose", {})
     return str(policy.get("purpose", "everyday"))
+
+
+def get_gang_device_prefix(config_path: Path | None = None) -> str:
+    """
+    WHAT: Returns the neutral identifier prefix used when synthesizing gang-controlled devices.
+    It reads the device_id_prefix string from the gang_devices policy section in config/tactic_blocks.yaml.
+
+    WHY: Decision E2 requires device identifiers to be neutral (such as 'dev_ext_') so that the ID string
+    itself never leaks the device's illicit role or gang affiliation to simulated banking systems.
+
+    Args:
+        config_path: Optional filesystem Path to tactic_blocks.yaml.
+
+    Returns:
+        String prefix for external devices (e.g., 'dev_ext_').
+
+    Example:
+        # assert get_gang_device_prefix() == "dev_ext_"
+    """
+    # 1. Extract device identifier prefix from gang_devices configuration section.
+    section = load_tactic_blocks(config_path).get("gang_devices", {})
+    return str(section.get("device_id_prefix", "dev_ext_"))
+
+
+def get_gang_device_event_kinds(config_path: Path | None = None) -> list[str]:
+    """
+    WHAT: Returns the list of permitted event kind names for gang device lifecycle and compromise telemetry.
+    It extracts the allowed kinds from the gang_devices policy section in config/tactic_blocks.yaml.
+
+    WHY: Decision E4 defines distinct telemetry event kinds for device acquisition and account takeover
+    flags (SIM swap, linked number switch, emulator, remote access) to model external device events.
+
+    Args:
+        config_path: Optional filesystem Path to tactic_blocks.yaml.
+
+    Returns:
+        List of event kind string names.
+
+    Example:
+        # assert "device_acquired" in get_gang_device_event_kinds()
+        # assert "sim_swap" in get_gang_device_event_kinds()
+    """
+    # 1. Extract device event kinds list from gang_devices configuration section.
+    section = load_tactic_blocks(config_path).get("gang_devices", {})
+    kinds = section.get("device_event_kinds", [])
+    return [str(item) for item in kinds]
+

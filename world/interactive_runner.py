@@ -375,29 +375,27 @@ def _apply_gang_configs(
         # state, inputs = _apply_gang_configs(prepared, gang_configs, state, inputs, 101, config)
     """
     active_state = state if state is not None else start_runner_state(prepared.world)
-    for gang in gang_configs:
-        if gang.source.account_id not in active_state.bank_map:
+    for g in gang_configs:
+        if g.source.account_id not in active_state.bank_map:
             active_state.register_account(
-                gang.source.account_id, gang.source.bank_index,
-                opening_balance_paise=gang.source.opening_balance_paise, minute=gang.source.start_minute
+                g.source.account_id, g.source.bank_index,
+                opening_balance_paise=g.source.opening_balance_paise, minute=g.source.start_minute,
             )
 
-    stream_idx = runner_config.get("seed_streams", {}).get("gang_planning", 7)
-    seed_seq = np.random.SeedSequence(seed)
-    planning_rng = np.random.default_rng(seed_seq.spawn(stream_idx + 1)[stream_idx])
-
+    children = np.random.SeedSequence(seed).spawn(8)
+    dev_rng, plan_rng = np.random.default_rng(children[6]), np.random.default_rng(children[7])
     reserved = {g.source.account_id for g in gang_configs}
-    pmts = list(fraud_inputs.payments)
-    roles = list(fraud_inputs.truth.roles)
-    stories = list(fraud_inputs.truth.payment_stories)
-    for gang in gang_configs:
-        plan = plan_gang(gang, prepared.world, planning_rng, reserved_accounts=reserved)
+    pmts, roles, dev_ctrl, stories = list(fraud_inputs.payments), list(fraud_inputs.truth.roles), list(fraud_inputs.truth.device_control), list(fraud_inputs.truth.payment_stories)
+
+    for g in gang_configs:
+        plan = plan_gang(g, prepared.world, plan_rng, reserved_accounts=reserved, gang_devices_rng=dev_rng)
         reserved.update(r.account_id for r in plan.truth.roles if r.role == "mule")
         pmts.extend(plan.payments)
         roles.extend(plan.truth.roles)
+        dev_ctrl.extend(plan.truth.device_control)
         stories.extend(plan.truth.payment_stories)
 
-    new_truth = TruthFacts(roles=tuple(roles), device_control=fraud_inputs.truth.device_control, payment_stories=tuple(stories))
+    new_truth = TruthFacts(roles=tuple(roles), device_control=tuple(dev_ctrl), payment_stories=tuple(stories))
     return active_state, FraudInputs(payments=tuple(pmts), outside_events=fraud_inputs.outside_events, truth=new_truth)
 
 

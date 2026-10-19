@@ -90,7 +90,7 @@ def test_every_block_lists_allowed_strengths_in_one_and_two() -> None:
     """
     # 1. Retrieve blocks dictionary from configuration.
     blocks_config = load_tactic_blocks()["tactic_blocks"]["blocks"]
-    expected_blocks = {"acquire", "warm_up", "route", "disguise"}
+    expected_blocks = {"acquire", "warm_up", "route", "disguise", "take_control"}
     assert set(blocks_config.keys()) == expected_blocks
 
     # 2. Verify allowed strengths for each block are within {1, 2}.
@@ -105,7 +105,7 @@ def test_every_block_lists_allowed_strengths_in_one_and_two() -> None:
 
 def test_tactic_risk_per_use_matches_block_names_and_has_valid_ranges() -> None:
     """
-    WHAT: Asserts that tactic_risk_per_use in config/tactic_costs.yaml contains exactly the four building blocks
+    WHAT: Asserts that tactic_risk_per_use in config/tactic_costs.yaml contains exactly the five building blocks
     from tactic_blocks.yaml, and every entry is labelled assumption with a valid probability range in [0, 1].
 
     WHY: Decision D2 and amendment A-016 require per-block execution risks to be assumptions with ranges inside [0, 1]

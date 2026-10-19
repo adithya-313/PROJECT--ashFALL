@@ -160,6 +160,9 @@ NEW_CODE_FILES: list[str] = [
     "tests/unit/world/test_gang_planner.py",
     # Level 12b gang runner integration test suite.
     "tests/unit/world/test_gang_runs.py",
+    # Level 12b gang devices module and test suite.
+    "world/gang_devices.py",
+    "tests/unit/world/test_gang_devices.py",
 ]
 
 

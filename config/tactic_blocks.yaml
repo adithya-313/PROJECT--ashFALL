@@ -27,6 +27,33 @@ tactic_blocks:
           world_ranges_reference: mules_per_gang
           split: training
           reason: "Number of mule accounts acquired by a gang per campaign, referenced from config/world_ranges.yaml"
+    take_control:
+      label: assumption
+      reason: "No published figure; building block models unauthorized device takeover for comparison per amendment A-016."
+      meaning: "Take control of acquired mule accounts via dedicated gang devices and compromise tooling"
+      allowed_strengths: [1, 2]
+      time_minutes_per_use: [10, 120]
+      parameters:
+        devices:
+          label: assumption
+          range: [1, 5]
+          reason: "Number of external gang devices provisioned to control acquired mule accounts"
+        sim_swap:
+          label: policy
+          type: boolean
+          reason: "Whether SIM swapping was executed to divert two-factor SMS codes"
+        linked_number_switch:
+          label: policy
+          type: boolean
+          reason: "Whether the registered bank linked telephone number was altered"
+        emulator:
+          label: policy
+          type: boolean
+          reason: "Whether an emulator environment is used instead of a physical mobile device"
+        remote_access:
+          label: policy
+          type: boolean
+          reason: "Whether remote access software was installed to operate the session remotely"
     warm_up:
       label: assumption
       reason: "No published figure; building block models account seasoning for comparison per amendment A-016."
@@ -102,3 +129,17 @@ gang_payment_purpose:
   label: policy
   purpose: everyday
   reason: "Real scam purposes are decided in Level 12c; Level 12b uses the valid runner purpose everyday."
+
+gang_devices:
+  label: policy
+  reason: "External gang devices have neutral identifiers and generate synthetic device takeover events."
+  issue_ids_v2: [12-8, 12-9]
+  derived_from: "Decision E2; Decision E4"
+  device_id_prefix: "dev_ext_"
+  device_event_kinds:
+    - device_acquired
+    - sim_swap
+    - linked_number_switch
+    - emulator_enabled
+    - remote_access_enabled
+

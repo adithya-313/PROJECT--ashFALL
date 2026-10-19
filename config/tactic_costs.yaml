@@ -65,3 +65,7 @@ tactic_risk_per_use:
     label: assumption
     range: [0.0, 0.005]
     reason: "No published figure; exists only to compare tactics per amendment A-016"
+  take_control:
+    label: assumption
+    range: [0.001, 0.01]
+    reason: "No published figure; exists only to compare tactics per amendment A-016"

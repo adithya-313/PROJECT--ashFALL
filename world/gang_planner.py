@@ -19,6 +19,13 @@ import numpy as np
 from world.build_world import World
 from world.calendar_runner import PlannedPayment
 from world.gang_config import BlockStep, GangBudget, GangConfig, validate_gang_config
+from world.gang_devices import (
+    GangDeviceEvent,
+    assign_devices_round_robin,
+    build_device_control_spans,
+    build_gang_device_events,
+    make_gang_devices,
+)
 from world.tactic_blocks import (
     acquire_mule_accounts,
     advance_warmup_clock,
@@ -33,7 +40,7 @@ from world.tactic_config import (
     get_gang_payment_purpose,
     get_supplier_fee_range,
 )
-from world.truth_records import PaymentStory, RoleSpan, TruthFacts
+from world.truth_records import DeviceControlSpan, PaymentStory, RoleSpan, TruthFacts
 
 MINUTES_PER_DAY: int = 1440
 
@@ -104,6 +111,7 @@ class GangPlan:
     truth: TruthFacts
     costs: tuple[BlockCost, ...]
     totals: BlockCost
+    gang_device_events: tuple[GangDeviceEvent, ...] = ()
 
 
 def _check_running_budget(
@@ -498,14 +506,121 @@ def _plan_disguise_step(
     return BlockCost(0, time_cost, risk_cost)
 
 
+def _plan_take_control_step(
+    config: GangConfig, step: BlockStep, acquired_accounts: list[str], clock_minute: int,
+    gang_devices_rng: np.random.Generator, rng: np.random.Generator
+) -> tuple[list[DeviceControlSpan], list[GangDeviceEvent], BlockCost]:
+    """
+    WHAT: Synthesizes external gang devices, round-robin account assignments, truth spans, and telemetry events.
+    It provisions devices using child 6 gang_devices stream, assigns them cyclically across acquired mule accounts,
+    records ground truth DeviceControlSpan records, and creates client-side GangDeviceEvent takeover telemetry.
+
+    WHY: Decision E1, E2, E3, and E4 model criminal device control infrastructure, establishing observable
+    compromise signals and ground truth device groupings for evaluation benchmarks without leaking truth labels.
+
+    Args:
+        config: Full GangConfig specification providing gang identity.
+        step: BlockStep for the take_control block containing device count and compromise flags.
+        acquired_accounts: Sequence of citizen account identifiers previously acquired by the gang.
+        clock_minute: Current simulation minute timestamp of the gang campaign.
+        gang_devices_rng: Dedicated random number generator stream for device creation (child 6).
+        rng: Gang-specific random number generator stream for time and risk expenditures.
+
+    Returns:
+        Tuple of (list of DeviceControlSpan records, list of GangDeviceEvent records, and take_control BlockCost).
+
+    Example:
+        # spans, events, cost = _plan_take_control_step(config, step, mules, 100, dev_rng, rng)
+    """
+    # 1. Extract device count and boolean compromise flags from parameters.
+    devices_count = step.params_dict.get("devices", 1)
+    sim_swap = bool(step.params_dict.get("sim_swap", False))
+    linked_number_switch = bool(step.params_dict.get("linked_number_switch", False))
+    emulator = bool(step.params_dict.get("emulator", False))
+    remote_access = bool(step.params_dict.get("remote_access", False))
+
+    # 2. Provision devices on child stream 6 and allocate across mules in round-robin order.
+    devices = make_gang_devices(devices_count, gang_devices_rng)
+    account_to_device = assign_devices_round_robin(acquired_accounts, devices)
+
+    # 3. Build forensic ground truth spans and synthetic client telemetry events.
+    spans = build_device_control_spans(
+        config.gang_id, account_to_device, clock_minute, sim_swap, linked_number_switch, emulator, remote_access
+    )
+    events = build_gang_device_events(
+        devices, account_to_device, clock_minute, sim_swap, linked_number_switch, emulator, remote_access
+    )
+
+    # 4. Sample execution duration and risk from calibrated take_control ranges.
+    min_time, max_time = get_block_time_range("take_control")
+    time_cost = int(rng.integers(min_time, max_time + 1))
+    min_risk, max_risk = get_block_risk_range("take_control")
+    risk_cost = float(rng.uniform(min_risk, max_risk))
+    cost = BlockCost(0, time_cost, risk_cost)
+
+    return spans, events, cost
+
+
+def _plan_campaign_steps(
+    config: GangConfig, world: World, rng: np.random.Generator,
+    reserved_accounts: set[str] | None, dev_rng: np.random.Generator
+) -> tuple[Any, ...]:
+    """
+    WHAT: Iterates through configured block steps, dispatching procedural handlers and accumulating expenditures.
+    It tracks clock minutes, recruited mules, truth spans, telemetry events, and checks running budget limits.
+
+    WHY: Separates multi-block campaign step dispatch from top-level plan assembly and validation.
+
+    Args:
+        config: Immutable GangConfig defining gang itinerary and limits.
+        world: Simulated World instance containing people and shops.
+        rng: Master random generator stream for gang planning.
+        reserved_accounts: Set of account identifiers reserved by prior gangs.
+        dev_rng: Dedicated random generator stream for gang devices.
+
+    Returns:
+        Tuple of (payments, roles, spans, stories, costs, money, time, prob_safe, events).
+
+    Example:
+        # res = _plan_campaign_steps(config, world, rng, None, dev_rng)
+    """
+    clock_min, acq_min = config.source.start_minute, config.source.start_minute
+    mules, device_spans, device_events = [], [], []
+    pmts, roles, stories, costs = [], [], [], []
+    money, time, prob_safe = 0, 0, 1.0
+
+    for step in config.steps:
+        if step.block == "acquire":
+            mules, acq_min, cost = _plan_acquire_step(world, config, step, clock_min, reserved_accounts, rng)
+        elif step.block == "take_control":
+            d_spans, d_events, cost = _plan_take_control_step(config, step, mules, clock_min, dev_rng, rng)
+            device_spans.extend(d_spans); device_events.extend(d_events)
+        elif step.block == "warm_up":
+            clock_min, cost = _plan_warmup_step(step, clock_min, rng)
+        elif step.block == "route":
+            r_pmts, r_roles, r_stories, cost = _execute_route_step(config, step, mules, acq_min, clock_min, rng)
+            pmts.extend(r_pmts); roles.extend(r_roles); stories.extend(r_stories)
+        elif step.block == "disguise":
+            cost = _plan_disguise_step(step, rng)
+        else:
+            raise ValueError(f"Unrecognized block '{step.block}'.")
+
+        costs.append(cost)
+        money += cost.money_paise; time += cost.time_minutes; prob_safe *= (1.0 - cost.risk)
+        _check_running_budget(config.gang_id, config.budget, money, time, 1.0 - prob_safe, step.block)
+
+    return pmts, roles, device_spans, stories, costs, money, time, prob_safe, device_events
+
+
 def plan_gang(
     config: GangConfig, world: World, rng: np.random.Generator,
-    reserved_accounts: set[str] | None = None
+    reserved_accounts: set[str] | None = None,
+    gang_devices_rng: np.random.Generator | None = None,
 ) -> GangPlan:
     """
     WHAT: Synthesizes a complete tactical campaign plan from a GangConfig specification and simulated World state.
     It validates structural rules, recruits authentic citizen mule accounts, simulates seasoning dormancy,
-    schedules layered transfers and forensic narratives, and strictly checks multi-dimensional budget constraints.
+    provisions gang devices and compromise telemetry, schedules layered transfers, and enforces budget constraints.
 
     WHY: Ground Rule 15 and Decisions D7 and D8 establish procedural gang generation as the bridge between
     high-level fraud typologies and low-level reactive world execution, guaranteeing economic and temporal consistency.
@@ -515,6 +630,7 @@ def plan_gang(
         world: Simulated World instance containing citizen accounts, commercial shops, and ledgers.
         rng: Master random number generator stream assigned to this gang's planning process.
         reserved_accounts: Optional set of account identifiers reserved by prior gangs or system fixtures.
+        gang_devices_rng: Optional dedicated random number generator stream for device creation (child 6).
 
     Returns:
         An initialized GangPlan containing planned transfers, truth assertions, step costs, and total expenditures.
@@ -524,38 +640,17 @@ def plan_gang(
         # assert len(plan.payments) > 0 and plan.totals.money_paise <= gang_config.budget.money_paise
     """
     validate_gang_config(config)
-    clock_min, acq_min = config.source.start_minute, config.source.start_minute
-    mules: list[str] = []
-    pmts, roles, stories, costs = [], [], [], []
-    money, time, prob_safe = 0, 0, 1.0
-
-    for step in config.steps:
-        if step.block == "acquire":
-            mules, acq_min, cost = _plan_acquire_step(world, config, step, clock_min, reserved_accounts, rng)
-        elif step.block == "warm_up":
-            clock_min, cost = _plan_warmup_step(step, clock_min, rng)
-        elif step.block == "route":
-            r_pmts, r_roles, r_stories, cost = _execute_route_step(config, step, mules, acq_min, clock_min, rng)
-            pmts.extend(r_pmts)
-            roles.extend(r_roles)
-            stories.extend(r_stories)
-        elif step.block == "disguise":
-            cost = _plan_disguise_step(step, rng)
-        else:
-            raise ValueError(f"Unrecognized block '{step.block}'.")
-
-        costs.append(cost)
-        money += cost.money_paise
-        time += cost.time_minutes
-        prob_safe *= (1.0 - cost.risk)
-        _check_running_budget(config.gang_id, config.budget, money, time, 1.0 - prob_safe, step.block)
-
-    return _build_gang_plan(pmts, roles, stories, costs, money, time, prob_safe)
+    dev_rng = gang_devices_rng if gang_devices_rng is not None else rng
+    pmts, roles, spans, stories, costs, money, time, safe, events = _plan_campaign_steps(
+        config, world, rng, reserved_accounts, dev_rng
+    )
+    return _build_gang_plan(pmts, roles, spans, stories, costs, money, time, safe, events)
 
 
 def _build_gang_plan(
-    pmts: list[PlannedPayment], roles: list[RoleSpan], stories: list[PaymentStory],
-    costs: list[BlockCost], money: int, time: int, prob_safe: float
+    pmts: list[PlannedPayment], roles: list[RoleSpan], device_spans: list[DeviceControlSpan],
+    stories: list[PaymentStory], costs: list[BlockCost], money: int, time: int, prob_safe: float,
+    gang_device_events: list[GangDeviceEvent] | None = None,
 ) -> GangPlan:
     """
     WHAT: Packages planned payments, truth facts, block costs, and total expenditures into an immutable GangPlan.
@@ -566,22 +661,25 @@ def _build_gang_plan(
     Args:
         pmts: List of PlannedPayment records scheduled during campaign planning.
         roles: List of RoleSpan records identifying account role assignments.
+        device_spans: List of DeviceControlSpan records identifying gang device control.
         stories: List of PaymentStory records documenting transaction narratives.
         costs: List of BlockCost records for individual executed blocks.
         money: Total cumulative transaction fees in paise.
         time: Total cumulative elapsed campaign minutes.
         prob_safe: Cumulative probability of evading detection across all blocks.
+        gang_device_events: Optional list of GangDeviceEvent records emitted during device takeover.
 
     Returns:
         Immutable GangPlan record ready for runner execution.
 
     Example:
-        # plan = _build_gang_plan(pmts, roles, stories, costs, 500, 100, 0.98)
+        # plan = _build_gang_plan(pmts, roles, [], stories, costs, 500, 100, 0.98)
         # assert len(plan.payments) == len(pmts)
     """
     indexed = tuple(
         PlannedPayment(p.minute, p.from_account, p.to_account, p.amount_paise, idx, p.purpose)
         for idx, p in enumerate(pmts)
     )
-    truth = TruthFacts(roles=tuple(roles), device_control=(), payment_stories=tuple(stories))
-    return GangPlan(indexed, truth, tuple(costs), BlockCost(money, time, 1.0 - prob_safe))
+    truth = TruthFacts(roles=tuple(roles), device_control=tuple(device_spans), payment_stories=tuple(stories))
+    events = tuple(gang_device_events or [])
+    return GangPlan(indexed, truth, tuple(costs), BlockCost(money, time, 1.0 - prob_safe), events)

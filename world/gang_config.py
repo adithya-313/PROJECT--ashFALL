@@ -263,6 +263,9 @@ def _validate_step_ordering(gang_id: str, steps: tuple[BlockStep, ...]) -> None:
     for step in steps:
         if step.block == "acquire":
             has_acquired = True
+        elif step.block == "take_control":
+            if not has_acquired:
+                raise ValueError(f"Gang '{gang_id}' cannot take control before acquiring accounts.")
         elif step.block == "warm_up":
             if not has_acquired:
                 raise ValueError(f"Gang '{gang_id}' cannot warm up before acquiring accounts.")
@@ -316,6 +319,41 @@ def _validate_route_parameters(gang_id: str, steps: tuple[BlockStep, ...]) -> No
             )
 
 
+def _validate_take_control_parameters(gang_id: str, steps: tuple[BlockStep, ...]) -> None:
+    """
+    WHAT: Asserts take_control steps configure devices count within [1, 5] and strict boolean compromise flags.
+
+    WHY: Decision E1 models device takeover with 1 to 5 devices and strict boolean flags per Decision E6.
+
+    Args:
+        gang_id: Gang identifier for error diagnostics.
+        steps: Sequence of BlockStep items to validate.
+
+    Returns:
+        None. Raises ValueError if devices count is out of range or flags are not booleans.
+
+    Example:
+        # Non-boolean sim_swap raises ValueError.
+        # _validate_take_control_parameters("gang_a", (BlockStep("take_control", (("sim_swap", "yes"),)),))
+    """
+    boolean_flags = ("sim_swap", "linked_number_switch", "emulator", "remote_access")
+    for step in steps:
+        if step.block != "take_control":
+            continue
+        params = step.params_dict
+        if "devices" in params:
+            devices_count = params["devices"]
+            if not isinstance(devices_count, int) or isinstance(devices_count, bool) or not (1 <= devices_count <= 5):
+                raise ValueError(
+                    f"Gang '{gang_id}' take_control devices must be an integer in [1, 5], got {devices_count}."
+                )
+        for flag in boolean_flags:
+            if flag in params and not isinstance(params[flag], bool):
+                raise ValueError(
+                    f"Gang '{gang_id}' take_control parameter '{flag}' must be boolean, got {type(params[flag]).__name__}."
+                )
+
+
 def validate_gang_config(config: GangConfig) -> None:
     """
     WHAT: Comprehensive validator enforcing block schemas, strength constraints, step ordering, and dividing lines.
@@ -343,3 +381,6 @@ def validate_gang_config(config: GangConfig) -> None:
 
     # 4. Validate route parameters against dividing lines.
     _validate_route_parameters(config.gang_id, config.steps)
+
+    # 5. Validate take control parameters.
+    _validate_take_control_parameters(config.gang_id, config.steps)
