@@ -23,7 +23,7 @@ tactic_cost_units:
   money_storage: paise
   time_unit: simulated_minutes
   risk_unit: probability_per_use
-  risk_values: set in Level 12b, labelled assumption
+  risk_values: set in Level 12b in tactic_risk_per_use, labelled assumption
 
   parameters:
     account_supplier_fee_share:
@@ -42,3 +42,30 @@ tactic_cost_units:
       issue_ids_v2: [12-9]
       derived_from: "amendment A-016"
       reason: The reported 20 to 30% share is NOT confirmed by the source finding, which is why it is an assumption with a range and not a fact.
+
+tactic_risk_per_use:
+  label: assumption
+  reason: "No published figure; it exists only to compare tactics, as amendment A-016 says."
+  issue_ids_v2: [12-9]
+  derived_from: "amendment A-016"
+  unit: probability_per_use
+  acquire:
+    label: assumption
+    range: [0.001, 0.01]
+    reason: "No published figure; exists only to compare tactics per amendment A-016"
+  warm_up:
+    label: assumption
+    range: [0.0, 0.001]
+    reason: "No published figure; exists only to compare tactics per amendment A-016"
+  route:
+    label: assumption
+    range: [0.001, 0.02]
+    reason: "No published figure; exists only to compare tactics per amendment A-016"
+  disguise:
+    label: assumption
+    range: [0.0, 0.005]
+    reason: "No published figure; exists only to compare tactics per amendment A-016"
+  take_control:
+    label: assumption
+    range: [0.001, 0.01]
+    reason: "No published figure; exists only to compare tactics per amendment A-016"

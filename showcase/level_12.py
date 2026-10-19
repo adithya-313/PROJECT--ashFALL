@@ -23,15 +23,23 @@ from showcase.level_12_checks import (
     run_split_world_check,
     run_v2_register_negative_check,
 )
+from showcase.level_12_checks_b import (
+    run_gang_consistency_check,
+    run_gang_two_layers_check,
+    run_over_budget_gang_negative_check,
+    run_temporal_truth_edge_check,
+    run_truth_isolation_negative_check,
+)
 
 LEVEL_NUMBER = 12
-LEVEL_TITLE = "World engine II: a world that can react (built: part 12a of 12a-12g)"
+LEVEL_TITLE = "World engine II: a world that can react (built: parts 12a-12b of 12a-12g)"
 NEEDS_DATABASE = False
 
 WHAT_YOU_SAW = (
     "Level 12a builds a reactive world engine: outside events (liens, debit holds, releases, payment resumes), "
     "an interactive runner that can hold and resume payments while preserving true origin and child random draws, "
-    "bit-for-bit equivalence with Level 11 under allow-all execution, and v2 issue tracking."
+    "bit-for-bit equivalence with Level 11 under allow-all execution, and v2 issue tracking. "
+    "Level 12b adds hidden truth isolation, a tactic language with budget enforcement, and gang device telemetry."
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -40,6 +48,7 @@ REQUIRED_FILES = [
     REPO_ROOT / "config" / "issues_v2.yaml",
     REPO_ROOT / "config" / "frozen_anchors.yaml",
     REPO_ROOT / "scripts" / "golden_values.yaml",
+    REPO_ROOT / "showcase" / "fixtures" / "level_12" / "gang_two_layers.yaml",
 ]
 
 
@@ -137,27 +146,98 @@ def _get_checks_4_to_5() -> list[CheckDefinition]:
     return [check_4, check_5]
 
 
+def _get_checks_6_to_8() -> list[CheckDefinition]:
+    """
+    WHAT: Constructs check definition descriptors for Level 12b checks 6 through 8.
+    It builds CheckDefinition objects for multi-hop gang routing, truth isolation guards,
+    and budget overrun refusal.
+
+    WHY: Decomposing check construction into modular subroutines keeps all functions under 30 code lines.
+    Separates routing verification and negative isolation guards into a focused builder.
+
+    Returns:
+        List of CheckDefinition containers representing checks 6 through 8.
+
+    Example:
+        checks = _get_checks_6_to_8(); assert len(checks) == 3
+    """
+    check_6 = CheckDefinition(
+        "6. a gang moves fixture money through two layers", "normal",
+        "A gang routes fixture money through two layers of mules with complete forensic payment stories.",
+        run_gang_two_layers_check, "Gang planning or routing failed to construct mule chains or attach stories.",
+        "world/gang_planner.py, showcase/fixtures/level_12/gang_two_layers.yaml", part="b",
+    )
+    check_7 = CheckDefinition(
+        "7. ashFALL code cannot open the truth", "negative",
+        "Operational ashFALL packages are strictly prevented from reading hidden truth at runtime and build time.",
+        run_truth_isolation_negative_check,
+        "Caller inspection or static AST import guards failed to block truth access.",
+        "evaluation/truth.py, core/truth_import_check.py", part="b",
+    )
+    check_8 = CheckDefinition(
+        "8. an over-budget gang is refused with a plain reason", "negative",
+        "A gang exceeding its configured spending limits is halted with an informative reason before execution.",
+        run_over_budget_gang_negative_check,
+        "Budget tracking failed to detect expenditure overruns or failed to raise GangBudgetExceeded.",
+        "world/gang_planner.py, world/interactive_runner.py", part="b",
+    )
+    return [check_6, check_7, check_8]
+
+
+def _get_checks_9_to_10() -> list[CheckDefinition]:
+    """
+    WHAT: Constructs check definition descriptors for Level 12b checks 9 and 10.
+    It builds CheckDefinition objects for multi-artifact deterministic reproducibility
+    and temporal truth role transitions.
+
+    WHY: Decomposing check construction into modular subroutines keeps all functions under 30 code lines.
+    Separates multi-artifact consistency assertions and temporal boundary checks into a focused builder.
+
+    Returns:
+        List of CheckDefinition containers representing checks 9 and 10.
+
+    Example:
+        checks = _get_checks_9_to_10(); assert len(checks) == 2
+    """
+    check_9 = CheckDefinition(
+        "9. the same seed gives the same gang activity and truth", "consistency",
+        "Identical seeds produce bit-for-bit identical event streams, device streams, and truth files.",
+        run_gang_consistency_check, "Nondeterministic random stream calls or unsorted dictionary serialization.",
+        "world/interactive_runner.py, world/truth_writer.py", part="b",
+    )
+    check_10 = CheckDefinition(
+        "10. truth is temporal: a rented account is genuine before its rental", "edge",
+        "Rented mule accounts remain genuine before recruitment, and gang devices take control at the takeover minute.",
+        run_temporal_truth_edge_check,
+        "Temporal role span evaluation leaked mule status retroactively or device control times drifted.",
+        "evaluation/truth.py, world/gang_planner.py", part="b",
+    )
+    return [check_9, check_10]
+
+
 def get_checks(quick: bool = False) -> list[CheckDefinition]:
     """
-    WHAT: Constructs the ordered sequence of 5 Level 12a showcase verification checks.
-    All checks belong to part 'a' and span consistency, normal, edge, and negative check kinds.
+    WHAT: Constructs the ordered sequence of 10 Level 12 showcase verification checks (Parts 12a and 12b).
+    All checks span consistency, normal, edge, and negative check kinds across parts 'a' and 'b'.
 
-    WHY: Supplies the showcase execution engine with the authoritative test suite for Level 12a.
+    WHY: Supplies the showcase execution engine with the authoritative test suite for Level 12.
     Enforces required coverage distribution across normal, edge, and negative categories while
-    tagging each check with part='a' for selective execution.
+    tagging each check with part='a' or part='b' for selective execution.
 
     Args:
         quick: Boolean flag indicating whether quick execution mode is requested.
 
     Returns:
-        List of CheckDefinition instances configuring Level 12a showcase evaluations.
+        List of CheckDefinition instances configuring Level 12 showcase evaluations.
 
     Example:
-        checks = get_checks(quick=True); assert len(checks) == 5
+        checks = get_checks(quick=True); assert len(checks) == 10
     """
-    # Concatenate checks from helper builders to construct complete Level 12a suite.
+    # Concatenate checks from helper builders to construct complete Level 12 suite.
     checks: list[CheckDefinition] = []
     checks.extend(_get_checks_1_to_3())
     checks.extend(_get_checks_4_to_5())
+    checks.extend(_get_checks_6_to_8())
+    checks.extend(_get_checks_9_to_10())
     return checks
 

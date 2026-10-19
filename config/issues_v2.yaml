@@ -64,9 +64,12 @@ issues:
   K5:
     title: "One shared .env across services"
     origin: revision_2
-    status: planned
+    status: partial
     levels: [12, 39]
-    later_work: ["Level 12: Separate env file and mount for truth"]
+    evidence:
+      - {kind: test, file: tests/unit/test_truth_env_separation.py, name: test_operational_configurations_exclude_truth_environment_variable}
+      - {kind: test, file: tests/unit/test_truth_env_separation.py, name: test_dedicated_truth_env_defines_variable_with_separation_rationale}
+    later_work: ["Level 12: mount envs/truth.env into world and evaluation containers when those containers exist"]
   K6:
     title: "Account IDs repeat across worlds; velocity keys are not namespaced"
     origin: revision_2
@@ -211,10 +214,12 @@ issues:
   12-1:
     title: "A static truth record cannot describe rented or resold accounts"
     origin: revision_2
-    status: planned
+    status: built
     levels: [12]
     parts: [12b]
-    later_work: ["Level 12b: Temporal truth with gang ownership and depth"]
+    evidence:
+      - {kind: test, file: tests/unit/evaluation/test_truth_loader.py, name: test_temporal_span_transitions_and_device_controllers}
+      - {kind: test, file: tests/unit/showcase/test_level_12_checks_b.py, name: test_check_10_temporal_truth_edge}
   12-2:
     title: "Balances are checked in two places, with no available balance"
     origin: revision_2
@@ -276,7 +281,8 @@ issues:
       - {kind: amendment, id: A-014}
       - {kind: config, file: config/tactic_families.yaml, name: tactic_families}
       - {kind: test, file: tests/unit/test_tactic_families.py, name: test_held_out_names_match_evaluation_yaml}
-    later_work: ["Level 12b: register the numeric dividing lines as labelled building-block parameters", "Level 12d: validate the family boundaries"]
+      - {kind: test, file: tests/unit/world/test_tactic_config.py, name: test_dividing_lines_resolve_to_world_ranges_bounds_dynamically}
+    later_work: ["Level 12d: validate the family boundaries"]
   12-9:
     title: "Tactic costs had no units"
     origin: revision_2
@@ -341,10 +347,12 @@ issues:
   12-17:
     title: "Mule depth was not recorded; gang routing must obey the same limits"
     origin: revision_2
-    status: planned
+    status: partial
     levels: [12]
     parts: [12b, 12c]
-    later_work: ["Level 12b: Depth in truth; Level 11's split helper"]
+    evidence:
+      - {kind: test, file: tests/unit/world/test_gang_planner.py, name: test_route_depths_cover_one_to_n}
+    later_work: ["Level 12c: gang cash-out routing through Level 11's split helper"]
   12-18:
     title: "Validation worlds were missing from the sampler though evaluation.yaml defines them"
     origin: revision_2

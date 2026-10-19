@@ -174,3 +174,30 @@ def test_fraud_inputs_with_switch_off_are_refused(which: str) -> None:
             run_interactive_world(TINY, RunnerSettings(), inputs, code_version=TEST_CODE_VERSION)
         else:
             run_interactive_world(TINY, RunnerSettings(), inputs, hook, code_version=TEST_CODE_VERSION)
+
+
+def test_fraud_off_event_fraud_input_index_is_all_none() -> None:
+    """
+    WHAT: Runs the tiny world with the fraud switch off and asserts that event_fraud_input_index has exactly 2,915
+    entries, each equal to None.
+
+    WHY: With the fraud switch off, every event originates from genuine or episode planned payments and can never
+    have a fraud input index.
+
+    Args:
+        None.
+
+    Returns:
+        None. Fails if the length differs from 2,915 or any entry is not None.
+
+    Example:
+        output.result.event_fraud_input_index == [None] * 2915
+    """
+    # 1. Execute tiny world under fraud-off runner settings.
+    output = run_interactive_world(TINY, code_version=TEST_CODE_VERSION)
+    indices = output.result.event_fraud_input_index
+
+    # 2. Assert all 2,915 events carry None as their fraud input index.
+    assert len(indices) == 2915
+    assert indices == [None] * 2915
+

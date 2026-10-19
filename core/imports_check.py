@@ -23,7 +23,7 @@ from core.config_validator import load_yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REQUIREMENTS_FILE = REPO_ROOT / "requirements-dev.txt"
 EXCEPTIONS_FILE = REPO_ROOT / "config" / "import_exceptions.yaml"
-FOLDERS_TO_CHECK = ["core", "showcase"]
+FOLDERS_TO_CHECK = ["core", "showcase", "evaluation"]
 
 
 def normalise(name):

@@ -134,6 +134,41 @@ NEW_CODE_FILES: list[str] = [
     "showcase/level_12_checks.py",
     "showcase/level_12.py",
     "tests/unit/showcase/test_level_12_checks.py",
+    # Level 12b hidden truth store records module and test suite.
+    "world/truth_records.py",
+    "tests/unit/world/test_truth_records.py",
+    # Level 12b hidden truth store writer and test suite.
+    "world/truth_writer.py",
+    "tests/unit/world/test_truth_writer.py",
+    # Level 12b evaluation truth loader and test suite.
+    "evaluation/truth.py",
+    "tests/unit/evaluation/test_truth_loader.py",
+    # Level 12b static truth import guard and test suite.
+    "core/truth_import_check.py",
+    "tests/unit/test_truth_import_check.py",
+    # Level 12b truth environment separation test suite.
+    "tests/unit/test_truth_env_separation.py",
+    # Level 12b tactic block catalogue and dividing lines module and test suite.
+    "world/tactic_config.py",
+    "tests/unit/world/test_tactic_config.py",
+    # Level 12b gang configuration module and validation test suite.
+    "world/gang_config.py",
+    "tests/unit/world/test_gang_config.py",
+    # Level 12b tactic blocks and gang planner modules and test suite.
+    "world/tactic_blocks.py",
+    "world/gang_planner.py",
+    "tests/unit/world/test_gang_planner.py",
+    # Level 12b gang runner integration test suite.
+    "tests/unit/world/test_gang_runs.py",
+    # Level 12b gang devices module and test suite.
+    "world/gang_devices.py",
+    "tests/unit/world/test_gang_devices.py",
+    # Level 12b gang device stream test suite.
+    "tests/unit/world/test_gang_device_stream.py",
+    # Level 12b showcase checks and runner modules.
+    "showcase/level_12_support_b.py",
+    "showcase/level_12_checks_b.py",
+    "tests/unit/showcase/test_level_12_checks_b.py",
 ]
 
 
@@ -145,6 +180,12 @@ NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
     ("showcase/framework.py", "select_part_checks"),
     ("showcase/__main__.py", "check_part_argument"),
     ("showcase/__main__.py", "report_folder"),
+    # Level 12b events-v2 writer function.
+    ("world/interactive_events.py", "write_events_v2_file"),
+    # Level 12b interactive runner gang configs integration helper.
+    ("world/interactive_runner.py", "_apply_gang_configs"),
+    # Level 12b unified device event stream helper.
+    ("world/interactive_runner.py", "device_event_stream"),
 ]
 
 

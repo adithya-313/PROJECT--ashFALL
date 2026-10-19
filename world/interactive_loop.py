@@ -47,6 +47,7 @@ from world.device_runtime import DeviceStamp, stamp_sender_device
 from world.encumbrance import EncumbranceBook
 from world.failure_decision import decide_failure
 from world.failures import PaymentEvent, make_event
+from world.gang_devices import GangDeviceEvent
 from world.interactive_records import (
     HOOK_DECISIONS,
     FraudInputs,
@@ -57,6 +58,7 @@ from world.interactive_records import (
 from world.interactive_state import RunnerState
 from world.outside_events import OutsideEvent, validate_outside_event
 from world.run_identity import make_payment_id
+from world.truth_records import TruthFacts, validate_truth_facts
 from world.world_plan import WorldPlan
 
 # The failure reasons this runner adds; both are failures of the sender's bank.
@@ -69,11 +71,11 @@ SENDER_BANK_DOMAIN: str = "sender_bank"
 class QueuedPayment:
     """
     WHAT: One payment waiting on the queue: the payment itself, its stream source ("planned", "fraud" or "resumed"),
-    where it truly came from ("planned" or "fraud"), and, once it has been seen the first time, its planned payment id
-    and its sender stamp.
+    where it truly came from ("planned" or "fraud"), its fraud input index, and, once it has been seen the first time,
+    its planned payment id and its sender stamp.
 
-    WHY: A held payment that is later resumed must keep its first name and its first stamp, so the phone it was made
-    from is not marked "new" twice. Carrying both on the queued item makes that automatic.
+    WHY: A held payment that is later resumed must keep its first name, its first stamp, and its fraud input index, so
+    the phone it was made from is not marked "new" twice and truth records correlate the resumed event correctly.
 
     Args:
         payment: The PlannedPayment (minute, accounts, amount, order number, purpose).
@@ -81,13 +83,14 @@ class QueuedPayment:
         origin: "planned" or "fraud": where the payment truly came from.
         planned_payment_id: Its name after the first time it is seen, else None.
         stamp: Its sender stamp after the first time it is seen, else None.
+        input_index: The 0-based position in FraudInputs.payments; None for planned payments.
 
     Returns:
         A frozen QueuedPayment.
 
     Example:
-        QueuedPayment(payment, "fraud", "fraud") before it is first seen;
-        QueuedPayment(payment, "resumed", "fraud", "run-p-000004", stamp) when a held fraud payment comes back.
+        QueuedPayment(payment, "fraud", "fraud", input_index=0) before it is first seen;
+        QueuedPayment(payment, "resumed", "fraud", "run-p-000004", stamp, input_index=0) when resumed.
     """
 
     payment: PlannedPayment
@@ -95,13 +98,15 @@ class QueuedPayment:
     origin: str
     planned_payment_id: str | None = None
     stamp: DeviceStamp | None = None
+    input_index: int | None = None
 
 
 @dataclass
 class LoopContext:
     """
     WHAT: Everything one fraud-on run changes as it goes: the queue, the encumbrance book, held payments, the device
-    position, counters for names, and the growing output lists (events, purposes, stamps, counts, ids, sources).
+    position, counters for names, and the growing output lists (events, purposes, stamps, counts, ids, sources,
+    and fraud input indices).
 
     WHY: Passing one context to small functions keeps each function short and named after one job, while all of
     them share the same run.
@@ -152,6 +157,9 @@ class LoopContext:
     event_sources: list[str] = field(default_factory=list)
     events_resumed: list[bool] = field(default_factory=list)
     applied_device_events: list[DeviceEvent] = field(default_factory=list)
+    applied_gang_device_events: list[GangDeviceEvent] = field(default_factory=list)
+    event_fraud_input_index: list[int | None] = field(default_factory=list)
+    truth: TruthFacts = field(default_factory=TruthFacts)
 
 
 def build_component_streams(seed: int, children: dict[str, int]) -> dict[str, np.random.Generator]:
@@ -235,19 +243,25 @@ def queue_initial_items(context: LoopContext, planned: Sequence[PlannedPayment],
             raise ValueError(f"fraud payment purpose '{payment.purpose}' is not one of {', '.join(PAYMENT_PURPOSES)}")
         push(
             context, payment.minute, "fraud_payments", order,
-            QueuedPayment(payment=payment, source="fraud", origin="fraud"),
+            QueuedPayment(payment=payment, source="fraud", origin="fraud", input_index=order),
         )
     # Outside events, checked as they are queued.
     for order, event in enumerate(fraud_inputs.outside_events):
         validate_outside_event(event)
         push(context, event.minute, "outside_events", order, event)
+    # Gang device events, queued under the gang_device_events tie-break rank.
+    for order, dev_event in enumerate(fraud_inputs.gang_device_events):
+        push(context, dev_event.minute, "gang_device_events", order, dev_event)
+    # Hidden truth facts, validated against planned fraud payments before the loop begins.
+    validate_truth_facts(fraud_inputs.truth, len(fraud_inputs.payments))
+    context.truth = fraud_inputs.truth
 
 
 def apply_outside_event(context: LoopContext, event: OutsideEvent) -> None:
     """
     WHAT: Applies one outside event: a lien or debit hold is placed in the encumbrance book (under its given id or a
     new "enc-000000"-style id), a release ends one, and a resume puts a held payment back on the queue at this minute
-    as a "resumed" payment with its first name and stamp.
+    as a "resumed" payment with its first name, stamp, and fraud input index.
 
     WHY: Outside events act on the book and the held list only; they never move money. A resume for a payment that is
     not held means the inputs contradict each other, so it raises instead of doing nothing.
@@ -279,6 +293,7 @@ def apply_outside_event(context: LoopContext, event: OutsideEvent) -> None:
         resumed = QueuedPayment(
             payment=resumed_payment, source="resumed", origin=held.origin,
             planned_payment_id=held.planned_payment_id, stamp=held.stamp,
+            input_index=held.input_index,
         )
         push(context, event.minute, "resumed_payments", context.insertion_sequence, resumed)
 
@@ -520,6 +535,7 @@ def record_event(context: LoopContext, event: PaymentEvent, queued: QueuedPaymen
     context.planned_payment_ids.append(str(queued.planned_payment_id))
     context.event_sources.append(queued.origin)
     context.events_resumed.append(queued.source == "resumed")
+    context.event_fraud_input_index.append(queued.input_index)
 
 
 def process_payment(context: LoopContext, queued: QueuedPayment) -> None:
@@ -598,10 +614,13 @@ def finish_run(context: LoopContext, money_created_paise: int) -> InteractiveRun
         event_sources=context.event_sources,
         events_resumed=context.events_resumed,
         applied_device_events=context.applied_device_events,
+        applied_gang_device_events=context.applied_gang_device_events,
+        event_fraud_input_index=context.event_fraud_input_index,
         held_payments=held,
         encumbrance_log=list(context.book.log),
         run_id=context.run_id,
         money_created_paise=money_created_paise,
+        truth=context.truth,
     )
 
 
@@ -645,11 +664,13 @@ def run_fraud_on(
                           device_events)
     # 4. Everything goes on one queue.
     queue_initial_items(context, planned, fraud_inputs)
-    # 5. Take items off in order: outside events change the book or the held list; payments run.
+    # 5. Take items off in order: outside events, gang device events, or payments.
     while context.queue:
-        item = heapq.heappop(context.queue)[-1]
+        item: OutsideEvent | GangDeviceEvent | QueuedPayment = heapq.heappop(context.queue)[-1]
         if isinstance(item, OutsideEvent):
             apply_outside_event(context, item)
+        elif isinstance(item, GangDeviceEvent):
+            context.applied_gang_device_events.append(item)
         else:
             process_payment(context, item)
     # 6. Final device events, Level 11's guard, and the result.

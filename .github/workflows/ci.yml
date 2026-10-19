@@ -217,11 +217,11 @@ jobs:
 
       # Style check on the Level 7 code and the code it uses.
       - name: Lint (ruff)
-        run: ruff check showcase api core
+        run: ruff check showcase api core evaluation
 
       # Type check on the same folders.
       - name: Type check (mypy)
-        run: mypy showcase api core --ignore-missing-imports --no-strict-optional
+        run: mypy showcase api core evaluation --ignore-missing-imports --no-strict-optional
 
       # Fast unit tests that need no database or Kafka. Two kinds of old problems are left out on purpose and are
       # NOT fixed in Level 7 (known issues, tracked in the pull request):
@@ -369,6 +369,10 @@ jobs:
       # Fails if core/ or showcase/ imports a package that requirements-dev.txt (and the files it includes) lacks.
       - name: Check that every import is declared
         run: python -m core.imports_check
+
+      # Fails if hidden truth is imported outside allowed folders or truth env vars leak into operational code.
+      - name: Check hidden truth isolation
+        run: python -m core.truth_import_check
 
       # Fails if a top-level folder is not listed in config/folder_classification.yaml, or an engine folder is not
       # listed in config/new_engine_paths.yaml.
