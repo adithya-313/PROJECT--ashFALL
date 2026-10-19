@@ -50,8 +50,10 @@ from world.failures import PaymentEvent, make_event
 from world.gang_devices import GangDeviceEvent
 from world.interactive_records import (
     HOOK_DECISIONS,
+    ForwardAdjustment,
     FraudInputs,
     HookDecision,
+    IllicitMoneyRule,
     InteractiveRunResult,
     PaymentView,
 )
@@ -160,6 +162,11 @@ class LoopContext:
     applied_gang_device_events: list[GangDeviceEvent] = field(default_factory=list)
     event_fraud_input_index: list[int | None] = field(default_factory=list)
     truth: TruthFacts = field(default_factory=TruthFacts)
+    illicit_balances: dict[str, int] = field(default_factory=dict)
+    money_rules_by_index: dict[int, IllicitMoneyRule] = field(default_factory=dict)
+    original_fraud_amounts: list[int] = field(default_factory=list)
+    skipped_forwards: list[ForwardAdjustment] = field(default_factory=list)
+    capped_forwards: list[ForwardAdjustment] = field(default_factory=list)
 
 
 def build_component_streams(seed: int, children: dict[str, int]) -> dict[str, np.random.Generator]:
@@ -211,6 +218,33 @@ def push(context: LoopContext, minute: int, rank_name: str, order: int, item: An
     heapq.heappush(context.queue, key)
 
 
+def validate_illicit_money_inputs(fraud_inputs: FraudInputs, state: RunnerState) -> None:
+    """
+    Validates illicit money rules and seeds before simulation starts.
+
+    Ensures each rule references a valid fraud payment index without duplicates,
+    each seed specifies a positive amount in paise, and seed accounts are registered.
+    """
+    num_payments = len(fraud_inputs.payments)
+    seen_indices: set[int] = set()
+    for rule in fraud_inputs.money_rules:
+        if rule.input_index < 0 or rule.input_index >= num_payments:
+            raise ValueError(
+                f"illicit money rule input index {rule.input_index} is out of range for {num_payments} fraud payments"
+            )
+        if rule.input_index in seen_indices:
+            raise ValueError(f"duplicate illicit money rule for fraud payment index {rule.input_index}")
+        seen_indices.add(rule.input_index)
+
+    for seed in fraud_inputs.illicit_seeds:
+        if seed.amount_paise <= 0:
+            raise ValueError(
+                f"illicit seed amount for account {seed.account_id} must be positive, got {seed.amount_paise}"
+            )
+        if seed.account_id not in state.bank_map:
+            raise ValueError(f"illicit seed account {seed.account_id} is not registered with the runner")
+
+
 def queue_initial_items(context: LoopContext, planned: Sequence[PlannedPayment], fraud_inputs: FraudInputs) -> None:
     """
     WHAT: Puts every planned payment, fraud payment and outside event on the queue before the run starts. Planned
@@ -255,6 +289,14 @@ def queue_initial_items(context: LoopContext, planned: Sequence[PlannedPayment],
     # Hidden truth facts, validated against planned fraud payments before the loop begins.
     validate_truth_facts(fraud_inputs.truth, len(fraud_inputs.payments))
     context.truth = fraud_inputs.truth
+    # Illicit money rules and seeds, validated and registered before simulation proceeds.
+    validate_illicit_money_inputs(fraud_inputs, context.state)
+    for seed in fraud_inputs.illicit_seeds:
+        context.illicit_balances[seed.account_id] = (
+            context.illicit_balances.get(seed.account_id, 0) + seed.amount_paise
+        )
+    context.money_rules_by_index = {rule.input_index: rule for rule in fraud_inputs.money_rules}
+    context.original_fraud_amounts = [p.amount_paise for p in fraud_inputs.payments]
 
 
 def apply_outside_event(context: LoopContext, event: OutsideEvent) -> None:
@@ -562,6 +604,44 @@ def process_payment(context: LoopContext, queued: QueuedPayment) -> None:
     # Phones change first, then the payment is named and stamped once.
     apply_due_device_events(context, payment.minute)
     queued = first_look(context, queued)
+
+    rule = (
+        context.money_rules_by_index.get(queued.input_index)
+        if queued.input_index is not None
+        else None
+    )
+    if rule is not None and rule.spends_illicit:
+        planned_paise = context.original_fraud_amounts[queued.input_index]
+        available_paise = max(0, context.illicit_balances.get(payment.from_account, 0))
+        effective_paise = min(planned_paise, available_paise)
+        if effective_paise == 0:
+            context.skipped_forwards.append(
+                ForwardAdjustment(
+                    planned_payment_id=str(queued.planned_payment_id),
+                    minute=payment.minute,
+                    from_account=payment.from_account,
+                    to_account=payment.to_account,
+                    planned_paise=planned_paise,
+                    available_paise=0,
+                    reason="no_illicit_money_arrived",
+                )
+            )
+            return
+        if effective_paise < planned_paise:
+            context.capped_forwards.append(
+                ForwardAdjustment(
+                    planned_payment_id=str(queued.planned_payment_id),
+                    minute=payment.minute,
+                    from_account=payment.from_account,
+                    to_account=payment.to_account,
+                    planned_paise=planned_paise,
+                    available_paise=effective_paise,
+                    reason="only_part_arrived",
+                )
+            )
+        payment = dataclasses.replace(payment, amount_paise=effective_paise)
+        queued = dataclasses.replace(queued, payment=payment)
+
     decision = ask_hook(context, queued)
     stream = stream_for(context, queued.source)
     pieces = pieces_of(context, payment, banks[0])
@@ -575,7 +655,17 @@ def process_payment(context: LoopContext, queued: QueuedPayment) -> None:
         return
     # Allowed or declined: every piece is decided and recorded, with no early stop.
     for piece in pieces:
-        record_event(context, decide_piece(context, payment, piece, banks, decision, stream), queued)
+        event = decide_piece(context, payment, piece, banks, decision, stream)
+        record_event(context, event, queued)
+        if event.status == "success" and rule is not None:
+            if rule.credits_illicit:
+                context.illicit_balances[payment.to_account] = (
+                    context.illicit_balances.get(payment.to_account, 0) + event.amount_paise
+                )
+            if rule.spends_illicit:
+                context.illicit_balances[payment.from_account] = (
+                    context.illicit_balances.get(payment.from_account, 0) - event.amount_paise
+                )
 
 
 def finish_run(context: LoopContext, money_created_paise: int) -> InteractiveRunResult:
@@ -621,6 +711,8 @@ def finish_run(context: LoopContext, money_created_paise: int) -> InteractiveRun
         run_id=context.run_id,
         money_created_paise=money_created_paise,
         truth=context.truth,
+        skipped_forwards=context.skipped_forwards,
+        capped_forwards=context.capped_forwards,
     )
 
 

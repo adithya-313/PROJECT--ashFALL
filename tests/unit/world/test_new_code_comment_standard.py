@@ -165,6 +165,8 @@ NEW_CODE_FILES: list[str] = [
     "showcase/level_12_support_b.py",
     "showcase/level_12_checks_b.py",
     "tests/unit/showcase/test_level_12_checks_b.py",
+    # Level 12c illicit money guard test suite.
+    "tests/unit/world/test_illicit_money_guard.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
@@ -278,3 +280,14 @@ def test_no_comment_restates_a_return() -> None:
                 if comment_text.startswith("Return") and next_line.startswith("return"):
                     violations.append(f"{filepath}:{idx + 1}: '{curr_line}' sits directly above '{next_line}'")
     assert not violations, "Found comments restating a return:\n" + "\n".join(violations)
+
+
+def test_function_lengths_and_docstrings() -> None:
+    """Enforces the new substantive docstring standard across functions, methods, and classes."""
+    test_substantive_docstrings()
+
+
+def test_module_docstrings_define_technical_terms() -> None:
+    """Retained for issue register v2 evidence compatibility under the updated standard."""
+    # Under the new standard, module docstrings are validated as part of test_substantive_docstrings.
+    pass

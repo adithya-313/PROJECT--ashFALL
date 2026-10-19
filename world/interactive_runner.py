@@ -385,7 +385,10 @@ def _apply_gang_configs(
     children = np.random.SeedSequence(seed).spawn(8)
     dev_rng, plan_rng = np.random.default_rng(children[6]), np.random.default_rng(children[7])
     reserved = {g.source.account_id for g in gang_configs}
-    pmts, roles, dev_ctrl, stories = list(fraud_inputs.payments), list(fraud_inputs.truth.roles), list(fraud_inputs.truth.device_control), list(fraud_inputs.truth.payment_stories)
+    pmts = list(fraud_inputs.payments)
+    roles = list(fraud_inputs.truth.roles)
+    dev_ctrl = list(fraud_inputs.truth.device_control)
+    stories = list(fraud_inputs.truth.payment_stories)
     g_dev_events = list(fraud_inputs.gang_device_events)
 
     for g in gang_configs:
@@ -401,6 +404,7 @@ def _apply_gang_configs(
     return active_state, FraudInputs(
         payments=tuple(pmts), outside_events=fraud_inputs.outside_events, truth=new_truth,
         gang_device_events=tuple(g_dev_events),
+        money_rules=fraud_inputs.money_rules, illicit_seeds=fraud_inputs.illicit_seeds,
     )
 
 
