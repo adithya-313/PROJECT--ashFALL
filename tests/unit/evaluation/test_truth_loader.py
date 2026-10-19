@@ -130,11 +130,13 @@ def test_story_lookup_by_payment_id(tmp_path: Path) -> None:
 
 def test_tampered_file_is_refused(tmp_path: Path) -> None:
     """
-    WHAT: Modifies a single byte in roles.jsonl and asserts that load_truth strictly refuses
-    to load the directory with a ValueError describing the cryptographic hash mismatch.
+    WHAT: Modifies a single character inside an existing record of payment_stories.jsonl without altering the line
+    count, and asserts that load_truth strictly refuses to load the directory with a ValueError describing the
+    cryptographic hash mismatch.
 
-    WHY: Ground rule 15 requires cryptographic tamper proofing: corrupted or maliciously modified
-    ground truth must never be accepted into evaluation metrics.
+    WHY: Ground rule 15 requires cryptographic tamper proofing: row count checks alone cannot detect in-place
+    modifications to transaction attribution metadata. Verifying that in-line byte edits trigger SHA-256 mismatch
+    guarantees tampered simulation realities are refused by evaluation consumers.
 
     Args:
         tmp_path: Pytest temporary directory fixture for truth file storage.
@@ -143,21 +145,29 @@ def test_tampered_file_is_refused(tmp_path: Path) -> None:
         None. Fails if tampered files are loaded without raising ValueError.
 
     Example:
-        # Modifying roles.jsonl causes load_truth to raise ValueError on digest verification.
+        # Modifying 'gang_delta' to 'gang_xelta' in payment_stories.jsonl causes load_truth to raise ValueError.
+        # with pytest.raises(ValueError, match="Cryptographic hash mismatch for 'payment_stories.jsonl'"):
+        #     load_truth(tmp_path, run_dir.name)
     """
-    # 1. Execute run, write valid truth files, and verify initial loading succeeds.
-    output = run_interactive_world(TINY, RunnerSettings(fraud_enabled=False), code_version=TEST_CODE_VERSION)
+    # 1. Execute run with a fraud payment and narrative story, then write truth files.
+    fraud_payment = PlannedPayment(10, "acc_person_000001", "acc_person_000002", 5000, 0, "everyday")
+    story = PaymentStory("gang_delta", "cashing_out", 2, "terminal withdrawal hop")
+    output = run_interactive_world(
+        TINY, RunnerSettings(fraud_enabled=True),
+        FraudInputs(payments=(fraud_payment,), truth=TruthFacts(payment_stories=(story,))),
+        code_version=TEST_CODE_VERSION,
+    )
     run_dir = write_truth_files(output, tmp_path)
-    assert load_truth(tmp_path, run_dir.name) is not None
 
-    # 2. Tamper with roles.jsonl by modifying one character in the file.
-    roles_path = run_dir / "roles.jsonl"
-    original_bytes = roles_path.read_bytes()
-    tampered_bytes = original_bytes + b" "
-    roles_path.write_bytes(tampered_bytes)
+    # 2. Tamper with payment_stories.jsonl by changing one character in place (same line count).
+    story_path = run_dir / "payment_stories.jsonl"
+    original_text = story_path.read_text(encoding="utf-8")
+    assert "gang_delta" in original_text
+    tampered_text = original_text.replace("gang_delta", "gang_xelta", 1)
+    story_path.write_text(tampered_text, encoding="utf-8")
 
     # 3. Assert load_truth detects the hash mismatch and refuses to load.
-    with pytest.raises(ValueError, match="Cryptographic hash mismatch for 'roles.jsonl'"):
+    with pytest.raises(ValueError, match="Cryptographic hash mismatch for 'payment_stories.jsonl'"):
         load_truth(tmp_path, run_dir.name)
 
 
