@@ -154,6 +154,10 @@ NEW_CODE_FILES: list[str] = [
     # Level 12b gang configuration module and validation test suite.
     "world/gang_config.py",
     "tests/unit/world/test_gang_config.py",
+    # Level 12b tactic blocks and gang planner modules and test suite.
+    "world/tactic_blocks.py",
+    "world/gang_planner.py",
+    "tests/unit/world/test_gang_planner.py",
 ]
 
 
