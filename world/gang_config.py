@@ -185,6 +185,48 @@ def gang_config_to_plain(config: GangConfig) -> dict[str, Any]:
     }
 
 
+def gang_config_from_plain(data: dict[str, Any]) -> GangConfig:
+    """
+    WHAT: Reconstructs an immutable GangConfig instance from a plain Python dictionary.
+    It converts primitive budget, source, and step specifications back into strongly typed dataclasses
+    (tuples for sequences and parameter pairs), validating all rules before returning.
+
+    WHY: Enables loading gang specifications from YAML fixtures and effective_config representations
+    while guaranteeing that all schemas, strengths, step orderings, and dividing line rules are enforced.
+
+    Args:
+        data: Plain Python dictionary containing serialized gang specification fields.
+
+    Returns:
+        A validated, fully typed GangConfig instance.
+
+    Raises:
+        ValueError: If the configuration fails structural or semantic validation.
+
+    Example:
+        # config = gang_config_from_plain(plain_data)
+        # assert config.gang_id == "gang_alpha"
+    """
+    # 1. Unpack budget and source specifications from target dictionary.
+    target = data.get("gang", data)
+    b_data, s_data = target["budget"], target["source"]
+    budget = GangBudget(int(b_data["money_paise"]), int(b_data["time_minutes"]), float(b_data["max_risk"]))
+    source = FixtureSource(
+        str(s_data["account_id"]), int(s_data["bank_index"]),
+        int(s_data["opening_balance_paise"]), int(s_data["start_minute"])
+    )
+    # 2. Reconstruct tuple of BlockStep items with (name, value) parameter tuples.
+    steps: list[BlockStep] = []
+    for s in target.get("steps", []):
+        raw_p = s.get("params", [])
+        p_items = raw_p.items() if isinstance(raw_p, dict) else raw_p
+        steps.append(BlockStep(str(s["block"]), tuple((str(k), v) for k, v in p_items)))
+    # 3. Instantiate GangConfig and validate constraints before returning.
+    config = GangConfig(str(target["gang_id"]), int(target["strength"]), budget, source, tuple(steps))
+    validate_gang_config(config)
+    return config
+
+
 def _validate_block_existence_and_params(gang_id: str, steps: tuple[BlockStep, ...]) -> None:
     """
     WHAT: Asserts that all block names exist in tactic_blocks.yaml and parameter names match block schemas.

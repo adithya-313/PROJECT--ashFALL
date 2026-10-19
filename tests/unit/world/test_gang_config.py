@@ -14,6 +14,7 @@ TERM: strength level: the sophistication and camouflage applied by a gang (stren
 TERM: dividing line: boundary separating training tactics from held-out tactics to prevent data leakage.
 """
 
+from pathlib import Path
 import pytest
 import yaml
 
@@ -23,9 +24,11 @@ from world.gang_config import (
     FixtureSource,
     GangBudget,
     GangConfig,
+    gang_config_from_plain,
     gang_config_to_plain,
     validate_gang_config,
 )
+from world.run_identity import REPO_ROOT
 import world.tactic_config as tactic_config
 from world.tactic_config import TACTIC_BLOCKS_PATH, resolve_dividing_line
 
@@ -314,3 +317,81 @@ def test_take_control_devices_range_follows_config(tmp_path, monkeypatch) -> Non
     # 4. Assert devices=2 is accepted.
     steps_2 = (BlockStep("acquire", (("count", 2),)), BlockStep("take_control", (("devices", 2),)))
     validate_gang_config(GangConfig("gang_dev2", 1, DEFAULT_BUDGET, DEFAULT_SOURCE, steps_2))
+
+
+def test_gang_config_round_trip_plain_config_plain_is_identical() -> None:
+    """
+    WHAT: Asserts that serializing a GangConfig to plain data and deserializing it back preserves exact equality.
+    It constructs a multi-step gang, serializes to dictionary form, reconstructs it with gang_config_from_plain,
+    and asserts that both the GangConfig instance and the re-serialized plain dictionary match identically.
+
+    WHY: Round-trip fidelity is required by Decision D5 so that effective_config fingerprints and YAML fixtures
+    translate deterministically without altering types, ordering, or parameters.
+
+    Args:
+        None.
+
+    Returns:
+        None. Fails if deserialized config or secondary plain dictionary differs.
+
+    Example:
+        # plain = gang_config_to_plain(config)
+        # assert gang_config_from_plain(plain) == config
+    """
+    # 1. Build representative gang configuration with multiple building blocks.
+    steps = (
+        BlockStep("acquire", (("count", 3),)),
+        BlockStep("warm_up", (("days", 2),)),
+        BlockStep("route", (("layers", 2), ("accounts_per_layer", 1))),
+    )
+    original_config = GangConfig("gang_roundtrip", 2, DEFAULT_BUDGET, DEFAULT_SOURCE, steps)
+
+    # 2. Serialize to plain dictionary format.
+    plain_data = gang_config_to_plain(original_config)
+
+    # 3. Deserialize back into a strongly typed GangConfig.
+    reconstructed_config = gang_config_from_plain(plain_data)
+
+    # 4. Assert round-trip equality of both the dataclass instance and secondary plain serialization.
+    assert reconstructed_config == original_config
+    assert gang_config_to_plain(reconstructed_config) == plain_data
+
+
+def test_level_12_showcase_fixture_loads_and_validates() -> None:
+    """
+    WHAT: Asserts that the committed YAML fixture showcase/fixtures/level_12/gang_two_layers.yaml loads cleanly.
+    It reads the fixture from disk, parses it with gang_config_from_plain, and asserts all attributes match.
+
+    WHY: Level 12 Showcase Part B checks rely on this canonical fixture; validating it in a unit test guarantees
+    that the committed YAML file is syntactically correct and fully adheres to validation rules.
+
+    Args:
+        None.
+
+    Returns:
+        None. Fails if the fixture cannot be read, parsed, or validated.
+
+    Example:
+        # config = gang_config_from_plain(load_yaml(FIXTURE_PATH))
+        # assert config.gang_id == "gang_two_layers"
+    """
+    # 1. Locate and load committed YAML fixture from repository path.
+    fixture_path = REPO_ROOT / "showcase" / "fixtures" / "level_12" / "gang_two_layers.yaml"
+    fixture_data = load_yaml(fixture_path)
+
+    # 2. Reconstruct strongly typed GangConfig from fixture data.
+    config = gang_config_from_plain(fixture_data)
+
+    # 3. Assert top-level attributes and tactical step configurations.
+    assert config.gang_id == "gang_two_layers"
+    assert config.strength == 2
+    assert len(config.steps) == 5
+    assert config.steps[0].block == "acquire"
+    assert config.steps[1].block == "warm_up"
+    assert dict(config.steps[1].params)["days"] == 2
+    assert config.steps[2].block == "take_control"
+    assert dict(config.steps[2].params)["devices"] == 2
+    assert config.steps[3].block == "route"
+    assert config.steps[4].block == "disguise"
+    assert fixture_data["over_budget_money_paise"] == 100
+
