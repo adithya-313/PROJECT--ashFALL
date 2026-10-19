@@ -366,10 +366,13 @@ issues:
   12-19:
     title: "New mule accounts with new ID formats would reveal their role"
     origin: revision_2
-    status: planned
+    status: partial
     levels: [12]
     parts: [12c]
-    later_work: ["Level 12c: Existing formats; genuine accounts also open during runs"]
+    evidence:
+      - {kind: test, file: tests/unit/world/test_mid_run_accounts.py, name: test_mid_run_account_ids_continue_numbering_and_match_regex}
+      - {kind: test, file: tests/unit/world/test_account_openings_switch.py, name: test_switch_on_schedules_genuine_openings_with_standard_id_formats}
+    later_work: ["Level 12c C-2: gang worlds open borrowed-KYC and business mule accounts through open_account; new genuine accounts get routine life"]
   12-20:
     title: "The showcase runner accepts only a level number"
     origin: revision_2
