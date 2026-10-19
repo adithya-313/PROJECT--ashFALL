@@ -50,6 +50,7 @@ class RunnerSettings:
 
     Args:
         fraud_enabled: True to run the fraud-on loop, False to fall back to Level 11.
+        account_openings_enabled: True to schedule genuine mid-run account openings, False by default.
 
     Returns:
         A frozen RunnerSettings.
@@ -59,6 +60,7 @@ class RunnerSettings:
     """
 
     fraud_enabled: bool = False
+    account_openings_enabled: bool = False
 
 
 @dataclass(frozen=True)

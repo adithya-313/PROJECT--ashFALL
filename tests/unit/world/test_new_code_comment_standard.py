@@ -169,6 +169,10 @@ NEW_CODE_FILES: list[str] = [
     "tests/unit/world/test_illicit_money_guard.py",
     # Level 12c mid-run account openings test suite.
     "tests/unit/world/test_mid_run_accounts.py",
+    # Level 12c account openings configuration resolver.
+    "world/account_openings_config.py",
+    # Level 12c account openings switch and scheduling test suite.
+    "tests/unit/world/test_account_openings_switch.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [

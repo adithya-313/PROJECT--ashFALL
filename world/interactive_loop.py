@@ -56,6 +56,7 @@ from world.interactive_records import (
     IllicitMoneyRule,
     InteractiveRunResult,
     PaymentView,
+    RunnerSettings,
 )
 from world.interactive_state import RunnerState
 from world.outside_events import OutsideEvent, validate_outside_event
@@ -732,11 +733,13 @@ def run_fraud_on(
     world: Any, plan: WorldPlan, rng: np.random.Generator, device_events: Sequence[DeviceEvent],
     episode_payments: Sequence[PlannedPayment], *, fraud_inputs: FraudInputs,
     hook: Callable[[PaymentView], HookDecision], run_id: str, runner_config: dict[str, Any], state: RunnerState,
+    settings: RunnerSettings = RunnerSettings(fraud_enabled=True),
+    account_openings_config: dict[str, Any] | None = None,
 ) -> InteractiveRunResult:
     """
     WHAT: Runs a world with the fraud switch on. It plans genuine payments exactly as run_world does (on the run stream,
-    before anything else), queues them with the fraud payments and outside events, then takes items off the queue in
-    order until it is empty, and finishes as run_world does.
+    before anything else), schedules genuine account openings if enabled, queues them with fraud payments and outside
+    events, then takes items off the queue in order until it is empty, and finishes as run_world does.
 
     WHY: Planning first on the same stream gives the identical genuine plan. Taking everything from one ordered queue
     makes every run with the same inputs repeat exactly.
@@ -752,6 +755,8 @@ def run_fraud_on(
         run_id: The run id.
         runner_config: The interactive_runner config block.
         state: The runner's lookup tables.
+        settings: RunnerSettings governing feature flags like account_openings_enabled.
+        account_openings_config: Optional account openings configuration dictionary.
 
     Returns:
         The InteractiveRunResult.
@@ -766,8 +771,21 @@ def run_fraud_on(
     streams = build_component_streams(world.seed, runner_config["random_stream_children"])
     context = LoopContext(world, plan, rng, streams, hook, run_id, runner_config["position_digits"], ranks, state,
                           device_events)
-    # 4. Everything goes on one queue.
-    queue_initial_items(context, planned, fraud_inputs)
+    # 4. Schedule genuine account openings if enabled, then queue everything on one queue.
+    effective_fraud_inputs = fraud_inputs
+    if settings.account_openings_enabled:
+        from world.account_openings_config import schedule_genuine_account_openings
+
+        genuine_openings = schedule_genuine_account_openings(
+            len(world.people), plan.n_days, plan.range_name,
+            streams["genuine_account_openings"], config=account_openings_config,
+        )
+        if genuine_openings:
+            effective_fraud_inputs = dataclasses.replace(
+                fraud_inputs,
+                outside_events=fraud_inputs.outside_events + genuine_openings,
+            )
+    queue_initial_items(context, planned, effective_fraud_inputs)
     # 5. Take items off in order: outside events, gang device events, or payments.
     while context.queue:
         item: OutsideEvent | GangDeviceEvent | QueuedPayment = heapq.heappop(context.queue)[-1]
