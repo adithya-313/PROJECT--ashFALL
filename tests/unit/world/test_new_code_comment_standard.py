@@ -158,6 +158,8 @@ NEW_CODE_FILES: list[str] = [
     "world/tactic_blocks.py",
     "world/gang_planner.py",
     "tests/unit/world/test_gang_planner.py",
+    # Level 12b gang runner integration test suite.
+    "tests/unit/world/test_gang_runs.py",
 ]
 
 
@@ -171,6 +173,8 @@ NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
     ("showcase/__main__.py", "report_folder"),
     # Level 12b events-v2 writer function.
     ("world/interactive_events.py", "write_events_v2_file"),
+    # Level 12b interactive runner gang configs integration helper.
+    ("world/interactive_runner.py", "_apply_gang_configs"),
 ]
 
 

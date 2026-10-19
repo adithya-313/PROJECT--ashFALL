@@ -56,6 +56,8 @@ from world.device_schedule import draw_device_event_schedule
 from world.episode_payments import plan_episode_payments
 from world.episodes import Episode, draw_episode_schedule
 from world.fast_mode import FastRunSettings
+from world.gang_config import GangConfig, gang_config_to_plain
+from world.gang_planner import plan_gang
 from world.interactive_loop import run_fraud_on
 from world.interactive_records import (
     FraudInputs,
@@ -317,33 +319,93 @@ def run_interactive(
     )
 
 
-def effective_config_for(fast_settings: FastRunSettings, configs: WorldConfigs | None) -> dict[str, Any]:
+def effective_config_for(
+    fast_settings: FastRunSettings, configs: WorldConfigs | None,
+    gang_configs: tuple[GangConfig, ...] = ()
+) -> dict[str, Any]:
     """
     WHAT: Builds the effective configuration as plain data: the run settings plus the four config dictionaries the
-    world is built from (the given layered configs, or the four files as read from disk).
+    world is built from (the given layered configs, or the four files as read from disk), plus gang configurations.
 
-    WHY: The run id must change when any setting changes, including one value deep inside a config file. Folding the
-    full configuration into the id guarantees that.
+    WHY: The run id must change when any setting changes, including one value deep inside a config file or a gang
+    tactical configuration. Folding the full configuration into the id guarantees that per Decision D5.
 
     Args:
         fast_settings: The run settings.
         configs: Layered configs, or None for the files on disk.
+        gang_configs: Sequence of GangConfig records, serialized to plain dictionaries only when non-empty.
 
     Returns:
-        {"settings": {...}, "world_configs": {...}}.
+        {"settings": {...}, "world_configs": {...}} and optionally "gang_configs".
 
     Example:
         effective_config_for(FastRunSettings(101, 60, 12, 61, "training"), None)["settings"]["seed"] is 101.
     """
     # Plain dictionaries serialise the same way on every machine.
     world_configs = configs if configs is not None else read_world_configs()
-    return {"settings": asdict(fast_settings), "world_configs": asdict(world_configs)}
+    result = {"settings": asdict(fast_settings), "world_configs": asdict(world_configs)}
+    if gang_configs:
+        result["gang_configs"] = [gang_config_to_plain(gc) for gc in gang_configs]
+    return result
+
+
+def _apply_gang_configs(
+    prepared: PreparedWorld, gang_configs: tuple[GangConfig, ...], state: Any,
+    fraud_inputs: FraudInputs, seed: int, runner_config: dict[str, Any]
+) -> tuple[Any, FraudInputs]:
+    """
+    WHAT: Registers fixture source accounts in runner state, plans each gang campaign using the gang_planning
+    stream (child 7), and appends scheduled payments and truth facts to FraudInputs.
+
+    WHY: Decision D5 connects gang tactical planning to reactive runner execution, ensuring criminal accounts
+    and scheduled multi-hop fraud payments enter the simulation loop deterministically.
+
+    Args:
+        prepared: The PreparedWorld instance.
+        gang_configs: Tuple of GangConfig records.
+        state: RunnerState instance or None.
+        fraud_inputs: Existing FraudInputs to extend.
+        seed: Master simulation integer seed.
+        runner_config: Interactive runner configuration dictionary.
+
+    Returns:
+        Tuple of (updated runner state, combined FraudInputs).
+
+    Example:
+        # state, inputs = _apply_gang_configs(prepared, gang_configs, state, inputs, 101, config)
+    """
+    active_state = state if state is not None else start_runner_state(prepared.world)
+    for gang in gang_configs:
+        if gang.source.account_id not in active_state.bank_map:
+            active_state.register_account(
+                gang.source.account_id, gang.source.bank_index,
+                opening_balance_paise=gang.source.opening_balance_paise, minute=gang.source.start_minute
+            )
+
+    stream_idx = runner_config.get("seed_streams", {}).get("gang_planning", 7)
+    seed_seq = np.random.SeedSequence(seed)
+    planning_rng = np.random.default_rng(seed_seq.spawn(stream_idx + 1)[stream_idx])
+
+    reserved = {g.source.account_id for g in gang_configs}
+    pmts = list(fraud_inputs.payments)
+    roles = list(fraud_inputs.truth.roles)
+    stories = list(fraud_inputs.truth.payment_stories)
+    for gang in gang_configs:
+        plan = plan_gang(gang, prepared.world, planning_rng, reserved_accounts=reserved)
+        reserved.update(r.account_id for r in plan.truth.roles if r.role == "mule")
+        pmts.extend(plan.payments)
+        roles.extend(plan.truth.roles)
+        stories.extend(plan.truth.payment_stories)
+
+    new_truth = TruthFacts(roles=tuple(roles), device_control=fraud_inputs.truth.device_control, payment_stories=tuple(stories))
+    return active_state, FraudInputs(payments=tuple(pmts), outside_events=fraud_inputs.outside_events, truth=new_truth)
 
 
 def run_interactive_world(
     fast_settings: FastRunSettings, runner_settings: RunnerSettings = RunnerSettings(),
     fraud_inputs: FraudInputs = FraudInputs(), hook: Callable[[PaymentView], HookDecision] = allow_all,
     configs: WorldConfigs | None = None, code_version: str | None = None, state_factory: Any = None,
+    gang_configs: tuple[GangConfig, ...] = (),
 ) -> InteractiveWorldOutput:
     """
     WHAT: Builds and runs a whole world: prepares it as Level 11 does, names the run (seed, effective configuration,
@@ -360,6 +422,7 @@ def run_interactive_world(
         configs: Layered configs, or None for the files on disk.
         code_version: The version to record, or None to look it up.
         state_factory: A function making the runner state from the prepared world (switch on only), or None.
+        gang_configs: Gang configurations planned on child 7 and executed when fraud switch is on.
 
     Returns:
         The InteractiveWorldOutput.
@@ -368,16 +431,20 @@ def run_interactive_world(
         run_interactive_world(FastRunSettings(101, 60, 12, 61, "training"), code_version="d41b176") gives 2,915
         events whose event lines hash to 24fc0e25009d7946...
     """
-    # Name the run from what it is built from.
+    if not runner_settings.fraud_enabled and gang_configs:
+        raise ValueError(SWITCH_OFF_MESSAGE)
     runner_config = load_runner_config()
-    effective_config = effective_config_for(fast_settings, configs)
+    effective_config = effective_config_for(fast_settings, configs, gang_configs)
     version = code_version if code_version is not None else find_code_version(
         os.environ, REPO_ROOT, runner_config["code_version_git_timeout_seconds"]
     )
     run_id = make_run_id(fast_settings.seed, effective_config, version, runner_config["run_id_hex_length"])
-    # Prepare exactly as Level 11 does, then run with the requested switch position.
     prepared = prepare_world(fast_settings, configs)
     state = state_factory(prepared) if state_factory is not None else None
+    if gang_configs:
+        state, fraud_inputs = _apply_gang_configs(
+            prepared, gang_configs, state, fraud_inputs, fast_settings.seed, runner_config
+        )
     result = run_interactive(
         prepared.world, prepared.plan, prepared.run_rng, prepared.device_events, prepared.episode_payments,
         settings=runner_settings, fraud_inputs=fraud_inputs, hook=hook, run_id=run_id,
