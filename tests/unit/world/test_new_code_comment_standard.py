@@ -167,6 +167,8 @@ NEW_CODE_FILES: list[str] = [
     "tests/unit/showcase/test_level_12_checks_b.py",
     # Level 12c illicit money guard test suite.
     "tests/unit/world/test_illicit_money_guard.py",
+    # Level 12c mid-run account openings test suite.
+    "tests/unit/world/test_mid_run_accounts.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [

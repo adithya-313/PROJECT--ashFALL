@@ -325,6 +325,17 @@ def apply_outside_event(context: LoopContext, event: OutsideEvent) -> None:
         context.book.place(event, encumbrance_id)
     elif event.kind == "release":
         context.book.release(str(event.encumbrance_id), event.minute)
+    elif event.kind == "open_account":
+        stream_name = str(event.opening_stream)
+        if stream_name not in context.streams:
+            raise ValueError(f"unknown opening stream '{stream_name}'")
+        rng = context.streams[stream_name]
+        context.state.open_account(
+            owner_kind=str(event.owner_kind),
+            opening_stream=stream_name,
+            minute=event.minute,
+            rng=rng,
+        )
     else:
         # A resume: the named payment must be waiting in the held list.
         planned_payment_id = str(event.planned_payment_id)
@@ -713,6 +724,7 @@ def finish_run(context: LoopContext, money_created_paise: int) -> InteractiveRun
         truth=context.truth,
         skipped_forwards=context.skipped_forwards,
         capped_forwards=context.capped_forwards,
+        opened_accounts=list(context.state.opened_accounts),
     )
 
 

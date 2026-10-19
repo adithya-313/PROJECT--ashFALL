@@ -18,11 +18,22 @@ TERM: device state: for each person, the phone fingerprints seen so far, the cou
 TERM: paise: Rs 1 = 100 paise.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
+import numpy as np
+
 from world.calendar_runner import _build_account_bank_map
+from world.config_reader import get_parameter_entry, read_world_ranges
 from world.device_runtime import DeviceRuntimeState, start_device_runtime
+from world.money import rupees_to_paise
+from world.people import create_single_person
+from world.regions import assign_region
+from world.shops import (
+    SHOP_OPENING_BALANCE_RUPEES,
+    choose_bank_index,
+    determine_shop_kind,
+)
 
 
 @dataclass
@@ -41,6 +52,9 @@ class RunnerState:
         people_by_account: Account id -> Person (shops are not people and have no entry).
         device_state: Phones each person has used, as Level 11's DeviceRuntimeState.
         money_created_paise: Opening balances of registered accounts, in paise.
+        next_person_index: Next sequential index for person account opening.
+        next_shop_index: Next sequential index for shop account opening.
+        opened_accounts: Forensic audit log of accounts registered mid-run.
 
     Returns:
         A RunnerState.
@@ -55,6 +69,9 @@ class RunnerState:
     people_by_account: dict[str, Any]
     device_state: DeviceRuntimeState
     money_created_paise: int = 0
+    next_person_index: int = 0
+    next_shop_index: int = 0
+    opened_accounts: list[tuple[int, str, str, str, int, int]] = field(default_factory=list)
 
     def register_account(
         self, account_id: str, bank_index: int, person: Any = None, opening_balance_paise: int = 0, minute: int = 0
@@ -96,6 +113,58 @@ class RunnerState:
             self.device_state.phone_change_counts[person.person_id] = 0
             self.device_state.original_device_ids[person.person_id] = person.device.device_id
 
+    def open_account(
+        self, owner_kind: str, opening_stream: str, minute: int, rng: np.random.Generator
+    ) -> str:
+        """
+        Creates and registers one person or shop account mid-run in standard Level 11 ID format.
+
+        Allocates the sequential ID from the single runner counter per owner kind, constructs the
+        entity with authentic attributes and opening balance, and registers the account in the ledger.
+        """
+        if owner_kind not in ("person", "shop"):
+            raise ValueError(f"owner_kind must be 'person' or 'shop', got {owner_kind!r}")
+
+        world = self.world
+        n_regions = int(world.parameters_drawn["n_regions"])
+        banks = world.banks
+        range_name = str(world.parameters_drawn.get("range_name", "training"))
+
+        if owner_kind == "person":
+            person_idx = self.next_person_index
+            self.next_person_index += 1
+            employer_ids = [s.shop_id for s in world.shops if s.kind == "employer"]
+            ranges = read_world_ranges()
+            med_e = get_parameter_entry(ranges, "genuine_payment_median_amount_inr")
+            sig_e = get_parameter_entry(ranges, "genuine_payment_amount_spread_sigma")
+            person = create_single_person(
+                person_idx, n_regions, banks, employer_ids, med_e, sig_e, rng, range_name
+            )
+            account_id = person.account_id
+            bank_index = person.bank_index
+            opening_balance_paise = person.opening_balance_paise
+            self.register_account(
+                account_id, bank_index, person=person, opening_balance_paise=opening_balance_paise, minute=minute
+            )
+        else:
+            shop_idx = self.next_shop_index
+            self.next_shop_index += 1
+            s_id = f"shop_{shop_idx:04d}"
+            _ = determine_shop_kind(shop_idx, rng)
+            _ = assign_region(n_regions, rng)
+            b_idx = choose_bank_index(banks, rng)
+            account_id = f"acc_{s_id}"
+            opening_balance_paise = rupees_to_paise(SHOP_OPENING_BALANCE_RUPEES)
+            self.register_account(
+                account_id, b_idx, person=None, opening_balance_paise=opening_balance_paise, minute=minute
+            )
+            bank_index = b_idx
+
+        self.opened_accounts.append(
+            (minute, account_id, owner_kind, opening_stream, bank_index, opening_balance_paise)
+        )
+        return account_id
+
 
 def start_runner_state(world: Any) -> RunnerState:
     """
@@ -122,4 +191,6 @@ def start_runner_state(world: Any) -> RunnerState:
         people_by_id={person.person_id: person for person in world.people},
         people_by_account={person.account_id: person for person in world.people},
         device_state=start_device_runtime(world.people),
+        next_person_index=len(world.people),
+        next_shop_index=len(world.shops),
     )

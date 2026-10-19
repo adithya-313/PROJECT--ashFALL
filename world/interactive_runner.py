@@ -386,7 +386,7 @@ def _apply_gang_configs(
             )
         seeds.append(IllicitSeed(account_id=g.source.account_id, amount_paise=g.source.opening_balance_paise))
 
-    children = np.random.SeedSequence(seed).spawn(8)
+    children = np.random.SeedSequence(seed).spawn(10)
     dev_rng, plan_rng = np.random.default_rng(children[6]), np.random.default_rng(children[7])
     reserved = {g.source.account_id for g in gang_configs}
     pmts = list(fraud_inputs.payments)

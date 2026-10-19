@@ -215,6 +215,10 @@ class InteractiveRunResult:
         run_id: The run's name, e.g. "66db9aa439b092ee".
         money_created_paise: Opening balances of accounts registered during the run, in paise.
         truth: Hidden truth facts (roles, device control spans, payment stories) associated with the run.
+        skipped_forwards: Adjustments where forwards were skipped due to lack of received illicit money.
+        capped_forwards: Adjustments where forwards were capped to the illicit balance received.
+        opened_accounts: (minute, account_id, owner_kind, opening_stream, bank_index, opening_balance_paise)
+            for accounts registered mid-run.
 
     Returns:
         A frozen InteractiveRunResult.
@@ -239,6 +243,7 @@ class InteractiveRunResult:
     truth: TruthFacts = field(default_factory=TruthFacts)
     skipped_forwards: list[ForwardAdjustment] = field(default_factory=list)
     capped_forwards: list[ForwardAdjustment] = field(default_factory=list)
+    opened_accounts: list[tuple[int, str, str, str, int, int]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
