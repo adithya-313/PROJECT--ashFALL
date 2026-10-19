@@ -62,6 +62,8 @@ from world.interactive_loop import run_fraud_on
 from world.interactive_records import (
     FraudInputs,
     HookDecision,
+    IllicitMoneyRule,
+    IllicitSeed,
     InteractiveRunResult,
     InteractiveWorldOutput,
     PaymentView,
@@ -375,12 +377,14 @@ def _apply_gang_configs(
         # state, inputs = _apply_gang_configs(prepared, gang_configs, state, inputs, 101, config)
     """
     active_state = state if state is not None else start_runner_state(prepared.world)
+    seeds = list(fraud_inputs.illicit_seeds)
     for g in gang_configs:
         if g.source.account_id not in active_state.bank_map:
             active_state.register_account(
                 g.source.account_id, g.source.bank_index,
                 opening_balance_paise=g.source.opening_balance_paise, minute=g.source.start_minute,
             )
+        seeds.append(IllicitSeed(account_id=g.source.account_id, amount_paise=g.source.opening_balance_paise))
 
     children = np.random.SeedSequence(seed).spawn(8)
     dev_rng, plan_rng = np.random.default_rng(children[6]), np.random.default_rng(children[7])
@@ -390,10 +394,29 @@ def _apply_gang_configs(
     dev_ctrl = list(fraud_inputs.truth.device_control)
     stories = list(fraud_inputs.truth.payment_stories)
     g_dev_events = list(fraud_inputs.gang_device_events)
+    rules = list(fraud_inputs.money_rules)
 
     for g in gang_configs:
         plan = plan_gang(g, prepared.world, plan_rng, reserved_accounts=reserved, gang_devices_rng=dev_rng)
         reserved.update(r.account_id for r in plan.truth.roles if r.role == "mule")
+
+        # Refuse gang-planned route payments without an illicit money rule.
+        plan_rules_by_index = {rule.input_index: rule for rule in plan.money_rules}
+        for i, _ in enumerate(plan.payments):
+            story = plan.truth.payment_stories[i]
+            if story.block == "route" and i not in plan_rules_by_index:
+                raise ValueError(f"Gang '{g.gang_id}' route payment at index {i} has no illicit money rule.")
+
+        base_offset = len(pmts)
+        for rule in plan.money_rules:
+            rules.append(
+                IllicitMoneyRule(
+                    input_index=base_offset + rule.input_index,
+                    spends_illicit=rule.spends_illicit,
+                    credits_illicit=rule.credits_illicit,
+                )
+            )
+
         pmts.extend(plan.payments)
         roles.extend(plan.truth.roles)
         dev_ctrl.extend(plan.truth.device_control)
@@ -404,7 +427,7 @@ def _apply_gang_configs(
     return active_state, FraudInputs(
         payments=tuple(pmts), outside_events=fraud_inputs.outside_events, truth=new_truth,
         gang_device_events=tuple(g_dev_events),
-        money_rules=fraud_inputs.money_rules, illicit_seeds=fraud_inputs.illicit_seeds,
+        money_rules=tuple(rules), illicit_seeds=tuple(seeds),
     )
 
 

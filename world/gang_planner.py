@@ -13,7 +13,7 @@ TERM: supplier fee: percentage fee paid to account suppliers based on money move
 """
 
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any
 import numpy as np
 
 from world.build_world import World
@@ -26,6 +26,7 @@ from world.gang_devices import (
     build_gang_device_events,
     make_gang_devices,
 )
+from world.interactive_records import IllicitMoneyRule
 from world.tactic_blocks import (
     acquire_mule_accounts,
     advance_warmup_clock,
@@ -112,6 +113,7 @@ class GangPlan:
     costs: tuple[BlockCost, ...]
     totals: BlockCost
     gang_device_events: tuple[GangDeviceEvent, ...] = ()
+    money_rules: tuple[IllicitMoneyRule, ...] = ()
 
 
 def _check_running_budget(
@@ -588,7 +590,11 @@ def _plan_campaign_steps(
     mules: list[str] = []
     device_spans: list[DeviceControlSpan] = []
     device_events: list[GangDeviceEvent] = []
-    pmts, roles, stories, costs = [], [], [], []
+    pmts: list[PlannedPayment] = []
+    roles: list[RoleSpan] = []
+    stories: list[PaymentStory] = []
+    costs: list[BlockCost] = []
+    money_rules: list[IllicitMoneyRule] = []
     money, time, prob_safe = 0, 0, 1.0
 
     for step in config.steps:
@@ -601,7 +607,14 @@ def _plan_campaign_steps(
             clock_min, cost = _plan_warmup_step(step, clock_min, rng)
         elif step.block == "route":
             r_pmts, r_roles, r_stories, cost = _execute_route_step(config, step, mules, acq_min, clock_min, rng)
-            pmts.extend(r_pmts); roles.extend(r_roles); stories.extend(r_stories)
+            base_idx = len(pmts)
+            for i in range(len(r_pmts)):
+                money_rules.append(
+                    IllicitMoneyRule(input_index=base_idx + i, spends_illicit=True, credits_illicit=True)
+                )
+            pmts.extend(r_pmts)
+            roles.extend(r_roles)
+            stories.extend(r_stories)
         elif step.block == "disguise":
             cost = _plan_disguise_step(step, rng)
         else:
@@ -611,7 +624,7 @@ def _plan_campaign_steps(
         money += cost.money_paise; time += cost.time_minutes; prob_safe *= (1.0 - cost.risk)
         _check_running_budget(config.gang_id, config.budget, money, time, 1.0 - prob_safe, step.block)
 
-    return pmts, roles, device_spans, stories, costs, money, time, prob_safe, device_events
+    return pmts, roles, device_spans, stories, costs, money, time, prob_safe, device_events, money_rules
 
 
 def plan_gang(
@@ -643,16 +656,17 @@ def plan_gang(
     """
     validate_gang_config(config)
     dev_rng = gang_devices_rng if gang_devices_rng is not None else rng
-    pmts, roles, spans, stories, costs, money, time, safe, events = _plan_campaign_steps(
+    pmts, roles, spans, stories, costs, money, time, safe, events, rules = _plan_campaign_steps(
         config, world, rng, reserved_accounts, dev_rng
     )
-    return _build_gang_plan(pmts, roles, spans, stories, costs, money, time, safe, events)
+    return _build_gang_plan(pmts, roles, spans, stories, costs, money, time, safe, events, rules)
 
 
 def _build_gang_plan(
     pmts: list[PlannedPayment], roles: list[RoleSpan], device_spans: list[DeviceControlSpan],
     stories: list[PaymentStory], costs: list[BlockCost], money: int, time: int, prob_safe: float,
     gang_device_events: list[GangDeviceEvent] | None = None,
+    money_rules: list[IllicitMoneyRule] | tuple[IllicitMoneyRule, ...] | None = None,
 ) -> GangPlan:
     """
     WHAT: Packages planned payments, truth facts, block costs, and total expenditures into an immutable GangPlan.
@@ -670,6 +684,7 @@ def _build_gang_plan(
         time: Total cumulative elapsed campaign minutes.
         prob_safe: Cumulative probability of evading detection across all blocks.
         gang_device_events: Optional list of GangDeviceEvent records emitted during device takeover.
+        money_rules: Optional sequence of IllicitMoneyRule records aligning with planned payments.
 
     Returns:
         Immutable GangPlan record ready for runner execution.
@@ -684,4 +699,5 @@ def _build_gang_plan(
     )
     truth = TruthFacts(roles=tuple(roles), device_control=tuple(device_spans), payment_stories=tuple(stories))
     events = tuple(gang_device_events or [])
-    return GangPlan(indexed, truth, tuple(costs), BlockCost(money, time, 1.0 - prob_safe), events)
+    rules = tuple(money_rules or [])
+    return GangPlan(indexed, truth, tuple(costs), BlockCost(money, time, 1.0 - prob_safe), events, rules)

@@ -4,6 +4,7 @@ Verifies that mule accounts forward only illicit funds actually received, preven
 balance drainage during routing hop failures, and tests rule validation and audit logs.
 """
 
+import numpy as np
 import pytest
 
 from showcase.level_12_support_b import get_showcase_b_settings, load_showcase_b_fixture
@@ -14,6 +15,7 @@ from world.checks import (
     check_no_negative_balances,
 )
 from world.fast_mode import FastRunSettings
+from world.gang_planner import plan_gang
 from world.interactive_records import (
     FraudInputs,
     HookDecision,
@@ -42,22 +44,10 @@ def test_fact_2_regression_forward_only_what_arrived() -> None:
             return "decline"
         return "allow"
 
-    rules = (
-        IllicitMoneyRule(input_index=0, spends_illicit=True, credits_illicit=True),
-        IllicitMoneyRule(input_index=1, spends_illicit=True, credits_illicit=True),
-        IllicitMoneyRule(input_index=2, spends_illicit=True, credits_illicit=True),
-        IllicitMoneyRule(input_index=3, spends_illicit=True, credits_illicit=True),
-    )
-    seeds = (
-        IllicitSeed(account_id=gang.source.account_id, amount_paise=gang.source.opening_balance_paise),
-    )
-
-    inputs = FraudInputs(money_rules=rules, illicit_seeds=seeds)
     output = run_interactive_world(
         fast_settings=settings,
         runner_settings=RunnerSettings(fraud_enabled=True),
         gang_configs=(gang,),
-        fraud_inputs=inputs,
         hook=decline_collector_hook,
         code_version=code_version,
     )
@@ -155,22 +145,10 @@ def test_forwarded_less_than_or_equal_received_invariant() -> None:
     gang, _ = load_showcase_b_fixture()
     settings, code_version = get_showcase_b_settings()
 
-    rules = (
-        IllicitMoneyRule(input_index=0, spends_illicit=True, credits_illicit=True),
-        IllicitMoneyRule(input_index=1, spends_illicit=True, credits_illicit=True),
-        IllicitMoneyRule(input_index=2, spends_illicit=True, credits_illicit=True),
-        IllicitMoneyRule(input_index=3, spends_illicit=True, credits_illicit=True),
-    )
-    seeds = (
-        IllicitSeed(account_id=gang.source.account_id, amount_paise=gang.source.opening_balance_paise),
-    )
-
-    inputs = FraudInputs(money_rules=rules, illicit_seeds=seeds)
     output = run_interactive_world(
         fast_settings=settings,
         runner_settings=RunnerSettings(fraud_enabled=True),
         gang_configs=(gang,),
-        fraud_inputs=inputs,
         code_version=code_version,
     )
 
@@ -281,12 +259,30 @@ def test_no_rules_preserves_baseline_behavior() -> None:
             return "decline"
         return "allow"
 
-    # No money rules or seeds supplied.
+    prepared = prepare_world(settings, None)
+    children = np.random.SeedSequence(101).spawn(8)
+    dev_rng = np.random.default_rng(children[6])
+    plan_rng = np.random.default_rng(children[7])
+    plan = plan_gang(
+        gang, prepared.world, plan_rng, reserved_accounts={"acc_collector_01"}, gang_devices_rng=dev_rng
+    )
+
+    def custom_state_factory(prep):
+        """Registers the fixture source account with opening balance before running hand-made inputs."""
+        state = start_runner_state(prep.world)
+        state.register_account(
+            gang.source.account_id,
+            gang.source.bank_index,
+            opening_balance_paise=gang.source.opening_balance_paise,
+            minute=gang.source.start_minute,
+        )
+        return state
+
     output = run_interactive_world(
         fast_settings=settings,
         runner_settings=RunnerSettings(fraud_enabled=True),
-        gang_configs=(gang,),
-        fraud_inputs=FraudInputs(),
+        fraud_inputs=FraudInputs(payments=plan.payments, truth=plan.truth),
+        state_factory=custom_state_factory,
         hook=decline_collector_hook,
         code_version=code_version,
     )
