@@ -170,7 +170,8 @@ def _get_checks_6_to_8() -> list[CheckDefinition]:
     check_7 = CheckDefinition(
         "7. ashFALL code cannot open the truth", "negative",
         "Operational ashFALL packages are strictly prevented from reading hidden truth at runtime and build time.",
-        run_truth_isolation_negative_check, "Caller inspection or static AST import guards failed to block truth access.",
+        run_truth_isolation_negative_check,
+        "Caller inspection or static AST import guards failed to block truth access.",
         "evaluation/truth.py, core/truth_import_check.py", part="b",
     )
     check_8 = CheckDefinition(

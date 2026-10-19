@@ -224,8 +224,6 @@ def build_gang_device_events(
         # events = build_gang_device_events(devices[:1], {"acc_1": devices[0]}, 100, True, False, True, False)
         # assert len(events) == 3  # device_acquired, sim_swap, emulator_enabled
     """
-    events: list[GangDeviceEvent] = []
-
     # 1. Emit one device_acquired event for each provisioned physical or virtual device.
     events: list[GangDeviceEvent] = [
         GangDeviceEvent(take_control_minute, d.device_id, None, "device_acquired", d.platform, d.os_generation, d.fingerprint)

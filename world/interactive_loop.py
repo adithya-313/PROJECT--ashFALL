@@ -250,8 +250,8 @@ def queue_initial_items(context: LoopContext, planned: Sequence[PlannedPayment],
         validate_outside_event(event)
         push(context, event.minute, "outside_events", order, event)
     # Gang device events, queued under the gang_device_events tie-break rank.
-    for order, event in enumerate(fraud_inputs.gang_device_events):
-        push(context, event.minute, "gang_device_events", order, event)
+    for order, dev_event in enumerate(fraud_inputs.gang_device_events):
+        push(context, dev_event.minute, "gang_device_events", order, dev_event)
     # Hidden truth facts, validated against planned fraud payments before the loop begins.
     validate_truth_facts(fraud_inputs.truth, len(fraud_inputs.payments))
     context.truth = fraud_inputs.truth
@@ -666,7 +666,7 @@ def run_fraud_on(
     queue_initial_items(context, planned, fraud_inputs)
     # 5. Take items off in order: outside events, gang device events, or payments.
     while context.queue:
-        item = heapq.heappop(context.queue)[-1]
+        item: OutsideEvent | GangDeviceEvent | QueuedPayment = heapq.heappop(context.queue)[-1]
         if isinstance(item, OutsideEvent):
             apply_outside_event(context, item)
         elif isinstance(item, GangDeviceEvent):

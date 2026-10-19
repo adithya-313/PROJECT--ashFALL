@@ -20,7 +20,7 @@ from typing import Any
 
 from core.config_validator import load_yaml
 from core.truth_import_check import find_truth_violations
-from evaluation.truth import TruthStore, load_truth
+from evaluation.truth import TruthStore
 from world.checks import (
     check_balances_equal_entry_sums,
     check_money_conserved,
@@ -121,7 +121,7 @@ def run_showcase_b_world(
     """
     # 1. Resolve frozen-anchor parameters and invoke interactive runner.
     settings, code_version = get_showcase_b_settings()
-    gangs = [gang_config] if gang_config is not None else None
+    gangs: tuple[GangConfig, ...] = (gang_config,) if gang_config is not None else ()
     output = run_interactive_world(
         settings,
         RunnerSettings(fraud_enabled=True),

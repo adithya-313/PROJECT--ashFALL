@@ -343,7 +343,7 @@ def effective_config_for(
     """
     # Plain dictionaries serialise the same way on every machine.
     world_configs = configs if configs is not None else read_world_configs()
-    result = {"settings": asdict(fast_settings), "world_configs": asdict(world_configs)}
+    result: dict[str, Any] = {"settings": asdict(fast_settings), "world_configs": asdict(world_configs)}
     if gang_configs:
         result["gang_configs"] = [gang_config_to_plain(gc) for gc in gang_configs]
     return result

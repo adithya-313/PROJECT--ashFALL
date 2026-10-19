@@ -585,7 +585,9 @@ def _plan_campaign_steps(
         # res = _plan_campaign_steps(config, world, rng, None, dev_rng)
     """
     clock_min, acq_min = config.source.start_minute, config.source.start_minute
-    mules, device_spans, device_events = [], [], []
+    mules: list[str] = []
+    device_spans: list[DeviceControlSpan] = []
+    device_events: list[GangDeviceEvent] = []
     pmts, roles, stories, costs = [], [], [], []
     money, time, prob_safe = 0, 0, 1.0
 
