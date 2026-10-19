@@ -21,8 +21,8 @@ interactive_runner:
     gang_devices: 6
     gang_planning: 7
   random_stream_children_reason: Children 0-3 belong to Level 11 and must never be touched. Children 4-5 handle failure decisions. Child 6 is reserved for gang devices (Level 12b B-2b) and child 7 provides planning randomness for gangs (D6). Each component gets its own stream so its draws never shift another stream's draws.
-  tie_break_order: [outside_events, planned_payments, fraud_payments, resumed_payments]
-  tie_break_order_reason: Outside events at minute m apply before any payment at m. Genuine and episode payments keep Level 11's order. Fraud and resumed payments come after genuine ones at the same minute, so an empty fraud plan cannot reorder anything.
+  tie_break_order: [outside_events, planned_payments, fraud_payments, resumed_payments, gang_device_events]
+  tie_break_order_reason: Outside events at minute m apply before any payment at m. Genuine and episode payments keep Level 11's order. Fraud and resumed payments come after genuine ones at the same minute. Gang device events are appended at the end so existing ranks never change.
   run_id_hex_length: 16
   position_digits: 6
   id_shape_reason: The same shape as Level 11's live-mode event_id, 16 hex characters, a dash and a 6-digit position.

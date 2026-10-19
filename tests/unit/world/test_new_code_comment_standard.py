@@ -163,6 +163,8 @@ NEW_CODE_FILES: list[str] = [
     # Level 12b gang devices module and test suite.
     "world/gang_devices.py",
     "tests/unit/world/test_gang_devices.py",
+    # Level 12b gang device stream test suite.
+    "tests/unit/world/test_gang_device_stream.py",
 ]
 
 
@@ -178,6 +180,8 @@ NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
     ("world/interactive_events.py", "write_events_v2_file"),
     # Level 12b interactive runner gang configs integration helper.
     ("world/interactive_runner.py", "_apply_gang_configs"),
+    # Level 12b unified device event stream helper.
+    ("world/interactive_runner.py", "device_event_stream"),
 ]
 
 

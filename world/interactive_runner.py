@@ -386,6 +386,7 @@ def _apply_gang_configs(
     dev_rng, plan_rng = np.random.default_rng(children[6]), np.random.default_rng(children[7])
     reserved = {g.source.account_id for g in gang_configs}
     pmts, roles, dev_ctrl, stories = list(fraud_inputs.payments), list(fraud_inputs.truth.roles), list(fraud_inputs.truth.device_control), list(fraud_inputs.truth.payment_stories)
+    g_dev_events = list(fraud_inputs.gang_device_events)
 
     for g in gang_configs:
         plan = plan_gang(g, prepared.world, plan_rng, reserved_accounts=reserved, gang_devices_rng=dev_rng)
@@ -394,9 +395,13 @@ def _apply_gang_configs(
         roles.extend(plan.truth.roles)
         dev_ctrl.extend(plan.truth.device_control)
         stories.extend(plan.truth.payment_stories)
+        g_dev_events.extend(plan.gang_device_events)
 
     new_truth = TruthFacts(roles=tuple(roles), device_control=tuple(dev_ctrl), payment_stories=tuple(stories))
-    return active_state, FraudInputs(payments=tuple(pmts), outside_events=fraud_inputs.outside_events, truth=new_truth)
+    return active_state, FraudInputs(
+        payments=tuple(pmts), outside_events=fraud_inputs.outside_events, truth=new_truth,
+        gang_device_events=tuple(g_dev_events),
+    )
 
 
 def run_interactive_world(
@@ -478,4 +483,36 @@ def interactive_fast_output(output: InteractiveWorldOutput) -> Any:
         world=output.world, plan=output.plan, result=output.result.run_result,
         episodes=output.episodes, episode_report=output.episode_report,
     )
+
+
+def device_event_stream(result: InteractiveRunResult) -> list[dict[str, Any]]:
+    """
+    WHAT: Merges applied Level 11 device events and gang device events into a single chronological stream of plain
+    dictionaries, ordering by minute, then Level 11 events first, then arrival order.
+
+    WHY: Downstream detection engines and verification checks read one unified device event stream without needing
+    to know internal simulator structures. The stream contains no gang identities, roles, or ground truth labels.
+
+    Args:
+        result: The InteractiveRunResult from an interactive world execution.
+
+    Returns:
+        List of plain dictionaries representing device lifecycle events, each containing a 'kind' attribute.
+
+    Example:
+        # In a run with 32 Level 11 events and 0 gang events:
+        stream = device_event_stream(output.result)
+        # len(stream) == 32 and "kind" in stream[0]
+    """
+    # 1. Tag each event with minute, source priority (0 for Level 11, 1 for gang), and original position.
+    tagged_events: list[tuple[int, int, int, dict[str, Any]]] = [
+        (e.minute, 0, idx, asdict(e)) for idx, e in enumerate(result.applied_device_events)
+    ]
+    tagged_events.extend(
+        (e.minute, 1, idx, asdict(e)) for idx, e in enumerate(result.applied_gang_device_events)
+    )
+    # 2. Sort chronologically by minute, breaking ties with Level 11 first then original order.
+    tagged_events.sort(key=lambda item: (item[0], item[1], item[2]))
+    # 3. Strip sorting tags and return plain dictionary records.
+    return [record for _, _, _, record in tagged_events]
 

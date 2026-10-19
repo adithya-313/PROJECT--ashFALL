@@ -29,6 +29,7 @@ from world.build_world import World
 from world.calendar_runner import PlannedPayment, RunResult
 from world.device_events import DeviceEvent
 from world.episodes import Episode
+from world.gang_devices import GangDeviceEvent
 from world.outside_events import OutsideEvent
 from world.truth_records import TruthFacts
 from world.world_plan import WorldPlan
@@ -63,7 +64,7 @@ class RunnerSettings:
 @dataclass(frozen=True)
 class FraudInputs:
     """
-    WHAT: What fraud adds to a world: extra payments, outside events, and hidden truth facts.
+    WHAT: What fraud adds to a world: extra payments, outside events, hidden truth facts, and gang device events.
     All are empty by default, and an empty FraudInputs with an allow-all hook gives exactly Level 11's run.
 
     WHY: Fraud payments use the same PlannedPayment record as genuine ones and a purpose from Level 11's list, so the
@@ -73,6 +74,7 @@ class FraudInputs:
         payments: Extra payments, in the order they should be tried at equal minutes.
         outside_events: Liens, debit holds, releases and resumes to apply during the run.
         truth: Hidden truth facts (roles, device control spans, payment stories) associated with the run.
+        gang_device_events: Synthesized gang device lifecycle events to queue and apply.
 
     Returns:
         A frozen FraudInputs.
@@ -85,6 +87,7 @@ class FraudInputs:
     payments: tuple[PlannedPayment, ...] = ()
     outside_events: tuple[OutsideEvent, ...] = ()
     truth: TruthFacts = field(default_factory=TruthFacts)
+    gang_device_events: tuple[GangDeviceEvent, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -155,6 +158,7 @@ class InteractiveRunResult:
         event_sources: One per event: "planned" or "fraud". World side only.
         events_resumed: One boolean per event: True if the payment was held and resumed, False otherwise.
         applied_device_events: The device events applied during the run, in order.
+        applied_gang_device_events: The gang device events applied during the run, in order.
         event_fraud_input_index: One per event: index in FraudInputs.payments for fraud events,
             None for planned payments.
         held_payments: Payments held by the hook and never resumed.
@@ -177,6 +181,7 @@ class InteractiveRunResult:
     event_sources: list[str]
     events_resumed: list[bool]
     applied_device_events: list[DeviceEvent]
+    applied_gang_device_events: list[GangDeviceEvent] = field(default_factory=list)
     event_fraud_input_index: list[int | None] = field(default_factory=list)
     held_payments: list[PaymentView] = field(default_factory=list)
     encumbrance_log: list[tuple[int, str, str]] = field(default_factory=list)

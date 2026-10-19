@@ -47,6 +47,7 @@ from world.device_runtime import DeviceStamp, stamp_sender_device
 from world.encumbrance import EncumbranceBook
 from world.failure_decision import decide_failure
 from world.failures import PaymentEvent, make_event
+from world.gang_devices import GangDeviceEvent
 from world.interactive_records import (
     HOOK_DECISIONS,
     FraudInputs,
@@ -156,6 +157,7 @@ class LoopContext:
     event_sources: list[str] = field(default_factory=list)
     events_resumed: list[bool] = field(default_factory=list)
     applied_device_events: list[DeviceEvent] = field(default_factory=list)
+    applied_gang_device_events: list[GangDeviceEvent] = field(default_factory=list)
     event_fraud_input_index: list[int | None] = field(default_factory=list)
     truth: TruthFacts = field(default_factory=TruthFacts)
 
@@ -247,6 +249,9 @@ def queue_initial_items(context: LoopContext, planned: Sequence[PlannedPayment],
     for order, event in enumerate(fraud_inputs.outside_events):
         validate_outside_event(event)
         push(context, event.minute, "outside_events", order, event)
+    # Gang device events, queued under the gang_device_events tie-break rank.
+    for order, event in enumerate(fraud_inputs.gang_device_events):
+        push(context, event.minute, "gang_device_events", order, event)
     # Hidden truth facts, validated against planned fraud payments before the loop begins.
     validate_truth_facts(fraud_inputs.truth, len(fraud_inputs.payments))
     context.truth = fraud_inputs.truth
@@ -609,6 +614,7 @@ def finish_run(context: LoopContext, money_created_paise: int) -> InteractiveRun
         event_sources=context.event_sources,
         events_resumed=context.events_resumed,
         applied_device_events=context.applied_device_events,
+        applied_gang_device_events=context.applied_gang_device_events,
         event_fraud_input_index=context.event_fraud_input_index,
         held_payments=held,
         encumbrance_log=list(context.book.log),
@@ -658,11 +664,13 @@ def run_fraud_on(
                           device_events)
     # 4. Everything goes on one queue.
     queue_initial_items(context, planned, fraud_inputs)
-    # 5. Take items off in order: outside events change the book or the held list; payments run.
+    # 5. Take items off in order: outside events, gang device events, or payments.
     while context.queue:
         item = heapq.heappop(context.queue)[-1]
         if isinstance(item, OutsideEvent):
             apply_outside_event(context, item)
+        elif isinstance(item, GangDeviceEvent):
+            context.applied_gang_device_events.append(item)
         else:
             process_payment(context, item)
     # 6. Final device events, Level 11's guard, and the result.
