@@ -423,6 +423,46 @@ def get_gang_device_event_kinds(config_path: Path | None = None) -> list[str]:
     return [str(item) for item in kinds]
 
 
+def get_acquire_count_range(
+    split: str = "training", world_ranges_path: Path | None = None
+) -> tuple[int, int]:
+    """
+    WHAT: Resolves the [min, max] count of mule accounts acquired from world ranges.
+
+    WHY: When an acquire step omits count, the planner draws count from this configured range.
+
+    Args:
+        split: Range split ('training', 'test', 'stress').
+        world_ranges_path: Optional path override for world_ranges.yaml.
+
+    Returns:
+        Two-element integer tuple (min_mules, max_mules).
+    """
+    ranges_data = load_world_ranges(world_ranges_path)["parameters"]["mules_per_gang"]
+    bounds = ranges_data[split]
+    return int(bounds[0]), int(bounds[1])
+
+
+def get_warmup_days_range(
+    split: str = "training", world_ranges_path: Path | None = None
+) -> tuple[int, int]:
+    """
+    WHAT: Resolves the [min, max] warmup days for mule seasoning from world ranges.
+
+    WHY: When a warm_up step omits days, the planner draws days from this configured range.
+
+    Args:
+        split: Range split ('training', 'test', 'stress').
+        world_ranges_path: Optional path override for world_ranges.yaml.
+
+    Returns:
+        Two-element integer tuple (min_days, max_days).
+    """
+    ranges_data = load_world_ranges(world_ranges_path)["parameters"]["mule_warmup_days"]
+    bounds = ranges_data[split]
+    return int(bounds[0]), int(bounds[1])
+
+
 def get_take_control_devices_range(config_path: Path | None = None) -> tuple[int, int]:
     """
     WHAT: Retrieves the [min, max] device count range for take_control from config/tactic_blocks.yaml.

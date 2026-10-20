@@ -39,11 +39,14 @@ from world.tactic_blocks import (
     draw_route_stream_amount,
 )
 from world.tactic_config import (
+    get_acquire_count_range,
     get_block_risk_range,
     get_block_time_range,
     get_disguise_jitter_range,
     get_gang_payment_purpose,
     get_supplier_fee_range,
+    get_take_control_devices_range,
+    get_warmup_days_range,
 )
 from world.truth_records import DeviceControlSpan, PaymentStory, RoleSpan, TruthFacts
 
@@ -583,7 +586,13 @@ def _plan_acquire_step(
     Example:
         # accts, minute, cost, origins, openings = _plan_acquire_step(world, config, step, 100, None, rng)
     """
-    count = step.params_dict.get("count", 1)
+    count_param = step.params_dict.get("count")
+    if count_param is not None:
+        count = int(count_param)
+    else:
+        split = str(world.parameters_drawn.get("range_name", "training"))
+        min_count, max_count = get_acquire_count_range(split)
+        count = int(rng.integers(min_count, max_count + 1))
     origin_mix = step.params_dict.get("origin_mix")
     excluded = (reserved_accounts or set()) | ({config.source.account_id} if config.source is not None else set())
     origins: dict[str, str] = {}
@@ -616,7 +625,7 @@ def _plan_acquire_step(
 
 
 def _plan_warmup_step(
-    step: BlockStep, clock_minute: int, rng: np.random.Generator
+    step: BlockStep, clock_minute: int, rng: np.random.Generator, split: str = "training"
 ) -> tuple[int, BlockCost]:
     """
     WHAT: Executes the account seasoning building block step, advancing the gang clock and evaluating costs.
@@ -629,6 +638,7 @@ def _plan_warmup_step(
         step: BlockStep for the warm_up block containing seasoning days.
         clock_minute: Current simulation minute timestamp of the gang campaign.
         rng: Gang-specific random number generator stream.
+        split: Range split ('training', 'test', 'stress').
 
     Returns:
         Tuple of (new simulation minute timestamp, and warm_up BlockCost).
@@ -636,7 +646,12 @@ def _plan_warmup_step(
     Example:
         # new_min, cost = _plan_warmup_step(step, 100, rng)
     """
-    days = step.params_dict.get("days", 1)
+    days_param = step.params_dict.get("days")
+    if days_param is not None:
+        days = int(days_param)
+    else:
+        min_days, max_days = get_warmup_days_range(split)
+        days = int(rng.integers(min_days, max_days + 1))
     new_clock = advance_warmup_clock(clock_minute, days)
     min_risk, max_risk = get_block_risk_range("warm_up")
     risk_cost = float(rng.uniform(min_risk, max_risk))
@@ -699,7 +714,12 @@ def _plan_take_control_step(
         # spans, events, cost = _plan_take_control_step(config, step, mules, 100, dev_rng, rng)
     """
     # 1. Extract device count and boolean compromise flags from parameters.
-    devices_count = step.params_dict.get("devices", 1)
+    devices_param = step.params_dict.get("devices")
+    if devices_param is not None:
+        devices_count = int(devices_param)
+    else:
+        min_devices, max_devices = get_take_control_devices_range()
+        devices_count = int(rng.integers(min_devices, max_devices + 1))
     sim_swap = bool(step.params_dict.get("sim_swap", False))
     linked_number_switch = bool(step.params_dict.get("linked_number_switch", False))
     emulator = bool(step.params_dict.get("emulator", False))
@@ -774,7 +794,8 @@ def _plan_campaign_steps(
             d_spans, d_events, cost = _plan_take_control_step(config, step, mules, clock_min, dev_rng, rng)
             device_spans.extend(d_spans); device_events.extend(d_events)
         elif step.block == "warm_up":
-            clock_min, cost = _plan_warmup_step(step, clock_min, rng)
+            split = str(world.parameters_drawn.get("range_name", "training"))
+            clock_min, cost = _plan_warmup_step(step, clock_min, rng, split)
         elif step.block == "scam":
             scam_plan = plan_scam_step(world, config, step, mules, clock_min, reserved_accounts, rng)
             base_idx = len(pmts)
