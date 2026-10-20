@@ -66,6 +66,22 @@ tactic_blocks:
           world_ranges_reference: mule_warmup_days
           split: training
           reason: "Number of days spent letting acquired accounts season before routing, referenced from config/world_ranges.yaml"
+    scam:
+      label: assumption
+      reason: "No published figure; building block models victims paying receiving mules for comparison per amendment A-016."
+      meaning: "Victims pay acquired receiving mules; this is the gang's money source in place of a fixture source"
+      allowed_strengths: [1, 2]
+      time_minutes_per_use: "span of the victim payment schedule"
+      parameters:
+        receiving_mules:
+          label: assumption
+          range: [1, 10]
+          reason: "Number of acquired mules that receive victim money; route accounts_per_layer must equal it"
+        victims_per_receiving_mule:
+          label: assumption
+          world_ranges_reference: victims_per_mule_typical
+          split: training
+          reason: "Number of victims paying each receiving mule, referenced from config/world_ranges.yaml"
     route:
       label: assumption
       reason: "No published figure; building block models layered forwarding for comparison per amendment A-016."
@@ -128,7 +144,7 @@ held_out_dividing_lines:
 gang_payment_purpose:
   label: policy
   purpose: everyday
-  reason: "Real scam purposes are decided in Level 12c; Level 12b uses the valid runner purpose everyday."
+  reason: "Payment purposes stay world-side (ground rule 29) and Level 11's purpose list cannot grow, so gang payments, victim payments included, reuse everyday; the truth story carries the scam type."
 
 gang_devices:
   label: policy

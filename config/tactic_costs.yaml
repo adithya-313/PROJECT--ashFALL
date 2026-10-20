@@ -57,6 +57,10 @@ tactic_risk_per_use:
     label: assumption
     range: [0.0, 0.001]
     reason: "No published figure; exists only to compare tactics per amendment A-016"
+  scam:
+    label: assumption
+    range: [0.001, 0.02]
+    reason: "No published figure; exists only to compare tactics per amendment A-016"
   route:
     label: assumption
     range: [0.001, 0.02]

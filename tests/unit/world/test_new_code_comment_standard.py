@@ -173,6 +173,9 @@ NEW_CODE_FILES: list[str] = [
     "world/account_openings_config.py",
     # Level 12c account openings switch and scheduling test suite.
     "tests/unit/world/test_account_openings_switch.py",
+    # Level 12c scam schedule configuration resolver and test suite.
+    "world/scam_config.py",
+    "tests/unit/world/test_scam_config.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
