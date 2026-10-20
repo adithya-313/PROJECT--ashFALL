@@ -145,6 +145,16 @@ mule_origin_shares:
     new_account_owner_kind: shop
     reason: "A business mule is a new business account, modelled as a shop account; its share is read from config/world_ranges.yaml."
 
+rented_owner_activity:
+  label: policy
+  reason: "A rented mule keeps part of its owner's normal payments next to the illicit flows. The kept share is drawn once per rented mule; an outgoing owner payment inside the mule span is paused when a fresh draw is not below that share."
+  issue_ids_v2: [G1]
+  derived_from: "amendment A-016; config/world_ranges.yaml"
+  kept_share:
+    label: policy
+    world_ranges_reference: rented_mule_owner_activity_kept_share
+    reason: "Share of the owner's outgoing payments that a rented mule keeps; read from config/world_ranges.yaml, where its label and reason live."
+
 held_out_dividing_lines:
   label: policy
   reason: "Dividing lines derived from world ranges to separate training tactics from held-out tactics per amendment A-014."

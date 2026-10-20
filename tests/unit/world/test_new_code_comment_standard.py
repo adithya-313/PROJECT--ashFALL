@@ -185,6 +185,9 @@ NEW_CODE_FILES: list[str] = [
     "world/mule_origins.py",
     "world/opening_handles.py",
     "tests/unit/world/test_mule_origins.py",
+    # Level 12c rented mule owner activity.
+    "world/rented_owner_activity.py",
+    "tests/unit/world/test_rented_owner_activity.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [

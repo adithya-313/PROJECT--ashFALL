@@ -592,3 +592,42 @@ def get_new_account_owner_kind(origin: str, config_path: Path | None = None) -> 
     if owner_kind not in ("person", "shop", None):
         raise ValueError(f"Mule origin '{origin}' has owner kind {owner_kind!r}; it must be person, shop or null.")
     return owner_kind
+
+
+def get_rented_owner_kept_share_range(
+    split: str, config_path: Path | None = None, world_ranges_path: Path | None = None
+) -> tuple[float, float]:
+    """
+    WHAT: Resolves the range of the share of its owner's outgoing payments that a rented mule keeps, through the
+    world_ranges_reference in the rented_owner_activity section of config/tactic_blocks.yaml.
+
+    WHY: The number lives in config/world_ranges.yaml; reading it by reference keeps a single copy.
+
+    Args:
+        split: Split name of the world, e.g. "training".
+        config_path: Optional path override for tactic_blocks.yaml.
+        world_ranges_path: Optional path override for world_ranges.yaml.
+
+    Returns:
+        (lower, upper) bounds of the kept share.
+
+    Raises:
+        ValueError: If the reference, the parameter or the split is missing, or the range is not two ordered numbers.
+
+    Example:
+        # get_rented_owner_kept_share_range("training") == (0.3, 0.8)
+    """
+    # 1. Follow the reference to the world ranges parameter.
+    setting = load_tactic_blocks(config_path)["rented_owner_activity"]["kept_share"]
+    if "world_ranges_reference" not in setting:
+        raise ValueError("The rented owner kept_share setting must name a world_ranges_reference.")
+    reference = setting["world_ranges_reference"]
+    parameters = load_world_ranges(world_ranges_path)["parameters"]
+    if reference not in parameters:
+        raise ValueError(f"Rented owner kept_share references unknown world_ranges parameter '{reference}'.")
+    if split not in parameters[reference]:
+        raise ValueError(f"World ranges parameter '{reference}' has no range for split '{split}'.")
+    bounds = parameters[reference][split]
+    if not isinstance(bounds, list) or len(bounds) != 2 or bounds[0] > bounds[1]:
+        raise ValueError(f"World ranges parameter '{reference}' split '{split}' must be two ordered numbers.")
+    return float(bounds[0]), float(bounds[1])

@@ -61,6 +61,7 @@ from world.interactive_records import (
 from world.interactive_state import RunnerState
 from world.opening_handles import resolve_opening_handles
 from world.outside_events import OutsideEvent, validate_outside_event
+from world.rented_owner_activity import OwnerActivity, PausedOwnerPayment, plan_owner_activity
 from world.run_identity import make_payment_id
 from world.truth_records import TruthFacts, validate_truth_facts
 from world.world_plan import WorldPlan
@@ -170,6 +171,8 @@ class LoopContext:
     skipped_forwards: list[ForwardAdjustment] = field(default_factory=list)
     capped_forwards: list[ForwardAdjustment] = field(default_factory=list)
     opening_ids: dict[str, str] = field(default_factory=dict)
+    owner_activity: dict[str, OwnerActivity] = field(default_factory=dict)
+    paused_owner_payments: list[PausedOwnerPayment] = field(default_factory=list)
 
 
 def build_component_streams(seed: int, children: dict[str, int]) -> dict[str, np.random.Generator]:
@@ -656,6 +659,44 @@ def cap_forward_to_illicit_balance(context: LoopContext, queued: QueuedPayment) 
     return dataclasses.replace(queued, payment=capped_payment)
 
 
+def pause_owner_payment(context: LoopContext, queued: QueuedPayment, banks: tuple[int, int]) -> bool:
+    """
+    WHAT: Decides whether a genuine payment of a rented mule's owner is paused. Only a planned payment sent from a
+    rented mule account inside its mule span gets one draw from the rented owner activity stream; a draw at or above
+    the mule's kept share pauses it. A paused payment reads the failure draws a held planned payment reads, records
+    no event and moves no money, and is added to paused_owner_payments.
+
+    WHY: The failure draws keep the run stream where it would have been, so every other genuine payment reads the
+    numbers it read before. Incoming payments are never paused because only the sender is looked at.
+
+    Args:
+        context: The loop context.
+        queued: The payment as it came off the queue, before it is named or stamped.
+        banks: (sender bank, receiver bank) of the payment.
+
+    Returns:
+        True when the payment was paused and the caller must stop processing it.
+
+    Example:
+        With a kept share of 0 every outgoing payment of the rented mule inside its span is paused.
+    """
+    payment = queued.payment
+    activity = context.owner_activity.get(payment.from_account)
+    if queued.source != "planned" or activity is None or not activity.covers(payment.minute):
+        return False
+    draw = float(context.streams["rented_owner_activity"].uniform(0.0, 1.0))
+    if draw < activity.kept_share:
+        return False
+    # Take the same failure draws a held planned payment takes, so later genuine payments read unchanged numbers.
+    for _ in pieces_of(context, payment, banks[0]):
+        decide_failure(payment.minute, banks[0], banks[1], context.plan.incidents,
+                       context.plan.failure_settings, context.run_rng)
+    context.paused_owner_payments.append(
+        PausedOwnerPayment(payment.minute, payment.from_account, payment.to_account, payment.amount_paise)
+    )
+    return True
+
+
 def process_payment(context: LoopContext, queued: QueuedPayment) -> None:
     """
     WHAT: Handles one payment taken off the queue: applies due device events, names and stamps it the first time, asks
@@ -679,6 +720,8 @@ def process_payment(context: LoopContext, queued: QueuedPayment) -> None:
     banks = banks_for(context, payment)
     # Phones change first, then the payment is named and stamped once.
     apply_due_device_events(context, payment.minute)
+    if pause_owner_payment(context, queued, banks):
+        return
     queued = first_look(context, queued)
 
     rule = (
@@ -765,6 +808,7 @@ def finish_run(context: LoopContext, money_created_paise: int) -> InteractiveRun
         skipped_forwards=context.skipped_forwards,
         capped_forwards=context.capped_forwards,
         opened_accounts=list(context.state.opened_accounts),
+        paused_owner_payments=context.paused_owner_payments,
     )
 
 
@@ -829,6 +873,10 @@ def run_fraud_on(
         effective_fraud_inputs, state.next_person_index, state.next_shop_index
     )
     queue_initial_items(context, planned, effective_fraud_inputs)
+    # Rented mules keep part of their owner's life: draw each one's kept share once, before the loop starts.
+    context.owner_activity = plan_owner_activity(
+        context.truth.roles, plan.range_name, streams["rented_owner_activity"]
+    )
     # 5. Take items off in order: outside events, gang device events, or payments.
     while context.queue:
         item: OutsideEvent | GangDeviceEvent | QueuedPayment = heapq.heappop(context.queue)[-1]

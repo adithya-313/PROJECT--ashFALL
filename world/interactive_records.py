@@ -31,6 +31,7 @@ from world.device_events import DeviceEvent
 from world.episodes import Episode
 from world.gang_devices import GangDeviceEvent
 from world.outside_events import OutsideEvent
+from world.rented_owner_activity import PausedOwnerPayment
 from world.truth_records import TruthFacts
 from world.world_plan import WorldPlan
 
@@ -221,6 +222,7 @@ class InteractiveRunResult:
         capped_forwards: Adjustments where forwards were capped to the illicit balance received.
         opened_accounts: (minute, account_id, owner_kind, opening_stream, bank_index, opening_balance_paise)
             for accounts registered mid-run.
+        paused_owner_payments: Genuine payments of rented mules' owners that were paused (no event, no money moved).
 
     Returns:
         A frozen InteractiveRunResult.
@@ -246,6 +248,7 @@ class InteractiveRunResult:
     skipped_forwards: list[ForwardAdjustment] = field(default_factory=list)
     capped_forwards: list[ForwardAdjustment] = field(default_factory=list)
     opened_accounts: list[tuple[int, str, str, str, int, int]] = field(default_factory=list)
+    paused_owner_payments: list[PausedOwnerPayment] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
