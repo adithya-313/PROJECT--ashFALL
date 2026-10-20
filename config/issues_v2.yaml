@@ -647,11 +647,16 @@ issues:
   G6:
     title: "Scam-type payment schedules"
     origin: level_11
-    status: planned
+    status: partial
     levels: [12]
     parts: [12c]
     v1_status: built
-    later_work: ["Level 12c: scam types in gang worlds"]
+    evidence:
+      - {kind: test, file: tests/unit/world/test_scam_gangs.py, name: test_unauthorised_debit_has_no_payout_and_stays_inside_the_spread}
+      - {kind: test, file: tests/unit/world/test_scam_gangs.py, name: test_job_schedule_has_the_same_shape_as_investment}
+      - {kind: test, file: tests/unit/world/test_victim_money_route.py, name: test_victim_to_layer_one_to_layer_two_never_forwards_more_than_received}
+      - {kind: test, file: tests/unit/world/test_victim_money_route.py, name: test_outage_stops_a_victim_payment_and_the_mule_forwards_nothing}
+    later_work: ["Level 12e: complaint delays by scam type"]
   A2:
     title: "Genuine shops downstream of mules"
     origin: level_11

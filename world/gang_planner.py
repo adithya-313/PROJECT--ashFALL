@@ -28,7 +28,7 @@ from world.gang_devices import (
     make_gang_devices,
 )
 from world.interactive_records import IllicitMoneyRule
-from world.scam_planner import plan_scam_step
+from world.scam_planner import MuleInflow, plan_scam_step
 from world.tactic_blocks import (
     acquire_mule_accounts,
     advance_warmup_clock,
@@ -167,8 +167,9 @@ def _build_route_roles(
 ) -> list[RoleSpan]:
     """
     WHAT: Constructs RoleSpan assertions for the fixture collector account and all routed citizen mule accounts.
-    The collector receives role 'collector' at depth None valid from the fixture start minute; each intermediate
-    and terminal mule account receives role 'mule' at its specific layer depth valid from acquisition minute.
+    The collector receives role 'collector' at depth None valid from the fixture start minute (a gang whose money
+    comes from a scam step has no collector and gets none); each intermediate and terminal mule account receives
+    role 'mule' at its specific layer depth valid from acquisition minute.
 
     WHY: Ground Rule 15 and Decision D7 require explicit forensic attribution of accounts to criminal roles,
     layer depths, and temporal validity intervals to enable downstream audit and detection benchmarking.
@@ -187,9 +188,11 @@ def _build_route_roles(
         # roles = _build_route_roles(config, ["acc_m1", "acc_m2"], 2, 1, 100)
         # assert len(roles) == 3 and roles[0].role == "collector"
     """
-    roles: list[RoleSpan] = [
-        RoleSpan(config.source.account_id, "collector", config.gang_id, None, config.source.start_minute, None)
-    ]
+    roles: list[RoleSpan] = []
+    if config.source is not None:
+        roles.append(
+            RoleSpan(config.source.account_id, "collector", config.gang_id, None, config.source.start_minute, None)
+        )
     for l in range(layers):
         layer_num = l + 1
         for acct in routed_accounts[l * accounts_per_layer : (l + 1) * accounts_per_layer]:
@@ -289,9 +292,126 @@ def _plan_route_stream(
     return payments, stories, total_dwell
 
 
+def _plan_victim_route_stream(
+    gang_id: str, stream_accounts: list[str], stream_amount: int, last_victim_payment_minute: int,
+    dwell_param: int | None, has_disguise: bool, jitter_param: int | None,
+    fixed_dwell: int | None, rng: np.random.Generator
+) -> tuple[list[PlannedPayment], list[PaymentStory], int]:
+    """
+    WHAT: Plans the forwarding chain of one stream whose money comes from victims. Layer 1 already holds the money,
+    so there is no source hop: the layer 1 mule forwards stream_amount to layer 2 one dwell after its last victim
+    payment, layer 2 forwards to layer 3 one dwell later, and so on. A stream of one layer has no payments.
+
+    WHY: Decision D5 makes the route pass on exactly what the victims paid, starting when the last victim payment is
+    planned to arrive, with dwell and disguise drawn as in a fixture route.
+
+    Args:
+        gang_id: String identifier of the gang orchestrating the route.
+        stream_accounts: Account ids of this stream from layer 1 to layer N.
+        stream_amount: Paise forwarded on every hop (the layer 1 mule's victim payments minus its payouts).
+        last_victim_payment_minute: Minute the layer 1 mule's last victim payment is planned.
+        dwell_param: Optional configured dwell duration in minutes.
+        has_disguise: Whether timing disguise is active.
+        jitter_param: Optional maximum jitter window in minutes.
+        fixed_dwell: Fixed dwell drawn once for strength 1 campaigns, or None.
+        rng: Gang-specific random number generator stream.
+
+    Returns:
+        Tuple of the payments, the stories (aligned with the payments) and the total dwell in minutes.
+
+    Example:
+        # result = _plan_victim_route_stream("g1", ["m1", "m2"], 450000, 9000, None, False, None, 30, rng)
+        # payments[0].from_account == "m1" and payments[0].minute == 9030
+    """
+    payments: list[PlannedPayment] = []
+    stories: list[PaymentStory] = []
+    receive_minute = last_victim_payment_minute
+    total_dwell = 0
+
+    for hop_index in range(1, len(stream_accounts)):
+        hop_dwell = fixed_dwell if fixed_dwell is not None else draw_hop_dwell_minutes(dwell_param, rng)
+        send_minute = calculate_send_minute(receive_minute, hop_dwell, has_disguise, jitter_param, rng)
+        total_dwell += hop_dwell
+        payment, story = _plan_single_hop(
+            gang_id, stream_accounts[hop_index - 1], stream_accounts[hop_index], stream_amount, send_minute,
+            hop_index + 1
+        )
+        payments.append(payment)
+        stories.append(story)
+        receive_minute = send_minute
+
+    return payments, stories, total_dwell
+
+
+def _execute_victim_route_step(
+    config: GangConfig, step: BlockStep, acquired_accounts: list[str], acquisition_minute: int,
+    mule_inflows: dict[str, MuleInflow], rng: np.random.Generator
+) -> tuple[list[PlannedPayment], list[RoleSpan], list[PaymentStory], BlockCost]:
+    """
+    WHAT: Plans a route whose money is victim money. Each stream starts at its layer 1 mule and forwards that
+    mule's planned inflow (victim payments minus payouts); the route's own amount is never used. Roles, dwell,
+    disguise and cost follow the fixture route; there is no collector and no source balance check.
+
+    WHY: Decision D5 lets a gang with a scam step launder the money its victims paid and nothing else; the runner
+    additionally caps each forward at the illicit money that really arrived.
+
+    Args:
+        config: Full GangConfig specification of a gang with no fixture source.
+        step: BlockStep for the route block.
+        acquired_accounts: Account ids acquired by the gang; the first layers x accounts_per_layer are routed.
+        acquisition_minute: Minute the mule accounts were acquired.
+        mule_inflows: Receiving mule account id -> planned inflow, from the scam step.
+        rng: Gang-specific random number generator stream.
+
+    Returns:
+        Tuple of (payments, role spans, stories, route BlockCost).
+
+    Raises:
+        ValueError: If too few accounts were acquired, or a layer 1 mule has no planned victim money.
+
+    Example:
+        # payments, roles, stories, cost = _execute_victim_route_step(config, step, mules, 100, inflows, rng)
+    """
+    params = step.params_dict
+    layers, accounts_per_layer = params.get("layers", 1), params.get("accounts_per_layer", 1)
+    needed = layers * accounts_per_layer
+    if len(acquired_accounts) < needed:
+        raise ValueError(
+            f"Gang '{config.gang_id}' needs {needed} accounts for routing but has {len(acquired_accounts)}."
+        )
+
+    disguise_step = next((s for s in config.steps if s.block == "disguise"), None)
+    has_disguise = disguise_step is not None
+    jitter = disguise_step.params_dict.get("jitter_minutes") if disguise_step else None
+    fixed_dwell = draw_hop_dwell_minutes(params.get("dwell_minutes"), rng) if config.strength == 1 else None
+
+    routed = acquired_accounts[:needed]
+    roles = _build_route_roles(config, routed, layers, accounts_per_layer, acquisition_minute)
+    payments: list[PlannedPayment] = []
+    stories: list[PaymentStory] = []
+    total_paise, max_dwell = 0, 0
+    for stream_index in range(accounts_per_layer):
+        stream_accounts = [routed[layer * accounts_per_layer + stream_index] for layer in range(layers)]
+        first_mule = stream_accounts[0]
+        if first_mule not in mule_inflows:
+            raise ValueError(f"Gang '{config.gang_id}' layer 1 mule '{first_mule}' receives no victim money to route.")
+        inflow = mule_inflows[first_mule]
+        total_paise += inflow.net_paise
+        stream_payments, stream_stories, stream_dwell = _plan_victim_route_stream(
+            config.gang_id, stream_accounts, inflow.net_paise, inflow.last_victim_payment_minute,
+            params.get("dwell_minutes"), has_disguise, jitter, fixed_dwell, rng
+        )
+        payments.extend(stream_payments)
+        stories.extend(stream_stories)
+        max_dwell = max(max_dwell, stream_dwell)
+
+    cost = _calculate_route_costs(total_paise, max_dwell, rng)
+    return payments, roles, stories, cost
+
+
 def _execute_route_step(
     config: GangConfig, step: BlockStep, acquired_accounts: list[str], acquisition_minute: int,
-    current_minute: int, rng: np.random.Generator
+    current_minute: int, rng: np.random.Generator, mule_inflows: dict[str, MuleInflow] | None = None
 ) -> tuple[list[PlannedPayment], list[RoleSpan], list[PaymentStory], BlockCost]:
     """
     WHAT: Orchestrates multi-hop laundering transfers across layered mule accounts, assigning forensic roles and costs.
@@ -308,6 +428,8 @@ def _execute_route_step(
         acquisition_minute: Simulation minute timestamp when mule accounts were acquired.
         current_minute: Current simulation minute timestamp of the gang campaign.
         rng: Gang-specific random number generator stream.
+        mule_inflows: Receiving mule inflows from a scam step; required, and only used, when the gang has no
+            fixture source (the route then forwards victim money, see _execute_victim_route_step).
 
     Returns:
         Tuple of (planned payments list, role spans list, payment stories list, and route BlockCost).
@@ -316,7 +438,9 @@ def _execute_route_step(
         # payments, roles, stories, cost = _execute_route_step(config, step, mules, 100, 100, rng)
     """
     if config.source is None:
-        raise ValueError(f"Gang '{config.gang_id}' routes victim money after a scam step, which is not planned yet.")
+        if mule_inflows is None:
+            raise ValueError(f"Gang '{config.gang_id}' has no fixture source and no scam step to route money from.")
+        return _execute_victim_route_step(config, step, acquired_accounts, acquisition_minute, mule_inflows, rng)
     params = step.params_dict
     layers, accounts_per_layer = params.get("layers", 1), params.get("accounts_per_layer", 1)
     needed = layers * accounts_per_layer
@@ -599,6 +723,7 @@ def _plan_campaign_steps(
     stories: list[PaymentStory] = []
     costs: list[BlockCost] = []
     money_rules: list[IllicitMoneyRule] = []
+    mule_inflows: dict[str, MuleInflow] | None = None
     money, time, prob_safe = 0, 0, 1.0
 
     for step in config.steps:
@@ -619,9 +744,12 @@ def _plan_campaign_steps(
             pmts.extend(scam_plan.payments)
             roles.extend(scam_plan.roles)
             stories.extend(scam_plan.stories)
+            mule_inflows = scam_plan.mule_inflows
             cost = BlockCost(0, scam_plan.span_minutes, scam_plan.risk)
         elif step.block == "route":
-            r_pmts, r_roles, r_stories, cost = _execute_route_step(config, step, mules, acq_min, clock_min, rng)
+            r_pmts, r_roles, r_stories, cost = _execute_route_step(
+                config, step, mules, acq_min, clock_min, rng, mule_inflows
+            )
             base_idx = len(pmts)
             for i in range(len(r_pmts)):
                 money_rules.append(
