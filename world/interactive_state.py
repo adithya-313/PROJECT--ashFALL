@@ -36,6 +36,43 @@ from world.shops import (
 )
 
 
+def person_account_id(person_index: int) -> str:
+    """
+    WHAT: Returns the account id Level 11 gives the person with this index, e.g. "acc_person_000060" for index 60.
+
+    WHY: The opening replay must know an id before the person is created. open_account checks the real id against
+    this one, so a change in Level 11's id format stops the run instead of silently shifting ids.
+
+    Args:
+        person_index: Sequential person index, from 0.
+
+    Returns:
+        The account id.
+
+    Example:
+        person_account_id(60) == "acc_person_000060"
+    """
+    return f"acc_person_{person_index:06d}"
+
+
+def shop_account_id(shop_index: int) -> str:
+    """
+    WHAT: Returns the account id of the shop with this index, e.g. "acc_shop_0012" for index 12.
+
+    WHY: One function names shop accounts for both open_account and the opening replay, so they cannot disagree.
+
+    Args:
+        shop_index: Sequential shop index, from 0.
+
+    Returns:
+        The account id.
+
+    Example:
+        shop_account_id(12) == "acc_shop_0012"
+    """
+    return f"acc_shop_{shop_index:04d}"
+
+
 @dataclass
 class RunnerState:
     """
@@ -149,11 +186,10 @@ class RunnerState:
         else:
             shop_idx = self.next_shop_index
             self.next_shop_index += 1
-            s_id = f"shop_{shop_idx:04d}"
             _ = determine_shop_kind(shop_idx, rng)
             _ = assign_region(n_regions, rng)
             b_idx = choose_bank_index(banks, rng)
-            account_id = f"acc_{s_id}"
+            account_id = shop_account_id(shop_idx)
             opening_balance_paise = rupees_to_paise(SHOP_OPENING_BALANCE_RUPEES)
             self.register_account(
                 account_id, b_idx, person=None, opening_balance_paise=opening_balance_paise, minute=minute

@@ -419,6 +419,7 @@ def _apply_gang_configs(
     stories = list(fraud_inputs.truth.payment_stories)
     g_dev_events = list(fraud_inputs.gang_device_events)
     rules = list(fraud_inputs.money_rules)
+    opening_events = list(fraud_inputs.outside_events)
 
     for g in gang_configs:
         plan = plan_gang(g, prepared.world, plan_rng, reserved_accounts=reserved, gang_devices_rng=dev_rng)
@@ -448,10 +449,11 @@ def _apply_gang_configs(
         dev_ctrl.extend(plan.truth.device_control)
         stories.extend(plan.truth.payment_stories)
         g_dev_events.extend(plan.gang_device_events)
+        opening_events.extend(plan.outside_events)
 
     new_truth = TruthFacts(roles=tuple(roles), device_control=tuple(dev_ctrl), payment_stories=tuple(stories))
     return active_state, FraudInputs(
-        payments=tuple(pmts), outside_events=fraud_inputs.outside_events, truth=new_truth,
+        payments=tuple(pmts), outside_events=tuple(opening_events), truth=new_truth,
         gang_device_events=tuple(g_dev_events),
         money_rules=tuple(rules), illicit_seeds=tuple(seeds),
     )

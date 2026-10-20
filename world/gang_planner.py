@@ -28,6 +28,8 @@ from world.gang_devices import (
     make_gang_devices,
 )
 from world.interactive_records import IllicitMoneyRule
+from world.mule_origins import build_opening_event, draw_mule_origins, make_opening_handle
+from world.outside_events import OutsideEvent
 from world.scam_planner import MuleInflow, plan_scam_step
 from world.tactic_blocks import (
     acquire_mule_accounts,
@@ -116,6 +118,7 @@ class GangPlan:
     totals: BlockCost
     gang_device_events: tuple[GangDeviceEvent, ...] = ()
     money_rules: tuple[IllicitMoneyRule, ...] = ()
+    outside_events: tuple[OutsideEvent, ...] = ()
 
 
 def _check_running_budget(
@@ -163,7 +166,7 @@ def _check_running_budget(
 
 def _build_route_roles(
     config: GangConfig, routed_accounts: list[str], layers: int, accounts_per_layer: int,
-    acquisition_minute: int
+    acquisition_minute: int, mule_origin_map: dict[str, str] | None = None
 ) -> list[RoleSpan]:
     """
     WHAT: Constructs RoleSpan assertions for the fixture collector account and all routed citizen mule accounts.
@@ -180,6 +183,7 @@ def _build_route_roles(
         layers: Integer number of hops in the laundering chain.
         accounts_per_layer: Integer number of parallel accounts operating in each layer.
         acquisition_minute: Simulation minute timestamp when mule accounts were acquired.
+        mule_origin_map: Optional account id -> mule origin; an account missing from it gets no origin.
 
     Returns:
         List of initialized RoleSpan instances.
@@ -196,7 +200,8 @@ def _build_route_roles(
     for l in range(layers):
         layer_num = l + 1
         for acct in routed_accounts[l * accounts_per_layer : (l + 1) * accounts_per_layer]:
-            roles.append(RoleSpan(acct, "mule", config.gang_id, layer_num, acquisition_minute, None))
+            origin = mule_origin_map.get(acct) if mule_origin_map is not None else None
+            roles.append(RoleSpan(acct, "mule", config.gang_id, layer_num, acquisition_minute, None, origin))
     return roles
 
 
@@ -345,7 +350,7 @@ def _plan_victim_route_stream(
 
 def _execute_victim_route_step(
     config: GangConfig, step: BlockStep, acquired_accounts: list[str], acquisition_minute: int,
-    mule_inflows: dict[str, MuleInflow], rng: np.random.Generator
+    mule_inflows: dict[str, MuleInflow], rng: np.random.Generator, mule_origin_map: dict[str, str] | None = None
 ) -> tuple[list[PlannedPayment], list[RoleSpan], list[PaymentStory], BlockCost]:
     """
     WHAT: Plans a route whose money is victim money. Each stream starts at its layer 1 mule and forwards that
@@ -386,7 +391,7 @@ def _execute_victim_route_step(
     fixed_dwell = draw_hop_dwell_minutes(params.get("dwell_minutes"), rng) if config.strength == 1 else None
 
     routed = acquired_accounts[:needed]
-    roles = _build_route_roles(config, routed, layers, accounts_per_layer, acquisition_minute)
+    roles = _build_route_roles(config, routed, layers, accounts_per_layer, acquisition_minute, mule_origin_map)
     payments: list[PlannedPayment] = []
     stories: list[PaymentStory] = []
     total_paise, max_dwell = 0, 0
@@ -411,7 +416,8 @@ def _execute_victim_route_step(
 
 def _execute_route_step(
     config: GangConfig, step: BlockStep, acquired_accounts: list[str], acquisition_minute: int,
-    current_minute: int, rng: np.random.Generator, mule_inflows: dict[str, MuleInflow] | None = None
+    current_minute: int, rng: np.random.Generator, mule_inflows: dict[str, MuleInflow] | None = None,
+    mule_origin_map: dict[str, str] | None = None
 ) -> tuple[list[PlannedPayment], list[RoleSpan], list[PaymentStory], BlockCost]:
     """
     WHAT: Orchestrates multi-hop laundering transfers across layered mule accounts, assigning forensic roles and costs.
@@ -440,7 +446,9 @@ def _execute_route_step(
     if config.source is None:
         if mule_inflows is None:
             raise ValueError(f"Gang '{config.gang_id}' has no fixture source and no scam step to route money from.")
-        return _execute_victim_route_step(config, step, acquired_accounts, acquisition_minute, mule_inflows, rng)
+        return _execute_victim_route_step(
+            config, step, acquired_accounts, acquisition_minute, mule_inflows, rng, mule_origin_map
+        )
     params = step.params_dict
     layers, accounts_per_layer = params.get("layers", 1), params.get("accounts_per_layer", 1)
     needed = layers * accounts_per_layer
@@ -454,7 +462,7 @@ def _execute_route_step(
     fix_amt = draw_route_stream_amount(config.strength, params.get("amount_inr"), rng) if config.strength == 1 else None
 
     routed = acquired_accounts[:needed]
-    roles = _build_route_roles(config, routed, layers, accounts_per_layer, acquisition_minute)
+    roles = _build_route_roles(config, routed, layers, accounts_per_layer, acquisition_minute, mule_origin_map)
     pmts, stories, total_paise, max_dwell = _plan_all_route_streams(
         config, routed, layers, accounts_per_layer, fix_amt, fix_dwell, current_minute, params,
         has_disguise, jitter, rng
@@ -546,7 +554,7 @@ def _calculate_route_costs(total_paise: int, max_dwell: int, rng: np.random.Gene
 def _plan_acquire_step(
     world: World, config: GangConfig, step: BlockStep, clock_minute: int,
     reserved_accounts: set[str] | None, rng: np.random.Generator
-) -> tuple[list[str], int, BlockCost]:
+) -> tuple[list[str], int, BlockCost, dict[str, str], list[OutsideEvent]]:
     """
     WHAT: Executes the account acquisition building block step, recruiting citizen accounts and assessing costs.
     It pulls citizen accounts from the world while excluding reserved fixtures, records the acquisition timestamp,
@@ -563,20 +571,48 @@ def _plan_acquire_step(
         reserved_accounts: Set of account identifiers reserved by prior gangs.
         rng: Gang-specific random number generator stream.
 
+    Without an origin_mix parameter every mule is an existing ordinary account and no origin is recorded, exactly as
+    before mule origins existed. With origin_mix all_rented every mule is such an account and its origin is
+    "rented". With origin_mix world_ranges the origins are drawn first, then only the rented mules are picked from
+    the world; the others are named by handles and an open_account request is planned for each at clock_minute.
+
     Returns:
-        Tuple of (list of acquired account IDs, acquisition minute timestamp, and acquire BlockCost).
+        Tuple of (acquired account ids or handles in mule order, acquisition minute, acquire BlockCost, account ->
+        origin for mules whose origin is recorded, open_account requests for the new accounts).
 
     Example:
-        # accts, minute, cost = _plan_acquire_step(world, config, step, 100, None, rng)
+        # accts, minute, cost, origins, openings = _plan_acquire_step(world, config, step, 100, None, rng)
     """
     count = step.params_dict.get("count", 1)
+    origin_mix = step.params_dict.get("origin_mix")
     excluded = (reserved_accounts or set()) | ({config.source.account_id} if config.source is not None else set())
-    acquired = acquire_mule_accounts(world, count, rng, excluded)
+    origins: dict[str, str] = {}
+    opening_events: list[OutsideEvent] = []
+    if origin_mix == "world_ranges":
+        # Origins first (child 7 draws), then the picks of existing accounts for the rented ones only.
+        drawn_origins = draw_mule_origins(count, str(world.parameters_drawn["range_name"]), rng)
+        rented_accounts = acquire_mule_accounts(world, drawn_origins.count("rented"), rng, excluded)
+        acquired = []
+        next_rented = 0
+        for origin in drawn_origins:
+            if origin == "rented":
+                account = rented_accounts[next_rented]
+                next_rented += 1
+            else:
+                opening_number = len(opening_events)
+                account = make_opening_handle(config.gang_id, opening_number)
+                opening_events.append(build_opening_event(config.gang_id, opening_number, origin, clock_minute))
+            acquired.append(account)
+            origins[account] = origin
+    else:
+        acquired = acquire_mule_accounts(world, count, rng, excluded)
+        if origin_mix == "all_rented":
+            origins = {account: "rented" for account in acquired}
     min_time, max_time = get_block_time_range("acquire")
     time_cost = int(rng.integers(min_time, max_time + 1))
     min_risk, max_risk = get_block_risk_range("acquire")
     risk_cost = float(rng.uniform(min_risk, max_risk))
-    return acquired, clock_minute, BlockCost(0, time_cost, risk_cost)
+    return acquired, clock_minute, BlockCost(0, time_cost, risk_cost), origins, opening_events
 
 
 def _plan_warmup_step(
@@ -724,11 +760,16 @@ def _plan_campaign_steps(
     costs: list[BlockCost] = []
     money_rules: list[IllicitMoneyRule] = []
     mule_inflows: dict[str, MuleInflow] | None = None
+    mule_origin_map: dict[str, str] = {}
+    opening_events: list[OutsideEvent] = []
     money, time, prob_safe = 0, 0, 1.0
 
     for step in config.steps:
         if step.block == "acquire":
-            mules, acq_min, cost = _plan_acquire_step(world, config, step, clock_min, reserved_accounts, rng)
+            mules, acq_min, cost, mule_origin_map, new_openings = _plan_acquire_step(
+                world, config, step, clock_min, reserved_accounts, rng
+            )
+            opening_events.extend(new_openings)
         elif step.block == "take_control":
             d_spans, d_events, cost = _plan_take_control_step(config, step, mules, clock_min, dev_rng, rng)
             device_spans.extend(d_spans); device_events.extend(d_events)
@@ -748,7 +789,7 @@ def _plan_campaign_steps(
             cost = BlockCost(0, scam_plan.span_minutes, scam_plan.risk)
         elif step.block == "route":
             r_pmts, r_roles, r_stories, cost = _execute_route_step(
-                config, step, mules, acq_min, clock_min, rng, mule_inflows
+                config, step, mules, acq_min, clock_min, rng, mule_inflows, mule_origin_map
             )
             base_idx = len(pmts)
             for i in range(len(r_pmts)):
@@ -767,7 +808,9 @@ def _plan_campaign_steps(
         money += cost.money_paise; time += cost.time_minutes; prob_safe *= (1.0 - cost.risk)
         _check_running_budget(config.gang_id, config.budget, money, time, 1.0 - prob_safe, step.block)
 
-    return pmts, roles, device_spans, stories, costs, money, time, prob_safe, device_events, money_rules
+    return (
+        pmts, roles, device_spans, stories, costs, money, time, prob_safe, device_events, money_rules, opening_events
+    )
 
 
 def plan_gang(
@@ -799,10 +842,10 @@ def plan_gang(
     """
     validate_gang_config(config)
     dev_rng = gang_devices_rng if gang_devices_rng is not None else rng
-    pmts, roles, spans, stories, costs, money, time, safe, events, rules = _plan_campaign_steps(
+    pmts, roles, spans, stories, costs, money, time, safe, events, rules, openings = _plan_campaign_steps(
         config, world, rng, reserved_accounts, dev_rng
     )
-    return _build_gang_plan(pmts, roles, spans, stories, costs, money, time, safe, events, rules)
+    return _build_gang_plan(pmts, roles, spans, stories, costs, money, time, safe, events, rules, openings)
 
 
 def _build_gang_plan(
@@ -810,6 +853,7 @@ def _build_gang_plan(
     stories: list[PaymentStory], costs: list[BlockCost], money: int, time: int, prob_safe: float,
     gang_device_events: list[GangDeviceEvent] | None = None,
     money_rules: list[IllicitMoneyRule] | tuple[IllicitMoneyRule, ...] | None = None,
+    outside_events: list[OutsideEvent] | None = None,
 ) -> GangPlan:
     """
     WHAT: Packages planned payments, truth facts, block costs, and total expenditures into an immutable GangPlan.
@@ -828,6 +872,7 @@ def _build_gang_plan(
         prob_safe: Cumulative probability of evading detection across all blocks.
         gang_device_events: Optional list of GangDeviceEvent records emitted during device takeover.
         money_rules: Optional sequence of IllicitMoneyRule records aligning with planned payments.
+        outside_events: Optional open_account requests for accounts the gang opens during the run.
 
     Returns:
         Immutable GangPlan record ready for runner execution.
@@ -843,4 +888,5 @@ def _build_gang_plan(
     truth = TruthFacts(roles=tuple(roles), device_control=tuple(device_spans), payment_stories=tuple(stories))
     events = tuple(gang_device_events or [])
     rules = tuple(money_rules or [])
-    return GangPlan(indexed, truth, tuple(costs), BlockCost(money, time, 1.0 - prob_safe), events, rules)
+    openings = tuple(outside_events or [])
+    return GangPlan(indexed, truth, tuple(costs), BlockCost(money, time, 1.0 - prob_safe), events, rules, openings)

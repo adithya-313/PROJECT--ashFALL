@@ -20,6 +20,7 @@ from typing import Any
 
 from world.tactic_config import (
     get_block_definition,
+    get_origin_mix_options,
     get_scam_receiving_mules_range,
     get_scam_victims_per_mule_range,
     get_take_control_devices_range,
@@ -548,6 +549,35 @@ def _validate_scam_parameters(gang_id: str, steps: tuple[BlockStep, ...]) -> Non
             )
 
 
+def _validate_acquire_parameters(gang_id: str, steps: tuple[BlockStep, ...]) -> None:
+    """
+    WHAT: Asserts that an acquire step's origin_mix, when given, is one of the values allowed in
+    config/tactic_blocks.yaml.
+
+    WHY: A misspelled mix would otherwise be treated as a different, unintended mix by the planner.
+
+    Args:
+        gang_id: Gang identifier for error diagnostics.
+        steps: Sequence of BlockStep items to validate.
+
+    Returns:
+        None. Raises ValueError if origin_mix is not an allowed value.
+
+    Example:
+        # _validate_acquire_parameters("g", (BlockStep("acquire", (("origin_mix", "random"),)),)) raises.
+    """
+    allowed_values, _default = get_origin_mix_options()
+    for step in steps:
+        if step.block != "acquire":
+            continue
+        params = step.params_dict
+        if "origin_mix" in params and params["origin_mix"] not in allowed_values:
+            raise ValueError(
+                f"Gang '{gang_id}' acquire origin_mix must be one of {', '.join(allowed_values)}, "
+                f"got {params['origin_mix']!r}."
+            )
+
+
 def _validate_scam_route_agreement(gang_id: str, steps: tuple[BlockStep, ...]) -> None:
     """
     WHAT: When a gang has both a scam step and a route step, asserts that route accounts_per_layer equals the scam
@@ -616,4 +646,5 @@ def validate_gang_config(config: GangConfig) -> None:
     # 6. Validate the money source, scam parameters, and the scam-to-route agreement.
     _validate_money_source(config)
     _validate_scam_parameters(config.gang_id, config.steps)
+    _validate_acquire_parameters(config.gang_id, config.steps)
     _validate_scam_route_agreement(config.gang_id, config.steps)

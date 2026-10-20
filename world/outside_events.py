@@ -49,6 +49,8 @@ class OutsideEvent:
         planned_payment_id: The held payment a resume_payment lets go ahead.
         owner_kind: For open_account, whether the owner is a "person" or a "shop".
         opening_stream: For open_account, the random stream name from random_stream_children.
+        opening_handle: For an open_account planned by a gang, the placeholder name ("new:<gang_id>:<n>") of the
+            account to open; the runner replaces it by the real id before the run. None for genuine openings.
 
     Returns:
         A frozen OutsideEvent.
@@ -66,6 +68,7 @@ class OutsideEvent:
     planned_payment_id: str | None = None
     owner_kind: str | None = None
     opening_stream: str | None = None
+    opening_handle: str | None = None
 
 
 def validate_outside_event(event: OutsideEvent) -> None:
@@ -117,3 +120,8 @@ def validate_outside_event(event: OutsideEvent) -> None:
             raise ValueError(
                 f"an open_account event needs opening_stream to be one of {', '.join(VALID_OPENING_STREAMS)}"
             )
+        # A gang opening may carry the handle its plan uses; a genuine opening never does.
+        if event.opening_stream == "genuine_account_openings" and event.opening_handle is not None:
+            raise ValueError("a genuine open_account event must not carry an opening_handle")
+    elif event.opening_handle is not None:
+        raise ValueError("only an open_account event may carry an opening_handle")

@@ -492,3 +492,103 @@ def get_scam_victims_per_mule_range(
     bounds = resolve_parameter_training_range("scam", "victims_per_receiving_mule", config_path, world_ranges_path)
     return int(bounds[0]), int(bounds[1])
 
+
+
+def get_origin_mix_options(config_path: Path | None = None) -> tuple[list[str], str]:
+    """
+    WHAT: Retrieves the allowed origin_mix values of the acquire block and the default used when it is left out,
+    from config/tactic_blocks.yaml.
+
+    WHY: Gang validation and the planner must agree on the allowed values and the default without typing them.
+
+    Args:
+        config_path: Optional path override for tactic_blocks.yaml.
+
+    Returns:
+        (allowed values, default value).
+
+    Raises:
+        ValueError: If the default is not one of the allowed values.
+
+    Example:
+        # allowed, default = get_origin_mix_options()
+        # assert default == "all_rented" and "world_ranges" in allowed
+    """
+    # 1. Read the origin_mix parameter of the acquire block.
+    definition = get_block_definition("acquire", config_path)["parameters"]["origin_mix"]
+    allowed = [str(value) for value in definition["allowed_values"]]
+    default = str(definition["default"])
+    if default not in allowed:
+        raise ValueError(f"The default origin_mix '{default}' is not one of {', '.join(allowed)}.")
+    return allowed, default
+
+
+def get_mule_origin_share_ranges(
+    split: str, config_path: Path | None = None, world_ranges_path: Path | None = None
+) -> dict[str, tuple[float, float]]:
+    """
+    WHAT: Resolves the share range of every mule origin for a split, through the world_ranges_reference that
+    config/tactic_blocks.yaml names for each origin. Origins come back in the order the config lists them.
+
+    WHY: The ranges live in config/world_ranges.yaml; reading them by reference keeps one copy of each number.
+
+    Args:
+        split: Split name of the world, e.g. "training".
+        config_path: Optional path override for tactic_blocks.yaml.
+        world_ranges_path: Optional path override for world_ranges.yaml.
+
+    Returns:
+        Origin -> (lower, upper) share bounds.
+
+    Raises:
+        ValueError: If the split or a referenced parameter is missing, or a range is not two ordered numbers.
+
+    Example:
+        # get_mule_origin_share_ranges("training")["rented"] == (0.2, 0.5)
+    """
+    # 1. Read the origin section and the referenced world ranges parameters.
+    section = load_tactic_blocks(config_path)["mule_origin_shares"]
+    parameters = load_world_ranges(world_ranges_path)["parameters"]
+    ranges: dict[str, tuple[float, float]] = {}
+    for origin, setting in section.items():
+        if not isinstance(setting, dict) or "world_ranges_reference" not in setting:
+            continue
+        reference = setting["world_ranges_reference"]
+        if reference not in parameters:
+            raise ValueError(f"Mule origin '{origin}' references unknown world_ranges parameter '{reference}'.")
+        if split not in parameters[reference]:
+            raise ValueError(f"World ranges parameter '{reference}' has no range for split '{split}'.")
+        bounds = parameters[reference][split]
+        if not isinstance(bounds, list) or len(bounds) != 2 or bounds[0] > bounds[1]:
+            raise ValueError(f"World ranges parameter '{reference}' split '{split}' must be two ordered numbers.")
+        ranges[origin] = (float(bounds[0]), float(bounds[1]))
+    return ranges
+
+
+def get_new_account_owner_kind(origin: str, config_path: Path | None = None) -> str | None:
+    """
+    WHAT: Returns the owner kind of the new account a mule origin needs ("person" or "shop"), or None when the
+    origin uses an existing account.
+
+    WHY: Which origins open accounts, and what kind, is configuration and not planner code.
+
+    Args:
+        origin: Mule origin name, e.g. "business".
+        config_path: Optional path override for tactic_blocks.yaml.
+
+    Returns:
+        "person", "shop" or None.
+
+    Raises:
+        ValueError: If the origin is unknown or the configured kind is not person, shop or null.
+
+    Example:
+        # get_new_account_owner_kind("borrowed_kyc") == "person"
+    """
+    section = load_tactic_blocks(config_path)["mule_origin_shares"]
+    if origin not in section or not isinstance(section[origin], dict):
+        raise ValueError(f"Unknown mule origin '{origin}'.")
+    owner_kind = section[origin]["new_account_owner_kind"]
+    if owner_kind not in ("person", "shop", None):
+        raise ValueError(f"Mule origin '{origin}' has owner kind {owner_kind!r}; it must be person, shop or null.")
+    return owner_kind

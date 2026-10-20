@@ -59,6 +59,7 @@ from world.interactive_records import (
     RunnerSettings,
 )
 from world.interactive_state import RunnerState
+from world.opening_handles import resolve_opening_handles
 from world.outside_events import OutsideEvent, validate_outside_event
 from world.run_identity import make_payment_id
 from world.truth_records import TruthFacts, validate_truth_facts
@@ -168,6 +169,7 @@ class LoopContext:
     original_fraud_amounts: list[int] = field(default_factory=list)
     skipped_forwards: list[ForwardAdjustment] = field(default_factory=list)
     capped_forwards: list[ForwardAdjustment] = field(default_factory=list)
+    opening_ids: dict[str, str] = field(default_factory=dict)
 
 
 def build_component_streams(seed: int, children: dict[str, int]) -> dict[str, np.random.Generator]:
@@ -331,12 +333,20 @@ def apply_outside_event(context: LoopContext, event: OutsideEvent) -> None:
         if stream_name not in context.streams:
             raise ValueError(f"unknown opening stream '{stream_name}'")
         rng = context.streams[stream_name]
-        context.state.open_account(
+        opened_id = context.state.open_account(
             owner_kind=str(event.owner_kind),
             opening_stream=stream_name,
             minute=event.minute,
             rng=rng,
         )
+        # A gang opening was given its id before the run; a different id means the replay and the queue disagree.
+        if event.opening_handle is not None:
+            assigned_id = context.opening_ids[event.opening_handle]
+            if opened_id != assigned_id:
+                raise RuntimeError(
+                    f"open_account for handle '{event.opening_handle}' produced '{opened_id}' "
+                    f"but '{assigned_id}' was assigned before the run"
+                )
     else:
         # A resume: the named payment must be waiting in the held list.
         planned_payment_id = str(event.planned_payment_id)
@@ -814,6 +824,10 @@ def run_fraud_on(
                 fraud_inputs,
                 outside_events=fraud_inputs.outside_events + genuine_openings,
             )
+    # Gang openings are named by handles in the plan; give them their real ids now that every opening is known.
+    effective_fraud_inputs, context.opening_ids = resolve_opening_handles(
+        effective_fraud_inputs, state.next_person_index, state.next_shop_index
+    )
     queue_initial_items(context, planned, effective_fraud_inputs)
     # 5. Take items off in order: outside events, gang device events, or payments.
     while context.queue:

@@ -27,6 +27,11 @@ tactic_blocks:
           world_ranges_reference: mules_per_gang
           split: training
           reason: "Number of mule accounts acquired by a gang per campaign, referenced from config/world_ranges.yaml"
+        origin_mix:
+          label: policy
+          allowed_values: [all_rented, world_ranges]
+          default: all_rented
+          reason: "Where mule origins come from. all_rented takes every mule from the ordinary people of the world, as the 12b fixtures did before mule origins existed, and is the default when the parameter is left out; an omitted parameter records no origin in truth so those fixtures stay unchanged, while an explicit all_rented records origin rented. world_ranges draws each mule's origin from the mule_origin_share ranges."
     take_control:
       label: assumption
       reason: "No published figure; building block models unauthorized device takeover for comparison per amendment A-016."
@@ -118,6 +123,27 @@ tactic_blocks:
           label: assumption
           range: [0, 30]
           reason: "Random minute offset applied to payment timings within dwell window"
+
+mule_origin_shares:
+  label: policy
+  reason: "Chances that an acquired mule is rented, opened on borrowed documents or opened as a business account when origin_mix is world_ranges. The three ranges in config/world_ranges.yaml are independent and do not sum to 1, so each draw is divided by the sum of the three before it is used."
+  issue_ids_v2: [G1, 12-19]
+  derived_from: "amendment A-016; config/world_ranges.yaml"
+  rented:
+    label: policy
+    world_ranges_reference: mule_origin_share_rented
+    new_account_owner_kind: null
+    reason: "A rented mule is an existing ordinary account, so no account is opened for it; its share is read from config/world_ranges.yaml."
+  borrowed_kyc:
+    label: policy
+    world_ranges_reference: mule_origin_share_borrowed_kyc
+    new_account_owner_kind: person
+    reason: "A borrowed-KYC mule is a new personal account opened on someone else's identity documents; its share is read from config/world_ranges.yaml."
+  business:
+    label: policy
+    world_ranges_reference: mule_origin_share_business
+    new_account_owner_kind: shop
+    reason: "A business mule is a new business account, modelled as a shop account; its share is read from config/world_ranges.yaml."
 
 held_out_dividing_lines:
   label: policy
