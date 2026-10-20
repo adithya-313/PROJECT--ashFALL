@@ -130,6 +130,34 @@ class TruthStore:
         # 2. Return None if no gang owns the account at this minute.
         return None
 
+    def origin_at(self, account_id: str, minute: int) -> str | None:
+        """
+        WHAT: Returns how the gang came to control the account (rented, borrowed_kyc or business) if the account
+        is an active mule at the given simulation minute and its origin was recorded, otherwise None.
+
+        WHY: Lets evaluation compare detection across mule origins without reading raw truth rows.
+
+        Args:
+            account_id: Account identifier to query.
+            minute: Integer simulation minute.
+
+        Returns:
+            The origin string or None.
+
+        Example:
+            # store.origin_at('acc_person_000006', 1440) -> 'rented'
+        """
+        # 1. Find the active role span and return its recorded origin.
+        for role_span in self._roles:
+            if role_span["account_id"] == account_id:
+                valid_from = role_span["valid_from"]
+                valid_to = role_span["valid_to"]
+                if valid_from <= minute and (valid_to is None or minute < valid_to):
+                    return role_span["origin"]
+
+        # 2. Return None if the account has no active role span.
+        return None
+
     def depth_at(self, account_id: str, minute: int) -> int | None:
         """
         WHAT: Returns the hierarchical mule depth layer for the account at the given simulation minute,

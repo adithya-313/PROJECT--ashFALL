@@ -34,6 +34,7 @@ from world.truth_records import (
     validate_no_overlapping_role_spans,
     validate_payment_stories_length,
     validate_role_in_config,
+    validate_role_origin,
     validate_time_span,
     validate_truth_facts,
 )
@@ -397,3 +398,37 @@ def test_runner_refuses_invalid_truth_facts(bad_truth: TruthFacts, error_match: 
         run_interactive_world(TINY, RunnerSettings(fraud_enabled=True), inputs, code_version=TEST_CODE_VERSION)
 
 
+
+
+ALLOWED_ORIGINS = load_truth_config()["truth_store"]["mule_origins"]
+
+
+def test_origin_is_allowed_only_on_mule_roles_from_the_configured_list() -> None:
+    """
+    Verifies role origin validation: a configured origin on a mule passes, no origin passes on any role, an
+    origin on a victim is refused, and an origin outside the configured list is refused on a mule.
+    """
+    for origin in ALLOWED_ORIGINS:
+        validate_role_origin(RoleSpan("acc_a", "mule", "g1", 1, 0, 100, origin), ALLOWED_ORIGINS)
+    validate_role_origin(RoleSpan("acc_a", "victim", "g1", None, 0, None), ALLOWED_ORIGINS)
+
+    with pytest.raises(ValueError, match="origin is only allowed on mule roles, not 'victim'"):
+        validate_role_origin(RoleSpan("acc_a", "victim", "g1", None, 0, None, "rented"), ALLOWED_ORIGINS)
+    with pytest.raises(ValueError, match="invalid origin 'stolen'"):
+        validate_role_origin(RoleSpan("acc_a", "mule", "g1", 1, 0, 100, "stolen"), ALLOWED_ORIGINS)
+
+
+def test_origin_list_is_read_from_config_and_checked_by_the_composite_validator() -> None:
+    """
+    Verifies the origin list comes from config: narrowing the list refuses a formerly valid origin, and
+    validate_truth_facts applies the origin rule to every role span.
+    """
+    assert ALLOWED_ORIGINS == ["rented", "borrowed_kyc", "business"]
+    span = RoleSpan("acc_a", "mule", "g1", 1, 0, 100, "business")
+    with pytest.raises(ValueError, match="invalid origin 'business'"):
+        validate_role_origin(span, ["rented"])
+
+    validate_truth_facts(TruthFacts(roles=(span,)), 0)
+    bad = RoleSpan("acc_a", "victim", "g1", None, 0, None, "rented")
+    with pytest.raises(ValueError, match="origin is only allowed on mule roles"):
+        validate_truth_facts(TruthFacts(roles=(bad,)), 0)

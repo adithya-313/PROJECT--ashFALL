@@ -213,3 +213,24 @@ def test_caller_guard_blocks_operational_package(tmp_path: Path) -> None:
     # 4. Assert calling load_truth raises PermissionError naming operational package.
     with pytest.raises(PermissionError, match="Operational package 'api' is forbidden"):
         mock_module.try_load(tmp_path, run_dir.name)
+
+
+def test_origin_round_trips_through_writer_and_loader(tmp_path: Path) -> None:
+    """
+    Writes mule spans with and without an origin, loads them back, and checks origin_at returns the origin only
+    inside the active span, None for a mule without one, and None for a non-mule account.
+    """
+    truth = TruthFacts(roles=(
+        RoleSpan("acc_person_000001", "mule", "gang_alpha", 1, 1440, 2880, "borrowed_kyc"),
+        RoleSpan("acc_person_000002", "mule", "gang_alpha", 2, 1440, None),
+    ))
+    output = run_interactive_world(
+        TINY, RunnerSettings(fraud_enabled=True), FraudInputs(truth=truth), code_version=TEST_CODE_VERSION
+    )
+    store = load_truth(tmp_path, write_truth_files(output, tmp_path).name)
+
+    assert store.origin_at("acc_person_000001", 1439) is None
+    assert store.origin_at("acc_person_000001", 1440) == "borrowed_kyc"
+    assert store.origin_at("acc_person_000001", 2880) is None
+    assert store.origin_at("acc_person_000002", 1440) is None
+    assert store.origin_at("acc_person_000003", 1440) is None

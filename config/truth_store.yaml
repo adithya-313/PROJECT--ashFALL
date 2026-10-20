@@ -27,6 +27,8 @@ truth_store:
     cash_out: "A terminal account used to withdraw illicit funds to cash or external instruments"
     victim: "An ordinary target account deceived or compromised into initiating unauthorized payments"
   roles_reason: "Ground rule 15; genuine is never stored as it is the default state of any account outside active spans"
+  mule_origins: [rented, borrowed_kyc, business]
+  mule_origins_reason: "How a gang came to control a mule account: rented from its ordinary owner, opened on borrowed identity documents, or opened as a business account. Stored only on mule spans so evaluation can compare origins."
   env_var: ASHFALL_TRUTH_DIR
   env_var_reason: "Location where the runner writes truth files; configured via a dedicated environment variable"
   allowed_reader_folders: [evaluation, showcase, tests]

@@ -161,7 +161,8 @@ def build_truth_rows(output: InteractiveWorldOutput) -> dict[str, list[dict[str,
     # 3. Format roles, device control, and sequential transaction story rows.
     roles_rows = [
         {"account_id": role_span.account_id, "depth": role_span.depth, "gang_id": role_span.gang_id,
-         "role": role_span.role, "valid_from": role_span.valid_from, "valid_to": role_span.valid_to}
+         "origin": role_span.origin, "role": role_span.role, "valid_from": role_span.valid_from,
+         "valid_to": role_span.valid_to}
         for role_span in active_truth.roles
     ]
     device_control_rows = [
