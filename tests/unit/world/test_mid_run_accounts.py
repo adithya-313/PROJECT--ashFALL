@@ -6,6 +6,7 @@ money conservation tracking, and stream isolation between genuine and gang openi
 
 import re
 
+import numpy as np
 import pytest
 
 from world.calendar_runner import PlannedPayment
@@ -17,6 +18,7 @@ from world.checks import (
 from world.fast_mode import FastRunSettings
 from world.interactive_records import FraudInputs, RunnerSettings
 from world.interactive_runner import prepare_world, run_interactive_world
+from world.interactive_state import start_runner_state
 from world.outside_events import OutsideEvent, validate_outside_event
 
 TINY = FastRunSettings(101, 60, 12, 61, "training")
@@ -207,3 +209,15 @@ def test_fraud_off_output_byte_identical_and_opened_accounts_empty() -> None:
     """
     output = run_interactive_world(TINY, RunnerSettings(fraud_enabled=False), code_version="test-mid-run-accounts")
     assert output.result.opened_accounts == []
+
+
+def test_open_account_requires_range_name_in_drawn_parameters() -> None:
+    """
+    Verifies that open_account does not guess the range name: a world whose drawn parameters lack range_name
+    raises KeyError instead of silently using the training range.
+    """
+    state = start_runner_state(prepare_world(TINY, None).world)
+    del state.world.parameters_drawn["range_name"]
+
+    with pytest.raises(KeyError, match="range_name"):
+        state.open_account("person", "genuine_account_openings", 100, np.random.default_rng(1))

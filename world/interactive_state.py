@@ -85,7 +85,7 @@ class RunnerState:
         the opening balance lets money-conservation checks expect exactly the money the run added.
 
         Args:
-            account_id: The new account's id, e.g. "acc_mule_000001".
+            account_id: The new account's id, e.g. "acc_person_000060".
             bank_index: The bank number, 0 to 2 in a three-bank world.
             person: The Person who owns it, or None for an account with no phone (like a shop).
             opening_balance_paise: Money it starts with, e.g. 500000 (Rs 5,000).
@@ -95,7 +95,7 @@ class RunnerState:
             None.
 
         Example:
-            register_account("acc_mule_000001", 1, None, 500000, 0) makes bank_map["acc_mule_000001"] == 1 and adds
+            register_account("acc_person_000060", 1, None, 500000, 0) makes bank_map["acc_person_000060"] == 1 and adds
             500000 to money_created_paise.
         """
         # One account id can exist only once in the world.
@@ -128,7 +128,7 @@ class RunnerState:
         world = self.world
         n_regions = int(world.parameters_drawn["n_regions"])
         banks = world.banks
-        range_name = str(world.parameters_drawn.get("range_name", "training"))
+        range_name = str(world.parameters_drawn["range_name"])
 
         if owner_kind == "person":
             person_idx = self.next_person_index

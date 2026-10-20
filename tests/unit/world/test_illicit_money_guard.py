@@ -138,33 +138,39 @@ def test_partial_arrival_caps_forward_amount() -> None:
 
 def test_forwarded_less_than_or_equal_received_invariant() -> None:
     """
-    Verifies that total forwarded money never exceeds total received money for any mule account.
-    Computes total inward and outward sums directly from executed transaction events across
-    governed mule entities to guarantee the core invariant holds over full simulation runs.
+    Verifies that no mule forwards more money than it received, in a run where the first hops are declined.
+    The collector's payments are declined, so every mule must forward nothing; without the forward cap the mules
+    would pay from their own balances and this test fails. Every account holding a mule role is checked, taken
+    from the run's truth, so a gang with more mules is covered without editing the test.
     """
     gang, _ = load_showcase_b_fixture()
     settings, code_version = get_showcase_b_settings()
+
+    def decline_collector_hook(view: PaymentView) -> HookDecision:
+        """Declines payments from the gang collector account while allowing all other transfers."""
+        if view.from_account == "acc_collector_01":
+            return "decline"
+        return "allow"
 
     output = run_interactive_world(
         fast_settings=settings,
         runner_settings=RunnerSettings(fraud_enabled=True),
         gang_configs=(gang,),
+        hook=decline_collector_hook,
         code_version=code_version,
     )
 
-    mule_accounts = {"acc_person_000006", "acc_person_000010"}
-    for mule in mule_accounts:
-        total_received = sum(
-            event.amount_paise
-            for event, source in zip(output.result.run_result.events, output.result.event_sources)
-            if source == "fraud" and event.to_account == mule and event.status == "success"
-        )
-        total_forwarded = sum(
-            event.amount_paise
-            for event, source in zip(output.result.run_result.events, output.result.event_sources)
-            if source == "fraud" and event.from_account == mule and event.status == "success"
-        )
-        assert total_forwarded <= total_received
+    mule_accounts = {role.account_id for role in output.result.truth.roles if role.role == "mule"}
+    assert len(mule_accounts) == 4
+    fraud_events = [
+        event for event, source in zip(output.result.run_result.events, output.result.event_sources)
+        if source == "fraud" and event.status == "success"
+    ]
+    for mule in sorted(mule_accounts):
+        total_received = sum(event.amount_paise for event in fraud_events if event.to_account == mule)
+        total_forwarded = sum(event.amount_paise for event in fraud_events if event.from_account == mule)
+        assert total_forwarded <= total_received, f"{mule} forwarded {total_forwarded} but received {total_received}"
+    assert output.result.skipped_forwards
 
 
 def test_hold_then_resume_rechecks_available_illicit_funds() -> None:

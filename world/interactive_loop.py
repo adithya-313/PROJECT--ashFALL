@@ -592,6 +592,60 @@ def record_event(context: LoopContext, event: PaymentEvent, queued: QueuedPaymen
     context.event_fraud_input_index.append(queued.input_index)
 
 
+def cap_forward_to_illicit_balance(context: LoopContext, queued: QueuedPayment) -> QueuedPayment | None:
+    """
+    WHAT: For a payment whose rule spends illicit money, limits the amount to the illicit money the sender holds now.
+    Nothing held: the payment is skipped and logged in skipped_forwards. Less held than planned: the amount is
+    lowered to what is held and the change is logged in capped_forwards. Enough held: the payment is unchanged.
+
+    WHY: A mule must pass on only money that reached it. Without the cap, a forward planned after a failed or
+    declined incoming payment would be paid from the mule's own ordinary balance and the forwarded total would
+    exceed the received total.
+
+    Args:
+        context: The loop context; its illicit balances are read and its two adjustment logs may grow.
+        queued: A payment whose money rule has spends_illicit set.
+
+    Returns:
+        The payment to run (the same one, or a copy with a lower amount), or None when it must be skipped.
+
+    Example:
+        A mule planned to forward 5,000 paise that holds 3,000 paise of illicit money returns a copy of the payment
+        for 3,000 paise and adds one "only_part_arrived" entry to capped_forwards.
+    """
+    payment = queued.payment
+    planned_paise = context.original_fraud_amounts[queued.input_index]
+    available_paise = max(0, context.illicit_balances.get(payment.from_account, 0))
+    effective_paise = min(planned_paise, available_paise)
+    if effective_paise == 0:
+        context.skipped_forwards.append(
+            ForwardAdjustment(
+                planned_payment_id=str(queued.planned_payment_id),
+                minute=payment.minute,
+                from_account=payment.from_account,
+                to_account=payment.to_account,
+                planned_paise=planned_paise,
+                available_paise=0,
+                reason="no_illicit_money_arrived",
+            )
+        )
+        return None
+    if effective_paise < planned_paise:
+        context.capped_forwards.append(
+            ForwardAdjustment(
+                planned_payment_id=str(queued.planned_payment_id),
+                minute=payment.minute,
+                from_account=payment.from_account,
+                to_account=payment.to_account,
+                planned_paise=planned_paise,
+                available_paise=effective_paise,
+                reason="only_part_arrived",
+            )
+        )
+    capped_payment = dataclasses.replace(payment, amount_paise=effective_paise)
+    return dataclasses.replace(queued, payment=capped_payment)
+
+
 def process_payment(context: LoopContext, queued: QueuedPayment) -> None:
     """
     WHAT: Handles one payment taken off the queue: applies due device events, names and stamps it the first time, asks
@@ -623,36 +677,11 @@ def process_payment(context: LoopContext, queued: QueuedPayment) -> None:
         else None
     )
     if rule is not None and rule.spends_illicit:
-        planned_paise = context.original_fraud_amounts[queued.input_index]
-        available_paise = max(0, context.illicit_balances.get(payment.from_account, 0))
-        effective_paise = min(planned_paise, available_paise)
-        if effective_paise == 0:
-            context.skipped_forwards.append(
-                ForwardAdjustment(
-                    planned_payment_id=str(queued.planned_payment_id),
-                    minute=payment.minute,
-                    from_account=payment.from_account,
-                    to_account=payment.to_account,
-                    planned_paise=planned_paise,
-                    available_paise=0,
-                    reason="no_illicit_money_arrived",
-                )
-            )
+        capped = cap_forward_to_illicit_balance(context, queued)
+        if capped is None:
             return
-        if effective_paise < planned_paise:
-            context.capped_forwards.append(
-                ForwardAdjustment(
-                    planned_payment_id=str(queued.planned_payment_id),
-                    minute=payment.minute,
-                    from_account=payment.from_account,
-                    to_account=payment.to_account,
-                    planned_paise=planned_paise,
-                    available_paise=effective_paise,
-                    reason="only_part_arrived",
-                )
-            )
-        payment = dataclasses.replace(payment, amount_paise=effective_paise)
-        queued = dataclasses.replace(queued, payment=payment)
+        queued = capped
+        payment = queued.payment
 
     decision = ask_hook(context, queued)
     stream = stream_for(context, queued.source)
