@@ -804,7 +804,10 @@ def _plan_campaign_steps(
             for scam_rule in scam_plan.rules:
                 money_rules.append(
                     IllicitMoneyRule(
-                        base_idx + scam_rule.input_index, scam_rule.spends_illicit, scam_rule.credits_illicit
+                        base_idx + scam_rule.input_index,
+                        scam_rule.spends_illicit,
+                        scam_rule.credits_illicit,
+                        requires_credit_from=scam_rule.requires_credit_from,
                     )
                 )
             pmts.extend(scam_plan.payments)

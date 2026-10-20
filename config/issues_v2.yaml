@@ -625,7 +625,7 @@ issues:
   G1:
     title: "Mule origin; rented mules keep normal life"
     origin: level_11
-    status: partial
+    status: built
     levels: [12]
     parts: [12c]
     v1_status: built
@@ -633,7 +633,7 @@ issues:
       - {kind: test, file: tests/unit/world/test_mule_origins.py, name: test_new_mules_get_normal_format_ids_in_time_order_with_genuine_openings}
       - {kind: test, file: tests/unit/world/test_rented_owner_activity.py, name: test_zero_kept_share_pauses_every_outgoing_payment_inside_the_span_and_none_outside}
       - {kind: test, file: tests/unit/world/test_rented_owner_activity.py, name: test_pausing_does_not_shift_the_failure_draws_of_other_genuine_payments}
-    later_work: ["Level 12c C-3b: lifecycle and burned mules"]
+      - {kind: test, file: tests/unit/world/test_mule_lifecycle.py, name: test_rented_owner_pausing_stops_at_burned_from}
   G2:
     title: "Cash-out channels including ATM limits and genuine shops"
     origin: level_11
@@ -645,11 +645,14 @@ issues:
   G3:
     title: "Mule lifecycle; heavy-tailed victims per mule"
     origin: level_11
-    status: planned
+    status: partial
     levels: [12]
     parts: [12c]
     v1_status: built
-    later_work: ["Level 12c: mule lifecycle and heavy-tailed victims in gang worlds"]
+    evidence:
+      - {kind: test, file: tests/unit/world/test_heavy_tailed_victims.py, name: test_exact_check_bulk_of_mules_within_typical_range}
+      - {kind: test, file: tests/unit/world/test_mule_lifecycle.py, name: test_phase_at_gives_phases_at_right_minutes}
+    later_work: ["Level 12d: burn a mule after an observed lien"]
   G6:
     title: "Scam-type payment schedules"
     origin: level_11

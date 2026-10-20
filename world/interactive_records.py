@@ -72,11 +72,33 @@ class IllicitMoneyRule:
     input_index identifies the target payment in FraudInputs.payments.
     spends_illicit limits the payment to the sender's current illicit balance.
     credits_illicit credits successful transfer amounts to the receiver's illicit balance.
+    requires_credit_from ties spending to funds credited specifically from that sender account.
     """
 
     input_index: int
     spends_illicit: bool
     credits_illicit: bool
+    requires_credit_from: str | None = None
+
+    def __post_init__(self) -> None:
+        """Enforces that requires_credit_from is only set when spends_illicit is True."""
+        if self.requires_credit_from is not None and not self.spends_illicit:
+            raise ValueError("requires_credit_from is only allowed on a rule with spends_illicit=True.")
+
+    def __repr__(self) -> str:
+        """Formats string representation, omitting requires_credit_from when unset for compatibility."""
+        if self.requires_credit_from is None:
+            return (
+                f"IllicitMoneyRule(input_index={self.input_index}, "
+                f"spends_illicit={self.spends_illicit}, "
+                f"credits_illicit={self.credits_illicit})"
+            )
+        return (
+            f"IllicitMoneyRule(input_index={self.input_index}, "
+            f"spends_illicit={self.spends_illicit}, "
+            f"credits_illicit={self.credits_illicit}, "
+            f"requires_credit_from={self.requires_credit_from!r})"
+        )
 
 
 @dataclass(frozen=True)

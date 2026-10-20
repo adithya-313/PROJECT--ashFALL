@@ -168,6 +168,7 @@ class LoopContext:
     event_fraud_input_index: list[int | None] = field(default_factory=list)
     truth: TruthFacts = field(default_factory=TruthFacts)
     illicit_balances: dict[str, int] = field(default_factory=dict)
+    pair_credits: dict[tuple[str, str], int] = field(default_factory=dict)
     money_rules_by_index: dict[int, IllicitMoneyRule] = field(default_factory=dict)
     original_fraud_amounts: list[int] = field(default_factory=list)
     skipped_forwards: list[ForwardAdjustment] = field(default_factory=list)
@@ -244,6 +245,10 @@ def validate_illicit_money_inputs(fraud_inputs: FraudInputs, state: RunnerState)
             )
         if rule.input_index in seen_indices:
             raise ValueError(f"duplicate illicit money rule for fraud payment index {rule.input_index}")
+        if rule.requires_credit_from is not None and not rule.spends_illicit:
+            raise ValueError(
+                f"rule at index {rule.input_index} has requires_credit_from but spends_illicit is False"
+            )
         seen_indices.add(rule.input_index)
 
     for seed in fraud_inputs.illicit_seeds:
@@ -654,16 +659,16 @@ def record_event(context: LoopContext, event: PaymentEvent, queued: QueuedPaymen
 
 def cap_forward_to_illicit_balance(context: LoopContext, queued: QueuedPayment) -> QueuedPayment | None:
     """
-    WHAT: For a payment whose rule spends illicit money, limits the amount to the illicit money the sender holds now.
+    WHAT: For a payment whose rule spends illicit money, limits the amount to the illicit money the sender holds now,
+    and if requires_credit_from is set, to the illicit credit received specifically from that sender account.
     Nothing held: the payment is skipped and logged in skipped_forwards. Less held than planned: the amount is
     lowered to what is held and the change is logged in capped_forwards. Enough held: the payment is unchanged.
 
-    WHY: A mule must pass on only money that reached it. Without the cap, a forward planned after a failed or
-    declined incoming payment would be paid from the mule's own ordinary balance and the forwarded total would
-    exceed the received total.
+    WHY: A mule must pass on only money that reached it. When a payout is tied to a victim, funds paid in by other
+    victims must never subsidize that victim's payout.
 
     Args:
-        context: The loop context; its illicit balances are read and its two adjustment logs may grow.
+        context: The loop context; its illicit balances and pair credits are read and its adjustment logs may grow.
         queued: A payment whose money rule has spends_illicit set.
 
     Returns:
@@ -676,6 +681,41 @@ def cap_forward_to_illicit_balance(context: LoopContext, queued: QueuedPayment) 
     payment = queued.payment
     planned_paise = context.original_fraud_amounts[queued.input_index]
     available_paise = max(0, context.illicit_balances.get(payment.from_account, 0))
+
+    rule = context.money_rules_by_index.get(queued.input_index) if queued.input_index is not None else None
+    if rule is not None and rule.requires_credit_from is not None:
+        victim_acct = rule.requires_credit_from
+        pair = (payment.from_account, victim_acct)
+        pair_credit = max(0, context.pair_credits.get(pair, 0))
+        effective_paise = min(planned_paise, available_paise, pair_credit)
+        if effective_paise == 0:
+            context.skipped_forwards.append(
+                ForwardAdjustment(
+                    planned_payment_id=str(queued.planned_payment_id),
+                    minute=payment.minute,
+                    from_account=payment.from_account,
+                    to_account=payment.to_account,
+                    planned_paise=planned_paise,
+                    available_paise=0,
+                    reason="victim_paid_nothing",
+                )
+            )
+            return None
+        if effective_paise < planned_paise:
+            context.capped_forwards.append(
+                ForwardAdjustment(
+                    planned_payment_id=str(queued.planned_payment_id),
+                    minute=payment.minute,
+                    from_account=payment.from_account,
+                    to_account=payment.to_account,
+                    planned_paise=planned_paise,
+                    available_paise=effective_paise,
+                    reason="only_part_arrived",
+                )
+            )
+        capped_payment = dataclasses.replace(payment, amount_paise=effective_paise)
+        return dataclasses.replace(queued, payment=capped_payment)
+
     effective_paise = min(planned_paise, available_paise)
     if effective_paise == 0:
         context.skipped_forwards.append(
@@ -803,10 +843,15 @@ def process_payment(context: LoopContext, queued: QueuedPayment) -> None:
                 context.illicit_balances[payment.to_account] = (
                     context.illicit_balances.get(payment.to_account, 0) + event.amount_paise
                 )
+                pair = (payment.to_account, payment.from_account)
+                context.pair_credits[pair] = context.pair_credits.get(pair, 0) + event.amount_paise
             if rule.spends_illicit:
                 context.illicit_balances[payment.from_account] = (
                     context.illicit_balances.get(payment.from_account, 0) - event.amount_paise
                 )
+                if rule.requires_credit_from is not None:
+                    pair = (payment.from_account, rule.requires_credit_from)
+                    context.pair_credits[pair] = max(0, context.pair_credits.get(pair, 0) - event.amount_paise)
 
 
 def finish_run(context: LoopContext, money_created_paise: int) -> InteractiveRunResult:

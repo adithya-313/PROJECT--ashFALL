@@ -441,6 +441,7 @@ def _apply_gang_configs(
                     input_index=base_offset + rule.input_index,
                     spends_illicit=rule.spends_illicit,
                     credits_illicit=rule.credits_illicit,
+                    requires_credit_from=rule.requires_credit_from,
                 )
             )
 

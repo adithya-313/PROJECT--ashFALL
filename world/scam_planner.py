@@ -164,7 +164,7 @@ class ScamPlan:
 
     @property
     def dropped_victim_payments_count(self) -> int:
-        """Alias for dropped_payments_count."""
+        """Compatibility alias returning the count of dropped victim payments."""
         return self.dropped_payments_count
 
 
@@ -483,7 +483,12 @@ def _build_schedule_records(
         if scam_payment.is_payout:
             sender, receiver = schedule.receiving_mule, schedule.victim_account
             description = f"Gang '{gang_id}' {schedule.scam_type} scam payout back"
-            rule = IllicitMoneyRule(input_index=position, spends_illicit=True, credits_illicit=False)
+            rule = IllicitMoneyRule(
+                input_index=position,
+                spends_illicit=True,
+                credits_illicit=False,
+                requires_credit_from=schedule.victim_account,
+            )
         else:
             victim_payment_number += 1
             sender, receiver = schedule.victim_account, schedule.receiving_mule
@@ -723,7 +728,14 @@ def _assemble_scam_plan(
         victim_payments, victim_stories, victim_rules = _build_schedule_records(gang_id, schedule, purpose)
         offset = len(payments)
         for rule in victim_rules:
-            rules.append(IllicitMoneyRule(offset + rule.input_index, rule.spends_illicit, rule.credits_illicit))
+            rules.append(
+                IllicitMoneyRule(
+                    offset + rule.input_index,
+                    rule.spends_illicit,
+                    rule.credits_illicit,
+                    requires_credit_from=rule.requires_credit_from,
+                )
+            )
         payments.extend(victim_payments)
         stories.extend(victim_stories)
         roles.append(RoleSpan(schedule.victim_account, "victim", gang_id, None, schedule.payments[0].minute, None))
