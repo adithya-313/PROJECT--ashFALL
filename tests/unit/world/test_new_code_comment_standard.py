@@ -176,6 +176,9 @@ NEW_CODE_FILES: list[str] = [
     # Level 12c scam schedule configuration resolver and test suite.
     "world/scam_config.py",
     "tests/unit/world/test_scam_config.py",
+    # Level 12c scam step planner and gang scam test suite.
+    "world/scam_planner.py",
+    "tests/unit/world/test_scam_gangs.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [

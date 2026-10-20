@@ -400,6 +400,9 @@ def _apply_gang_configs(
     active_state = state if state is not None else start_runner_state(prepared.world)
     seeds = list(fraud_inputs.illicit_seeds)
     for g in gang_configs:
+        # A gang whose money comes from a scam step has no fixture source to register or seed.
+        if g.source is None:
+            continue
         if g.source.account_id not in active_state.bank_map:
             active_state.register_account(
                 g.source.account_id, g.source.bank_index,
@@ -409,7 +412,7 @@ def _apply_gang_configs(
 
     children = np.random.SeedSequence(seed).spawn(10)
     dev_rng, plan_rng = np.random.default_rng(children[6]), np.random.default_rng(children[7])
-    reserved = {g.source.account_id for g in gang_configs}
+    reserved = {g.source.account_id for g in gang_configs if g.source is not None}
     pmts = list(fraud_inputs.payments)
     roles = list(fraud_inputs.truth.roles)
     dev_ctrl = list(fraud_inputs.truth.device_control)
@@ -419,14 +422,16 @@ def _apply_gang_configs(
 
     for g in gang_configs:
         plan = plan_gang(g, prepared.world, plan_rng, reserved_accounts=reserved, gang_devices_rng=dev_rng)
-        reserved.update(r.account_id for r in plan.truth.roles if r.role == "mule")
+        # Mules, victims and collectors of this gang are unavailable to later gangs; a person cannot hold two
+        # overlapping roles in the truth.
+        reserved.update(r.account_id for r in plan.truth.roles)
 
-        # Refuse gang-planned route payments without an illicit money rule.
+        # Refuse gang-planned route and scam payments without an illicit money rule.
         plan_rules_by_index = {rule.input_index: rule for rule in plan.money_rules}
         for i, _ in enumerate(plan.payments):
             story = plan.truth.payment_stories[i]
-            if story.block == "route" and i not in plan_rules_by_index:
-                raise ValueError(f"Gang '{g.gang_id}' route payment at index {i} has no illicit money rule.")
+            if story.block in ("route", "scam") and i not in plan_rules_by_index:
+                raise ValueError(f"Gang '{g.gang_id}' {story.block} payment at index {i} has no illicit money rule.")
 
         base_offset = len(pmts)
         for rule in plan.money_rules:

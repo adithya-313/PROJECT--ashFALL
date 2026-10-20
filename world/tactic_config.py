@@ -444,3 +444,51 @@ def get_take_control_devices_range(config_path: Path | None = None) -> tuple[int
     devices_range = definition["parameters"]["devices"]["range"]
     return int(devices_range[0]), int(devices_range[1])
 
+
+def get_scam_receiving_mules_range(config_path: Path | None = None) -> tuple[int, int]:
+    """
+    WHAT: Retrieves the [min, max] count of receiving mules a scam step may name, from config/tactic_blocks.yaml.
+
+    WHY: Gang configuration validation checks the scam step's receiving_mules against this range, so the limit is
+    never typed in code.
+
+    Args:
+        config_path: Optional path override for tactic_blocks.yaml.
+
+    Returns:
+        Two-element integer tuple (min_mules, max_mules).
+
+    Example:
+        # min_mules, max_mules = get_scam_receiving_mules_range()
+        # assert min_mules == 1 and max_mules == 10
+    """
+    # 1. Fetch the receiving_mules parameter range from the scam block definition.
+    definition = get_block_definition("scam", config_path)
+    mules_range = definition["parameters"]["receiving_mules"]["range"]
+    return int(mules_range[0]), int(mules_range[1])
+
+
+def get_scam_victims_per_mule_range(
+    config_path: Path | None = None, world_ranges_path: Path | None = None
+) -> tuple[int, int]:
+    """
+    WHAT: Resolves the [min, max] count of victims per receiving mule from the world ranges the scam block names.
+
+    WHY: The scam step draws each mule's victim count from this range, and validation checks an explicit count
+    against it.
+
+    Args:
+        config_path: Optional path override for tactic_blocks.yaml.
+        world_ranges_path: Optional path override for world_ranges.yaml.
+
+    Returns:
+        Two-element integer tuple (min_victims, max_victims).
+
+    Example:
+        # min_victims, max_victims = get_scam_victims_per_mule_range()
+        # assert min_victims == 1 and max_victims == 5
+    """
+    # 1. Resolve the training range through the block parameter's world_ranges_reference.
+    bounds = resolve_parameter_training_range("scam", "victims_per_receiving_mule", config_path, world_ranges_path)
+    return int(bounds[0]), int(bounds[1])
+

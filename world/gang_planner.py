@@ -14,11 +14,12 @@ TERM: supplier fee: percentage fee paid to account suppliers based on money move
 
 from dataclasses import dataclass
 from typing import Any
+
 import numpy as np
 
 from world.build_world import World
 from world.calendar_runner import PlannedPayment
-from world.gang_config import BlockStep, GangBudget, GangConfig, validate_gang_config
+from world.gang_config import BlockStep, GangBudget, GangConfig, gang_start_minute, validate_gang_config
 from world.gang_devices import (
     GangDeviceEvent,
     assign_devices_round_robin,
@@ -27,6 +28,7 @@ from world.gang_devices import (
     make_gang_devices,
 )
 from world.interactive_records import IllicitMoneyRule
+from world.scam_planner import plan_scam_step
 from world.tactic_blocks import (
     acquire_mule_accounts,
     advance_warmup_clock,
@@ -313,6 +315,8 @@ def _execute_route_step(
     Example:
         # payments, roles, stories, cost = _execute_route_step(config, step, mules, 100, 100, rng)
     """
+    if config.source is None:
+        raise ValueError(f"Gang '{config.gang_id}' routes victim money after a scam step, which is not planned yet.")
     params = step.params_dict
     layers, accounts_per_layer = params.get("layers", 1), params.get("accounts_per_layer", 1)
     needed = layers * accounts_per_layer
@@ -442,7 +446,7 @@ def _plan_acquire_step(
         # accts, minute, cost = _plan_acquire_step(world, config, step, 100, None, rng)
     """
     count = step.params_dict.get("count", 1)
-    excluded = {config.source.account_id} | (reserved_accounts or set())
+    excluded = (reserved_accounts or set()) | ({config.source.account_id} if config.source is not None else set())
     acquired = acquire_mule_accounts(world, count, rng, excluded)
     min_time, max_time = get_block_time_range("acquire")
     time_cost = int(rng.integers(min_time, max_time + 1))
@@ -586,7 +590,7 @@ def _plan_campaign_steps(
     Example:
         # res = _plan_campaign_steps(config, world, rng, None, dev_rng)
     """
-    clock_min, acq_min = config.source.start_minute, config.source.start_minute
+    clock_min = acq_min = gang_start_minute(config)
     mules: list[str] = []
     device_spans: list[DeviceControlSpan] = []
     device_events: list[GangDeviceEvent] = []
@@ -605,6 +609,17 @@ def _plan_campaign_steps(
             device_spans.extend(d_spans); device_events.extend(d_events)
         elif step.block == "warm_up":
             clock_min, cost = _plan_warmup_step(step, clock_min, rng)
+        elif step.block == "scam":
+            scam_plan = plan_scam_step(world, config, step, mules, clock_min, reserved_accounts, rng)
+            base_idx = len(pmts)
+            for scam_rule in scam_plan.rules:
+                money_rules.append(
+                    IllicitMoneyRule(base_idx + scam_rule.input_index, scam_rule.spends_illicit, scam_rule.credits_illicit)
+                )
+            pmts.extend(scam_plan.payments)
+            roles.extend(scam_plan.roles)
+            stories.extend(scam_plan.stories)
+            cost = BlockCost(0, scam_plan.span_minutes, scam_plan.risk)
         elif step.block == "route":
             r_pmts, r_roles, r_stories, cost = _execute_route_step(config, step, mules, acq_min, clock_min, rng)
             base_idx = len(pmts)
