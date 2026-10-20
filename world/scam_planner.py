@@ -39,8 +39,10 @@ from world.scam_config import (
     resolve_payments_per_victim,
     resolve_payout_back_share,
     resolve_remainder_scam_type,
+    resolve_victims_per_mule_largest,
+    resolve_victims_per_mule_tail_exponent,
 )
-from world.tactic_config import get_block_risk_range, get_gang_payment_purpose, get_scam_victims_per_mule_range
+from world.tactic_config import get_block_risk_range, get_gang_payment_purpose
 from world.truth_records import PaymentStory, RoleSpan
 
 MINUTES_PER_DAY: int = 1440
@@ -525,23 +527,60 @@ def _compute_mule_inflows(schedules: list[VictimSchedule]) -> dict[str, MuleInfl
     return inflows
 
 
-def _draw_victim_counts(step: BlockStep, receiving_count: int, rng: np.random.Generator) -> list[int]:
+def compute_power_law_probabilities(cap: int, exponent: float) -> list[float]:
+    """
+    WHAT: Computes the truncated power-law probability table P(k) proportional to k^-exponent for k = 1..cap.
+
+    WHY: Heavy-tailed sampling of victim counts per receiving mule, ensuring the bulk of mules receive few
+    victims while allowing a long tail up to cap.
+
+    Args:
+        cap: Upper truncation bound, an integer at least 1.
+        exponent: Power-law decay exponent, a positive float.
+
+    Returns:
+        List of probabilities for k = 1..cap, summing to 1.0 and strictly decreasing.
+
+    Raises:
+        ValueError: If cap is below 1 or exponent is not positive.
+
+    Example:
+        probs = compute_power_law_probabilities(10, 2.0)
+        assert len(probs) == 10 and probs[0] > probs[1]
+    """
+    if isinstance(cap, bool) or not isinstance(cap, int) or cap < 1:
+        raise ValueError(f"Truncation cap must be an integer of at least 1, got {cap!r}.")
+    if isinstance(exponent, bool) or not isinstance(exponent, (int, float)) or exponent <= 0.0:
+        raise ValueError(f"Power law exponent must be a positive number, got {exponent!r}.")
+    weights = [float(k) ** (-float(exponent)) for k in range(1, cap + 1)]
+    total_weight = sum(weights)
+    probs = [w / total_weight for w in weights]
+    diff = 1.0 - sum(probs)
+    probs[-1] += diff
+    return probs
+
+
+def _draw_victim_counts(
+    step: BlockStep, receiving_count: int, split: str, rng: np.random.Generator
+) -> list[int]:
     """
     WHAT: Returns how many victims each receiving mule has: the step's explicit victims_per_receiving_mule for every
-    mule if it is given, otherwise one uniform draw per mule from the configured victims range.
+    mule if it is given, otherwise drawn from a truncated power law whose cap and exponent are drawn once for the gang.
 
-    WHY: Lets a config pin the count while the default follows world_ranges.
+    WHY: Lets a config pin the count while the default follows a heavy-tailed power law distribution calibrated
+    from world_ranges and scam_schedules.
 
     Args:
         step: The scam BlockStep.
         receiving_count: Number of receiving mules.
+        split: Split name (e.g. 'training', 'test', 'stress').
         rng: The gang planning stream (child 7).
 
     Returns:
         One count per receiving mule, each at least 1.
 
     Raises:
-        ValueError: If a count is below 1.
+        ValueError: If cap or any drawn count is below 1.
 
     Example:
         With victims_per_receiving_mule 3 and 2 mules the result is [3, 3] and nothing is read from rng.
@@ -549,8 +588,16 @@ def _draw_victim_counts(step: BlockStep, receiving_count: int, rng: np.random.Ge
     explicit = step.params_dict.get("victims_per_receiving_mule")
     if explicit is not None:
         return [int(explicit)] * receiving_count
-    low_victims, high_victims = get_scam_victims_per_mule_range()
-    counts = [int(rng.integers(low_victims, high_victims + 1)) for _ in range(receiving_count)]
+    if receiving_count <= 0:
+        return []
+    low_cap, high_cap = resolve_victims_per_mule_largest(split)
+    cap = int(rng.integers(low_cap, high_cap + 1))
+    if cap < 1:
+        raise ValueError(f"Every receiving mule needs at least 1 victim, drew cap {cap}.")
+    low_exp, high_exp = resolve_victims_per_mule_tail_exponent(split)
+    exponent = float(rng.uniform(low_exp, high_exp))
+    probs = compute_power_law_probabilities(cap, exponent)
+    counts = [int(rng.choice(np.arange(1, cap + 1), p=probs)) for _ in range(receiving_count)]
     if min(counts) < 1:
         raise ValueError(f"Every receiving mule needs at least 1 victim, drew {min(counts)}.")
     return counts
@@ -597,11 +644,15 @@ def plan_scam_step(
     receiving_mules = mules[:receiving_count]
 
     chances = draw_type_chances(split, rng)
-    victim_counts = _draw_victim_counts(step, receiving_count, rng)
+    victim_counts = _draw_victim_counts(step, receiving_count, split, rng)
+    total_victims = sum(victim_counts)
     excluded = set(mules) | (reserved_accounts or set())
     if config.source is not None:
         excluded.add(config.source.account_id)
-    victims = choose_victims(world, sum(victim_counts), excluded, rng)
+    eligible_count = sum(1 for person in world.people if person.account_id not in excluded)
+    if total_victims > eligible_count:
+        raise ValueError(f"Total victims needed {total_victims} exceeds eligible people {eligible_count}.")
+    victims = choose_victims(world, total_victims, excluded, rng)
 
     schedules: list[VictimSchedule] = []
     next_victim = 0

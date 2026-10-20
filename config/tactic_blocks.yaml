@@ -84,9 +84,9 @@ tactic_blocks:
           reason: "Number of acquired mules that receive victim money; route accounts_per_layer must equal it"
         victims_per_receiving_mule:
           label: assumption
-          world_ranges_reference: victims_per_mule_typical
+          world_ranges_reference: victims_per_mule_largest
           split: training
-          reason: "Number of victims paying each receiving mule, referenced from config/world_ranges.yaml"
+          reason: "Number of victims paying each receiving mule, upper bound referenced from config/world_ranges.yaml"
     route:
       label: assumption
       reason: "No published figure; building block models layered forwarding for comparison per amendment A-016."

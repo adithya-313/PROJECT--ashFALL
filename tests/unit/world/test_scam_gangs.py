@@ -267,10 +267,9 @@ def test_narrowed_type_chances_and_counts_reach_the_plan(monkeypatch: pytest.Mon
     """Narrows the chances, victim range, risk range and purpose, and checks the plan carries each value."""
     monkeypatch.setattr(scam_planner, "resolve_investment_or_job_share", lambda split: (1.0, 1.0))
     monkeypatch.setattr(scam_planner, "resolve_investment_share_of_investment_or_job", lambda split: (1.0, 1.0))
-    monkeypatch.setattr(scam_planner, "get_scam_victims_per_mule_range", lambda: (2, 2))
     monkeypatch.setattr(scam_planner, "get_block_risk_range", lambda block: (0.5, 0.5))
     monkeypatch.setattr(scam_planner, "get_gang_payment_purpose", lambda: "rent")
-    config = make_scam_config(receiving_mules=2)
+    config = make_scam_config(receiving_mules=2, extra_scam_params=(("victims_per_receiving_mule", 2),))
 
     plan = plan_scam(scam_world, config)
 
@@ -393,9 +392,8 @@ def test_a_mule_with_nothing_left_after_payouts_is_refused(monkeypatch: pytest.M
     monkeypatch.setattr(scam_planner, "resolve_payments_per_victim", lambda split: (2, 2))
     monkeypatch.setattr(scam_planner, "resolve_payment_escalation_multiple", lambda split: (1.0, 1.0))
     monkeypatch.setattr(scam_planner, "resolve_payment_spread_days", lambda split: (1, 1))
-    monkeypatch.setattr(scam_planner, "get_scam_victims_per_mule_range", lambda: (1, 1))
     monkeypatch.setattr(scam_planner, "resolve_investment_or_job_share", lambda split: (1.0, 1.0))
-    config = make_scam_config(receiving_mules=1)
+    config = make_scam_config(receiving_mules=1, extra_scam_params=(("victims_per_receiving_mule", 1),))
 
     with pytest.raises(ValueError, match="nothing to forward"):
         for seed in range(30):
@@ -404,7 +402,7 @@ def test_a_mule_with_nothing_left_after_payouts_is_refused(monkeypatch: pytest.M
 
 def test_zero_victims_per_mule_is_refused(monkeypatch: pytest.MonkeyPatch, scam_world: World) -> None:
     """Narrows the victims range to zero and checks the step refuses a receiving mule without victims."""
-    monkeypatch.setattr(scam_planner, "get_scam_victims_per_mule_range", lambda: (0, 0))
+    monkeypatch.setattr(scam_planner, "resolve_victims_per_mule_largest", lambda split: (0, 0))
 
     with pytest.raises(ValueError, match="at least 1 victim"):
         plan_scam(scam_world, make_scam_config())
@@ -513,7 +511,7 @@ def test_route_amount_with_a_scam_source_is_refused() -> None:
         ((("receiving_mules", True),), "receiving_mules must be an integer in"),
         ((("receiving_mules", 1.5),), "receiving_mules must be an integer in"),
         ((("receiving_mules", 1), ("victims_per_receiving_mule", 0)), "victims_per_receiving_mule must be an integer"),
-        ((("receiving_mules", 1), ("victims_per_receiving_mule", 6)), "victims_per_receiving_mule must be an integer"),
+        ((("receiving_mules", 1), ("victims_per_receiving_mule", 51)), "victims_per_receiving_mule must be an integer"),
     ],
 )
 def test_scam_parameters_are_validated(params: tuple[tuple[str, Any], ...], message: str) -> None:

@@ -505,3 +505,98 @@ def resolve_debit_pays_back(config_path: Path | None = None) -> bool:
     if not isinstance(value, bool):
         raise ValueError(f"Scam setting 'payout_back' must be true or false, got {value!r}.")
     return value
+
+
+def resolve_victims_per_mule_tail_exponent(
+    split: str, config_path: Path | None = None
+) -> tuple[float, float]:
+    """
+    WHAT: Returns the range of the power-law tail exponent for the number of victims per receiving mule.
+
+    WHY: Heavy-tailed sampling of victims per mule: most mules fall in the typical range while a few reach the
+    largest cap.
+
+    Args:
+        split: Split name (e.g. 'training', 'test', 'stress').
+        config_path: Optional path of a scam schedule file; None means the committed file.
+
+    Returns:
+        (lower, upper) exponents as floats.
+
+    Raises:
+        ValueError: If the setting or split is missing or malformed.
+        FileNotFoundError: If the schedule file does not exist.
+
+    Example:
+        resolve_victims_per_mule_tail_exponent("training") == (1.8, 2.6)
+    """
+    schedules = load_scam_schedules(config_path)
+    if "victims_per_mule_tail_exponent" not in schedules:
+        raise ValueError("Scam schedule config has no setting 'victims_per_mule_tail_exponent'.")
+    entry = schedules["victims_per_mule_tail_exponent"]
+    return _split_bounds(entry, split, "victims_per_mule_tail_exponent")
+
+
+def resolve_victims_per_mule_largest(
+    split: str, world_ranges_path: Path | None = None
+) -> tuple[int, int]:
+    """
+    WHAT: Returns the [min, max] cap of victims per receiving mule for the split from config/world_ranges.yaml.
+
+    WHY: Heavy tail: provides the upper truncation cap for sampling victims per receiving mule.
+
+    Args:
+        split: Split name (e.g. 'training', 'test', 'stress').
+        world_ranges_path: Optional path of a world ranges file; None means the committed file.
+
+    Returns:
+        (min_cap, max_cap) as ints.
+
+    Raises:
+        ValueError: If the parameter or split is missing or malformed.
+        FileNotFoundError: If the world ranges file does not exist.
+
+    Example:
+        resolve_victims_per_mule_largest("training") == (10, 50)
+    """
+    path = world_ranges_path if world_ranges_path is not None else WORLD_RANGES_PATH
+    if not path.exists():
+        raise FileNotFoundError(f"World ranges config not found: {path}")
+    parameters = load_yaml(path)["parameters"]
+    if "victims_per_mule_largest" not in parameters:
+        raise ValueError("World ranges has no parameter 'victims_per_mule_largest'.")
+    bounds = _split_bounds(parameters["victims_per_mule_largest"], split, "victims_per_mule_largest")
+    return _as_int_range(bounds, "victims_per_mule_largest")
+
+
+def resolve_victims_per_mule_typical(
+    split: str, world_ranges_path: Path | None = None
+) -> tuple[int, int]:
+    """
+    WHAT: Returns the [min, max] typical count of victims per receiving mule for the split from
+    config/world_ranges.yaml.
+
+    WHY: Used by distribution tests and properties to verify the bulk of mules fall inside typical bounds.
+
+    Args:
+        split: Split name (e.g. 'training', 'test', 'stress').
+        world_ranges_path: Optional path of a world ranges file; None means the committed file.
+
+    Returns:
+        (min_typical, max_typical) as ints.
+
+    Raises:
+        ValueError: If the parameter or split is missing or malformed.
+        FileNotFoundError: If the world ranges file does not exist.
+
+    Example:
+        resolve_victims_per_mule_typical("training") == (1, 5)
+    """
+    path = world_ranges_path if world_ranges_path is not None else WORLD_RANGES_PATH
+    if not path.exists():
+        raise FileNotFoundError(f"World ranges config not found: {path}")
+    parameters = load_yaml(path)["parameters"]
+    if "victims_per_mule_typical" not in parameters:
+        raise ValueError("World ranges has no parameter 'victims_per_mule_typical'.")
+    bounds = _split_bounds(parameters["victims_per_mule_typical"], split, "victims_per_mule_typical")
+    return _as_int_range(bounds, "victims_per_mule_typical")

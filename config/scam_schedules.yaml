@@ -92,3 +92,13 @@ unauthorised_debit_schedule:
     label: policy
     value: false
     reason: "Nothing to build trust for after a takeover, so the mule pays nothing back."
+
+victims_per_mule_tail_exponent:
+  label: assumption
+  unit: power law exponent
+  training: [1.8, 2.6]
+  test: [1.8, 2.6]
+  stress: [1.2, 3.5]
+  issue_ids_v2: [G3]
+  derived_from: "amendment A-016"
+  reason: "No figure is published; chosen so most mules fall inside victims_per_mule_typical while a few reach victims_per_mule_largest."

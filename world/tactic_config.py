@@ -512,25 +512,25 @@ def get_scam_victims_per_mule_range(
     config_path: Path | None = None, world_ranges_path: Path | None = None
 ) -> tuple[int, int]:
     """
-    WHAT: Resolves the [min, max] count of victims per receiving mule from the world ranges the scam block names.
+    WHAT: Resolves the [1, max] count of victims per receiving mule from the world ranges the scam block names.
+    The lower bound is 1 and the upper bound is the high end of victims_per_mule_largest for the split.
 
-    WHY: The scam step draws each mule's victim count from this range, and validation checks an explicit count
-    against it.
+    WHY: Validation checks an explicit victims_per_receiving_mule against [1, high end of largest].
 
     Args:
         config_path: Optional path override for tactic_blocks.yaml.
         world_ranges_path: Optional path override for world_ranges.yaml.
 
     Returns:
-        Two-element integer tuple (min_victims, max_victims).
+        Two-element integer tuple (1, max_victims).
 
     Example:
         # min_victims, max_victims = get_scam_victims_per_mule_range()
-        # assert min_victims == 1 and max_victims == 5
+        # assert min_victims == 1 and max_victims == 50
     """
     # 1. Resolve the training range through the block parameter's world_ranges_reference.
     bounds = resolve_parameter_training_range("scam", "victims_per_receiving_mule", config_path, world_ranges_path)
-    return int(bounds[0]), int(bounds[1])
+    return 1, int(bounds[1])
 
 
 

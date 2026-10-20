@@ -26,6 +26,9 @@ from world.scam_config import (
     resolve_payments_per_victim,
     resolve_payout_back_share,
     resolve_remainder_scam_type,
+    resolve_victims_per_mule_largest,
+    resolve_victims_per_mule_tail_exponent,
+    resolve_victims_per_mule_typical,
 )
 
 
@@ -62,6 +65,9 @@ def test_resolvers_return_the_committed_training_values() -> None:
     assert resolve_debit_spread_minutes("training") == (0, 60)
     assert resolve_debit_amount_inr("training") == (2000.0, 50000.0)
     assert resolve_debit_pays_back() is False
+    assert resolve_victims_per_mule_tail_exponent("training") == (1.8, 2.6)
+    assert resolve_victims_per_mule_largest("training") == (10, 50)
+    assert resolve_victims_per_mule_typical("training") == (1, 5)
 
 
 def test_stress_split_reads_the_stress_values() -> None:
@@ -70,6 +76,9 @@ def test_stress_split_reads_the_stress_values() -> None:
     assert resolve_payment_escalation_multiple("stress") == (1.0, 4.0)
     assert resolve_debit_payment_count("stress") == (1, 10)
     assert resolve_debit_spread_minutes("stress") == (0, 240)
+    assert resolve_victims_per_mule_tail_exponent("stress") == (1.2, 3.5)
+    assert resolve_victims_per_mule_largest("stress") == (5, 200)
+    assert resolve_victims_per_mule_typical("stress") == (1, 20)
 
 
 @pytest.mark.parametrize(
@@ -243,3 +252,21 @@ def test_missing_world_ranges_file_is_refused(tmp_path: Path) -> None:
     """Checks that a world ranges path with no file raises FileNotFoundError."""
     with pytest.raises(FileNotFoundError, match="World ranges config not found"):
         resolve_payments_per_victim("training", None, tmp_path / "missing.yaml")
+
+
+def test_victims_per_mule_tail_exponent_follows_narrowed_schedule(tmp_path: Path) -> None:
+    """Checks that resolve_victims_per_mule_tail_exponent returns narrowed bounds from a custom schedule file."""
+    path = _write_schedules(
+        tmp_path,
+        lambda data: data["victims_per_mule_tail_exponent"].update({"training": [2.1, 2.4]}),
+    )
+    assert resolve_victims_per_mule_tail_exponent("training", path) == (2.1, 2.4)
+
+
+def test_victims_per_mule_ranges_follow_narrowed_world_ranges(tmp_path: Path) -> None:
+    """Checks that largest and typical resolvers follow a narrowed world_ranges file."""
+    largest_path = _write_world_ranges(tmp_path, "victims_per_mule_largest", "training", [15, 40])
+    assert resolve_victims_per_mule_largest("training", largest_path) == (15, 40)
+
+    typical_path = _write_world_ranges(tmp_path, "victims_per_mule_typical", "training", [2, 4])
+    assert resolve_victims_per_mule_typical("training", typical_path) == (2, 4)
