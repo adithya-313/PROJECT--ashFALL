@@ -366,13 +366,15 @@ issues:
   12-19:
     title: "New mule accounts with new ID formats would reveal their role"
     origin: revision_2
-    status: partial
+    status: built
     levels: [12]
     parts: [12c]
     evidence:
       - {kind: test, file: tests/unit/world/test_mid_run_accounts.py, name: test_mid_run_account_ids_continue_numbering_and_match_regex}
       - {kind: test, file: tests/unit/world/test_account_openings_switch.py, name: test_switch_on_schedules_genuine_openings_with_standard_id_formats}
-    later_work: ["Level 12c C-2: gang worlds open borrowed-KYC and business mule accounts through open_account; new genuine accounts get routine life"]
+      - {kind: test, file: tests/unit/world/test_mule_origins.py, name: test_new_mules_get_normal_format_ids_in_time_order_with_genuine_openings}
+      - {kind: test, file: tests/unit/world/test_mule_origins.py, name: test_no_handle_survives_anywhere_in_the_output}
+      - {kind: test, file: tests/unit/world/test_opened_routine.py, name: test_routine_people_pay_only_from_their_opening_minute}
   12-20:
     title: "The showcase runner accepts only a level number"
     origin: revision_2
@@ -623,11 +625,15 @@ issues:
   G1:
     title: "Mule origin; rented mules keep normal life"
     origin: level_11
-    status: planned
+    status: partial
     levels: [12]
     parts: [12c]
     v1_status: built
-    later_work: ["Level 12c: gang worlds with rented mules keeping normal life"]
+    evidence:
+      - {kind: test, file: tests/unit/world/test_mule_origins.py, name: test_new_mules_get_normal_format_ids_in_time_order_with_genuine_openings}
+      - {kind: test, file: tests/unit/world/test_rented_owner_activity.py, name: test_zero_kept_share_pauses_every_outgoing_payment_inside_the_span_and_none_outside}
+      - {kind: test, file: tests/unit/world/test_rented_owner_activity.py, name: test_pausing_does_not_shift_the_failure_draws_of_other_genuine_payments}
+    later_work: ["Level 12c C-3b: lifecycle and burned mules"]
   G2:
     title: "Cash-out channels including ATM limits and genuine shops"
     origin: level_11

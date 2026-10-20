@@ -59,6 +59,7 @@ from world.interactive_records import (
     RunnerSettings,
 )
 from world.interactive_state import RunnerState
+from world.opened_routine import draw_no_routine_share, is_idle, plan_opened_routine
 from world.opening_handles import resolve_opening_handles
 from world.outside_events import OutsideEvent, validate_outside_event
 from world.rented_owner_activity import OwnerActivity, PausedOwnerPayment, plan_owner_activity
@@ -75,7 +76,8 @@ SENDER_BANK_DOMAIN: str = "sender_bank"
 @dataclass(frozen=True)
 class QueuedPayment:
     """
-    WHAT: One payment waiting on the queue: the payment itself, its stream source ("planned", "fraud" or "resumed"),
+    WHAT: One payment waiting on the queue: the payment itself, its stream source ("planned", "fraud", "resumed" or
+    "opened_routine"),
     where it truly came from ("planned" or "fraud"), its fraud input index, and, once it has been seen the first time,
     its planned payment id and its sender stamp.
 
@@ -84,7 +86,7 @@ class QueuedPayment:
 
     Args:
         payment: The PlannedPayment (minute, accounts, amount, order number, purpose).
-        source: "planned", "fraud" or "resumed".
+        source: "planned", "fraud", "resumed" or "opened_routine" (the routine of a newly opened genuine person).
         origin: "planned" or "fraud": where the payment truly came from.
         planned_payment_id: Its name after the first time it is seen, else None.
         stamp: Its sender stamp after the first time it is seen, else None.
@@ -172,6 +174,8 @@ class LoopContext:
     capped_forwards: list[ForwardAdjustment] = field(default_factory=list)
     opening_ids: dict[str, str] = field(default_factory=dict)
     owner_activity: dict[str, OwnerActivity] = field(default_factory=dict)
+    no_routine_share: float | None = None
+    opened_routine_index: int = 0
     paused_owner_payments: list[PausedOwnerPayment] = field(default_factory=list)
 
 
@@ -350,6 +354,13 @@ def apply_outside_event(context: LoopContext, event: OutsideEvent) -> None:
                     f"open_account for handle '{event.opening_handle}' produced '{opened_id}' "
                     f"but '{assigned_id}' was assigned before the run"
                 )
+        # A new genuine person may get a routine life; gang openings and shops never do.
+        if (
+            event.opening_stream == "genuine_account_openings"
+            and event.owner_kind == "person"
+            and context.no_routine_share is not None
+        ):
+            schedule_opened_routine(context, opened_id, event.minute)
     else:
         # A resume: the named payment must be waiting in the held list.
         planned_payment_id = str(event.planned_payment_id)
@@ -363,6 +374,40 @@ def apply_outside_event(context: LoopContext, event: OutsideEvent) -> None:
             input_index=held.input_index,
         )
         push(context, event.minute, "resumed_payments", context.insertion_sequence, resumed)
+
+
+def schedule_opened_routine(context: LoopContext, account_id: str, open_minute: int) -> None:
+    """
+    WHAT: Decides whether a newly opened genuine person is idle, with one draw from the opened account routine stream
+    against this run's no-routine share. A person with a routine gets Level 11-style payments planned from the opening
+    minute on, and each is queued as an "opened_routine" payment under its own tie-break rank.
+
+    WHY: These payments have their own stream for draws (child 10) and failures (child 11), so nothing they read can
+    shift a draw of an existing genuine payment.
+
+    Args:
+        context: The loop context; context.no_routine_share must be set.
+        account_id: The new person's account id.
+        open_minute: Minute at which the account was opened.
+
+    Returns:
+        None. Pushes the routine payments onto the queue; an idle person pushes nothing.
+
+    Example:
+        With a no-routine share of 0 every new person has payments; with 1 none has.
+    """
+    stream = context.streams["opened_account_routine"]
+    if is_idle(float(context.no_routine_share), stream):
+        return
+    person = context.state.people_by_account[account_id]
+    payments, context.opened_routine_index = plan_opened_routine(
+        context.world, context.plan, person, open_minute, stream, context.opened_routine_index
+    )
+    for payment in payments:
+        push(
+            context, payment.minute, "opened_routine_payments", payment.creation_index,
+            QueuedPayment(payment=payment, source="opened_routine", origin="planned"),
+        )
 
 
 def apply_due_device_events(context: LoopContext, minute: int) -> None:
@@ -499,6 +544,8 @@ def stream_for(context: LoopContext, source: str) -> np.random.Generator:
         return context.run_rng
     if source == "fraud":
         return context.streams["fraud_payment_failures"]
+    if source == "opened_routine":
+        return context.streams["opened_routine_failures"]
     return context.streams["resumed_payment_failures"]
 
 
@@ -741,7 +788,7 @@ def process_payment(context: LoopContext, queued: QueuedPayment) -> None:
     pieces = pieces_of(context, payment, banks[0])
     if decision == "hold":
         # A planned payment still uses up its draws at its planned place; fraud and resumed ones use nothing.
-        if queued.source == "planned":
+        if queued.source in ("planned", "opened_routine"):
             for _ in pieces:
                 decide_failure(payment.minute, banks[0], banks[1], context.plan.incidents,
                                context.plan.failure_settings, stream)
@@ -868,6 +915,15 @@ def run_fraud_on(
                 fraud_inputs,
                 outside_events=fraud_inputs.outside_events + genuine_openings,
             )
+    if settings.account_openings_enabled:
+        from world.account_openings_config import load_account_openings_config
+
+        openings_config = (
+            account_openings_config if account_openings_config is not None else load_account_openings_config()
+        )
+        context.no_routine_share = draw_no_routine_share(
+            plan.range_name, openings_config, streams["opened_account_routine"]
+        )
     # Gang openings are named by handles in the plan; give them their real ids now that every opening is known.
     effective_fraud_inputs, context.opening_ids = resolve_opening_handles(
         effective_fraud_inputs, state.next_person_index, state.next_shop_index
