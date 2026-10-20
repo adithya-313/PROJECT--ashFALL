@@ -186,6 +186,42 @@ class TruthStore:
         # 2. Return None if the account has no active role span.
         return None
 
+    def phase_at(self, account_id: str, minute: int) -> str | None:
+        """
+        WHAT: Returns the operational lifecycle phase ('warm_up', 'active', 'burned') of a mule account
+        at the specified simulation minute, or None if the account is not a mule or has no configured lifecycle.
+
+        WHY: Gang campaigns move mules through explicit lifecycle stages: pre-activation warm-up, active
+        victim inflow, and burned status after the activity window or final outgoing payment.
+
+        Args:
+            account_id: Account identifier to inspect.
+            minute: Integer simulation minute (>= 0).
+
+        Returns:
+            'warm_up' | 'active' | 'burned' | None.
+
+        Example:
+            # store.phase_at('acc_mule_001', 100) -> 'warm_up'
+        """
+        for role_span in self._roles:
+            if role_span["account_id"] == account_id:
+                active_from = role_span.get("active_from")
+                burned_from = role_span.get("burned_from")
+                if active_from is None or burned_from is None:
+                    continue
+                valid_from = role_span["valid_from"]
+                valid_to = role_span.get("valid_to")
+                if minute < valid_from or (valid_to is not None and minute >= valid_to):
+                    continue
+                if minute < active_from:
+                    return "warm_up"
+                elif minute < burned_from:
+                    return "active"
+                else:
+                    return "burned"
+        return None
+
     def story_of(self, payment_id: str) -> dict[str, Any]:
         """
         WHAT: Retrieves the forensic narrative and tactical attribution dictionary for a payment event.

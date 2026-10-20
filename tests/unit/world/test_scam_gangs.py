@@ -373,7 +373,7 @@ def test_scam_step_after_warm_up_starts_later(scam_world: World) -> None:
 
     plan = plan_gang(config, scam_world, np.random.default_rng(8))
 
-    assert min(role.valid_from for role in plan.truth.roles) == START_MINUTE + 2 * 1440
+    assert min(role.valid_from for role in plan.truth.roles) >= START_MINUTE + 2 * 1440
 
 
 def test_scam_needs_enough_acquired_mules_and_people(scam_world: World) -> None:

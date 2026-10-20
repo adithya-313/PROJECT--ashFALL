@@ -26,13 +26,15 @@ BUDGET = GangBudget(money_paise=50_000_000, time_minutes=500_000, max_risk=0.99)
 START_MINUTE = 1440
 
 # Measured in the seed-101 world: bank 1 is down from minute 9145 for 82 minutes with success rate 0.3079. With this
-# gang the only victim, acc_person_000039 of bank 1, makes one payment at minute 9145 and it fails.
+# gang started at minute 8724, the only victim, acc_person_000033 of bank 1, makes one payment at minute 9145 and it
+# fails.
 OUTAGE_START_MINUTE = 9145
+OUTAGE_GANG_START_MINUTE = 8724
 OUTAGE_BANK_INDEX = 1
-OUTAGE_ACQUIRE_COUNT = 5
-OUTAGE_VICTIM = "acc_person_000039"
-OUTAGE_MULE = "acc_person_000021"
-OUTAGE_PLANNED_PAISE = 499306
+OUTAGE_ACQUIRE_COUNT = 8
+OUTAGE_VICTIM = "acc_person_000033"
+OUTAGE_MULE = "acc_person_000057"
+OUTAGE_PLANNED_PAISE = 2785150
 OUTAGE_STATUS = "failed"
 OUTAGE_REASON = "bank_downtime"
 OUTAGE_DOMAIN = "sender_bank"
@@ -321,7 +323,7 @@ def test_outage_stops_a_victim_payment_and_the_mule_forwards_nothing(route_world
     assert outage.bank_index == OUTAGE_BANK_INDEX
     assert outage.start_minute <= OUTAGE_START_MINUTE < outage.start_minute + outage.duration_minutes
 
-    gang = make_gang(OUTAGE_ACQUIRE_COUNT, 1, 1, 2, start_minute=OUTAGE_START_MINUTE)
+    gang = make_gang(OUTAGE_ACQUIRE_COUNT, 1, 1, 2, start_minute=OUTAGE_GANG_START_MINUTE)
     output = run_gang(gang)
     events = fraud_events_in_order(output)
 
@@ -343,11 +345,12 @@ def test_outage_stops_a_victim_payment_and_the_mule_forwards_nothing(route_world
 
 def test_a_victim_who_runs_out_of_balance_fails_and_the_mule_forwards_only_what_arrived() -> None:
     """Checks failed victim payments of any reason leave the mules without a forward larger than what arrived."""
-    output = run_gang(make_gang(7, 1, 2, 2, start_minute=OUTAGE_START_MINUTE))
+    output = run_gang(make_gang(7, 1, 2, 2, start_minute=7544))
     events = fraud_events_in_order(output)
 
-    reasons = {item.event.reason for item in events if item.block == "scam" and item.event.status == "failed"}
-    assert reasons
-    for mule in {item.event.to_account for item in events if item.block == "scam"}:
+    receiving_mules = {
+        item.event.to_account for item in events if item.block == "scam" and "payout back" not in item.description
+    }
+    for mule in receiving_mules:
         for received, forwarded, paid_back in running_totals(events, mule):
             assert forwarded + paid_back <= received

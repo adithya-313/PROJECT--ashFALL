@@ -57,6 +57,8 @@ class RoleSpan:
     valid_from: int
     valid_to: int | None
     origin: str | None = None
+    active_from: int | None = None
+    burned_from: int | None = None
 
 
 @dataclass(frozen=True)
@@ -290,6 +292,45 @@ def validate_mule_depth(role_span: RoleSpan) -> None:
             )
 
 
+def validate_role_lifecycle(role_span: RoleSpan) -> None:
+    """
+    WHAT: Validates mule lifecycle attributes active_from and burned_from on a RoleSpan.
+    Asserts both are None or both are set; if set, role must be 'mule' and valid_from <= active_from <= burned_from.
+
+    WHY: Mules progress through defined lifecycle phases (warm-up, active, burned). Non-mules do not possess
+    gang lifecycle states, and partial or out-of-order timestamps represent corrupted temporal progression.
+
+    Args:
+        role_span: The RoleSpan instance to validate.
+
+    Returns:
+        None. Raises ValueError with one plain sentence upon invariant violation.
+
+    Example:
+        validate_role_lifecycle(RoleSpan("acc_1", "mule", "g1", 1, 0, None, active_from=100, burned_from=200))
+    """
+    has_active = role_span.active_from is not None
+    has_burned = role_span.burned_from is not None
+    if has_active != has_burned:
+        raise ValueError(
+            f"RoleSpan for account '{role_span.account_id}' must have both active_from "
+            f"and burned_from set or both None."
+        )
+    if has_active:
+        if role_span.role != "mule":
+            raise ValueError(
+                f"RoleSpan for account '{role_span.account_id}' has lifecycle fields but role is '{role_span.role}'; "
+                f"lifecycle is only allowed on mule roles."
+            )
+        assert role_span.active_from is not None and role_span.burned_from is not None
+        if not (role_span.valid_from <= role_span.active_from <= role_span.burned_from):
+            raise ValueError(
+                f"RoleSpan for account '{role_span.account_id}' has invalid lifecycle order: "
+                f"valid_from ({role_span.valid_from}) <= active_from ({role_span.active_from}) <= "
+                f"burned_from ({role_span.burned_from}) was violated."
+            )
+
+
 def validate_no_overlapping_role_spans(spans: Sequence[RoleSpan]) -> None:
     """
     WHAT: Asserts that no two role spans for the same account overlap in time.
@@ -417,6 +458,7 @@ def validate_truth_facts(
         validate_role_origin(role_span, allowed_origins)
         validate_time_span(role_span)
         validate_mule_depth(role_span)
+        validate_role_lifecycle(role_span)
     validate_no_overlapping_role_spans(truth.roles)
 
     # 3. Validate device control spans for temporal consistency and mutual exclusion.

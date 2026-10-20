@@ -179,18 +179,52 @@ def test_full_kept_share_pauses_nothing_and_changes_no_event(
 def test_zero_kept_share_pauses_every_outgoing_payment_inside_the_span_and_none_outside(
     monkeypatch: pytest.MonkeyPatch, baseline: Any
 ) -> None:
-    """Checks a kept share of 0 pauses all outgoing mule payments from the span start and none before it."""
+    """Checks a kept share of 0 pauses all outgoing mule payments inside the span and none outside."""
     output = run_with_kept_share(monkeypatch, (0.0, 0.0), "all_rented")
-    mules = mule_accounts(output)
     base_events = planned_events(baseline)
+    mule_spans = {
+        role.account_id: (role.valid_from, role.burned_from)
+        for role in output.result.truth.roles
+        if role.role == "mule"
+    }
 
-    inside = [e for e in base_events if e.from_account in mules and e.minute >= START_MINUTE]
-    outside = [e for e in base_events if e.from_account in mules and e.minute < START_MINUTE]
+    inside = [
+        e for e in base_events
+        if e.from_account in mule_spans
+        and mule_spans[e.from_account][0] <= e.minute < (mule_spans[e.from_account][1] or float("inf"))
+    ]
+    outside = [
+        e for e in base_events
+        if e.from_account in mule_spans
+        and (
+            e.minute < mule_spans[e.from_account][0]
+            or (mule_spans[e.from_account][1] is not None and e.minute >= mule_spans[e.from_account][1])
+        )
+    ]
     assert inside and outside
+
+    # At least one baseline owner payment has minute >= burned_from, and none of those is paused
+    after_burned = [
+        e for e in base_events
+        if e.from_account in mule_spans
+        and mule_spans[e.from_account][1] is not None
+        and e.minute >= mule_spans[e.from_account][1]
+    ]
+    assert after_burned
+    paused_set = {
+        (p.minute, p.from_account, p.to_account, p.amount_paise)
+        for p in output.result.paused_owner_payments
+    }
+    assert not any(
+        (e.minute, e.from_account, e.to_account, e.amount_paise) in paused_set
+        for e in after_burned
+    )
 
     paused_totals: dict[tuple[int, str, str], int] = {}
     for paused in output.result.paused_owner_payments:
-        assert paused.from_account in mules and paused.minute >= START_MINUTE
+        assert paused.from_account in mule_spans
+        span_from, span_burned = mule_spans[paused.from_account]
+        assert span_from <= paused.minute < (span_burned or float("inf"))
         key = (paused.minute, paused.from_account, paused.to_account)
         paused_totals[key] = paused_totals.get(key, 0) + paused.amount_paise
     base_totals: dict[tuple[int, str, str], int] = {}
@@ -200,8 +234,21 @@ def test_zero_kept_share_pauses_every_outgoing_payment_inside_the_span_and_none_
     assert paused_totals == base_totals
 
     new_events = planned_events(output)
-    assert not [e for e in new_events if e.from_account in mules and e.minute >= START_MINUTE]
-    assert [e for e in new_events if e.from_account in mules and e.minute < START_MINUTE] == outside
+    inside_new = [
+        e for e in new_events
+        if e.from_account in mule_spans
+        and mule_spans[e.from_account][0] <= e.minute < (mule_spans[e.from_account][1] or float("inf"))
+    ]
+    assert not inside_new
+    outside_new = [
+        e for e in new_events
+        if e.from_account in mule_spans
+        and (
+            e.minute < mule_spans[e.from_account][0]
+            or (mule_spans[e.from_account][1] is not None and e.minute >= mule_spans[e.from_account][1])
+        )
+    ]
+    assert outside_new == outside
 
 
 def test_incoming_payments_to_the_owner_are_never_paused(monkeypatch: pytest.MonkeyPatch, baseline: Any) -> None:
@@ -251,8 +298,16 @@ def test_pausing_does_not_shift_the_failure_draws_of_other_genuine_payments(
 def test_real_range_pauses_some_payments_and_keeps_others(baseline: Any) -> None:
     """Checks with the committed range that some owner payments are paused and some are still made."""
     output = run_with_kept_share(None, None, "all_rented")
-    mules = mule_accounts(output)
-    kept = [e for e in planned_events(output) if e.from_account in mules and e.minute >= START_MINUTE]
+    mule_spans = {
+        role.account_id: (role.valid_from, role.burned_from)
+        for role in output.result.truth.roles
+        if role.role == "mule"
+    }
+    kept = [
+        e for e in planned_events(output)
+        if e.from_account in mule_spans
+        and mule_spans[e.from_account][0] <= e.minute < (mule_spans[e.from_account][1] or float("inf"))
+    ]
 
     assert output.result.paused_owner_payments
     assert kept

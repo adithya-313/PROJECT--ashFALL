@@ -783,6 +783,7 @@ def _plan_campaign_steps(
     mule_origin_map: dict[str, str] = {}
     opening_events: list[OutsideEvent] = []
     money, time, prob_safe = 0, 0, 1.0
+    scam_active_from: int | None = None
 
     for step in config.steps:
         if step.block == "acquire":
@@ -797,11 +798,14 @@ def _plan_campaign_steps(
             split = str(world.parameters_drawn.get("range_name", "training"))
             clock_min, cost = _plan_warmup_step(step, clock_min, rng, split)
         elif step.block == "scam":
+            scam_active_from = clock_min
             scam_plan = plan_scam_step(world, config, step, mules, clock_min, reserved_accounts, rng)
             base_idx = len(pmts)
             for scam_rule in scam_plan.rules:
                 money_rules.append(
-                    IllicitMoneyRule(base_idx + scam_rule.input_index, scam_rule.spends_illicit, scam_rule.credits_illicit)
+                    IllicitMoneyRule(
+                        base_idx + scam_rule.input_index, scam_rule.spends_illicit, scam_rule.credits_illicit
+                    )
                 )
             pmts.extend(scam_plan.payments)
             roles.extend(scam_plan.roles)
@@ -828,6 +832,28 @@ def _plan_campaign_steps(
         costs.append(cost)
         money += cost.money_paise; time += cost.time_minutes; prob_safe *= (1.0 - cost.risk)
         _check_running_budget(config.gang_id, config.budget, money, time, 1.0 - prob_safe, step.block)
+
+    if mule_inflows is not None and scam_active_from is not None:
+        updated_roles: list[RoleSpan] = []
+        for role in roles:
+            if role.role == "mule":
+                acct = role.account_id
+                outgoing = [p for p in pmts if p.from_account == acct]
+                last_outgoing = max((p.minute for p in outgoing), default=None)
+                if acct in mule_inflows:
+                    window_end = mule_inflows[acct].inflow_window_end
+                    burned_from = max(window_end, (last_outgoing + 1) if last_outgoing is not None else 0)
+                else:
+                    burned_from = (last_outgoing + 1) if last_outgoing is not None else scam_active_from
+                updated_roles.append(
+                    RoleSpan(
+                        acct, role.role, role.gang_id, role.depth, role.valid_from, role.valid_to,
+                        role.origin, active_from=scam_active_from, burned_from=burned_from,
+                    )
+                )
+            else:
+                updated_roles.append(role)
+        roles = updated_roles
 
     return (
         pmts, roles, device_spans, stories, costs, money, time, prob_safe, device_events, money_rules, opening_events

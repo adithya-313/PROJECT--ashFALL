@@ -129,5 +129,6 @@ def plan_owner_activity(
         if role.account_id in activity:
             raise ValueError(f"Rented mule '{role.account_id}' has more than one mule span.")
         kept_share = float(rng.uniform(low_share, high_share))
-        activity[role.account_id] = OwnerActivity(kept_share, role.valid_from, role.valid_to)
+        span_end = role.burned_from if role.burned_from is not None else role.valid_to
+        activity[role.account_id] = OwnerActivity(kept_share, role.valid_from, span_end)
     return activity

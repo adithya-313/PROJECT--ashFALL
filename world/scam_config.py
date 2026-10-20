@@ -600,3 +600,36 @@ def resolve_victims_per_mule_typical(
         raise ValueError("World ranges has no parameter 'victims_per_mule_typical'.")
     bounds = _split_bounds(parameters["victims_per_mule_typical"], split, "victims_per_mule_typical")
     return _as_int_range(bounds, "victims_per_mule_typical")
+
+
+def resolve_mule_active_days_before_dropped(
+    split: str, world_ranges_path: Path | None = None
+) -> tuple[int, int]:
+    """
+    WHAT: Returns the [min_days, max_days] that a receiving mule remains active before being dropped,
+    read from config/world_ranges.yaml.
+
+    WHY: Mules have finite active lifetimes before liens or operational rotation lead to their abandonment.
+
+    Args:
+        split: Split name (e.g. 'training', 'test', 'stress').
+        world_ranges_path: Optional path of a world ranges file; None means the committed file.
+
+    Returns:
+        (min_days, max_days) as ints.
+
+    Raises:
+        ValueError: If the parameter or split is missing or malformed.
+        FileNotFoundError: If the world ranges file does not exist.
+
+    Example:
+        resolve_mule_active_days_before_dropped("training") == (2, 14)
+    """
+    path = world_ranges_path if world_ranges_path is not None else WORLD_RANGES_PATH
+    if not path.exists():
+        raise FileNotFoundError(f"World ranges config not found: {path}")
+    parameters = load_yaml(path)["parameters"]
+    if "mule_active_days_before_dropped" not in parameters:
+        raise ValueError("World ranges has no parameter 'mule_active_days_before_dropped'.")
+    bounds = _split_bounds(parameters["mule_active_days_before_dropped"], split, "mule_active_days_before_dropped")
+    return _as_int_range(bounds, "mule_active_days_before_dropped")

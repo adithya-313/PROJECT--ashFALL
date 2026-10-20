@@ -34,6 +34,7 @@ from world.scam_config import (
     resolve_investment_or_job_share,
     resolve_investment_share_of_investment_or_job,
     resolve_min_minutes_between_victim_payments,
+    resolve_mule_active_days_before_dropped,
     resolve_payment_escalation_multiple,
     resolve_payment_spread_days,
     resolve_payments_per_victim,
@@ -122,6 +123,7 @@ class MuleInflow:
 
     last_victim_payment_minute: int
     net_paise: int
+    inflow_window_end: int = 0
 
 
 @dataclass(frozen=True)
@@ -141,6 +143,7 @@ class ScamPlan:
         mule_inflows: Receiving mule account id -> MuleInflow.
         span_minutes: Minutes from the step start to the latest payment.
         risk: Detection risk of the step, drawn from the scam risk range.
+        dropped_payments_count: Number of planned payments dropped because they fell past window end.
 
     Returns:
         An initialized immutable ScamPlan.
@@ -157,6 +160,12 @@ class ScamPlan:
     mule_inflows: dict[str, MuleInflow]
     span_minutes: int
     risk: float
+    dropped_payments_count: int = 0
+
+    @property
+    def dropped_victim_payments_count(self) -> int:
+        """Alias for dropped_payments_count."""
+        return self.dropped_payments_count
 
 
 @dataclass(frozen=True)
@@ -490,15 +499,19 @@ def _build_schedule_records(
     return payments, stories, rules
 
 
-def _compute_mule_inflows(schedules: list[VictimSchedule]) -> dict[str, MuleInflow]:
+def _compute_mule_inflows(
+    schedules: list[VictimSchedule], window_ends: dict[str, int] | None = None
+) -> dict[str, MuleInflow]:
     """
-    WHAT: For each receiving mule, finds the minute of its latest planned victim payment and the planned money it
-    holds afterwards: all its victims' payments minus all payouts back.
+    WHAT: For each receiving mule, finds the minute of its latest planned victim payment, the planned money it
+    holds afterwards: all its victims' payments minus all payouts back, and its inflow window end.
 
-    WHY: The route forwards this amount and starts counting its dwell from that minute.
+    WHY: The route forwards this amount and starts counting its dwell from that minute, and mule lifecycle
+    burn timestamps are bounded by the inflow window.
 
     Args:
         schedules: Every victim's VictimSchedule.
+        window_ends: Optional mapping of receiving mule account to inflow window end minute.
 
     Returns:
         Mule account id -> MuleInflow.
@@ -523,7 +536,8 @@ def _compute_mule_inflows(schedules: list[VictimSchedule]) -> dict[str, MuleInfl
     for mule, net_paise in net_amounts.items():
         if net_paise <= 0:
             raise ValueError(f"Receiving mule '{mule}' would hold {net_paise} paise after payouts; nothing to forward.")
-        inflows[mule] = MuleInflow(last_minutes[mule], net_paise)
+        win_end = (window_ends or {}).get(mule, 0)
+        inflows[mule] = MuleInflow(last_minutes[mule], net_paise, win_end)
     return inflows
 
 
@@ -654,18 +668,30 @@ def plan_scam_step(
         raise ValueError(f"Total victims needed {total_victims} exceeds eligible people {eligible_count}.")
     victims = choose_victims(world, total_victims, excluded, rng)
 
+    active_from = start_minute
+    low_days, high_days = resolve_mule_active_days_before_dropped(split)
     schedules: list[VictimSchedule] = []
+    window_ends: dict[str, int] = {}
+    total_dropped = 0
     next_victim = 0
     for mule, victim_count in zip(receiving_mules, victim_counts):
+        active_days = int(rng.integers(low_days, high_days + 1))
+        window_end = active_from + active_days * MINUTES_PER_DAY
+        window_ends[mule] = window_end
         for victim in victims[next_victim:next_victim + victim_count]:
-            schedules.append(plan_victim_schedule(victim, mule, chances, start_minute, split, rng))
+            first_minute = int(rng.integers(active_from, window_end))
+            raw_schedule = plan_victim_schedule(victim, mule, chances, first_minute, split, rng)
+            kept_payments = tuple(p for p in raw_schedule.payments if p.minute < window_end)
+            total_dropped += len(raw_schedule.payments) - len(kept_payments)
+            schedules.append(VictimSchedule(victim, mule, raw_schedule.scam_type, kept_payments))
         next_victim += victim_count
 
-    return _assemble_scam_plan(config.gang_id, schedules, start_minute, rng)
+    return _assemble_scam_plan(config.gang_id, schedules, start_minute, rng, window_ends, total_dropped)
 
 
 def _assemble_scam_plan(
-    gang_id: str, schedules: list[VictimSchedule], start_minute: int, rng: np.random.Generator
+    gang_id: str, schedules: list[VictimSchedule], start_minute: int, rng: np.random.Generator,
+    window_ends: dict[str, int] | None = None, dropped_payments_count: int = 0
 ) -> ScamPlan:
     """
     WHAT: Builds the final ScamPlan from the victims' schedules: payments, stories and rules with the rule indexes
@@ -679,6 +705,8 @@ def _assemble_scam_plan(
         schedules: Every victim's VictimSchedule.
         start_minute: Minute at which the step starts.
         rng: The gang planning stream (child 7); one number is read, for the risk.
+        window_ends: Optional mapping of receiving mule account to inflow window end minute.
+        dropped_payments_count: Total count of planned payments dropped because they fell past window end.
 
     Returns:
         The ScamPlan.
@@ -700,10 +728,11 @@ def _assemble_scam_plan(
         stories.extend(victim_stories)
         roles.append(RoleSpan(schedule.victim_account, "victim", gang_id, None, schedule.payments[0].minute, None))
 
-    latest_minute = max(payment.minute for payment in payments)
+    latest_minute = max((payment.minute for payment in payments), default=start_minute)
     low_risk, high_risk = get_block_risk_range("scam")
     risk = float(rng.uniform(low_risk, high_risk))
     return ScamPlan(
         tuple(payments), tuple(stories), tuple(rules), tuple(roles),
-        _compute_mule_inflows(schedules), latest_minute - start_minute, risk,
+        _compute_mule_inflows(schedules, window_ends), latest_minute - start_minute, risk,
+        dropped_payments_count,
     )
