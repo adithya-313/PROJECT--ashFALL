@@ -1,33 +1,23 @@
 # Level 12c Handoff Note
 
-## What 12c Delivered
-Level 12c implements victim money routing, mule lifecycle transitions from warm-up to burned, rented owner activity, diverse cash-out channels, and Part-C showcase checks (World Engine II Part C):
+## Round History
+- C-1: forward at most the illicit money that arrived; mid-run account openings in existing id formats; genuine openings behind a switch; new documentation guard.
+- C-2: victims and scam schedules (investment, job, unauthorised debit) as the gang's money source; route forwards victim money only.
+- C-3a: mule origins in truth; borrowed-KYC and business mules opened mid-run via handles; rented owners keep part of their normal life; routine life for new genuine people.
+- C-3b: omitted step sizes drawn from config; heavy-tailed victims per mule; lifecycle (warm-up, active, burned); payouts tied to their own victim.
+- C-4: cash withdrawals with ATM daily limits; cash-out channels (crypto collector, ATM, branch, genuine shops); split-below-threshold block.
+- C-5: withdrawals fail cleanly on a short balance; showcase part c (checks 11-15); handoff.
 
-1. **Victim Inflows & Scam Planning**:
-   - `world/scam_config.py` & `world/scam_planner.py`: Configures and plans dynamic victim fraud generation across scam categories (`investment_or_job`, `unauthorised_debit`, and general scams). Evaluates power-law victim distributions per receiving mule, multi-payment victim schedules with escalation multiples, and optional bait payouts.
-   - `world/truth_records.py`: Tracks victim roles (`RoleSpan` with role `"victim"`) and forensic payment narratives (`PaymentStory` tagging scam, route hops, and cash-outs).
-   - Money routing: Gangs forward at most what arrived from victims; unreceived or outage-blocked inflows cleanly suppress downstream forwards via `IllicitMoneyRule`.
+---
 
-2. **Mule Lifecycle & State Machine**:
-   - Lifecycle stages: Intermediate mule accounts advance through three temporal phases: `warm_up` -> `active` -> `burned`.
-   - `world/truth_records.py`: `RoleSpan` enriched with `active_from` and `burned_from` timestamps, validated for temporal ordering and strict non-overlap.
-   - `evaluation/truth.py`: `TruthStore.phase_at(account_id, minute)` resolves the operational lifecycle phase at any simulation minute.
-
-3. **Mule Recruitment Diversity & Rented Owner Activity**:
-   - `world/mule_origins.py`: Provisions mules across three distinct recruitment channels: `rented`, `borrowed_kyc`, and `business`. Stamped into truth via `RoleSpan.origin`.
-   - `world/opening_handles.py`: Generates placeholder handles for accounts created mid-run (`__opening_...__`), resolved before simulation dispatch.
-   - `world/rented_owner_activity.py`: Models authentic account owner behavior during rental intervals. Genuine incoming and outgoing transactions continue at a configured kept share, while conflicting outgoing transfers are paused cleanly under child stream 12 without shifting other draws.
-   - `world/account_openings_config.py` & `world/opened_routine.py`: Supports background account creation for genuine citizens and businesses with routine daily transaction schedules.
-
-4. **Cash-Out Channels & Safe Withdrawals**:
-   - `world/cash_out.py`: Sinks laundered mule funds across four realistic exit vectors: crypto exchanges (`crypto`), ATM cash withdrawals (`atm`), bank branch counter withdrawals (`branch`), and retail merchant purchases (`genuine_shop`).
-   - `world/split_below_threshold.py`: Implements structuring tactics splitting large amounts into smaller sub-threshold transfers.
-   - `world/cash_withdrawals.py`: Processes ATM and branch counter withdrawals. Strictly enforces all-or-nothing debit posting against real ledger balances, recording short balances as failed debits using domain `"customer"` and reason `"insufficient_balance"` matching Level 11 conventions. Requires positive daily limits for ATM and None for branch withdrawals. Takes failure draws before balance evaluation to maintain stream invariance.
-
-5. **Showcase Part C & 15-Check Suite**:
-   - `showcase/fixtures/level_12/gang_victims_cashout.yaml`: Realistic scam syndicate fixture combining acquisition, warm-up, victim scams, multi-layer routing, and cash-out channels.
-   - `showcase/level_12_checks_c.py` & `showcase/level_12_support_c.py`: Checks 11 to 15 proving end-to-end victim-to-cashout flow, rented mule normal life, lifecycle phase transitions, innocent downstream merchant receipts, and bank outage resilience. Uses cached execution for checks 11-14 to preserve quick-mode performance.
-   - `tests/unit/showcase/test_level_12_checks.py`: Pinned check registry updated to exactly 15 checks (5 Part A, 5 Part B, 5 Part C).
+## Register Changes
+- 12-19: New mule accounts with new ID formats would reveal their role (status: built)
+- G1: Mule origin; rented mules keep normal life (status: built)
+- G2: Cash-out channels including ATM limits and genuine shops (status: partial)
+- G3: Mule lifecycle; heavy-tailed victims per mule (status: partial)
+- G6: Scam-type payment schedules (status: partial)
+- A2: Genuine shops downstream of mules (status: built)
+- 12-17: Mule depth was not recorded; gang routing must obey the same limits (status: built)
 
 ---
 
@@ -52,6 +42,16 @@ build_opening_event(gang_id: str, opening_number: int, origin: str, minute: int)
 - Path: `world/mule_origins.py`
 
 ```python
+choose_victims(world: world.build_world.World, count: int, excluded: set[str], rng: numpy.random._generator.Generator) -> list[str]
+```
+- Path: `world/scam_planner.py`
+
+```python
+compute_power_law_probabilities(cap: int, exponent: float) -> list[float]
+```
+- Path: `world/scam_planner.py`
+
+```python
 draw_atm_daily_limit_paise(split: str, rng: numpy.random._generator.Generator, world_ranges_path: pathlib.Path | None = None) -> int
 ```
 - Path: `world/cash_out.py`
@@ -72,9 +72,79 @@ draw_mule_origins(count: int, split: str, rng: numpy.random._generator.Generator
 - Path: `world/mule_origins.py`
 
 ```python
+draw_no_routine_share(split: str, config: dict[str, typing.Any], rng: numpy.random._generator.Generator) -> float
+```
+- Path: `world/opened_routine.py`
+
+```python
+draw_origin_shares(split: str, rng: numpy.random._generator.Generator) -> dict[str, float]
+```
+- Path: `world/mule_origins.py`
+
+```python
+draw_scam_type(chances: world.scam_planner.TypeChances, rng: numpy.random._generator.Generator) -> str
+```
+- Path: `world/scam_planner.py`
+
+```python
 draw_threshold_paise(split: str, threshold_param: int | float | None, rng: numpy.random._generator.Generator, config_path: pathlib.Path | None = None) -> int
 ```
 - Path: `world/split_below_threshold.py`
+
+```python
+draw_type_chances(split: str, rng: numpy.random._generator.Generator) -> world.scam_planner.TypeChances
+```
+- Path: `world/scam_planner.py`
+
+```python
+get_cash_out_channel_share_ranges(split: str, config_path: pathlib.Path | None = None, world_ranges_path: pathlib.Path | None = None) -> dict[str, tuple[float, float]]
+```
+- Path: `world/cash_out.py`
+
+```python
+get_genuine_shop_kinds(config_path: pathlib.Path | None = None) -> tuple[str, ...]
+```
+- Path: `world/cash_out.py`
+
+```python
+get_threshold_inr_range(split: str = 'training', config_path: pathlib.Path | None = None) -> tuple[int, int]
+```
+- Path: `world/split_below_threshold.py`
+
+```python
+is_idle(no_routine_share: float, rng: numpy.random._generator.Generator) -> bool
+```
+- Path: `world/opened_routine.py`
+
+```python
+is_opening_handle(account_id: str) -> bool
+```
+- Path: `world/mule_origins.py`
+
+```python
+load_account_openings_config(config_path: pathlib.Path | None = None) -> dict[str, typing.Any]
+```
+- Path: `world/account_openings_config.py`
+
+```python
+load_cash_out_config(path: pathlib.Path | None = None) -> dict[str, typing.Any]
+```
+- Path: `world/cash_out.py`
+
+```python
+load_scam_schedules(config_path: pathlib.Path | None = None) -> dict[str, typing.Any]
+```
+- Path: `world/scam_config.py`
+
+```python
+load_truth_config(path: pathlib.Path = WindowsPath('C:/Users/sinne/Downloads/PROJECT-ashFALL/config/truth_store.yaml')) -> dict[str, typing.Any]
+```
+- Path: `world/truth_records.py`
+
+```python
+make_opening_handle(gang_id: str, opening_number: int) -> str
+```
+- Path: `world/mule_origins.py`
 
 ```python
 plan_cash_out_step(world: world.build_world.World, gang_id: str, strength: int, terminal_mules: list[tuple[str, int, int]], split: str, layers: int, opening_start_index: int, has_disguise: bool, jitter: int | None, fixed_dwell: int | None, dwell_param: Any, rng: numpy.random._generator.Generator, config_path: pathlib.Path | None = None, world_ranges_path: pathlib.Path | None = None) -> world.cash_out.CashOutPlan
@@ -82,17 +152,37 @@ plan_cash_out_step(world: world.build_world.World, gang_id: str, strength: int, 
 - Path: `world/cash_out.py`
 
 ```python
+plan_investment_or_job_payments(first_minute: int, split: str, rng: numpy.random._generator.Generator) -> list[world.scam_planner.ScamPayment]
+```
+- Path: `world/scam_planner.py`
+
+```python
 plan_opened_routine(world: Any, plan: world.world_plan.WorldPlan, person: Any, open_minute: int, rng: numpy.random._generator.Generator, start_index: int) -> tuple[list[world.calendar_runner.PlannedPayment], int]
 ```
 - Path: `world/opened_routine.py`
 
 ```python
-plan_owner_activity(roles: collections.abc.Sequence[world.truth_records.RoleSpan], split: str, rng: numpy.random._generator.Generator) -> dict[str, world.rented_owner_activity.OwnerActivity]
+plan_owner_activity(roles: Sequence[world.truth_records.RoleSpan], split: str, rng: numpy.random._generator.Generator) -> dict[str, world.rented_owner_activity.OwnerActivity]
 ```
 - Path: `world/rented_owner_activity.py`
 
 ```python
+plan_payout_back(payments: list[world.scam_planner.ScamPayment], split: str, rng: numpy.random._generator.Generator) -> world.scam_planner.ScamPayment | None
+```
+- Path: `world/scam_planner.py`
+
+```python
 plan_scam_step(world: world.build_world.World, config: world.gang_config.GangConfig, step: world.gang_config.BlockStep, mules: list[str], start_minute: int, reserved_accounts: set[str] | None, rng: numpy.random._generator.Generator) -> world.scam_planner.ScamPlan
+```
+- Path: `world/scam_planner.py`
+
+```python
+plan_unauthorised_debit_payments(first_minute: int, split: str, rng: numpy.random._generator.Generator) -> list[world.scam_planner.ScamPayment]
+```
+- Path: `world/scam_planner.py`
+
+```python
+plan_victim_schedule(victim: str, mule: str, chances: world.scam_planner.TypeChances, first_minute: int, split: str, rng: numpy.random._generator.Generator) -> world.scam_planner.VictimSchedule
 ```
 - Path: `world/scam_planner.py`
 
@@ -102,9 +192,114 @@ process_cash_withdrawal(context: Any, withdrawal: world.cash_withdrawals.CashWit
 - Path: `world/cash_withdrawals.py`
 
 ```python
+replay_openings(outside_events: tuple[world.outside_events.OutsideEvent, ...], next_person_index: int, next_shop_index: int) -> tuple[dict[str, str], dict[str, int]]
+```
+- Path: `world/opening_handles.py`
+
+```python
+resolve_debit_amount_inr(split: str, config_path: pathlib.Path | None = None, world_ranges_path: pathlib.Path | None = None) -> tuple[float, float]
+```
+- Path: `world/scam_config.py`
+
+```python
+resolve_debit_payment_count(split: str, config_path: pathlib.Path | None = None) -> tuple[int, int]
+```
+- Path: `world/scam_config.py`
+
+```python
+resolve_debit_pays_back(config_path: pathlib.Path | None = None) -> bool
+```
+- Path: `world/scam_config.py`
+
+```python
+resolve_debit_spread_minutes(split: str, config_path: pathlib.Path | None = None) -> tuple[int, int]
+```
+- Path: `world/scam_config.py`
+
+```python
+resolve_first_payment_amount_inr(split: str, config_path: pathlib.Path | None = None, world_ranges_path: pathlib.Path | None = None) -> tuple[float, float]
+```
+- Path: `world/scam_config.py`
+
+```python
+resolve_investment_or_job_share(split: str, config_path: pathlib.Path | None = None, world_ranges_path: pathlib.Path | None = None) -> tuple[float, float]
+```
+- Path: `world/scam_config.py`
+
+```python
+resolve_investment_share_of_investment_or_job(split: str, config_path: pathlib.Path | None = None) -> tuple[float, float]
+```
+- Path: `world/scam_config.py`
+
+```python
+resolve_min_minutes_between_victim_payments(config_path: pathlib.Path | None = None) -> int
+```
+- Path: `world/scam_config.py`
+
+```python
+resolve_mule_active_days_before_dropped(split: str, world_ranges_path: pathlib.Path | None = None) -> tuple[int, int]
+```
+- Path: `world/scam_config.py`
+
+```python
+resolve_no_routine_share_range(split: str, config: dict[str, typing.Any]) -> tuple[float, float]
+```
+- Path: `world/opened_routine.py`
+
+```python
 resolve_opening_handles(fraud_inputs: world.interactive_records.FraudInputs, next_person_index: int, next_shop_index: int) -> tuple[world.interactive_records.FraudInputs, dict[str, str]]
 ```
 - Path: `world/opening_handles.py`
+
+```python
+resolve_opening_rate_range(split: str = 'training', config: dict[str, typing.Any] | None = None) -> tuple[float, float]
+```
+- Path: `world/account_openings_config.py`
+
+```python
+resolve_payment_escalation_multiple(split: str, config_path: pathlib.Path | None = None) -> tuple[float, float]
+```
+- Path: `world/scam_config.py`
+
+```python
+resolve_payment_spread_days(split: str, config_path: pathlib.Path | None = None, world_ranges_path: pathlib.Path | None = None) -> tuple[int, int]
+```
+- Path: `world/scam_config.py`
+
+```python
+resolve_payments_per_victim(split: str, config_path: pathlib.Path | None = None, world_ranges_path: pathlib.Path | None = None) -> tuple[int, int]
+```
+- Path: `world/scam_config.py`
+
+```python
+resolve_payout_back_share(split: str, config_path: pathlib.Path | None = None, world_ranges_path: pathlib.Path | None = None) -> tuple[float, float]
+```
+- Path: `world/scam_config.py`
+
+```python
+resolve_remainder_scam_type(config_path: pathlib.Path | None = None) -> str
+```
+- Path: `world/scam_config.py`
+
+```python
+resolve_shop_share_range(split: str = 'training', config: dict[str, typing.Any] | None = None) -> tuple[float, float]
+```
+- Path: `world/account_openings_config.py`
+
+```python
+resolve_victims_per_mule_largest(split: str, world_ranges_path: pathlib.Path | None = None) -> tuple[int, int]
+```
+- Path: `world/scam_config.py`
+
+```python
+resolve_victims_per_mule_tail_exponent(split: str, config_path: pathlib.Path | None = None) -> tuple[float, float]
+```
+- Path: `world/scam_config.py`
+
+```python
+resolve_victims_per_mule_typical(split: str, world_ranges_path: pathlib.Path | None = None) -> tuple[int, int]
+```
+- Path: `world/scam_config.py`
 
 ```python
 schedule_genuine_account_openings(n_people: int, n_days: int, split: str, rng: numpy.random._generator.Generator, config: dict[str, typing.Any] | None = None) -> tuple[world.outside_events.OutsideEvent, ...]
@@ -117,14 +312,59 @@ validate_cash_withdrawal(withdrawal: world.cash_withdrawals.CashWithdrawal, stat
 - Path: `world/cash_withdrawals.py`
 
 ```python
+validate_mule_depth(role_span: world.truth_records.RoleSpan) -> None
+```
+- Path: `world/truth_records.py`
+
+```python
+validate_no_overlapping_device_control_spans(spans: Sequence[world.truth_records.DeviceControlSpan]) -> None
+```
+- Path: `world/truth_records.py`
+
+```python
+validate_no_overlapping_role_spans(spans: Sequence[world.truth_records.RoleSpan]) -> None
+```
+- Path: `world/truth_records.py`
+
+```python
+validate_payment_stories_length(payment_stories: Sequence[world.truth_records.PaymentStory], payment_count: int) -> None
+```
+- Path: `world/truth_records.py`
+
+```python
+validate_role_in_config(role_span: world.truth_records.RoleSpan, allowed_roles: Sequence[str]) -> None
+```
+- Path: `world/truth_records.py`
+
+```python
 validate_role_lifecycle(role_span: world.truth_records.RoleSpan) -> None
 ```
 - Path: `world/truth_records.py`
 
 ```python
-validate_role_origin(role_span: world.truth_records.RoleSpan, allowed_origins: collections.abc.Sequence[str]) -> None
+validate_role_origin(role_span: world.truth_records.RoleSpan, allowed_origins: Sequence[str]) -> None
 ```
 - Path: `world/truth_records.py`
+
+```python
+validate_time_span(span: world.truth_records.RoleSpan | world.truth_records.DeviceControlSpan) -> None
+```
+- Path: `world/truth_records.py`
+
+```python
+validate_truth_facts(truth: world.truth_records.TruthFacts, payment_count: int, allowed_roles: Optional[Sequence[str]] = None, allowed_origins: Optional[Sequence[str]] = None) -> None
+```
+- Path: `world/truth_records.py`
+
+```python
+TruthStore.controllers_of(self, account_id: str, minute: int) -> list[str]
+```
+- Path: `evaluation/truth.py`
+
+```python
+TruthStore.depth_at(self, account_id: str, minute: int) -> int | None
+```
+- Path: `evaluation/truth.py`
 
 ```python
 TruthStore.origin_at(self, account_id: str, minute: int) -> str | None
@@ -132,7 +372,27 @@ TruthStore.origin_at(self, account_id: str, minute: int) -> str | None
 - Path: `evaluation/truth.py`
 
 ```python
+TruthStore.owner_at(self, account_id: str, minute: int) -> str | None
+```
+- Path: `evaluation/truth.py`
+
+```python
 TruthStore.phase_at(self, account_id: str, minute: int) -> str | None
+```
+- Path: `evaluation/truth.py`
+
+```python
+TruthStore.role_at(self, account_id: str, minute: int) -> str
+```
+- Path: `evaluation/truth.py`
+
+```python
+TruthStore.story_of(self, payment_id: str) -> dict[str, typing.Any]
+```
+- Path: `evaluation/truth.py`
+
+```python
+load_truth(truth_root: pathlib.Path, run_id: str) -> evaluation.truth.TruthStore
 ```
 - Path: `evaluation/truth.py`
 
@@ -179,9 +439,133 @@ Extracted directly via `dataclasses.fields`:
 
 ---
 
-## Config Files and Keys
+## Configuration Keys
 
-### 1. `config/interactive_runner.yaml`
+### `config/scam_schedules.yaml`
+- **scam_type_shares** (label: `policy`)
+  - `label`
+  - `reason`
+  - `issue_ids_v2`
+  - `derived_from`
+  - `investment_or_job_share` (label: `policy`)
+  - `investment_share_of_investment_or_job` (label: `assumption`)
+  - `remainder_type` (label: `policy`)
+- **investment_and_job_schedule** (label: `policy`)
+  - `label`
+  - `reason`
+  - `issue_ids_v2`
+  - `derived_from`
+  - `payments_per_victim` (label: `policy`)
+  - `payment_spread_days` (label: `policy`)
+  - `first_payment_amount_inr` (label: `policy`)
+  - `payment_escalation_multiple` (label: `assumption`)
+  - `payout_back_share` (label: `policy`)
+  - `min_minutes_between_victim_payments` (label: `policy`)
+- **unauthorised_debit_schedule** (label: `policy`)
+  - `label`
+  - `reason`
+  - `issue_ids_v2`
+  - `derived_from`
+  - `debit_payments` (label: `assumption`)
+  - `debit_spread_minutes` (label: `assumption`)
+  - `debit_amount_inr` (label: `policy`)
+  - `payout_back` (label: `policy`)
+- **victims_per_mule_tail_exponent** (label: `assumption`)
+  - `label`
+  - `unit`
+  - `training`
+  - `test`
+  - `stress`
+  - `issue_ids_v2`
+  - `derived_from`
+  - `reason`
+
+### `config/account_openings.yaml`
+- **parameters**
+  - `genuine_account_openings_per_1000_people_per_30_days` (label: `assumption`)
+  - `share_of_openings_that_are_shops` (label: `assumption`)
+  - `share_of_new_genuine_people_with_no_routine` (label: `assumption`)
+
+### `config/cash_out.yaml`
+- **cash_out** (label: `policy`)
+  - `label`
+  - `reason`
+  - `issue_ids_v2`
+  - `derived_from`
+  - `channel_shares` (label: `policy`)
+  - `genuine_shop_kinds` (label: `policy`)
+  - `branch_withdrawal_delay_hours` (label: `assumption`)
+  - `atm_daily_limit_inr` (label: `policy`)
+
+### `config/truth_store.yaml`
+- **truth_store** (label: `policy`)
+  - `label`
+  - `reason`
+  - `issue_ids_v2`
+  - `derived_from`
+  - `format`
+  - `file_names`
+  - `file_names_reason`
+  - `roles`
+  - `roles_reason`
+  - `mule_origins`
+  - `mule_origins_reason`
+  - `env_var`
+  - `env_var_reason`
+  - `allowed_reader_folders`
+  - `allowed_reader_folders_reason`
+  - `ashfall_packages`
+  - `ashfall_packages_reason`
+
+### `config/interactive_runner.yaml`
+- **interactive_runner** (label: `policy`)
+  - `label`
+  - `reason`
+  - `issue_ids_v2`
+  - `derived_from`
+  - `random_stream_children`
+  - `random_stream_children_reason`
+  - `tie_break_order`
+  - `tie_break_order_reason`
+  - `run_id_hex_length`
+  - `position_digits`
+  - `id_shape_reason`
+  - `code_version_env_var`
+  - `code_version_git_timeout_seconds`
+  - `unknown_code_version`
+  - `code_version_reason`
+
+### `config/tactic_blocks.yaml` (scam, cash_out, split_below_threshold)
+- **scam** (label: `assumption`)
+  - `label`
+  - `reason`
+  - `meaning`
+  - `allowed_strengths`
+  - `time_minutes_per_use`
+  - `parameters`:
+    - `receiving_mules` (label: `assumption`)
+    - `victims_per_receiving_mule` (label: `assumption`)
+- **cash_out** (label: `assumption`)
+  - `label`
+  - `reason`
+  - `meaning`
+  - `allowed_strengths`
+  - `time_minutes_per_use`
+  - `parameters`:
+    - `channels` (label: `policy`)
+- **split_below_threshold** (label: `assumption`)
+  - `label`
+  - `reason`
+  - `meaning`
+  - `allowed_strengths`
+  - `time_minutes_per_use`
+  - `parameters`:
+    - `threshold_inr` (label: `assumption`)
+
+---
+
+## Random Stream Children and Tie-Break Order
+
 - `random_stream_children`:
   - `0-3`: Reserved for Level 11 simulation baseline (events, episodes, failures, device events).
   - `4`: `fraud_payment_failures`
@@ -194,39 +578,9 @@ Extracted directly via `dataclasses.fields`:
   - `11`: `opened_routine_failures` (failure draws of newly opened person payments)
   - `12`: `rented_owner_activity` (draws deciding kept share and paused outgoing owner payments)
   - `13`: `cash_withdrawal_failures` (failure draws for ATM and branch counter withdrawals)
+
 - `tie_break_order`:
   - `[outside_events, planned_payments, fraud_payments, resumed_payments, gang_device_events, opened_routine_payments, cash_withdrawals]`
-
-### 2. `config/scam_schedules.yaml`
-- Defines parameters for victim fraud planning:
-  - `scam_types`: `[investment_or_job, unauthorised_debit]`
-  - `victims_per_mule`: Power-law distribution configurations (`typical`, `largest`, `tail_exponent`).
-  - `payments_per_victim`: Payment frequency bounds and escalation factors.
-  - `bait_payout`: Probability and fraction of initial funds returned to victims.
-  - `timing`: Dwell intervals and min spacing between fraud debits.
-
-### 3. `config/account_openings.yaml`
-- Background population growth and genuine account openings:
-  - `enabled`: Feature flag controlling background opening injection.
-  - `opening_rate`: Daily new accounts per capita.
-  - `shop_share`: Proportion of new accounts registered as retail merchant shops.
-  - `no_routine_share`: Proportion of accounts opened without active calendar schedules.
-
-### 4. `config/cash_out.yaml`
-- Extraction channel definitions and limits:
-  - `channels`: `[crypto, atm, branch, genuine_shop]`
-  - `channel_shares`: Proportional split across channels.
-  - `atm_daily_limit_inr`: Daily cash ceiling per payment card.
-  - `branch_delay_minutes`: Turnaround latency for physical bank teller counter withdrawals.
-  - `genuine_shop_kinds`: Merchant category codes receiving commercial retail cash-outs.
-
-### 5. `config/tactic_blocks.yaml` & `config/tactic_costs.yaml`
-- `scam`: Parameter validation, block duration bounds, and empirical detection risk per use.
-- `cash_out`: Parameter validation, block duration bounds, and extraction risk per use.
-- `split_below_threshold`: Structuring parameters splitting large sums under reporting thresholds.
-
-### 6. `config/truth_store.yaml`
-- `allowed_origins`: `[rented, borrowed_kyc, business]` registered under ground truth schema.
 
 ---
 
