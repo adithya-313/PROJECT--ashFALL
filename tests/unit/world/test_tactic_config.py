@@ -90,7 +90,7 @@ def test_every_block_lists_allowed_strengths_in_one_and_two() -> None:
     """
     # 1. Retrieve blocks dictionary from configuration.
     blocks_config = load_tactic_blocks()["tactic_blocks"]["blocks"]
-    expected_blocks = {"acquire", "warm_up", "route", "disguise", "take_control", "scam", "cash_out"}
+    expected_blocks = {"acquire", "warm_up", "route", "disguise", "take_control", "scam", "cash_out", "split_below_threshold"}
     assert set(blocks_config.keys()) == expected_blocks
 
     # 2. Verify allowed strengths for each block are within {1, 2}.

@@ -347,12 +347,13 @@ issues:
   12-17:
     title: "Mule depth was not recorded; gang routing must obey the same limits"
     origin: revision_2
-    status: partial
+    status: built
     levels: [12]
     parts: [12b, 12c]
     evidence:
       - {kind: test, file: tests/unit/world/test_gang_planner.py, name: test_route_depths_cover_one_to_n}
-    later_work: ["Level 12c: gang cash-out routing through Level 11's split helper"]
+      - {kind: test, file: tests/unit/world/test_cash_withdrawals.py, name: test_withdrawal_above_upi_limit_splits_into_legal_legs}
+      - {kind: test, file: tests/unit/world/test_split_below_threshold.py, name: test_pieces_below_threshold_same_total_same_minute_own_rules_and_stories}
   12-18:
     title: "Validation worlds were missing from the sampler though evaluation.yaml defines them"
     origin: revision_2
@@ -637,11 +638,15 @@ issues:
   G2:
     title: "Cash-out channels including ATM limits and genuine shops"
     origin: level_11
-    status: planned
+    status: partial
     levels: [12]
     parts: [12c]
     v1_status: built
-    later_work: ["Level 12c: cash-out channels in gang worlds"]
+    evidence:
+      - {kind: config, file: config/cash_out.yaml, name: cash_out}
+      - {kind: test, file: tests/unit/world/test_cash_withdrawals.py, name: test_cash_withdrawal_money_conservation_and_record}
+      - {kind: test, file: tests/unit/world/test_cash_out.py, name: test_channel_amounts_follow_narrowed_shares}
+    later_work: ["Level 14: withdrawals reach banks as account events"]
   G3:
     title: "Mule lifecycle; heavy-tailed victims per mule"
     origin: level_11
@@ -669,11 +674,12 @@ issues:
   A2:
     title: "Genuine shops downstream of mules"
     origin: level_11
-    status: planned
+    status: built
     levels: [12]
     parts: [12c]
     v1_status: built
-    later_work: ["Level 12c: harm to genuine accounts in gang worlds"]
+    evidence:
+      - {kind: test, file: tests/unit/world/test_cash_out.py, name: test_genuine_shop_receives_mule_money_and_role_is_none}
   G4:
     title: "Fixed gang reactions; gang observation feed"
     origin: level_11

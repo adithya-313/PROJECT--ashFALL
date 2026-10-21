@@ -350,7 +350,7 @@ def _validate_step_ordering(gang_id: str, steps: tuple[BlockStep, ...]) -> None:
     has_acquired = False
     has_routed = False
 
-    for step in steps:
+    for idx, step in enumerate(steps):
         if step.block == "acquire":
             has_acquired = True
         elif step.block == "scam":
@@ -371,6 +371,12 @@ def _validate_step_ordering(gang_id: str, steps: tuple[BlockStep, ...]) -> None:
         elif step.block == "cash_out":
             if not has_routed:
                 raise ValueError(f"Gang '{gang_id}' must route money before cashing out.")
+        elif step.block == "split_below_threshold":
+            subsequent = [s.block for s in steps[idx + 1:]]
+            if not any(b in ("route", "cash_out") for b in subsequent):
+                raise ValueError(
+                    f"Gang '{gang_id}' split_below_threshold must be followed by a route or cash_out step."
+                )
 
     # 2. Assert that routing requires at least one acquisition step.
     if has_routed and not has_acquired:

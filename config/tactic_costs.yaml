@@ -77,3 +77,7 @@ tactic_risk_per_use:
     label: assumption
     range: [0.001, 0.02]
     reason: "No published figure; exists only to compare tactics per amendment A-016"
+  split_below_threshold:
+    label: assumption
+    range: [0.001, 0.01]
+    reason: "No published figure; exists only to compare tactics per amendment A-016"

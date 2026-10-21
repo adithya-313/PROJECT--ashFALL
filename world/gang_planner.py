@@ -33,6 +33,7 @@ from world.interactive_records import IllicitMoneyRule
 from world.mule_origins import build_opening_event, draw_mule_origins, make_opening_handle
 from world.outside_events import OutsideEvent
 from world.scam_planner import MuleInflow, plan_scam_step
+from world.split_below_threshold import apply_split_below_threshold, draw_threshold_paise
 from world.tactic_blocks import (
     acquire_mule_accounts,
     advance_warmup_clock,
@@ -794,6 +795,7 @@ def _plan_campaign_steps(
     fixed_dwell: int | None = None
     money, time, prob_safe = 0, 0, 1.0
     scam_active_from: int | None = None
+    pending_split_step: BlockStep | None = None
 
     for step in config.steps:
         if step.block == "acquire":
@@ -825,6 +827,11 @@ def _plan_campaign_steps(
             stories.extend(scam_plan.stories)
             mule_inflows = scam_plan.mule_inflows
             cost = BlockCost(0, scam_plan.span_minutes, scam_plan.risk)
+        elif step.block == "split_below_threshold":
+            pending_split_step = step
+            min_risk, max_risk = get_block_risk_range("split_below_threshold")
+            risk_cost = float(rng.uniform(min_risk, max_risk))
+            cost = BlockCost(0, 0, risk_cost)
         elif step.block == "route":
             params = step.params_dict
             layers, accounts_per_layer = params.get("layers", 1), params.get("accounts_per_layer", 1)
@@ -838,10 +845,28 @@ def _plan_campaign_steps(
             r_pmts, r_roles, r_stories, cost = _execute_route_step(
                 config, step, mules, acq_min, clock_min, rng, mule_inflows, mule_origin_map
             )
+            r_rules = [
+                IllicitMoneyRule(input_index=i, spends_illicit=True, credits_illicit=True)
+                for i in range(len(r_pmts))
+            ]
+            if pending_split_step is not None:
+                split_name = str(world.parameters_drawn.get("range_name", "training"))
+                th_param = pending_split_step.params_dict.get("threshold_inr")
+                th_paise = draw_threshold_paise(split_name, th_param, rng)
+                r_pmts, r_rules, r_stories = apply_split_below_threshold(
+                    r_pmts, r_rules, r_stories, th_paise, config.gang_id, split_name
+                )
+                pending_split_step = None
+
             base_idx = len(pmts)
-            for i in range(len(r_pmts)):
+            for rule in r_rules:
                 money_rules.append(
-                    IllicitMoneyRule(input_index=base_idx + i, spends_illicit=True, credits_illicit=True)
+                    IllicitMoneyRule(
+                        input_index=base_idx + rule.input_index,
+                        spends_illicit=rule.spends_illicit,
+                        credits_illicit=rule.credits_illicit,
+                        requires_credit_from=rule.requires_credit_from,
+                    )
                 )
             pmts.extend(r_pmts)
             roles.extend(r_roles)
@@ -855,7 +880,7 @@ def _plan_campaign_steps(
                 terminal_acct = routed[(layers - 1) * accounts_per_layer + k]
                 in_pmts = [p for p in r_pmts if p.to_account == terminal_acct]
                 if in_pmts:
-                    terminal_mules.append((terminal_acct, in_pmts[-1].amount_paise, in_pmts[-1].minute))
+                    terminal_mules.append((terminal_acct, sum(p.amount_paise for p in in_pmts), in_pmts[-1].minute))
                 elif mule_inflows is not None and terminal_acct in mule_inflows:
                     inflow = mule_inflows[terminal_acct]
                     terminal_mules.append((terminal_acct, inflow.net_paise, inflow.last_victim_payment_minute))
@@ -875,8 +900,19 @@ def _plan_campaign_steps(
                 dwell_param=route_dwell_param,
                 rng=rng,
             )
+            co_pmts = list(co_plan.payments)
+            co_rules = list(co_plan.money_rules)
+            co_stories = list(co_plan.stories)
+            if pending_split_step is not None:
+                th_param = pending_split_step.params_dict.get("threshold_inr")
+                th_paise = draw_threshold_paise(split, th_param, rng)
+                co_pmts, co_rules, co_stories = apply_split_below_threshold(
+                    co_pmts, co_rules, co_stories, th_paise, config.gang_id, split
+                )
+                pending_split_step = None
+
             base_idx = len(pmts)
-            for rule in co_plan.money_rules:
+            for rule in co_rules:
                 money_rules.append(
                     IllicitMoneyRule(
                         input_index=base_idx + rule.input_index,
@@ -885,9 +921,9 @@ def _plan_campaign_steps(
                         requires_credit_from=rule.requires_credit_from,
                     )
                 )
-            pmts.extend(co_plan.payments)
+            pmts.extend(co_pmts)
             roles.extend(co_plan.roles)
-            stories.extend(co_plan.stories)
+            stories.extend(co_stories)
             withdrawals.extend(co_plan.withdrawals)
             opening_events.extend(co_plan.outside_events)
             cost = BlockCost(0, co_plan.time_cost, co_plan.risk_cost)

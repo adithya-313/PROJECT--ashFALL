@@ -134,6 +134,20 @@ tactic_blocks:
           label: policy
           allowed_values: [crypto, atm, branch, genuine_shop]
           reason: "Cash-out distribution channels specified in config/cash_out.yaml"
+    split_below_threshold:
+      label: assumption
+      reason: "No published figure; building block models splitting payments below a threshold for comparison per amendment A-016."
+      meaning: "Split payments exceeding a threshold into smaller pieces to avoid reporting or rule limits"
+      allowed_strengths: [1, 2]
+      time_minutes_per_use: 0
+      parameters:
+        threshold_inr:
+          label: assumption
+          range: [10000, 50000]
+          training: [10000, 50000]
+          test: [10000, 50000]
+          stress: [2000, 100000]
+          reason: "Threshold in INR above which payments are split into pieces below it"
 
 mule_origin_shares:
   label: policy
