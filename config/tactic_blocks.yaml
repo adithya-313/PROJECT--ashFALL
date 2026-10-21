@@ -123,6 +123,17 @@ tactic_blocks:
           label: assumption
           range: [0, 30]
           reason: "Random minute offset applied to payment timings within dwell window"
+    cash_out:
+      label: assumption
+      reason: "No published figure; building block models downstream extraction via crypto, ATM, branch, and genuine shops per Decision D3."
+      meaning: "Extract stolen money from terminal mule accounts into physical cash, crypto, or genuine merchant goods"
+      allowed_strengths: [1, 2]
+      time_minutes_per_use: "cashing out window"
+      parameters:
+        channels:
+          label: policy
+          allowed_values: [crypto, atm, branch, genuine_shop]
+          reason: "Cash-out distribution channels specified in config/cash_out.yaml"
 
 mule_origin_shares:
   label: policy

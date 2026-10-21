@@ -13,12 +13,14 @@ TERM: supplier fee: percentage fee paid to account suppliers based on money move
 """
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 
 from world.build_world import World
 from world.calendar_runner import PlannedPayment
+from world.cash_out import plan_cash_out_step
+from world.cash_withdrawals import CashWithdrawal
 from world.gang_config import BlockStep, GangBudget, GangConfig, gang_start_minute, validate_gang_config
 from world.gang_devices import (
     GangDeviceEvent,
@@ -122,6 +124,7 @@ class GangPlan:
     gang_device_events: tuple[GangDeviceEvent, ...] = ()
     money_rules: tuple[IllicitMoneyRule, ...] = ()
     outside_events: tuple[OutsideEvent, ...] = ()
+    withdrawals: tuple[CashWithdrawal, ...] = ()
 
 
 def _check_running_budget(
@@ -782,6 +785,13 @@ def _plan_campaign_steps(
     mule_inflows: dict[str, MuleInflow] | None = None
     mule_origin_map: dict[str, str] = {}
     opening_events: list[OutsideEvent] = []
+    withdrawals: list[CashWithdrawal] = []
+    terminal_mules: list[tuple[str, int, int]] = []
+    route_layers: int = 1
+    route_dwell_param: Any = None
+    has_disguise: bool = False
+    jitter: int | None = None
+    fixed_dwell: int | None = None
     money, time, prob_safe = 0, 0, 1.0
     scam_active_from: int | None = None
 
@@ -816,6 +826,15 @@ def _plan_campaign_steps(
             mule_inflows = scam_plan.mule_inflows
             cost = BlockCost(0, scam_plan.span_minutes, scam_plan.risk)
         elif step.block == "route":
+            params = step.params_dict
+            layers, accounts_per_layer = params.get("layers", 1), params.get("accounts_per_layer", 1)
+            route_layers = layers
+            route_dwell_param = params.get("dwell_minutes")
+            disguise_step = next((s for s in config.steps if s.block == "disguise"), None)
+            has_disguise = disguise_step is not None
+            jitter = disguise_step.params_dict.get("jitter_minutes") if disguise_step else None
+            fixed_dwell = draw_hop_dwell_minutes(params.get("dwell_minutes"), rng) if config.strength == 1 else None
+
             r_pmts, r_roles, r_stories, cost = _execute_route_step(
                 config, step, mules, acq_min, clock_min, rng, mule_inflows, mule_origin_map
             )
@@ -827,6 +846,51 @@ def _plan_campaign_steps(
             pmts.extend(r_pmts)
             roles.extend(r_roles)
             stories.extend(r_stories)
+
+            # Record terminal mules for downstream cash-out
+            terminal_mules.clear()
+            needed = layers * accounts_per_layer
+            routed = mules[:needed]
+            for k in range(accounts_per_layer):
+                terminal_acct = routed[(layers - 1) * accounts_per_layer + k]
+                in_pmts = [p for p in r_pmts if p.to_account == terminal_acct]
+                if in_pmts:
+                    terminal_mules.append((terminal_acct, in_pmts[-1].amount_paise, in_pmts[-1].minute))
+                elif mule_inflows is not None and terminal_acct in mule_inflows:
+                    inflow = mule_inflows[terminal_acct]
+                    terminal_mules.append((terminal_acct, inflow.net_paise, inflow.last_victim_payment_minute))
+        elif step.block == "cash_out":
+            split = str(world.parameters_drawn.get("range_name", "training"))
+            co_plan = plan_cash_out_step(
+                world=world,
+                gang_id=config.gang_id,
+                strength=config.strength,
+                terminal_mules=terminal_mules,
+                split=split,
+                layers=route_layers,
+                opening_start_index=len(opening_events),
+                has_disguise=has_disguise,
+                jitter=jitter,
+                fixed_dwell=fixed_dwell,
+                dwell_param=route_dwell_param,
+                rng=rng,
+            )
+            base_idx = len(pmts)
+            for rule in co_plan.money_rules:
+                money_rules.append(
+                    IllicitMoneyRule(
+                        input_index=base_idx + rule.input_index,
+                        spends_illicit=rule.spends_illicit,
+                        credits_illicit=rule.credits_illicit,
+                        requires_credit_from=rule.requires_credit_from,
+                    )
+                )
+            pmts.extend(co_plan.payments)
+            roles.extend(co_plan.roles)
+            stories.extend(co_plan.stories)
+            withdrawals.extend(co_plan.withdrawals)
+            opening_events.extend(co_plan.outside_events)
+            cost = BlockCost(0, co_plan.time_cost, co_plan.risk_cost)
         elif step.block == "disguise":
             cost = _plan_disguise_step(step, rng)
         else:
@@ -841,8 +905,10 @@ def _plan_campaign_steps(
         for role in roles:
             if role.role == "mule":
                 acct = role.account_id
-                outgoing = [p for p in pmts if p.from_account == acct]
-                last_outgoing = max((p.minute for p in outgoing), default=None)
+                outgoing = [p.minute for p in pmts if p.from_account == acct] + [
+                    w.minute for w in withdrawals if w.account_id == acct
+                ]
+                last_outgoing = max(outgoing, default=None)
                 if acct in mule_inflows:
                     window_end = mule_inflows[acct].inflow_window_end
                     burned_from = max(window_end, (last_outgoing + 1) if last_outgoing is not None else 0)
@@ -859,7 +925,18 @@ def _plan_campaign_steps(
         roles = updated_roles
 
     return (
-        pmts, roles, device_spans, stories, costs, money, time, prob_safe, device_events, money_rules, opening_events
+        pmts,
+        roles,
+        device_spans,
+        stories,
+        costs,
+        money,
+        time,
+        prob_safe,
+        device_events,
+        money_rules,
+        opening_events,
+        withdrawals,
     )
 
 
@@ -892,10 +969,12 @@ def plan_gang(
     """
     validate_gang_config(config)
     dev_rng = gang_devices_rng if gang_devices_rng is not None else rng
-    pmts, roles, spans, stories, costs, money, time, safe, events, rules, openings = _plan_campaign_steps(
+    pmts, roles, spans, stories, costs, money, time, safe, events, rules, openings, withdrawals = _plan_campaign_steps(
         config, world, rng, reserved_accounts, dev_rng
     )
-    return _build_gang_plan(pmts, roles, spans, stories, costs, money, time, safe, events, rules, openings)
+    return _build_gang_plan(
+        pmts, roles, spans, stories, costs, money, time, safe, events, rules, openings, withdrawals
+    )
 
 
 def _build_gang_plan(
@@ -904,6 +983,7 @@ def _build_gang_plan(
     gang_device_events: list[GangDeviceEvent] | None = None,
     money_rules: list[IllicitMoneyRule] | tuple[IllicitMoneyRule, ...] | None = None,
     outside_events: list[OutsideEvent] | None = None,
+    withdrawals: Sequence[CashWithdrawal] | None = None,
 ) -> GangPlan:
     """
     WHAT: Packages planned payments, truth facts, block costs, and total expenditures into an immutable GangPlan.
@@ -923,6 +1003,7 @@ def _build_gang_plan(
         gang_device_events: Optional list of GangDeviceEvent records emitted during device takeover.
         money_rules: Optional sequence of IllicitMoneyRule records aligning with planned payments.
         outside_events: Optional open_account requests for accounts the gang opens during the run.
+        withdrawals: Optional sequence of CashWithdrawal records scheduled for terminal mules.
 
     Returns:
         Immutable GangPlan record ready for runner execution.
@@ -939,4 +1020,14 @@ def _build_gang_plan(
     events = tuple(gang_device_events or [])
     rules = tuple(money_rules or [])
     openings = tuple(outside_events or [])
-    return GangPlan(indexed, truth, tuple(costs), BlockCost(money, time, 1.0 - prob_safe), events, rules, openings)
+    w_tuple = tuple(withdrawals or [])
+    return GangPlan(
+        indexed,
+        truth,
+        tuple(costs),
+        BlockCost(money, time, 1.0 - prob_safe),
+        events,
+        rules,
+        openings,
+        w_tuple,
+    )

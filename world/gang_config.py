@@ -368,6 +368,9 @@ def _validate_step_ordering(gang_id: str, steps: tuple[BlockStep, ...]) -> None:
             if not has_acquired:
                 raise ValueError(f"Gang '{gang_id}' must acquire accounts before routing money.")
             has_routed = True
+        elif step.block == "cash_out":
+            if not has_routed:
+                raise ValueError(f"Gang '{gang_id}' must route money before cashing out.")
 
     # 2. Assert that routing requires at least one acquisition step.
     if has_routed and not has_acquired:
