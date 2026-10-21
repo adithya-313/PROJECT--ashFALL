@@ -119,14 +119,22 @@ def validate_cash_withdrawal(withdrawal: CashWithdrawal, state: Any = None) -> N
         raise ValueError(
             f"Withdrawal channel must be one of {ALLOWED_CHANNELS}, got {withdrawal.channel!r}."
         )
-    if withdrawal.card_daily_limit_paise is not None:
+    if withdrawal.channel == CHANNEL_ATM:
         if (
-            isinstance(withdrawal.card_daily_limit_paise, bool)
+            withdrawal.card_daily_limit_paise is None
+            or isinstance(withdrawal.card_daily_limit_paise, bool)
             or not isinstance(withdrawal.card_daily_limit_paise, int)
             or withdrawal.card_daily_limit_paise <= 0
         ):
+            limit_val = withdrawal.card_daily_limit_paise
             raise ValueError(
-                f"card_daily_limit_paise must be a positive integer or None, got {withdrawal.card_daily_limit_paise!r}."
+                f"channel 'atm' requires card_daily_limit_paise to be a positive integer, got {limit_val!r}."
+            )
+    elif withdrawal.channel == CHANNEL_BRANCH:
+        if withdrawal.card_daily_limit_paise is not None:
+            limit_val = withdrawal.card_daily_limit_paise
+            raise ValueError(
+                f"channel 'branch' requires card_daily_limit_paise to be None, got {limit_val!r}."
             )
     if state is not None and withdrawal.account_id not in state.bank_map:
         raise ValueError(f"Account '{withdrawal.account_id}' is not registered with the runner.")
@@ -190,16 +198,18 @@ def apply_illicit_cap(
 
 def process_cash_withdrawal(context: Any, withdrawal: CashWithdrawal) -> None:
     """
-    WHAT: Executes a single cash withdrawal attempt following Decision D2 processing order.
+    WHAT: Executes a single cash withdrawal attempt following Decision D1 processing order.
     WHY: Enforces illicit capping, ATM daily limit ceilings, encumbrances, bank outage failures,
-         and UPI leg splitting for debits.
+         ledger balance verification, and UPI leg splitting for debits.
 
     Processing order:
         1. Cap to account's illicit balance (record skipped/capped adjustment).
         2. ATM only: Fail with domain 'sender_bank', reason 'atm_daily_limit' if daily ATM sum exceeds card limit.
         3. Encumbrance: Fail with domain 'sender_bank', reason 'funds_on_hold' if lien or debit hold blocks debit.
         4. Failure draw: Evaluate decide_failure on child 13 ('cash_withdrawal_failures').
-        5. Ledger post_debit: Split amount into legal legs at bank's upi_limit_paise under single transfer id.
+        5. Balance check: Compare real ledger balance with effective amount; fail with domain 'customer',
+           reason 'insufficient_balance' if short, posting no legs.
+        6. Ledger post_debit: Split amount into legal legs at bank's upi_limit_paise under single transfer id.
     """
     # Generate canonical withdrawal identifier: <run_id>-w-NNNNNN
     w_id = f"{context.run_id}-w-{context.withdrawal_sequence:06d}"
@@ -285,7 +295,24 @@ def process_cash_withdrawal(context: Any, withdrawal: CashWithdrawal) -> None:
         context.cash_withdrawals.append(rec)
         return
 
-    # Step 5: Post debit in legal UPI legs and update monetary tracking
+    # Step 5: Ledger balance verification before posting any legs
+    balance = ledger.balance_of(withdrawal.account_id)
+    if balance < effective_paise:
+        rec = CashWithdrawalRecord(
+            id=w_id,
+            minute=withdrawal.minute,
+            account=withdrawal.account_id,
+            channel=withdrawal.channel,
+            requested=planned_paise,
+            withdrawn=0,
+            status="failed",
+            reason="insufficient_balance",
+            domain="customer",
+        )
+        context.cash_withdrawals.append(rec)
+        return
+
+    # Step 6: Post debit in legal UPI legs and update monetary tracking
     legs = split_into_legal_payments(effective_paise, ledger.upi_limit_paise)
     for leg in legs:
         ledger.post_debit(withdrawal.account_id, leg, withdrawal.minute, w_id)

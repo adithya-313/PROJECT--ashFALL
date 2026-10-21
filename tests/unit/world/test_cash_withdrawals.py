@@ -15,6 +15,7 @@ ISSUE IDs: G2 (cash-out channels), 12-17 (split payments).
 import dataclasses
 from typing import Any
 
+import numpy as np
 import pytest
 
 from core.config_validator import load_yaml
@@ -23,6 +24,7 @@ from world.cash_withdrawals import (
     CHANNEL_ATM,
     CHANNEL_BRANCH,
     CashWithdrawal,
+    process_cash_withdrawal,
     validate_cash_withdrawal,
 )
 from world.checks import (
@@ -72,25 +74,32 @@ def test_runner_config_has_cash_withdrawals_stream_and_tie_break_rank() -> None:
 
 def test_validate_cash_withdrawal_constraints() -> None:
     """Checks input validation for CashWithdrawal fields."""
-    valid = CashWithdrawal(minute=100, account_id="acc_person_000000", amount_paise=10000, channel="atm")
-    validate_cash_withdrawal(valid)
+    valid_atm = CashWithdrawal(
+        minute=100, account_id="acc_person_000000", amount_paise=10000, channel="atm", card_daily_limit_paise=50000
+    )
+    validate_cash_withdrawal(valid_atm)
+
+    valid_branch = CashWithdrawal(
+        minute=100, account_id="acc_person_000000", amount_paise=10000, channel="branch", card_daily_limit_paise=None
+    )
+    validate_cash_withdrawal(valid_branch)
 
     # Negative minute
     with pytest.raises(ValueError, match="non-negative integer"):
         validate_cash_withdrawal(
-            CashWithdrawal(minute=-1, account_id="acc_person_000000", amount_paise=10000, channel="atm")
+            CashWithdrawal(minute=-1, account_id="acc_person_000000", amount_paise=10000, channel="branch")
         )
 
     # Empty account id
     with pytest.raises(ValueError, match="non-empty string"):
         validate_cash_withdrawal(
-            CashWithdrawal(minute=100, account_id="", amount_paise=10000, channel="atm")
+            CashWithdrawal(minute=100, account_id="", amount_paise=10000, channel="branch")
         )
 
     # Non-positive amount
     with pytest.raises(ValueError, match="positive integer"):
         validate_cash_withdrawal(
-            CashWithdrawal(minute=100, account_id="acc_person_000000", amount_paise=0, channel="atm")
+            CashWithdrawal(minute=100, account_id="acc_person_000000", amount_paise=0, channel="branch")
         )
 
     # Invalid channel
@@ -99,8 +108,8 @@ def test_validate_cash_withdrawal_constraints() -> None:
             CashWithdrawal(minute=100, account_id="acc_person_000000", amount_paise=10000, channel="crypto")
         )
 
-    # Invalid card daily limit
-    with pytest.raises(ValueError, match="card_daily_limit_paise must be a positive integer"):
+    # Invalid card daily limit for ATM (zero or negative)
+    with pytest.raises(ValueError, match="card_daily_limit_paise to be a positive integer"):
         validate_cash_withdrawal(
             CashWithdrawal(
                 minute=100,
@@ -111,12 +120,36 @@ def test_validate_cash_withdrawal_constraints() -> None:
             )
         )
 
+    # ATM without card daily limit is refused
+    with pytest.raises(ValueError, match="channel 'atm' requires card_daily_limit_paise"):
+        validate_cash_withdrawal(
+            CashWithdrawal(
+                minute=100,
+                account_id="acc_person_000000",
+                amount_paise=10000,
+                channel="atm",
+                card_daily_limit_paise=None,
+            )
+        )
+
+    # Branch with card daily limit is refused
+    with pytest.raises(ValueError, match="channel 'branch' requires card_daily_limit_paise to be None"):
+        validate_cash_withdrawal(
+            CashWithdrawal(
+                minute=100,
+                account_id="acc_person_000000",
+                amount_paise=10000,
+                channel="branch",
+                card_daily_limit_paise=50000,
+            )
+        )
+
     # Unregistered account in state
     prepared = prepare_world(TINY, None)
     state = start_runner_state(prepared.world)
     with pytest.raises(ValueError, match="is not registered with the runner"):
         validate_cash_withdrawal(
-            CashWithdrawal(minute=100, account_id="acc_unregistered", amount_paise=10000, channel="atm"),
+            CashWithdrawal(minute=100, account_id="acc_unregistered", amount_paise=10000, channel="branch"),
             state=state,
         )
 
@@ -453,7 +486,9 @@ def test_cash_withdrawal_inside_bank_outage_fails() -> None:
     run_id = make_run_id(TINY.seed, {"range_name": TINY.range_name}, "test", runner_config["run_id_hex_length"])
     state = start_runner_state(prepared_modified.world)
 
-    withdrawal = CashWithdrawal(minute=150, account_id=account, amount_paise=100000, channel=CHANNEL_ATM)
+    withdrawal = CashWithdrawal(
+        minute=150, account_id=account, amount_paise=100000, channel=CHANNEL_ATM, card_daily_limit_paise=200000
+    )
     inputs = FraudInputs(
         illicit_seeds=(IllicitSeed(account_id=account, amount_paise=100000),),
         withdrawals=(withdrawal,),
@@ -489,7 +524,9 @@ def test_cash_withdrawals_never_in_events_or_truth() -> None:
     inputs = FraudInputs(
         illicit_seeds=(IllicitSeed(account_id=account, amount_paise=100000),),
         withdrawals=(
-            CashWithdrawal(minute=100, account_id=account, amount_paise=100000, channel=CHANNEL_ATM),
+            CashWithdrawal(
+                minute=100, account_id=account, amount_paise=100000, channel=CHANNEL_ATM, card_daily_limit_paise=200000
+            ),
         ),
     )
 
@@ -530,3 +567,222 @@ def test_empty_withdrawals_preserves_exact_behavior() -> None:
     assert baseline_output.result.cash_withdrawals == []
     assert explicit_empty_output.result.cash_withdrawals == []
     assert len(baseline_output.result.run_result.events) == len(explicit_empty_output.result.run_result.events)
+
+
+def test_insufficient_ledger_balance_fails_cleanly_and_leaves_balance_untouched() -> None:
+    """
+    F1 reproduction: verifies that a withdrawal whose effective illicit amount exceeds the real ledger
+    balance fails cleanly with status 'failed', reason 'insufficient_balance', domain 'customer',
+    and leaves the account's ledger balance and entries completely untouched.
+    """
+    account = "acc_person_009999"
+    bank_idx = 0
+    opening_balance = 5_000_000
+    illicit_amount = 9_000_000
+
+    def state_factory(prepared: Any) -> Any:
+        state = start_runner_state(prepared.world)
+        state.register_account(account, bank_idx, opening_balance_paise=opening_balance, minute=0)
+        return state
+
+    inputs = FraudInputs(
+        illicit_seeds=(IllicitSeed(account_id=account, amount_paise=illicit_amount),),
+        withdrawals=(
+            CashWithdrawal(
+                minute=100,
+                account_id=account,
+                amount_paise=illicit_amount,
+                channel=CHANNEL_BRANCH,
+            ),
+        ),
+    )
+
+    output = run_interactive_world(
+        fast_settings=TINY,
+        runner_settings=RunnerSettings(fraud_enabled=True),
+        fraud_inputs=inputs,
+        state_factory=state_factory,
+    )
+
+    assert len(output.result.cash_withdrawals) == 1
+    rec = output.result.cash_withdrawals[0]
+    assert rec.status == "failed"
+    assert rec.reason == "insufficient_balance"
+    assert rec.domain == "customer"
+    assert rec.requested == illicit_amount
+    assert rec.withdrawn == 0
+    assert output.result.money_withdrawn_paise == 0
+
+    # Real ledger balance must be unchanged
+    ledger = output.world.ledgers[bank_idx]
+    assert ledger.balance_of(account) == opening_balance
+    account_debits = [e for e in ledger.entries if e.account_id == account and e.kind == "transfer_debit"]
+    assert account_debits == []
+
+
+def test_two_leg_withdrawal_with_short_balance_posts_no_legs() -> None:
+    """
+    Verifies that a multi-leg withdrawal (amount exceeding upi_limit_paise) where the account has
+    sufficient balance for the first leg but insufficient for the total effective amount fails cleanly
+    and posts zero debit legs to the ledger (all-or-nothing).
+    """
+    fresh_world = prepare_world(TINY, None).world
+    bank_idx = 0
+    ledger = fresh_world.ledgers[bank_idx]
+    upi_limit = ledger.upi_limit_paise
+
+    account = "acc_person_009998"
+    # Total withdrawal needs 2 legs
+    withdrawal_amount = upi_limit + 2_000_000
+    # Opening balance is enough for the first leg (upi_limit), but short of total withdrawal_amount
+    opening_balance = upi_limit + 500_000
+
+    def state_factory(prepared: Any) -> Any:
+        state = start_runner_state(prepared.world)
+        state.register_account(account, bank_idx, opening_balance_paise=opening_balance, minute=0)
+        return state
+
+    inputs = FraudInputs(
+        illicit_seeds=(IllicitSeed(account_id=account, amount_paise=withdrawal_amount),),
+        withdrawals=(
+            CashWithdrawal(
+                minute=100,
+                account_id=account,
+                amount_paise=withdrawal_amount,
+                channel=CHANNEL_BRANCH,
+            ),
+        ),
+    )
+
+    output = run_interactive_world(
+        fast_settings=TINY,
+        runner_settings=RunnerSettings(fraud_enabled=True),
+        fraud_inputs=inputs,
+        state_factory=state_factory,
+    )
+
+    rec = output.result.cash_withdrawals[0]
+    assert rec.status == "failed"
+    assert rec.reason == "insufficient_balance"
+    assert rec.domain == "customer"
+    assert rec.withdrawn == 0
+
+    # Ensure no leg was posted to the ledger
+    runner_ledger = output.world.ledgers[bank_idx]
+    assert runner_ledger.balance_of(account) == opening_balance
+    debit_entries = [e for e in runner_ledger.entries if e.account_id == account and e.kind == "transfer_debit"]
+    assert len(debit_entries) == 0
+
+
+def test_withdrawal_channel_card_limit_validation() -> None:
+    """
+    Verifies channel card limit constraints:
+    - channel 'atm' requires card_daily_limit_paise > 0 (None or non-positive refused).
+    - channel 'branch' requires card_daily_limit_paise is None (any limit refused).
+    """
+    # ATM without limit is refused
+    with pytest.raises(ValueError, match="channel 'atm' requires card_daily_limit_paise"):
+        validate_cash_withdrawal(
+            CashWithdrawal(
+                minute=100,
+                account_id="acc_person_000000",
+                amount_paise=10000,
+                channel="atm",
+                card_daily_limit_paise=None,
+            )
+        )
+
+    # Branch with limit is refused
+    with pytest.raises(ValueError, match="channel 'branch' requires card_daily_limit_paise to be None"):
+        validate_cash_withdrawal(
+            CashWithdrawal(
+                minute=100,
+                account_id="acc_person_000000",
+                amount_paise=10000,
+                channel="branch",
+                card_daily_limit_paise=50000,
+            )
+        )
+
+
+def test_stream_position_after_short_balance_equals_successful_withdrawal() -> None:
+    """
+    Verifies that the failure draw (child 13: cash_withdrawal_failures) is evaluated before the
+    balance check so the stream position after a short-balance withdrawal equals the position
+    after a successful one (same draws taken).
+    """
+    from types import SimpleNamespace
+
+    from world.encumbrance import EncumbranceBook
+
+    account = "acc_person_000000"
+    withdrawal_amount = 50000
+
+    # Build two generators initialized from identical seed
+    seed = 42
+    rng1 = np.random.default_rng(seed)
+    rng2 = np.random.default_rng(seed)
+
+    prep1 = prepare_world(TINY, None)
+    prep2 = prepare_world(TINY, None)
+
+    state1 = start_runner_state(prep1.world)
+    state2 = start_runner_state(prep2.world)
+
+    bank_idx = state1.bank_map[account]
+
+    # In context 1, account has ample balance
+    prep1.world.ledgers[bank_idx].post_credit(account, withdrawal_amount * 2, 0, "test-init-1")
+
+    # In context 2, account balance is 0 (short)
+    curr_bal = prep2.world.ledgers[bank_idx].balance_of(account)
+    if curr_bal > 0:
+        prep2.world.ledgers[bank_idx].post_debit(account, curr_bal, 0, "test-clear-2")
+
+    book1 = EncumbranceBook()
+    book2 = EncumbranceBook()
+
+    ctx1 = SimpleNamespace(
+        run_id="run-1",
+        withdrawal_sequence=0,
+        illicit_balances={account: withdrawal_amount},
+        skipped_forwards=[],
+        capped_forwards=[],
+        cash_withdrawals=[],
+        daily_atm_withdrawn={},
+        state=state1,
+        world=prep1.world,
+        book=book1,
+        streams={"cash_withdrawal_failures": rng1},
+        plan=prep1.plan,
+        money_withdrawn_paise=0,
+    )
+
+    ctx2 = SimpleNamespace(
+        run_id="run-2",
+        withdrawal_sequence=0,
+        illicit_balances={account: withdrawal_amount},
+        skipped_forwards=[],
+        capped_forwards=[],
+        cash_withdrawals=[],
+        daily_atm_withdrawn={},
+        state=state2,
+        world=prep2.world,
+        book=book2,
+        streams={"cash_withdrawal_failures": rng2},
+        plan=prep2.plan,
+        money_withdrawn_paise=0,
+    )
+
+    w = CashWithdrawal(minute=100, account_id=account, amount_paise=withdrawal_amount, channel=CHANNEL_BRANCH)
+
+    process_cash_withdrawal(ctx1, w)
+    process_cash_withdrawal(ctx2, w)
+
+    # ctx1 succeeded, ctx2 failed due to insufficient balance
+    assert ctx1.cash_withdrawals[0].status == "success"
+    assert ctx2.cash_withdrawals[0].status == "failed"
+    assert ctx2.cash_withdrawals[0].reason == "insufficient_balance"
+
+    # Both generators took the exact same failure draw(s) from child 13
+    assert rng1.bit_generator.state == rng2.bit_generator.state
