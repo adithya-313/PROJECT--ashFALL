@@ -30,16 +30,25 @@ from showcase.level_12_checks_b import (
     run_temporal_truth_edge_check,
     run_truth_isolation_negative_check,
 )
+from showcase.level_12_checks_c import (
+    run_genuine_shop_downstream_check,
+    run_mule_lifecycle_check,
+    run_rented_mule_normal_life_check,
+    run_victim_payment_outage_check,
+    run_victim_to_cashout_check,
+)
 
 LEVEL_NUMBER = 12
-LEVEL_TITLE = "World engine II: a world that can react (built: parts 12a-12b of 12a-12g)"
+LEVEL_TITLE = "World engine II: a world that can react (built: parts 12a-12c of 12a-12g)"
 NEEDS_DATABASE = False
 
 WHAT_YOU_SAW = (
     "Level 12a builds a reactive world engine: outside events (liens, debit holds, releases, payment resumes), "
     "an interactive runner that can hold and resume payments while preserving true origin and child random draws, "
     "bit-for-bit equivalence with Level 11 under allow-all execution, and v2 issue tracking. "
-    "Level 12b adds hidden truth isolation, a tactic language with budget enforcement, and gang device telemetry."
+    "Level 12b adds hidden truth isolation, a tactic language with budget enforcement, and gang device telemetry. "
+    "Level 12c adds victim money routing, mule lifecycle transitions from warm-up to burned, "
+    "rented owner activity, and cash-out channels."
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -49,6 +58,7 @@ REQUIRED_FILES = [
     REPO_ROOT / "config" / "frozen_anchors.yaml",
     REPO_ROOT / "scripts" / "golden_values.yaml",
     REPO_ROOT / "showcase" / "fixtures" / "level_12" / "gang_two_layers.yaml",
+    REPO_ROOT / "showcase" / "fixtures" / "level_12" / "gang_victims_cashout.yaml",
 ]
 
 
@@ -215,14 +225,84 @@ def _get_checks_9_to_10() -> list[CheckDefinition]:
     return [check_9, check_10]
 
 
+def _get_checks_11_to_13() -> list[CheckDefinition]:
+    """
+    WHAT: Constructs check definition descriptors for Level 12c checks 11 through 13.
+    It builds CheckDefinition objects for victim-to-cash-out laundering flow,
+    rented mule normal routine preservation, and temporal mule lifecycle progression.
+
+    WHY: Decomposing check construction into modular subroutines keeps all functions under 30 code lines.
+    Separates victim routing, owner routine co-existence, and temporal lifecycle transitions into a focused builder.
+
+    Returns:
+        List of CheckDefinition containers representing checks 11 through 13.
+
+    Example:
+        checks = _get_checks_11_to_13(); assert len(checks) == 3
+    """
+    check_11 = CheckDefinition(
+        "11. victim to mules to cash-out for one gang", "normal",
+        "A scam gang converts victim fraud into layered mule forwards and diverse cash-out extractions.",
+        run_victim_to_cashout_check,
+        "Victim payment generation, forwarding schedule, or cash-out routing failed.",
+        "world/scam_planner.py, world/cash_out.py", part="c",
+    )
+    check_12 = CheckDefinition(
+        "12. a rented mule keeps its normal life", "edge",
+        "A rented mule account continues normal financial routine alongside paused outgoing owner transfers.",
+        run_rented_mule_normal_life_check,
+        "Rented owner activity planner paused all activity or failed to preserve genuine transactions.",
+        "world/rented_owner_activity.py, world/interactive_loop.py", part="c",
+    )
+    check_13 = CheckDefinition(
+        "13. one mule from warm-up to burned", "edge",
+        "A mule account transitions deterministically through warm_up, active, and burned lifecycle phases.",
+        run_mule_lifecycle_check,
+        "Mule lifecycle phase calculation drifted or failed to track transition minute boundaries.",
+        "evaluation/truth.py, world/gang_planner.py", part="c",
+    )
+    return [check_11, check_12, check_13]
+
+
+def _get_checks_14_to_15() -> list[CheckDefinition]:
+    """
+    WHAT: Constructs check definition descriptors for Level 12c checks 14 and 15.
+    It builds CheckDefinition objects for downstream genuine merchant payments and outage forward suppression.
+
+    WHY: Decomposing check construction into modular subroutines keeps all functions under 30 code lines.
+    Separates downstream genuine merchant interaction and negative bank downtime handling into a focused builder.
+
+    Returns:
+        List of CheckDefinition containers representing checks 14 and 15.
+
+    Example:
+        checks = _get_checks_14_to_15(); assert len(checks) == 2
+    """
+    check_14 = CheckDefinition(
+        "14. a genuine shop receives mule money and stays genuine", "edge",
+        "A genuine retail merchant receives illicit mule money through cash-out while staying genuine in truth.",
+        run_genuine_shop_downstream_check,
+        "Downstream merchant shop was incorrectly assigned an illicit role span in truth.",
+        "world/cash_out.py, evaluation/truth.py", part="c",
+    )
+    check_15 = CheckDefinition(
+        "15. a victim payment fails in an outage and nothing is forwarded", "negative",
+        "Bank downtime halts victim money inflows cleanly, causing dependent forwarding transfers to be skipped.",
+        run_victim_payment_outage_check,
+        "Outage decision failed to decline victim payment or forward skipping logic failed.",
+        "world/interactive_loop.py, world/failures.py", part="c",
+    )
+    return [check_14, check_15]
+
+
 def get_checks(quick: bool = False) -> list[CheckDefinition]:
     """
-    WHAT: Constructs the ordered sequence of 10 Level 12 showcase verification checks (Parts 12a and 12b).
-    All checks span consistency, normal, edge, and negative check kinds across parts 'a' and 'b'.
+    WHAT: Constructs the ordered sequence of 15 Level 12 showcase verification checks (Parts 12a, 12b, and 12c).
+    All checks span consistency, normal, edge, and negative check kinds across parts 'a', 'b', and 'c'.
 
     WHY: Supplies the showcase execution engine with the authoritative test suite for Level 12.
     Enforces required coverage distribution across normal, edge, and negative categories while
-    tagging each check with part='a' or part='b' for selective execution.
+    tagging each check with part='a', part='b', or part='c' for selective execution.
 
     Args:
         quick: Boolean flag indicating whether quick execution mode is requested.
@@ -231,7 +311,7 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
         List of CheckDefinition instances configuring Level 12 showcase evaluations.
 
     Example:
-        checks = get_checks(quick=True); assert len(checks) == 10
+        checks = get_checks(quick=True); assert len(checks) == 15
     """
     # Concatenate checks from helper builders to construct complete Level 12 suite.
     checks: list[CheckDefinition] = []
@@ -239,5 +319,8 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
     checks.extend(_get_checks_4_to_5())
     checks.extend(_get_checks_6_to_8())
     checks.extend(_get_checks_9_to_10())
+    checks.extend(_get_checks_11_to_13())
+    checks.extend(_get_checks_14_to_15())
     return checks
+
 

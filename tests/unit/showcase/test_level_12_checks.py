@@ -17,8 +17,8 @@ from core.config_validator import load_yaml
 from showcase import level_12
 from showcase.framework import validate_checks
 from showcase.level_12_checks import (
-    FROZEN_ANCHORS_PATH,
     FRAUD_ON,
+    FROZEN_ANCHORS_PATH,
     run_consistency_check,
     run_held_payment_isolation_check,
     run_lien_blocks_debit_check,
@@ -38,7 +38,7 @@ from world.outside_events import OutsideEvent
 
 def test_level_12_checks_match_the_brief() -> None:
     """
-    WHAT: Verifies that Level 12 exports 10 checks across parts 'a' and 'b' in quick and full modes.
+    WHAT: Verifies that Level 12 exports 15 checks across parts 'a', 'b', and 'c' in quick and full modes.
     Confirms part-a check kinds match the brief, validate_checks succeeds, and find_missing_preconditions passes.
 
     WHY: Enforces showcase framework contract requirements and guarantees that the level definition satisfies
@@ -56,10 +56,9 @@ def test_level_12_checks_match_the_brief() -> None:
     # 1. Retrieve checks in quick and full modes and verify length and part sequences.
     quick_checks = level_12.get_checks(quick=True)
     full_checks = level_12.get_checks(quick=False)
-    assert len(quick_checks) == 10
-    assert len(full_checks) == 10
-    assert [check.part for check in quick_checks[:5]] == ["a"] * 5
-    assert [check.part for check in quick_checks[5:]] == ["b"] * 5
+    assert len(quick_checks) == 15
+    assert len(full_checks) == 15
+    assert [check.part for check in quick_checks] == ["a"] * 5 + ["b"] * 5 + ["c"] * 5
 
     # 2. Assert check kinds follow the exact brief sequence for Part A.
     part_a_checks = quick_checks[:5]
