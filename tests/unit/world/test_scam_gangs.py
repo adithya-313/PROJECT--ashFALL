@@ -54,7 +54,7 @@ DEBIT_CHANCES = TypeChances(investment_or_job=0.0, investment_within=0.5)
 # stories, costs, totals and money rules. It was computed at a103b48 and still matches, so no draw changed.
 FIXTURE_PLAIN_SHA256 = "28615d91d9a0b0f0ab09d79c55d5241d051638fc8df4bf03cc5e59ee1252f30e"
 FIXTURE_RUN_ID = "f3dc93d7013b2eba"
-FIXTURE_PLAN_SHA256 = "0e2d035d6ddfaba445661c8da463533c950897bf878734558b81e222969a501f"
+FIXTURE_PLAN_SHA256 = "ade10fcfd89f329ba9b8fa67712da4e6253e05c09ff884ac4caa68338b27fc07"
 
 
 @pytest.fixture
@@ -368,12 +368,15 @@ def test_scam_step_after_warm_up_starts_later(scam_world: World) -> None:
         BlockStep("acquire", (("count", 4),)),
         BlockStep("warm_up", (("days", 2),)),
         BlockStep("scam", (("receiving_mules", 2),)),
+        BlockStep("route", (("layers", 1), ("accounts_per_layer", 2))),
     )
     config = GangConfig("g1", 1, GENEROUS_BUDGET, None, steps, START_MINUTE)
 
     plan = plan_gang(config, scam_world, np.random.default_rng(8))
 
-    assert min(role.valid_from for role in plan.truth.roles) >= START_MINUTE + 2 * 1440
+    mule_roles = [role for role in plan.truth.roles if role.role == "mule"]
+    assert mule_roles
+    assert all(role.active_from == START_MINUTE + 2 * 1440 for role in mule_roles)
 
 
 def test_scam_needs_enough_acquired_mules_and_people(scam_world: World) -> None:
@@ -577,8 +580,19 @@ def test_fixture_gang_plain_form_run_id_and_plan_are_unchanged() -> None:
         (role.account_id, role.role, role.gang_id, role.depth, role.valid_from, role.valid_to)
         for role in plan.truth.roles
     )
+    original_money_rules = tuple(
+        (rule.input_index, rule.spends_illicit, rule.credits_illicit)
+        for rule in plan.money_rules
+    )
     plan_text = repr(
-        (plan.payments, original_role_fields, plan.truth.payment_stories, plan.costs, plan.totals, plan.money_rules)
+        (
+            plan.payments,
+            original_role_fields,
+            plan.truth.payment_stories,
+            plan.costs,
+            plan.totals,
+            original_money_rules,
+        )
     )
     assert hashlib.sha256(plan_text.encode("utf-8")).hexdigest() == FIXTURE_PLAN_SHA256
 

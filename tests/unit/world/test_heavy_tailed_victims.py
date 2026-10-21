@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 import yaml
 
+import world.scam_planner as scam_planner
 from world.build_world import build_world
 from world.gang_config import BlockStep, GangConfig, validate_gang_config
 from world.scam_config import (
@@ -23,6 +24,7 @@ from world.scam_config import (
     resolve_victims_per_mule_typical,
 )
 from world.scam_planner import (
+    _draw_victim_counts,
     compute_power_law_probabilities,
     plan_scam_step,
 )
@@ -80,13 +82,16 @@ def test_exact_check_bulk_of_mules_within_typical_range() -> None:
             )
 
 
-def test_sampling_converges_to_power_law_table_within_4_sd() -> None:
+def test_sampling_converges_to_power_law_table_within_4_sd(monkeypatch: pytest.MonkeyPatch) -> None:
     """
-    Checks that 20,000 draws from the truncated power law table match theoretical P(1) and P(count > 5)
-    within k = 4 standard deviations, and max draw reaches at least 2 x typical high.
+    Checks that 20,000 draws from _draw_victim_counts with narrowed config match theoretical
+    P(1) and P(count > 5) within k = 4 standard deviations, and max draw reaches at least 2 x typical high.
     """
     cap = 50
     exponent = 2.0
+    monkeypatch.setattr(scam_planner, "resolve_victims_per_mule_largest", lambda split: (cap, cap))
+    monkeypatch.setattr(scam_planner, "resolve_victims_per_mule_tail_exponent", lambda split: (exponent, exponent))
+
     probs = compute_power_law_probabilities(cap, exponent)
     typical_high = 5
     p_1 = probs[0]
@@ -94,11 +99,16 @@ def test_sampling_converges_to_power_law_table_within_4_sd() -> None:
 
     n_draws = 20_000
     rng = np.random.default_rng(20261021)
-    # Sample from explicit probability table using rng.choice with p
-    draws = rng.choice(np.arange(1, cap + 1), size=n_draws, p=probs)
+    step = BlockStep("scam", (("receiving_mules", 1),))
 
-    obs_p_1 = float(np.mean(draws == 1))
-    obs_p_gt_5 = float(np.mean(draws > 5))
+    draws: list[int] = []
+    batch_size = 1000
+    for _ in range(n_draws // batch_size):
+        draws.extend(_draw_victim_counts(step, batch_size, "training", rng))
+
+    draws_arr = np.array(draws)
+    obs_p_1 = float(np.mean(draws_arr == 1))
+    obs_p_gt_5 = float(np.mean(draws_arr > 5))
 
     sd_1 = math.sqrt(p_1 * (1.0 - p_1) / n_draws)
     sd_gt_5 = math.sqrt(p_gt_5 * (1.0 - p_gt_5) / n_draws)
@@ -109,8 +119,8 @@ def test_sampling_converges_to_power_law_table_within_4_sd() -> None:
     assert abs(obs_p_gt_5 - p_gt_5) <= 4.0 * sd_gt_5, (
         f"Observed P(>5) {obs_p_gt_5:.4f} deviated from theoretical {p_gt_5:.4f} by > 4 SD ({4.0 * sd_gt_5:.4f})."
     )
-    assert int(np.max(draws)) >= 2 * typical_high, (
-        f"Maximum draw {np.max(draws)} was not at least 2 x typical high ({2 * typical_high})."
+    assert int(np.max(draws_arr)) >= 2 * typical_high, (
+        f"Maximum draw {np.max(draws_arr)} was not at least 2 x typical high ({2 * typical_high})."
     )
 
 

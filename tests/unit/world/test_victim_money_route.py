@@ -345,9 +345,11 @@ def test_outage_stops_a_victim_payment_and_the_mule_forwards_nothing(route_world
 
 def test_a_victim_who_runs_out_of_balance_fails_and_the_mule_forwards_only_what_arrived() -> None:
     """Checks failed victim payments of any reason leave the mules without a forward larger than what arrived."""
-    output = run_gang(make_gang(7, 1, 2, 2, start_minute=7544))
+    output = run_gang(make_gang(7, 1, 2, 2, start_minute=7600))
     events = fraud_events_in_order(output)
 
+    reasons = {item.event.reason for item in events if item.block == "scam" and item.event.status == "failed"}
+    assert reasons
     receiving_mules = {
         item.event.to_account for item in events if item.block == "scam" and "payout back" not in item.description
     }

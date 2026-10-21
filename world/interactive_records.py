@@ -85,21 +85,6 @@ class IllicitMoneyRule:
         if self.requires_credit_from is not None and not self.spends_illicit:
             raise ValueError("requires_credit_from is only allowed on a rule with spends_illicit=True.")
 
-    def __repr__(self) -> str:
-        """Formats string representation, omitting requires_credit_from when unset for compatibility."""
-        if self.requires_credit_from is None:
-            return (
-                f"IllicitMoneyRule(input_index={self.input_index}, "
-                f"spends_illicit={self.spends_illicit}, "
-                f"credits_illicit={self.credits_illicit})"
-            )
-        return (
-            f"IllicitMoneyRule(input_index={self.input_index}, "
-            f"spends_illicit={self.spends_illicit}, "
-            f"credits_illicit={self.credits_illicit}, "
-            f"requires_credit_from={self.requires_credit_from!r})"
-        )
-
 
 @dataclass(frozen=True)
 class IllicitSeed:
