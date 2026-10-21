@@ -27,6 +27,7 @@ from typing import Any, Literal
 
 from world.build_world import World
 from world.calendar_runner import PlannedPayment, RunResult
+from world.cash_withdrawals import CashWithdrawal, CashWithdrawalRecord
 from world.device_events import DeviceEvent
 from world.episodes import Episode
 from world.gang_devices import GangDeviceEvent
@@ -147,6 +148,7 @@ class FraudInputs:
     gang_device_events: tuple[GangDeviceEvent, ...] = ()
     money_rules: tuple[IllicitMoneyRule, ...] = ()
     illicit_seeds: tuple[IllicitSeed, ...] = ()
+    withdrawals: tuple[CashWithdrawal, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -256,6 +258,8 @@ class InteractiveRunResult:
     capped_forwards: list[ForwardAdjustment] = field(default_factory=list)
     opened_accounts: list[tuple[int, str, str, str, int, int]] = field(default_factory=list)
     paused_owner_payments: list[PausedOwnerPayment] = field(default_factory=list)
+    cash_withdrawals: list[CashWithdrawalRecord] = field(default_factory=list)
+    money_withdrawn_paise: int = 0
 
 
 @dataclass(frozen=True)

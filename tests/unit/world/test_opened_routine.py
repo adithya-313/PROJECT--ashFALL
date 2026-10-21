@@ -153,10 +153,15 @@ def test_runner_config_has_the_new_streams_and_tie_break_rank() -> None:
     children = runner_config["random_stream_children"]
     assert (children["opened_account_routine"], children["opened_routine_failures"]) == (10, 11)
     assert children["rented_owner_activity"] == 12
-    assert runner_config["tie_break_order"][-1] == "opened_routine_payments"
-    assert runner_config["tie_break_order"][:5] == [
-        "outside_events", "planned_payments", "fraud_payments", "resumed_payments", "gang_device_events",
+    assert runner_config["tie_break_order"][:6] == [
+        "outside_events",
+        "planned_payments",
+        "fraud_payments",
+        "resumed_payments",
+        "gang_device_events",
+        "opened_routine_payments",
     ]
+    assert runner_config["tie_break_order"].count("opened_routine_payments") == 1
 
 
 # ---- one person's routine -------------------------------------------------------------------------------------

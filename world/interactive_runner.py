@@ -457,6 +457,7 @@ def _apply_gang_configs(
         payments=tuple(pmts), outside_events=tuple(opening_events), truth=new_truth,
         gang_device_events=tuple(g_dev_events),
         money_rules=tuple(rules), illicit_seeds=tuple(seeds),
+        withdrawals=tuple(fraud_inputs.withdrawals),
     )
 
 

@@ -42,6 +42,13 @@ from world.calendar_runner import (
     _merge_planned_payments,
     _record_event_counts,
 )
+from world.cash_withdrawals import (
+    CashWithdrawal,
+    CashWithdrawalRecord,
+    apply_illicit_cap,
+    process_cash_withdrawal,
+    validate_cash_withdrawal,
+)
 from world.device_events import DeviceEvent
 from world.device_runtime import DeviceStamp, stamp_sender_device
 from world.encumbrance import EncumbranceBook
@@ -178,6 +185,10 @@ class LoopContext:
     no_routine_share: float | None = None
     opened_routine_index: int = 0
     paused_owner_payments: list[PausedOwnerPayment] = field(default_factory=list)
+    cash_withdrawals: list[CashWithdrawalRecord] = field(default_factory=list)
+    money_withdrawn_paise: int = 0
+    withdrawal_sequence: int = 0
+    daily_atm_withdrawn: dict[tuple[str, int], int] = field(default_factory=dict)
 
 
 def build_component_streams(seed: int, children: dict[str, int]) -> dict[str, np.random.Generator]:
@@ -312,6 +323,10 @@ def queue_initial_items(context: LoopContext, planned: Sequence[PlannedPayment],
         )
     context.money_rules_by_index = {rule.input_index: rule for rule in fraud_inputs.money_rules}
     context.original_fraud_amounts = [p.amount_paise for p in fraud_inputs.payments]
+    # Cash withdrawals, validated and queued under the cash_withdrawals tie-break rank.
+    for order, withdrawal in enumerate(fraud_inputs.withdrawals):
+        validate_cash_withdrawal(withdrawal, context.state)
+        push(context, withdrawal.minute, "cash_withdrawals", order, withdrawal)
 
 
 def apply_outside_event(context: LoopContext, event: OutsideEvent) -> None:
@@ -716,33 +731,18 @@ def cap_forward_to_illicit_balance(context: LoopContext, queued: QueuedPayment) 
         capped_payment = dataclasses.replace(payment, amount_paise=effective_paise)
         return dataclasses.replace(queued, payment=capped_payment)
 
-    effective_paise = min(planned_paise, available_paise)
-    if effective_paise == 0:
-        context.skipped_forwards.append(
-            ForwardAdjustment(
-                planned_payment_id=str(queued.planned_payment_id),
-                minute=payment.minute,
-                from_account=payment.from_account,
-                to_account=payment.to_account,
-                planned_paise=planned_paise,
-                available_paise=0,
-                reason="no_illicit_money_arrived",
-            )
-        )
+    cap_res = apply_illicit_cap(
+        context,
+        str(queued.planned_payment_id),
+        payment.minute,
+        payment.from_account,
+        payment.to_account,
+        planned_paise,
+        available_paise,
+    )
+    if cap_res is None:
         return None
-    if effective_paise < planned_paise:
-        context.capped_forwards.append(
-            ForwardAdjustment(
-                planned_payment_id=str(queued.planned_payment_id),
-                minute=payment.minute,
-                from_account=payment.from_account,
-                to_account=payment.to_account,
-                planned_paise=planned_paise,
-                available_paise=effective_paise,
-                reason="only_part_arrived",
-            )
-        )
-    capped_payment = dataclasses.replace(payment, amount_paise=effective_paise)
+    capped_payment = dataclasses.replace(payment, amount_paise=cap_res)
     return dataclasses.replace(queued, payment=capped_payment)
 
 
@@ -901,6 +901,8 @@ def finish_run(context: LoopContext, money_created_paise: int) -> InteractiveRun
         capped_forwards=context.capped_forwards,
         opened_accounts=list(context.state.opened_accounts),
         paused_owner_payments=context.paused_owner_payments,
+        cash_withdrawals=context.cash_withdrawals,
+        money_withdrawn_paise=context.money_withdrawn_paise,
     )
 
 
@@ -980,11 +982,13 @@ def run_fraud_on(
     )
     # 5. Take items off in order: outside events, gang device events, or payments.
     while context.queue:
-        item: OutsideEvent | GangDeviceEvent | QueuedPayment = heapq.heappop(context.queue)[-1]
+        item: OutsideEvent | GangDeviceEvent | QueuedPayment | CashWithdrawal = heapq.heappop(context.queue)[-1]
         if isinstance(item, OutsideEvent):
             apply_outside_event(context, item)
         elif isinstance(item, GangDeviceEvent):
             context.applied_gang_device_events.append(item)
+        elif isinstance(item, CashWithdrawal):
+            process_cash_withdrawal(context, item)
         else:
             process_payment(context, item)
     # 6. Final device events, Level 11's guard, and the result.
