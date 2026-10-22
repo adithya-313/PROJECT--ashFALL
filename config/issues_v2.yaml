@@ -710,11 +710,15 @@ issues:
   G5:
     title: "Account market shared by gangs"
     origin: level_11
-    status: planned
+    status: built
     levels: [12]
     parts: [12d]
     v1_status: built
-    later_work: ["Level 12d: gang tactics and held-out families"]
+    evidence:
+      - {kind: amendment, id: A-017}
+      - {kind: config, file: config/account_market.yaml, name: account_market}
+      - {kind: test, file: tests/unit/world/test_account_market.py, name: test_apply_resale_leaves_no_trace_of_new_account}
+      - {kind: test, file: tests/unit/world/test_account_market.py, name: test_two_scam_gangs_resale_share_1_moves_money_and_transfers_truth_owner}
   L1:
     title: "Complaint delay by scam type"
     origin: level_11
