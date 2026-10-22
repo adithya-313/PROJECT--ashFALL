@@ -1,0 +1,104 @@
+# How scam victims pay a gang's receiving mules: scam types, how many payments, how far apart, how big.
+#
+# TERM: scam type = the story that makes a victim pay: investment, job or unauthorised_debit.
+# TERM: victim payment = money a victim sends to a receiving mule because of the scam.
+# TERM: payout back = a small payment from the receiving mule back to the victim, to build trust for later payments.
+# TERM: escalation multiple = how many times larger a victim's next payment is than the one before it.
+# TERM: world_ranges_reference = the value is read from config/world_ranges.yaml; its label, source and reason
+#       live there and are not copied here.
+# TERM: split = the evaluation range of the world: training, test or stress.
+#
+# Read by world/scam_config.py. Checked by: python -m core.config_validator config/scam_schedules.yaml
+
+scam_type_shares:
+  label: policy
+  reason: "Decides which scam type a victim gets: first investment-or-job against everything else, then investment against job. Everything else is modelled as an unauthorised debit for now."
+  issue_ids_v2: [G6]
+  derived_from: "amendment A-016"
+  investment_or_job_share:
+    label: policy
+    world_ranges_reference: share_of_scams_investment_or_job
+    reason: "Chance that a victim's scam is investment or job; read from config/world_ranges.yaml, where the Kerala Police 2025 figure and its label live."
+  investment_share_of_investment_or_job:
+    label: assumption
+    unit: fraction
+    training: [0.4, 0.6]
+    test: [0.4, 0.6]
+    stress: [0.1, 0.9]
+    reason: "Kerala Police 2025 reported 34.8% trading and 33% job scams, close to even; one state only."
+  remainder_type:
+    label: policy
+    value: unauthorised_debit
+    reason: "Every scam type other than investment and job is modelled as an unauthorised debit for now."
+
+investment_and_job_schedule:
+  label: policy
+  reason: "Investment and job scams escalate: a victim pays several times, each payment larger than the last, spread over days."
+  issue_ids_v2: [G6]
+  derived_from: "amendment A-016"
+  payments_per_victim:
+    label: policy
+    world_ranges_reference: scam_payments_per_victim
+    reason: "How many times one victim pays; read from config/world_ranges.yaml."
+  payment_spread_days:
+    label: policy
+    world_ranges_reference: scam_payment_spread_days
+    reason: "Days over which one victim's payments are spread; read from config/world_ranges.yaml."
+  first_payment_amount_inr:
+    label: policy
+    world_ranges_reference: mule_transfer_amount_inr
+    reason: "Size of a victim's first payment; read from config/world_ranges.yaml. No figure exists for a first scam payment, so the mule transfer range is reused."
+  payment_escalation_multiple:
+    label: assumption
+    unit: multiple of the previous payment
+    training: [1.0, 2.0]
+    test: [1.0, 2.0]
+    stress: [1.0, 4.0]
+    reason: "These scams escalate (see scam_payment_spread_days in config/world_ranges.yaml) but no multiple is published."
+  payout_back_share:
+    label: policy
+    world_ranges_reference: scam_small_payout_back_share
+    reason: "Share of what the victim has paid so far that the mule pays back once; read from config/world_ranges.yaml."
+  min_minutes_between_victim_payments:
+    label: policy
+    value: 2
+    unit: minutes
+    reason: "Two payments of one victim are never closer than this, so the payout back always has a whole minute strictly after the first payment and strictly before the last."
+
+unauthorised_debit_schedule:
+  label: policy
+  reason: "After an account takeover the debits happen within minutes and there is no payout back, because there is no trust to build."
+  issue_ids_v2: [G6]
+  derived_from: "amendment A-016"
+  debit_payments:
+    label: assumption
+    unit: count
+    training: [1, 3]
+    test: [1, 3]
+    stress: [1, 10]
+    reason: "Debits after a takeover happen within minutes (see complaint_delay_unauthorised_debit_minutes in config/world_ranges.yaml) but no count is published."
+  debit_spread_minutes:
+    label: assumption
+    unit: minutes
+    training: [0, 60]
+    test: [0, 60]
+    stress: [0, 240]
+    reason: "Debits after a takeover happen within minutes (see complaint_delay_unauthorised_debit_minutes in config/world_ranges.yaml) but no spread is published."
+  debit_amount_inr:
+    label: policy
+    world_ranges_reference: mule_transfer_amount_inr
+    reason: "Size of each debit; read from config/world_ranges.yaml. No figure exists for a takeover debit, so the mule transfer range is reused."
+  payout_back:
+    label: policy
+    value: false
+    reason: "Nothing to build trust for after a takeover, so the mule pays nothing back."
+
+victims_per_mule_tail_exponent:
+  label: assumption
+  unit: power law exponent
+  training: [1.8, 2.6]
+  test: [1.8, 2.6]
+  stress: [1.2, 3.5]
+  issue_ids_v2: [G3]
+  derived_from: "amendment A-016"
+  reason: "No figure is published; chosen so most mules fall inside victims_per_mule_typical while a few reach victims_per_mule_largest."

@@ -27,10 +27,12 @@ from typing import Any, Literal
 
 from world.build_world import World
 from world.calendar_runner import PlannedPayment, RunResult
+from world.cash_withdrawals import CashWithdrawal, CashWithdrawalRecord
 from world.device_events import DeviceEvent
 from world.episodes import Episode
 from world.gang_devices import GangDeviceEvent
 from world.outside_events import OutsideEvent
+from world.rented_owner_activity import PausedOwnerPayment
 from world.truth_records import TruthFacts
 from world.world_plan import WorldPlan
 
@@ -50,6 +52,7 @@ class RunnerSettings:
 
     Args:
         fraud_enabled: True to run the fraud-on loop, False to fall back to Level 11.
+        account_openings_enabled: True to schedule genuine mid-run account openings, False by default.
 
     Returns:
         A frozen RunnerSettings.
@@ -59,13 +62,66 @@ class RunnerSettings:
     """
 
     fraud_enabled: bool = False
+    account_openings_enabled: bool = False
+
+
+@dataclass(frozen=True)
+class IllicitMoneyRule:
+    """
+    Controls how illicit money flows through one planned fraud payment.
+
+    input_index identifies the target payment in FraudInputs.payments.
+    spends_illicit limits the payment to the sender's current illicit balance.
+    credits_illicit credits successful transfer amounts to the receiver's illicit balance.
+    requires_credit_from ties spending to funds credited specifically from that sender account.
+    """
+
+    input_index: int
+    spends_illicit: bool
+    credits_illicit: bool
+    requires_credit_from: str | None = None
+
+    def __post_init__(self) -> None:
+        """Enforces that requires_credit_from is only set when spends_illicit is True."""
+        if self.requires_credit_from is not None and not self.spends_illicit:
+            raise ValueError("requires_credit_from is only allowed on a rule with spends_illicit=True.")
+
+
+@dataclass(frozen=True)
+class IllicitSeed:
+    """
+    Initial illicit money balance allocated to an account before simulation begins.
+
+    account_id specifies the target account identifier.
+    amount_paise specifies the starting illicit balance in paise.
+    """
+
+    account_id: str
+    amount_paise: int
+
+
+@dataclass(frozen=True)
+class ForwardAdjustment:
+    """
+    Audit record for a fraud forward payment capped or skipped by the illicit money guard.
+
+    Records planned versus available paise, accounts involved, and the adjustment reason.
+    """
+
+    planned_payment_id: str
+    minute: int
+    from_account: str
+    to_account: str
+    planned_paise: int
+    available_paise: int
+    reason: str
 
 
 @dataclass(frozen=True)
 class FraudInputs:
     """
-    WHAT: What fraud adds to a world: extra payments, outside events, hidden truth facts, and gang device events.
-    All are empty by default, and an empty FraudInputs with an allow-all hook gives exactly Level 11's run.
+    WHAT: Inputs for a world run with the fraud switch on: fraud payments to interleave with genuine ones, outside
+    events to apply, hidden truth facts, synthesized gang device events, and illicit money rules and seeds.
 
     WHY: Fraud payments use the same PlannedPayment record as genuine ones and a purpose from Level 11's list, so the
     events they create look like any other event. Which payments are fraud is kept by the world, not in the purpose.
@@ -75,6 +131,8 @@ class FraudInputs:
         outside_events: Liens, debit holds, releases and resumes to apply during the run.
         truth: Hidden truth facts (roles, device control spans, payment stories) associated with the run.
         gang_device_events: Synthesized gang device lifecycle events to queue and apply.
+        money_rules: Rules governing illicit funds movement for specific fraud payments.
+        illicit_seeds: Initial illicit balances allocated to designated source accounts.
 
     Returns:
         A frozen FraudInputs.
@@ -88,6 +146,9 @@ class FraudInputs:
     outside_events: tuple[OutsideEvent, ...] = ()
     truth: TruthFacts = field(default_factory=TruthFacts)
     gang_device_events: tuple[GangDeviceEvent, ...] = ()
+    money_rules: tuple[IllicitMoneyRule, ...] = ()
+    illicit_seeds: tuple[IllicitSeed, ...] = ()
+    withdrawals: tuple[CashWithdrawal, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -166,6 +227,11 @@ class InteractiveRunResult:
         run_id: The run's name, e.g. "66db9aa439b092ee".
         money_created_paise: Opening balances of accounts registered during the run, in paise.
         truth: Hidden truth facts (roles, device control spans, payment stories) associated with the run.
+        skipped_forwards: Adjustments where forwards were skipped due to lack of received illicit money.
+        capped_forwards: Adjustments where forwards were capped to the illicit balance received.
+        opened_accounts: (minute, account_id, owner_kind, opening_stream, bank_index, opening_balance_paise)
+            for accounts registered mid-run.
+        paused_owner_payments: Genuine payments of rented mules' owners that were paused (no event, no money moved).
 
     Returns:
         A frozen InteractiveRunResult.
@@ -188,6 +254,12 @@ class InteractiveRunResult:
     run_id: str = ""
     money_created_paise: int = 0
     truth: TruthFacts = field(default_factory=TruthFacts)
+    skipped_forwards: list[ForwardAdjustment] = field(default_factory=list)
+    capped_forwards: list[ForwardAdjustment] = field(default_factory=list)
+    opened_accounts: list[tuple[int, str, str, str, int, int]] = field(default_factory=list)
+    paused_owner_payments: list[PausedOwnerPayment] = field(default_factory=list)
+    cash_withdrawals: list[CashWithdrawalRecord] = field(default_factory=list)
+    money_withdrawn_paise: int = 0
 
 
 @dataclass(frozen=True)

@@ -423,6 +423,46 @@ def get_gang_device_event_kinds(config_path: Path | None = None) -> list[str]:
     return [str(item) for item in kinds]
 
 
+def get_acquire_count_range(
+    split: str = "training", world_ranges_path: Path | None = None
+) -> tuple[int, int]:
+    """
+    WHAT: Resolves the [min, max] count of mule accounts acquired from world ranges.
+
+    WHY: When an acquire step omits count, the planner draws count from this configured range.
+
+    Args:
+        split: Range split ('training', 'test', 'stress').
+        world_ranges_path: Optional path override for world_ranges.yaml.
+
+    Returns:
+        Two-element integer tuple (min_mules, max_mules).
+    """
+    ranges_data = load_world_ranges(world_ranges_path)["parameters"]["mules_per_gang"]
+    bounds = ranges_data[split]
+    return int(bounds[0]), int(bounds[1])
+
+
+def get_warmup_days_range(
+    split: str = "training", world_ranges_path: Path | None = None
+) -> tuple[int, int]:
+    """
+    WHAT: Resolves the [min, max] warmup days for mule seasoning from world ranges.
+
+    WHY: When a warm_up step omits days, the planner draws days from this configured range.
+
+    Args:
+        split: Range split ('training', 'test', 'stress').
+        world_ranges_path: Optional path override for world_ranges.yaml.
+
+    Returns:
+        Two-element integer tuple (min_days, max_days).
+    """
+    ranges_data = load_world_ranges(world_ranges_path)["parameters"]["mule_warmup_days"]
+    bounds = ranges_data[split]
+    return int(bounds[0]), int(bounds[1])
+
+
 def get_take_control_devices_range(config_path: Path | None = None) -> tuple[int, int]:
     """
     WHAT: Retrieves the [min, max] device count range for take_control from config/tactic_blocks.yaml.
@@ -444,3 +484,190 @@ def get_take_control_devices_range(config_path: Path | None = None) -> tuple[int
     devices_range = definition["parameters"]["devices"]["range"]
     return int(devices_range[0]), int(devices_range[1])
 
+
+def get_scam_receiving_mules_range(config_path: Path | None = None) -> tuple[int, int]:
+    """
+    WHAT: Retrieves the [min, max] count of receiving mules a scam step may name, from config/tactic_blocks.yaml.
+
+    WHY: Gang configuration validation checks the scam step's receiving_mules against this range, so the limit is
+    never typed in code.
+
+    Args:
+        config_path: Optional path override for tactic_blocks.yaml.
+
+    Returns:
+        Two-element integer tuple (min_mules, max_mules).
+
+    Example:
+        # min_mules, max_mules = get_scam_receiving_mules_range()
+        # assert min_mules == 1 and max_mules == 10
+    """
+    # 1. Fetch the receiving_mules parameter range from the scam block definition.
+    definition = get_block_definition("scam", config_path)
+    mules_range = definition["parameters"]["receiving_mules"]["range"]
+    return int(mules_range[0]), int(mules_range[1])
+
+
+def get_scam_victims_per_mule_range(
+    config_path: Path | None = None, world_ranges_path: Path | None = None
+) -> tuple[int, int]:
+    """
+    WHAT: Resolves the [1, max] count of victims per receiving mule from the world ranges the scam block names.
+    The lower bound is 1 and the upper bound is the high end of victims_per_mule_largest for the split.
+
+    WHY: Validation checks an explicit victims_per_receiving_mule against [1, high end of largest].
+
+    Args:
+        config_path: Optional path override for tactic_blocks.yaml.
+        world_ranges_path: Optional path override for world_ranges.yaml.
+
+    Returns:
+        Two-element integer tuple (1, max_victims).
+
+    Example:
+        # min_victims, max_victims = get_scam_victims_per_mule_range()
+        # assert min_victims == 1 and max_victims == 50
+    """
+    # 1. Resolve the training range through the block parameter's world_ranges_reference.
+    bounds = resolve_parameter_training_range("scam", "victims_per_receiving_mule", config_path, world_ranges_path)
+    return 1, int(bounds[1])
+
+
+
+def get_origin_mix_options(config_path: Path | None = None) -> tuple[list[str], str]:
+    """
+    WHAT: Retrieves the allowed origin_mix values of the acquire block and the default used when it is left out,
+    from config/tactic_blocks.yaml.
+
+    WHY: Gang validation and the planner must agree on the allowed values and the default without typing them.
+
+    Args:
+        config_path: Optional path override for tactic_blocks.yaml.
+
+    Returns:
+        (allowed values, default value).
+
+    Raises:
+        ValueError: If the default is not one of the allowed values.
+
+    Example:
+        # allowed, default = get_origin_mix_options()
+        # assert default == "all_rented" and "world_ranges" in allowed
+    """
+    # 1. Read the origin_mix parameter of the acquire block.
+    definition = get_block_definition("acquire", config_path)["parameters"]["origin_mix"]
+    allowed = [str(value) for value in definition["allowed_values"]]
+    default = str(definition["default"])
+    if default not in allowed:
+        raise ValueError(f"The default origin_mix '{default}' is not one of {', '.join(allowed)}.")
+    return allowed, default
+
+
+def get_mule_origin_share_ranges(
+    split: str, config_path: Path | None = None, world_ranges_path: Path | None = None
+) -> dict[str, tuple[float, float]]:
+    """
+    WHAT: Resolves the share range of every mule origin for a split, through the world_ranges_reference that
+    config/tactic_blocks.yaml names for each origin. Origins come back in the order the config lists them.
+
+    WHY: The ranges live in config/world_ranges.yaml; reading them by reference keeps one copy of each number.
+
+    Args:
+        split: Split name of the world, e.g. "training".
+        config_path: Optional path override for tactic_blocks.yaml.
+        world_ranges_path: Optional path override for world_ranges.yaml.
+
+    Returns:
+        Origin -> (lower, upper) share bounds.
+
+    Raises:
+        ValueError: If the split or a referenced parameter is missing, or a range is not two ordered numbers.
+
+    Example:
+        # get_mule_origin_share_ranges("training")["rented"] == (0.2, 0.5)
+    """
+    # 1. Read the origin section and the referenced world ranges parameters.
+    section = load_tactic_blocks(config_path)["mule_origin_shares"]
+    parameters = load_world_ranges(world_ranges_path)["parameters"]
+    ranges: dict[str, tuple[float, float]] = {}
+    for origin, setting in section.items():
+        if not isinstance(setting, dict) or "world_ranges_reference" not in setting:
+            continue
+        reference = setting["world_ranges_reference"]
+        if reference not in parameters:
+            raise ValueError(f"Mule origin '{origin}' references unknown world_ranges parameter '{reference}'.")
+        if split not in parameters[reference]:
+            raise ValueError(f"World ranges parameter '{reference}' has no range for split '{split}'.")
+        bounds = parameters[reference][split]
+        if not isinstance(bounds, list) or len(bounds) != 2 or bounds[0] > bounds[1]:
+            raise ValueError(f"World ranges parameter '{reference}' split '{split}' must be two ordered numbers.")
+        ranges[origin] = (float(bounds[0]), float(bounds[1]))
+    return ranges
+
+
+def get_new_account_owner_kind(origin: str, config_path: Path | None = None) -> str | None:
+    """
+    WHAT: Returns the owner kind of the new account a mule origin needs ("person" or "shop"), or None when the
+    origin uses an existing account.
+
+    WHY: Which origins open accounts, and what kind, is configuration and not planner code.
+
+    Args:
+        origin: Mule origin name, e.g. "business".
+        config_path: Optional path override for tactic_blocks.yaml.
+
+    Returns:
+        "person", "shop" or None.
+
+    Raises:
+        ValueError: If the origin is unknown or the configured kind is not person, shop or null.
+
+    Example:
+        # get_new_account_owner_kind("borrowed_kyc") == "person"
+    """
+    section = load_tactic_blocks(config_path)["mule_origin_shares"]
+    if origin not in section or not isinstance(section[origin], dict):
+        raise ValueError(f"Unknown mule origin '{origin}'.")
+    owner_kind = section[origin]["new_account_owner_kind"]
+    if owner_kind not in ("person", "shop", None):
+        raise ValueError(f"Mule origin '{origin}' has owner kind {owner_kind!r}; it must be person, shop or null.")
+    return owner_kind
+
+
+def get_rented_owner_kept_share_range(
+    split: str, config_path: Path | None = None, world_ranges_path: Path | None = None
+) -> tuple[float, float]:
+    """
+    WHAT: Resolves the range of the share of its owner's outgoing payments that a rented mule keeps, through the
+    world_ranges_reference in the rented_owner_activity section of config/tactic_blocks.yaml.
+
+    WHY: The number lives in config/world_ranges.yaml; reading it by reference keeps a single copy.
+
+    Args:
+        split: Split name of the world, e.g. "training".
+        config_path: Optional path override for tactic_blocks.yaml.
+        world_ranges_path: Optional path override for world_ranges.yaml.
+
+    Returns:
+        (lower, upper) bounds of the kept share.
+
+    Raises:
+        ValueError: If the reference, the parameter or the split is missing, or the range is not two ordered numbers.
+
+    Example:
+        # get_rented_owner_kept_share_range("training") == (0.3, 0.8)
+    """
+    # 1. Follow the reference to the world ranges parameter.
+    setting = load_tactic_blocks(config_path)["rented_owner_activity"]["kept_share"]
+    if "world_ranges_reference" not in setting:
+        raise ValueError("The rented owner kept_share setting must name a world_ranges_reference.")
+    reference = setting["world_ranges_reference"]
+    parameters = load_world_ranges(world_ranges_path)["parameters"]
+    if reference not in parameters:
+        raise ValueError(f"Rented owner kept_share references unknown world_ranges parameter '{reference}'.")
+    if split not in parameters[reference]:
+        raise ValueError(f"World ranges parameter '{reference}' has no range for split '{split}'.")
+    bounds = parameters[reference][split]
+    if not isinstance(bounds, list) or len(bounds) != 2 or bounds[0] > bounds[1]:
+        raise ValueError(f"World ranges parameter '{reference}' split '{split}' must be two ordered numbers.")
+    return float(bounds[0]), float(bounds[1])

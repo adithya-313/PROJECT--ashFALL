@@ -40,6 +40,8 @@ class RoleSpan:
         depth: Layer number in the laundering chain (>= 1 for mules, None for non-mules).
         valid_from: Starting minute of the role assignment (inclusive, >= 0).
         valid_to: Ending minute of the assignment (exclusive, > valid_from, or None if unending).
+        origin: How the gang came to control a mule account, one of the mule_origins in config/truth_store.yaml;
+            None when unknown and always None for roles other than "mule".
 
     Returns:
         A frozen RoleSpan.
@@ -54,6 +56,9 @@ class RoleSpan:
     depth: int | None
     valid_from: int
     valid_to: int | None
+    origin: str | None = None
+    active_from: int | None = None
+    burned_from: int | None = None
 
 
 @dataclass(frozen=True)
@@ -193,6 +198,38 @@ def validate_role_in_config(role_span: RoleSpan, allowed_roles: Sequence[str]) -
         )
 
 
+def validate_role_origin(role_span: RoleSpan, allowed_origins: Sequence[str]) -> None:
+    """
+    WHAT: Validates a role span's origin: it may be set only on a "mule" span, and then only to one of the origins
+    listed in config/truth_store.yaml under mule_origins.
+
+    WHY: Origin describes how a mule account was obtained, so it means nothing on a victim or collector, and a
+    misspelled origin would silently split evaluation groups.
+
+    Args:
+        role_span: The RoleSpan instance to validate.
+        allowed_origins: Permitted origin names from truth_store.yaml.
+
+    Returns:
+        None. Raises ValueError with one sentence naming the account when the origin is not allowed.
+
+    Example:
+        validate_role_origin(RoleSpan("acc_a", "mule", "g1", 1, 0, 100, "rented"), ["rented", "business"])
+    """
+    if role_span.origin is None:
+        return
+    if role_span.role != "mule":
+        raise ValueError(
+            f"RoleSpan for account '{role_span.account_id}' has origin '{role_span.origin}' "
+            f"but origin is only allowed on mule roles, not '{role_span.role}'."
+        )
+    if role_span.origin not in allowed_origins:
+        raise ValueError(
+            f"RoleSpan for account '{role_span.account_id}' has invalid origin '{role_span.origin}'; "
+            f"must be one of {', '.join(allowed_origins)}"
+        )
+
+
 def validate_time_span(span: RoleSpan | DeviceControlSpan) -> None:
     """
     WHAT: Validates that a temporal validity span is well-formed: valid_from must be non-negative,
@@ -252,6 +289,45 @@ def validate_mule_depth(role_span: RoleSpan) -> None:
             raise ValueError(
                 f"RoleSpan for non-mule account '{role_span.account_id}' (role '{role_span.role}') "
                 f"must have depth None, got {role_span.depth}"
+            )
+
+
+def validate_role_lifecycle(role_span: RoleSpan) -> None:
+    """
+    WHAT: Validates mule lifecycle attributes active_from and burned_from on a RoleSpan.
+    Asserts both are None or both are set; if set, role must be 'mule' and valid_from <= active_from <= burned_from.
+
+    WHY: Mules progress through defined lifecycle phases (warm-up, active, burned). Non-mules do not possess
+    gang lifecycle states, and partial or out-of-order timestamps represent corrupted temporal progression.
+
+    Args:
+        role_span: The RoleSpan instance to validate.
+
+    Returns:
+        None. Raises ValueError with one plain sentence upon invariant violation.
+
+    Example:
+        validate_role_lifecycle(RoleSpan("acc_1", "mule", "g1", 1, 0, None, active_from=100, burned_from=200))
+    """
+    has_active = role_span.active_from is not None
+    has_burned = role_span.burned_from is not None
+    if has_active != has_burned:
+        raise ValueError(
+            f"RoleSpan for account '{role_span.account_id}' must have both active_from "
+            f"and burned_from set or both None."
+        )
+    if has_active:
+        if role_span.role != "mule":
+            raise ValueError(
+                f"RoleSpan for account '{role_span.account_id}' has lifecycle fields but role is '{role_span.role}'; "
+                f"lifecycle is only allowed on mule roles."
+            )
+        assert role_span.active_from is not None and role_span.burned_from is not None
+        if not (role_span.valid_from <= role_span.active_from <= role_span.burned_from):
+            raise ValueError(
+                f"RoleSpan for account '{role_span.account_id}' has invalid lifecycle order: "
+                f"valid_from ({role_span.valid_from}) <= active_from ({role_span.active_from}) <= "
+                f"burned_from ({role_span.burned_from}) was violated."
             )
 
 
@@ -347,7 +423,8 @@ def validate_payment_stories_length(payment_stories: Sequence[PaymentStory], pay
 
 
 def validate_truth_facts(
-    truth: TruthFacts, payment_count: int, allowed_roles: Sequence[str] | None = None
+    truth: TruthFacts, payment_count: int, allowed_roles: Sequence[str] | None = None,
+    allowed_origins: Sequence[str] | None = None,
 ) -> None:
     """
     WHAT: Top-level validator applying all hidden truth invariant checks across role spans, device control spans,
@@ -360,6 +437,7 @@ def validate_truth_facts(
         truth: The TruthFacts collection to inspect.
         payment_count: Total number of planned fraud payments in the current simulation run.
         allowed_roles: Optional explicit list of allowed role strings; loads from config if None.
+        allowed_origins: Optional explicit list of allowed mule origin strings; loads from config if None.
 
     Returns:
         None.
@@ -368,15 +446,19 @@ def validate_truth_facts(
         validate_truth_facts(TruthFacts(), 0)  # Validates empty truth facts against zero payments
     """
     # 1. Resolve permitted role taxonomy from truth_store.yaml if not explicitly supplied.
+    truth_config = load_truth_config()
     if allowed_roles is None:
-        truth_config = load_truth_config()
         allowed_roles = list(truth_config["truth_store"]["roles"].keys())
+    if allowed_origins is None:
+        allowed_origins = list(truth_config["truth_store"]["mule_origins"])
 
     # 2. Validate individual role spans for schema compliance, non-negative bounds, and mule depth.
     for role_span in truth.roles:
         validate_role_in_config(role_span, allowed_roles)
+        validate_role_origin(role_span, allowed_origins)
         validate_time_span(role_span)
         validate_mule_depth(role_span)
+        validate_role_lifecycle(role_span)
     validate_no_overlapping_role_spans(truth.roles)
 
     # 3. Validate device control spans for temporal consistency and mutual exclusion.

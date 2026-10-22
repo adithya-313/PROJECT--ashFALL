@@ -27,6 +27,11 @@ tactic_blocks:
           world_ranges_reference: mules_per_gang
           split: training
           reason: "Number of mule accounts acquired by a gang per campaign, referenced from config/world_ranges.yaml"
+        origin_mix:
+          label: policy
+          allowed_values: [all_rented, world_ranges]
+          default: all_rented
+          reason: "Where mule origins come from. all_rented takes every mule from the ordinary people of the world, as the 12b fixtures did before mule origins existed, and is the default when the parameter is left out; an omitted parameter records no origin in truth so those fixtures stay unchanged, while an explicit all_rented records origin rented. world_ranges draws each mule's origin from the mule_origin_share ranges."
     take_control:
       label: assumption
       reason: "No published figure; building block models unauthorized device takeover for comparison per amendment A-016."
@@ -66,6 +71,22 @@ tactic_blocks:
           world_ranges_reference: mule_warmup_days
           split: training
           reason: "Number of days spent letting acquired accounts season before routing, referenced from config/world_ranges.yaml"
+    scam:
+      label: assumption
+      reason: "No published figure; building block models victims paying receiving mules for comparison per amendment A-016."
+      meaning: "Victims pay acquired receiving mules; this is the gang's money source in place of a fixture source"
+      allowed_strengths: [1, 2]
+      time_minutes_per_use: "span of the victim payment schedule"
+      parameters:
+        receiving_mules:
+          label: assumption
+          range: [1, 10]
+          reason: "Number of acquired mules that receive victim money; route accounts_per_layer must equal it"
+        victims_per_receiving_mule:
+          label: assumption
+          world_ranges_reference: victims_per_mule_largest
+          split: training
+          reason: "Number of victims paying each receiving mule, upper bound referenced from config/world_ranges.yaml"
     route:
       label: assumption
       reason: "No published figure; building block models layered forwarding for comparison per amendment A-016."
@@ -102,6 +123,62 @@ tactic_blocks:
           label: assumption
           range: [0, 30]
           reason: "Random minute offset applied to payment timings within dwell window"
+    cash_out:
+      label: assumption
+      reason: "No published figure; building block models downstream extraction via crypto, ATM, branch, and genuine shops per Decision D3."
+      meaning: "Extract stolen money from terminal mule accounts into physical cash, crypto, or genuine merchant goods"
+      allowed_strengths: [1, 2]
+      time_minutes_per_use: "cashing out window"
+      parameters:
+        channels:
+          label: policy
+          allowed_values: [crypto, atm, branch, genuine_shop]
+          reason: "Cash-out distribution channels specified in config/cash_out.yaml"
+    split_below_threshold:
+      label: assumption
+      reason: "No published figure; building block models splitting payments below a threshold for comparison per amendment A-016."
+      meaning: "Split payments exceeding a threshold into smaller pieces to avoid reporting or rule limits"
+      allowed_strengths: [1, 2]
+      time_minutes_per_use: 0
+      parameters:
+        threshold_inr:
+          label: assumption
+          range: [10000, 50000]
+          training: [10000, 50000]
+          test: [10000, 50000]
+          stress: [2000, 100000]
+          reason: "Threshold in INR above which payments are split into pieces below it"
+
+mule_origin_shares:
+  label: policy
+  reason: "Chances that an acquired mule is rented, opened on borrowed documents or opened as a business account when origin_mix is world_ranges. The three ranges in config/world_ranges.yaml are independent and do not sum to 1, so each draw is divided by the sum of the three before it is used."
+  issue_ids_v2: [G1, 12-19]
+  derived_from: "amendment A-016; config/world_ranges.yaml"
+  rented:
+    label: policy
+    world_ranges_reference: mule_origin_share_rented
+    new_account_owner_kind: null
+    reason: "A rented mule is an existing ordinary account, so no account is opened for it; its share is read from config/world_ranges.yaml."
+  borrowed_kyc:
+    label: policy
+    world_ranges_reference: mule_origin_share_borrowed_kyc
+    new_account_owner_kind: person
+    reason: "A borrowed-KYC mule is a new personal account opened on someone else's identity documents; its share is read from config/world_ranges.yaml."
+  business:
+    label: policy
+    world_ranges_reference: mule_origin_share_business
+    new_account_owner_kind: shop
+    reason: "A business mule is a new business account, modelled as a shop account; its share is read from config/world_ranges.yaml."
+
+rented_owner_activity:
+  label: policy
+  reason: "A rented mule keeps part of its owner's normal payments next to the illicit flows. The kept share is drawn once per rented mule; an outgoing owner payment inside the mule span is paused when a fresh draw is not below that share."
+  issue_ids_v2: [G1]
+  derived_from: "amendment A-016; config/world_ranges.yaml"
+  kept_share:
+    label: policy
+    world_ranges_reference: rented_mule_owner_activity_kept_share
+    reason: "Share of the owner's outgoing payments that a rented mule keeps; read from config/world_ranges.yaml, where its label and reason live."
 
 held_out_dividing_lines:
   label: policy
@@ -128,7 +205,7 @@ held_out_dividing_lines:
 gang_payment_purpose:
   label: policy
   purpose: everyday
-  reason: "Real scam purposes are decided in Level 12c; Level 12b uses the valid runner purpose everyday."
+  reason: "Payment purposes stay world-side (ground rule 29) and Level 11's purpose list cannot grow, so gang payments, victim payments included, reuse everyday; the truth story carries the scam type."
 
 gang_devices:
   label: policy

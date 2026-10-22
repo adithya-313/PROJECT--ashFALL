@@ -130,6 +130,34 @@ class TruthStore:
         # 2. Return None if no gang owns the account at this minute.
         return None
 
+    def origin_at(self, account_id: str, minute: int) -> str | None:
+        """
+        WHAT: Returns how the gang came to control the account (rented, borrowed_kyc or business) if the account
+        is an active mule at the given simulation minute and its origin was recorded, otherwise None.
+
+        WHY: Lets evaluation compare detection across mule origins without reading raw truth rows.
+
+        Args:
+            account_id: Account identifier to query.
+            minute: Integer simulation minute.
+
+        Returns:
+            The origin string or None.
+
+        Example:
+            # store.origin_at('acc_person_000006', 1440) -> 'rented'
+        """
+        # 1. Find the active role span and return its recorded origin.
+        for role_span in self._roles:
+            if role_span["account_id"] == account_id:
+                valid_from = role_span["valid_from"]
+                valid_to = role_span["valid_to"]
+                if valid_from <= minute and (valid_to is None or minute < valid_to):
+                    return role_span["origin"]
+
+        # 2. Return None if the account has no active role span.
+        return None
+
     def depth_at(self, account_id: str, minute: int) -> int | None:
         """
         WHAT: Returns the hierarchical mule depth layer for the account at the given simulation minute,
@@ -156,6 +184,42 @@ class TruthStore:
                     return role_span["depth"]
 
         # 2. Return None if the account has no active role span.
+        return None
+
+    def phase_at(self, account_id: str, minute: int) -> str | None:
+        """
+        WHAT: Returns the operational lifecycle phase ('warm_up', 'active', 'burned') of a mule account
+        at the specified simulation minute, or None if the account is not a mule or has no configured lifecycle.
+
+        WHY: Gang campaigns move mules through explicit lifecycle stages: pre-activation warm-up, active
+        victim inflow, and burned status after the activity window or final outgoing payment.
+
+        Args:
+            account_id: Account identifier to inspect.
+            minute: Integer simulation minute (>= 0).
+
+        Returns:
+            'warm_up' | 'active' | 'burned' | None.
+
+        Example:
+            # store.phase_at('acc_mule_001', 100) -> 'warm_up'
+        """
+        for role_span in self._roles:
+            if role_span["account_id"] == account_id:
+                active_from = role_span.get("active_from")
+                burned_from = role_span.get("burned_from")
+                if active_from is None or burned_from is None:
+                    continue
+                valid_from = role_span["valid_from"]
+                valid_to = role_span.get("valid_to")
+                if minute < valid_from or (valid_to is not None and minute >= valid_to):
+                    continue
+                if minute < active_from:
+                    return "warm_up"
+                elif minute < burned_from:
+                    return "active"
+                else:
+                    return "burned"
         return None
 
     def story_of(self, payment_id: str) -> dict[str, Any]:

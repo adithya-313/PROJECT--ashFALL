@@ -1,0 +1,53 @@
+# Cash-out channel configuration and downstream distribution (Level 12c C-4, D3).
+#
+# TERM: cash-out = terminal extraction of illicit funds leaving the mule network.
+# TERM: crypto collector = gang-opened borrowed-KYC collector account receiving crypto payouts.
+# TERM: ATM cash-out = physical cash withdrawals subject to card daily limits.
+# TERM: branch cash-out = over-the-counter physical cash withdrawals after branch delay.
+# TERM: genuine shop = ordinary retail shop receiving illicit customer payments for goods.
+#
+# Checked by: python -m core.config_validator config/cash_out.yaml
+
+cash_out:
+  label: policy
+  reason: "Downstream cash-out distribution channels for terminal layer mules per Decision D3."
+  issue_ids_v2: [G2, A2]
+  derived_from: "Decision D3; config/world_ranges.yaml"
+
+  channel_shares:
+    label: policy
+    reason: "Relative shares for cash-out channels. The ranges in config/world_ranges.yaml are independent, so draws are normalized to sum to 1."
+    crypto:
+      label: policy
+      world_ranges_reference: cashout_share_crypto
+      reason: "Fraction of cash-out routed to crypto collector accounts; read from config/world_ranges.yaml."
+    atm:
+      label: policy
+      world_ranges_reference: cashout_share_atm
+      reason: "Fraction of cash-out extracted via ATM withdrawals; read from config/world_ranges.yaml."
+    branch:
+      label: policy
+      world_ranges_reference: cashout_share_branch_or_cheque
+      reason: "Fraction of cash-out extracted via bank branch counter withdrawals; read from config/world_ranges.yaml."
+    genuine_shop:
+      label: policy
+      world_ranges_reference: share_of_mule_outflows_to_genuine_shops
+      reason: "Fraction of mule outflows spent at genuine goods-selling merchant shops; read from config/world_ranges.yaml."
+
+  genuine_shop_kinds:
+    label: policy
+    kinds: [grocery, restaurant]
+    reason: "Genuine goods-selling shops downstream of mules that receive stolen money for real consumer goods (Decision D3, review issue A2). Excludes employers, utilities, and landlords."
+
+  branch_withdrawal_delay_hours:
+    label: assumption
+    unit: hours
+    training: [2, 48]
+    test: [2, 48]
+    stress: [0, 168]
+    reason: "branch visits are slower than ATMs; no figure published"
+
+  atm_daily_limit_inr:
+    label: policy
+    world_ranges_reference: atm_daily_limit_inr
+    reason: "Daily withdrawal cap for ATM cards in INR; read from config/world_ranges.yaml."

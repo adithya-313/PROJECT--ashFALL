@@ -18,10 +18,11 @@ from typing import Any
 import pytest
 
 from evaluation.truth import load_truth
+from showcase.level_12_support_b import get_showcase_b_settings, load_showcase_b_fixture
 from world.calendar_runner import run_world
 from world.fast_mode import FastRunSettings
 from world.gang_config import BlockStep, FixtureSource, GangBudget, GangConfig
-from world.interactive_records import RunnerSettings
+from world.interactive_records import HookDecision, PaymentView, RunnerSettings
 import world.interactive_runner as interactive_runner
 from world.interactive_runner import (
     PreparedWorld,
@@ -30,6 +31,7 @@ from world.interactive_runner import (
     run_interactive_world,
 )
 from world.truth_writer import write_truth_files
+
 from tests.unit.world.test_interactive_runner_fraud_on import (
     CallRecorder,
     check_balances_equal_entry_sums,
@@ -282,3 +284,66 @@ def test_gang_configs_with_fraud_switch_off_is_refused() -> None:
     """
     with pytest.raises(ValueError, match=SWITCH_OFF_MESSAGE):
         run_interactive_world(TINY, RunnerSettings(fraud_enabled=False), gang_configs=(GANG_1,))
+
+
+def test_fact_2_regression_via_gang_configs_only() -> None:
+    """
+    Verifies that running the showcase-b fixture through gang_configs automatically generates
+    illicit money rules and source seeds that prevent layer-1 mules from draining personal balances.
+    Asserts two skipped forwards for 676,300 and 4,731,000 paise with total ledger money conserved.
+    """
+    gang, _ = load_showcase_b_fixture()
+    settings, code_version = get_showcase_b_settings()
+
+    def decline_collector_hook(view: PaymentView) -> HookDecision:
+        """Declines payments from the gang collector account while allowing all other transfers."""
+        if view.from_account == "acc_collector_01":
+            return "decline"
+        return "allow"
+
+    output = run_interactive_world(
+        fast_settings=settings,
+        runner_settings=RunnerSettings(fraud_enabled=True),
+        gang_configs=(gang,),
+        hook=decline_collector_hook,
+        code_version=code_version,
+    )
+
+    layer_1_mules = {"acc_person_000006", "acc_person_000010"}
+    mule_successes = [
+        event for event, source in zip(output.result.run_result.events, output.result.event_sources)
+        if source == "fraud" and event.from_account in layer_1_mules and event.status == "success"
+    ]
+    assert len(mule_successes) == 0
+
+    assert len(output.result.skipped_forwards) == 2
+    assert [skipped.planned_paise for skipped in output.result.skipped_forwards] == [676300, 4731000]
+    assert [skipped.from_account for skipped in output.result.skipped_forwards] == [
+        "acc_person_000006",
+        "acc_person_000010",
+    ]
+    assert all(skipped.reason == "no_illicit_money_arrived" for skipped in output.result.skipped_forwards)
+
+    ledgers = output.world.ledgers
+    expected_total = opening_total(settings) + output.result.money_created_paise
+    assert check_no_negative_balances(ledgers) == []
+    assert check_balances_equal_entry_sums(ledgers) == []
+    assert check_money_conserved(ledgers, expected_total) == []
+
+
+def test_refusal_when_gang_route_payment_lacks_rule(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Verifies that the runner strictly refuses gang plans containing route payments that lack illicit money rules.
+    Constructs a broken gang plan missing money rules and asserts that _apply_gang_configs raises a plain ValueError.
+    """
+    real_plan_gang = interactive_runner.plan_gang
+
+    def broken_plan_gang(*args: Any, **kwargs: Any) -> Any:
+        """Simulates a broken gang planner that omits illicit money rules for route transfers."""
+        plan = real_plan_gang(*args, **kwargs)
+        import dataclasses
+        return dataclasses.replace(plan, money_rules=())
+
+    monkeypatch.setattr(interactive_runner, "plan_gang", broken_plan_gang)
+    with pytest.raises(ValueError, match="has no illicit money rule"):
+        run_interactive_world(TINY, RunnerSettings(fraud_enabled=True), gang_configs=(GANG_1,))

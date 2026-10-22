@@ -42,6 +42,13 @@ from world.calendar_runner import (
     _merge_planned_payments,
     _record_event_counts,
 )
+from world.cash_withdrawals import (
+    CashWithdrawal,
+    CashWithdrawalRecord,
+    apply_illicit_cap,
+    process_cash_withdrawal,
+    validate_cash_withdrawal,
+)
 from world.device_events import DeviceEvent
 from world.device_runtime import DeviceStamp, stamp_sender_device
 from world.encumbrance import EncumbranceBook
@@ -50,13 +57,19 @@ from world.failures import PaymentEvent, make_event
 from world.gang_devices import GangDeviceEvent
 from world.interactive_records import (
     HOOK_DECISIONS,
+    ForwardAdjustment,
     FraudInputs,
     HookDecision,
+    IllicitMoneyRule,
     InteractiveRunResult,
     PaymentView,
+    RunnerSettings,
 )
 from world.interactive_state import RunnerState
+from world.opened_routine import draw_no_routine_share, is_idle, plan_opened_routine
+from world.opening_handles import resolve_opening_handles
 from world.outside_events import OutsideEvent, validate_outside_event
+from world.rented_owner_activity import OwnerActivity, PausedOwnerPayment, plan_owner_activity
 from world.run_identity import make_payment_id
 from world.truth_records import TruthFacts, validate_truth_facts
 from world.world_plan import WorldPlan
@@ -70,7 +83,8 @@ SENDER_BANK_DOMAIN: str = "sender_bank"
 @dataclass(frozen=True)
 class QueuedPayment:
     """
-    WHAT: One payment waiting on the queue: the payment itself, its stream source ("planned", "fraud" or "resumed"),
+    WHAT: One payment waiting on the queue: the payment itself, its stream source ("planned", "fraud", "resumed" or
+    "opened_routine"),
     where it truly came from ("planned" or "fraud"), its fraud input index, and, once it has been seen the first time,
     its planned payment id and its sender stamp.
 
@@ -79,7 +93,7 @@ class QueuedPayment:
 
     Args:
         payment: The PlannedPayment (minute, accounts, amount, order number, purpose).
-        source: "planned", "fraud" or "resumed".
+        source: "planned", "fraud", "resumed" or "opened_routine" (the routine of a newly opened genuine person).
         origin: "planned" or "fraud": where the payment truly came from.
         planned_payment_id: Its name after the first time it is seen, else None.
         stamp: Its sender stamp after the first time it is seen, else None.
@@ -160,6 +174,21 @@ class LoopContext:
     applied_gang_device_events: list[GangDeviceEvent] = field(default_factory=list)
     event_fraud_input_index: list[int | None] = field(default_factory=list)
     truth: TruthFacts = field(default_factory=TruthFacts)
+    illicit_balances: dict[str, int] = field(default_factory=dict)
+    pair_credits: dict[tuple[str, str], int] = field(default_factory=dict)
+    money_rules_by_index: dict[int, IllicitMoneyRule] = field(default_factory=dict)
+    original_fraud_amounts: list[int] = field(default_factory=list)
+    skipped_forwards: list[ForwardAdjustment] = field(default_factory=list)
+    capped_forwards: list[ForwardAdjustment] = field(default_factory=list)
+    opening_ids: dict[str, str] = field(default_factory=dict)
+    owner_activity: dict[str, OwnerActivity] = field(default_factory=dict)
+    no_routine_share: float | None = None
+    opened_routine_index: int = 0
+    paused_owner_payments: list[PausedOwnerPayment] = field(default_factory=list)
+    cash_withdrawals: list[CashWithdrawalRecord] = field(default_factory=list)
+    money_withdrawn_paise: int = 0
+    withdrawal_sequence: int = 0
+    daily_atm_withdrawn: dict[tuple[str, int], int] = field(default_factory=dict)
 
 
 def build_component_streams(seed: int, children: dict[str, int]) -> dict[str, np.random.Generator]:
@@ -211,6 +240,37 @@ def push(context: LoopContext, minute: int, rank_name: str, order: int, item: An
     heapq.heappush(context.queue, key)
 
 
+def validate_illicit_money_inputs(fraud_inputs: FraudInputs, state: RunnerState) -> None:
+    """
+    Validates illicit money rules and seeds before simulation starts.
+
+    Ensures each rule references a valid fraud payment index without duplicates,
+    each seed specifies a positive amount in paise, and seed accounts are registered.
+    """
+    num_payments = len(fraud_inputs.payments)
+    seen_indices: set[int] = set()
+    for rule in fraud_inputs.money_rules:
+        if rule.input_index < 0 or rule.input_index >= num_payments:
+            raise ValueError(
+                f"illicit money rule input index {rule.input_index} is out of range for {num_payments} fraud payments"
+            )
+        if rule.input_index in seen_indices:
+            raise ValueError(f"duplicate illicit money rule for fraud payment index {rule.input_index}")
+        if rule.requires_credit_from is not None and not rule.spends_illicit:
+            raise ValueError(
+                f"rule at index {rule.input_index} has requires_credit_from but spends_illicit is False"
+            )
+        seen_indices.add(rule.input_index)
+
+    for seed in fraud_inputs.illicit_seeds:
+        if seed.amount_paise <= 0:
+            raise ValueError(
+                f"illicit seed amount for account {seed.account_id} must be positive, got {seed.amount_paise}"
+            )
+        if seed.account_id not in state.bank_map:
+            raise ValueError(f"illicit seed account {seed.account_id} is not registered with the runner")
+
+
 def queue_initial_items(context: LoopContext, planned: Sequence[PlannedPayment], fraud_inputs: FraudInputs) -> None:
     """
     WHAT: Puts every planned payment, fraud payment and outside event on the queue before the run starts. Planned
@@ -255,6 +315,18 @@ def queue_initial_items(context: LoopContext, planned: Sequence[PlannedPayment],
     # Hidden truth facts, validated against planned fraud payments before the loop begins.
     validate_truth_facts(fraud_inputs.truth, len(fraud_inputs.payments))
     context.truth = fraud_inputs.truth
+    # Illicit money rules and seeds, validated and registered before simulation proceeds.
+    validate_illicit_money_inputs(fraud_inputs, context.state)
+    for seed in fraud_inputs.illicit_seeds:
+        context.illicit_balances[seed.account_id] = (
+            context.illicit_balances.get(seed.account_id, 0) + seed.amount_paise
+        )
+    context.money_rules_by_index = {rule.input_index: rule for rule in fraud_inputs.money_rules}
+    context.original_fraud_amounts = [p.amount_paise for p in fraud_inputs.payments]
+    # Cash withdrawals, validated and queued under the cash_withdrawals tie-break rank.
+    for order, withdrawal in enumerate(fraud_inputs.withdrawals):
+        validate_cash_withdrawal(withdrawal, context.state)
+        push(context, withdrawal.minute, "cash_withdrawals", order, withdrawal)
 
 
 def apply_outside_event(context: LoopContext, event: OutsideEvent) -> None:
@@ -283,6 +355,32 @@ def apply_outside_event(context: LoopContext, event: OutsideEvent) -> None:
         context.book.place(event, encumbrance_id)
     elif event.kind == "release":
         context.book.release(str(event.encumbrance_id), event.minute)
+    elif event.kind == "open_account":
+        stream_name = str(event.opening_stream)
+        if stream_name not in context.streams:
+            raise ValueError(f"unknown opening stream '{stream_name}'")
+        rng = context.streams[stream_name]
+        opened_id = context.state.open_account(
+            owner_kind=str(event.owner_kind),
+            opening_stream=stream_name,
+            minute=event.minute,
+            rng=rng,
+        )
+        # A gang opening was given its id before the run; a different id means the replay and the queue disagree.
+        if event.opening_handle is not None:
+            assigned_id = context.opening_ids[event.opening_handle]
+            if opened_id != assigned_id:
+                raise RuntimeError(
+                    f"open_account for handle '{event.opening_handle}' produced '{opened_id}' "
+                    f"but '{assigned_id}' was assigned before the run"
+                )
+        # A new genuine person may get a routine life; gang openings and shops never do.
+        if (
+            event.opening_stream == "genuine_account_openings"
+            and event.owner_kind == "person"
+            and context.no_routine_share is not None
+        ):
+            schedule_opened_routine(context, opened_id, event.minute)
     else:
         # A resume: the named payment must be waiting in the held list.
         planned_payment_id = str(event.planned_payment_id)
@@ -296,6 +394,40 @@ def apply_outside_event(context: LoopContext, event: OutsideEvent) -> None:
             input_index=held.input_index,
         )
         push(context, event.minute, "resumed_payments", context.insertion_sequence, resumed)
+
+
+def schedule_opened_routine(context: LoopContext, account_id: str, open_minute: int) -> None:
+    """
+    WHAT: Decides whether a newly opened genuine person is idle, with one draw from the opened account routine stream
+    against this run's no-routine share. A person with a routine gets Level 11-style payments planned from the opening
+    minute on, and each is queued as an "opened_routine" payment under its own tie-break rank.
+
+    WHY: These payments have their own stream for draws (child 10) and failures (child 11), so nothing they read can
+    shift a draw of an existing genuine payment.
+
+    Args:
+        context: The loop context; context.no_routine_share must be set.
+        account_id: The new person's account id.
+        open_minute: Minute at which the account was opened.
+
+    Returns:
+        None. Pushes the routine payments onto the queue; an idle person pushes nothing.
+
+    Example:
+        With a no-routine share of 0 every new person has payments; with 1 none has.
+    """
+    stream = context.streams["opened_account_routine"]
+    if is_idle(float(context.no_routine_share), stream):
+        return
+    person = context.state.people_by_account[account_id]
+    payments, context.opened_routine_index = plan_opened_routine(
+        context.world, context.plan, person, open_minute, stream, context.opened_routine_index
+    )
+    for payment in payments:
+        push(
+            context, payment.minute, "opened_routine_payments", payment.creation_index,
+            QueuedPayment(payment=payment, source="opened_routine", origin="planned"),
+        )
 
 
 def apply_due_device_events(context: LoopContext, minute: int) -> None:
@@ -432,6 +564,8 @@ def stream_for(context: LoopContext, source: str) -> np.random.Generator:
         return context.run_rng
     if source == "fraud":
         return context.streams["fraud_payment_failures"]
+    if source == "opened_routine":
+        return context.streams["opened_routine_failures"]
     return context.streams["resumed_payment_failures"]
 
 
@@ -538,6 +672,118 @@ def record_event(context: LoopContext, event: PaymentEvent, queued: QueuedPaymen
     context.event_fraud_input_index.append(queued.input_index)
 
 
+def cap_forward_to_illicit_balance(context: LoopContext, queued: QueuedPayment) -> QueuedPayment | None:
+    """
+    WHAT: For a payment whose rule spends illicit money, limits the amount to the illicit money the sender holds now,
+    and if requires_credit_from is set, to the illicit credit received specifically from that sender account.
+    Nothing held: the payment is skipped and logged in skipped_forwards. Less held than planned: the amount is
+    lowered to what is held and the change is logged in capped_forwards. Enough held: the payment is unchanged.
+
+    WHY: A mule must pass on only money that reached it. When a payout is tied to a victim, funds paid in by other
+    victims must never subsidize that victim's payout.
+
+    Args:
+        context: The loop context; its illicit balances and pair credits are read and its adjustment logs may grow.
+        queued: A payment whose money rule has spends_illicit set.
+
+    Returns:
+        The payment to run (the same one, or a copy with a lower amount), or None when it must be skipped.
+
+    Example:
+        A mule planned to forward 5,000 paise that holds 3,000 paise of illicit money returns a copy of the payment
+        for 3,000 paise and adds one "only_part_arrived" entry to capped_forwards.
+    """
+    payment = queued.payment
+    planned_paise = context.original_fraud_amounts[queued.input_index]
+    available_paise = max(0, context.illicit_balances.get(payment.from_account, 0))
+
+    rule = context.money_rules_by_index.get(queued.input_index) if queued.input_index is not None else None
+    if rule is not None and rule.requires_credit_from is not None:
+        victim_acct = rule.requires_credit_from
+        pair = (payment.from_account, victim_acct)
+        pair_credit = max(0, context.pair_credits.get(pair, 0))
+        effective_paise = min(planned_paise, available_paise, pair_credit)
+        if effective_paise == 0:
+            context.skipped_forwards.append(
+                ForwardAdjustment(
+                    planned_payment_id=str(queued.planned_payment_id),
+                    minute=payment.minute,
+                    from_account=payment.from_account,
+                    to_account=payment.to_account,
+                    planned_paise=planned_paise,
+                    available_paise=0,
+                    reason="victim_paid_nothing",
+                )
+            )
+            return None
+        if effective_paise < planned_paise:
+            context.capped_forwards.append(
+                ForwardAdjustment(
+                    planned_payment_id=str(queued.planned_payment_id),
+                    minute=payment.minute,
+                    from_account=payment.from_account,
+                    to_account=payment.to_account,
+                    planned_paise=planned_paise,
+                    available_paise=effective_paise,
+                    reason="only_part_arrived",
+                )
+            )
+        capped_payment = dataclasses.replace(payment, amount_paise=effective_paise)
+        return dataclasses.replace(queued, payment=capped_payment)
+
+    cap_res = apply_illicit_cap(
+        context,
+        str(queued.planned_payment_id),
+        payment.minute,
+        payment.from_account,
+        payment.to_account,
+        planned_paise,
+        available_paise,
+    )
+    if cap_res is None:
+        return None
+    capped_payment = dataclasses.replace(payment, amount_paise=cap_res)
+    return dataclasses.replace(queued, payment=capped_payment)
+
+
+def pause_owner_payment(context: LoopContext, queued: QueuedPayment, banks: tuple[int, int]) -> bool:
+    """
+    WHAT: Decides whether a genuine payment of a rented mule's owner is paused. Only a planned payment sent from a
+    rented mule account inside its mule span gets one draw from the rented owner activity stream; a draw at or above
+    the mule's kept share pauses it. A paused payment reads the failure draws a held planned payment reads, records
+    no event and moves no money, and is added to paused_owner_payments.
+
+    WHY: The failure draws keep the run stream where it would have been, so every other genuine payment reads the
+    numbers it read before. Incoming payments are never paused because only the sender is looked at.
+
+    Args:
+        context: The loop context.
+        queued: The payment as it came off the queue, before it is named or stamped.
+        banks: (sender bank, receiver bank) of the payment.
+
+    Returns:
+        True when the payment was paused and the caller must stop processing it.
+
+    Example:
+        With a kept share of 0 every outgoing payment of the rented mule inside its span is paused.
+    """
+    payment = queued.payment
+    activity = context.owner_activity.get(payment.from_account)
+    if queued.source != "planned" or activity is None or not activity.covers(payment.minute):
+        return False
+    draw = float(context.streams["rented_owner_activity"].uniform(0.0, 1.0))
+    if draw < activity.kept_share:
+        return False
+    # Take the same failure draws a held planned payment takes, so later genuine payments read unchanged numbers.
+    for _ in pieces_of(context, payment, banks[0]):
+        decide_failure(payment.minute, banks[0], banks[1], context.plan.incidents,
+                       context.plan.failure_settings, context.run_rng)
+    context.paused_owner_payments.append(
+        PausedOwnerPayment(payment.minute, payment.from_account, payment.to_account, payment.amount_paise)
+    )
+    return True
+
+
 def process_payment(context: LoopContext, queued: QueuedPayment) -> None:
     """
     WHAT: Handles one payment taken off the queue: applies due device events, names and stamps it the first time, asks
@@ -561,13 +807,28 @@ def process_payment(context: LoopContext, queued: QueuedPayment) -> None:
     banks = banks_for(context, payment)
     # Phones change first, then the payment is named and stamped once.
     apply_due_device_events(context, payment.minute)
+    if pause_owner_payment(context, queued, banks):
+        return
     queued = first_look(context, queued)
+
+    rule = (
+        context.money_rules_by_index.get(queued.input_index)
+        if queued.input_index is not None
+        else None
+    )
+    if rule is not None and rule.spends_illicit:
+        capped = cap_forward_to_illicit_balance(context, queued)
+        if capped is None:
+            return
+        queued = capped
+        payment = queued.payment
+
     decision = ask_hook(context, queued)
     stream = stream_for(context, queued.source)
     pieces = pieces_of(context, payment, banks[0])
     if decision == "hold":
         # A planned payment still uses up its draws at its planned place; fraud and resumed ones use nothing.
-        if queued.source == "planned":
+        if queued.source in ("planned", "opened_routine"):
             for _ in pieces:
                 decide_failure(payment.minute, banks[0], banks[1], context.plan.incidents,
                                context.plan.failure_settings, stream)
@@ -575,7 +836,22 @@ def process_payment(context: LoopContext, queued: QueuedPayment) -> None:
         return
     # Allowed or declined: every piece is decided and recorded, with no early stop.
     for piece in pieces:
-        record_event(context, decide_piece(context, payment, piece, banks, decision, stream), queued)
+        event = decide_piece(context, payment, piece, banks, decision, stream)
+        record_event(context, event, queued)
+        if event.status == "success" and rule is not None:
+            if rule.credits_illicit:
+                context.illicit_balances[payment.to_account] = (
+                    context.illicit_balances.get(payment.to_account, 0) + event.amount_paise
+                )
+                pair = (payment.to_account, payment.from_account)
+                context.pair_credits[pair] = context.pair_credits.get(pair, 0) + event.amount_paise
+            if rule.spends_illicit:
+                context.illicit_balances[payment.from_account] = (
+                    context.illicit_balances.get(payment.from_account, 0) - event.amount_paise
+                )
+                if rule.requires_credit_from is not None:
+                    pair = (payment.from_account, rule.requires_credit_from)
+                    context.pair_credits[pair] = max(0, context.pair_credits.get(pair, 0) - event.amount_paise)
 
 
 def finish_run(context: LoopContext, money_created_paise: int) -> InteractiveRunResult:
@@ -621,6 +897,12 @@ def finish_run(context: LoopContext, money_created_paise: int) -> InteractiveRun
         run_id=context.run_id,
         money_created_paise=money_created_paise,
         truth=context.truth,
+        skipped_forwards=context.skipped_forwards,
+        capped_forwards=context.capped_forwards,
+        opened_accounts=list(context.state.opened_accounts),
+        paused_owner_payments=context.paused_owner_payments,
+        cash_withdrawals=context.cash_withdrawals,
+        money_withdrawn_paise=context.money_withdrawn_paise,
     )
 
 
@@ -628,11 +910,13 @@ def run_fraud_on(
     world: Any, plan: WorldPlan, rng: np.random.Generator, device_events: Sequence[DeviceEvent],
     episode_payments: Sequence[PlannedPayment], *, fraud_inputs: FraudInputs,
     hook: Callable[[PaymentView], HookDecision], run_id: str, runner_config: dict[str, Any], state: RunnerState,
+    settings: RunnerSettings = RunnerSettings(fraud_enabled=True),
+    account_openings_config: dict[str, Any] | None = None,
 ) -> InteractiveRunResult:
     """
     WHAT: Runs a world with the fraud switch on. It plans genuine payments exactly as run_world does (on the run stream,
-    before anything else), queues them with the fraud payments and outside events, then takes items off the queue in
-    order until it is empty, and finishes as run_world does.
+    before anything else), schedules genuine account openings if enabled, queues them with fraud payments and outside
+    events, then takes items off the queue in order until it is empty, and finishes as run_world does.
 
     WHY: Planning first on the same stream gives the identical genuine plan. Taking everything from one ordered queue
     makes every run with the same inputs repeat exactly.
@@ -648,6 +932,8 @@ def run_fraud_on(
         run_id: The run id.
         runner_config: The interactive_runner config block.
         state: The runner's lookup tables.
+        settings: RunnerSettings governing feature flags like account_openings_enabled.
+        account_openings_config: Optional account openings configuration dictionary.
 
     Returns:
         The InteractiveRunResult.
@@ -662,15 +948,47 @@ def run_fraud_on(
     streams = build_component_streams(world.seed, runner_config["random_stream_children"])
     context = LoopContext(world, plan, rng, streams, hook, run_id, runner_config["position_digits"], ranks, state,
                           device_events)
-    # 4. Everything goes on one queue.
-    queue_initial_items(context, planned, fraud_inputs)
+    # 4. Schedule genuine account openings if enabled, then queue everything on one queue.
+    effective_fraud_inputs = fraud_inputs
+    if settings.account_openings_enabled:
+        from world.account_openings_config import schedule_genuine_account_openings
+
+        genuine_openings = schedule_genuine_account_openings(
+            len(world.people), plan.n_days, plan.range_name,
+            streams["genuine_account_openings"], config=account_openings_config,
+        )
+        if genuine_openings:
+            effective_fraud_inputs = dataclasses.replace(
+                fraud_inputs,
+                outside_events=fraud_inputs.outside_events + genuine_openings,
+            )
+    if settings.account_openings_enabled:
+        from world.account_openings_config import load_account_openings_config
+
+        openings_config = (
+            account_openings_config if account_openings_config is not None else load_account_openings_config()
+        )
+        context.no_routine_share = draw_no_routine_share(
+            plan.range_name, openings_config, streams["opened_account_routine"]
+        )
+    # Gang openings are named by handles in the plan; give them their real ids now that every opening is known.
+    effective_fraud_inputs, context.opening_ids = resolve_opening_handles(
+        effective_fraud_inputs, state.next_person_index, state.next_shop_index
+    )
+    queue_initial_items(context, planned, effective_fraud_inputs)
+    # Rented mules keep part of their owner's life: draw each one's kept share once, before the loop starts.
+    context.owner_activity = plan_owner_activity(
+        context.truth.roles, plan.range_name, streams["rented_owner_activity"]
+    )
     # 5. Take items off in order: outside events, gang device events, or payments.
     while context.queue:
-        item: OutsideEvent | GangDeviceEvent | QueuedPayment = heapq.heappop(context.queue)[-1]
+        item: OutsideEvent | GangDeviceEvent | QueuedPayment | CashWithdrawal = heapq.heappop(context.queue)[-1]
         if isinstance(item, OutsideEvent):
             apply_outside_event(context, item)
         elif isinstance(item, GangDeviceEvent):
             context.applied_gang_device_events.append(item)
+        elif isinstance(item, CashWithdrawal):
+            process_cash_withdrawal(context, item)
         else:
             process_payment(context, item)
     # 6. Final device events, Level 11's guard, and the result.

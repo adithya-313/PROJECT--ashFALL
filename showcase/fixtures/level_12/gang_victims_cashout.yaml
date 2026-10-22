@@ -1,0 +1,33 @@
+# Configuration fixture for Level 12 Showcase Part C checks.
+#
+# TERM: scam gang = syndicate funded through victim fraud payments rather than a fixture source.
+# TERM: route = multi-hop laundering chain forwarding illicit funds to terminal mules.
+# TERM: cash-out = terminal extraction of illicit funds via crypto, ATM, branch, or genuine retail merchants.
+# TERM: origin_mix = mechanism determining whether mules are rented or opened as new accounts.
+
+gang:
+  gang_id: gang_victims_cashout
+  strength: 1
+  budget:
+    money_paise: 50000000
+    time_minutes: 500000
+    max_risk: 0.99
+  start_minute: 1440
+  steps:
+    - block: acquire
+      params:
+        count: 3
+        origin_mix: world_ranges
+    - block: warm_up
+      params:
+        days: 2
+    - block: scam
+      params:
+        receiving_mules: 1
+        victims_per_receiving_mule: 6
+    - block: route
+      params:
+        layers: 3
+        accounts_per_layer: 1
+    - block: cash_out
+      params: {}

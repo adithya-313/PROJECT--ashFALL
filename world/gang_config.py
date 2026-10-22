@@ -20,6 +20,9 @@ from typing import Any
 
 from world.tactic_config import (
     get_block_definition,
+    get_origin_mix_options,
+    get_scam_receiving_mules_range,
+    get_scam_victims_per_mule_range,
     get_take_control_devices_range,
     resolve_dividing_line,
 )
@@ -127,21 +130,52 @@ class GangConfig:
         gang_id: Unique string identifier for the gang (e.g., 'gang_alpha').
         strength: Integer sophistication level: 1 (fixed parameters) or 2 (camouflaged).
         budget: GangBudget specifying monetary, temporal, and risk boundaries.
-        source: FixtureSource designating the starting collector account and capital.
+        source: FixtureSource designating the starting collector account and capital, or None when the gang's
+            money comes from a scam step. A gang has exactly one money source: this fixture source or a scam step.
         steps: Ordered sequence of BlockStep items specifying the campaign itinerary.
+        start_minute: Simulation minute at which the campaign begins when there is no fixture source (the fixture
+            source carries its own start_minute); None when a fixture source is set.
 
     Returns:
         An initialized immutable GangConfig instance.
 
     Example:
         # config = GangConfig("gang_alpha", 1, budget, source, (step1, step2))
+        # scam_config = GangConfig("gang_beta", 1, budget, None, (acquire, scam), start_minute=1440)
     """
 
     gang_id: str
     strength: int
     budget: GangBudget
-    source: FixtureSource
-    steps: tuple[BlockStep, ...]
+    source: FixtureSource | None = None
+    steps: tuple[BlockStep, ...] = ()
+    start_minute: int | None = None
+
+
+def gang_start_minute(config: GangConfig) -> int:
+    """
+    WHAT: Returns the simulation minute at which a gang's campaign begins: the fixture source's start_minute when
+    the gang has a fixture source, otherwise the gang's own start_minute.
+
+    WHY: The planner needs one start time whichever money source the gang has.
+
+    Args:
+        config: A GangConfig that passed validation.
+
+    Returns:
+        The start minute.
+
+    Raises:
+        ValueError: If the gang has neither a fixture source nor a start_minute.
+
+    Example:
+        # gang_start_minute(config_with_source_at_1440) == 1440
+    """
+    if config.source is not None:
+        return config.source.start_minute
+    if config.start_minute is None:
+        raise ValueError(f"Gang '{config.gang_id}' has neither a fixture source nor a start_minute.")
+    return config.start_minute
 
 
 def gang_config_to_plain(config: GangConfig) -> dict[str, Any]:
@@ -160,8 +194,8 @@ def gang_config_to_plain(config: GangConfig) -> dict[str, Any]:
         # plain = gang_config_to_plain(config)
         # plain["gang_id"] == "gang_alpha"
     """
-    # 1. Build canonical dictionary of budget, source, and step specifications.
-    return {
+    # 1. Build the canonical dictionary of identity and budget; source, start minute and steps follow.
+    plain: dict[str, Any] = {
         "gang_id": config.gang_id,
         "strength": config.strength,
         "budget": {
@@ -169,20 +203,25 @@ def gang_config_to_plain(config: GangConfig) -> dict[str, Any]:
             "time_minutes": config.budget.time_minutes,
             "max_risk": config.budget.max_risk,
         },
-        "source": {
+    }
+    # 2. Write source and start_minute only when set, so a fixture gang's plain form and run id stay as before.
+    if config.source is not None:
+        plain["source"] = {
             "account_id": config.source.account_id,
             "bank_index": config.source.bank_index,
             "opening_balance_paise": config.source.opening_balance_paise,
             "start_minute": config.source.start_minute,
-        },
-        "steps": [
-            {
-                "block": step.block,
-                "params": list(step.params),
-            }
-            for step in config.steps
-        ],
-    }
+        }
+    if config.start_minute is not None:
+        plain["start_minute"] = config.start_minute
+    plain["steps"] = [
+        {
+            "block": step.block,
+            "params": list(step.params),
+        }
+        for step in config.steps
+    ]
+    return plain
 
 
 def gang_config_from_plain(data: dict[str, Any]) -> GangConfig:
@@ -209,12 +248,16 @@ def gang_config_from_plain(data: dict[str, Any]) -> GangConfig:
     """
     # 1. Unpack budget and source specifications from target dictionary.
     target = data.get("gang", data)
-    b_data, s_data = target["budget"], target["source"]
+    b_data = target["budget"]
     budget = GangBudget(int(b_data["money_paise"]), int(b_data["time_minutes"]), float(b_data["max_risk"]))
-    source = FixtureSource(
-        str(s_data["account_id"]), int(s_data["bank_index"]),
-        int(s_data["opening_balance_paise"]), int(s_data["start_minute"])
-    )
+    source: FixtureSource | None = None
+    if "source" in target:
+        s_data = target["source"]
+        source = FixtureSource(
+            str(s_data["account_id"]), int(s_data["bank_index"]),
+            int(s_data["opening_balance_paise"]), int(s_data["start_minute"])
+        )
+    start_minute: int | None = int(target["start_minute"]) if "start_minute" in target else None
     # 2. Reconstruct tuple of BlockStep items with (name, value) parameter tuples.
     steps: list[BlockStep] = []
     for s in target.get("steps", []):
@@ -222,7 +265,7 @@ def gang_config_from_plain(data: dict[str, Any]) -> GangConfig:
         p_items = raw_p.items() if isinstance(raw_p, dict) else raw_p
         steps.append(BlockStep(str(s["block"]), tuple((str(k), v) for k, v in p_items)))
     # 3. Instantiate GangConfig and validate constraints before returning.
-    config = GangConfig(str(target["gang_id"]), int(target["strength"]), budget, source, tuple(steps))
+    config = GangConfig(str(target["gang_id"]), int(target["strength"]), budget, source, tuple(steps), start_minute)
     validate_gang_config(config)
     return config
 
@@ -287,7 +330,8 @@ def _validate_block_strengths(gang_id: str, strength: int, steps: tuple[BlockSte
 
 def _validate_step_ordering(gang_id: str, steps: tuple[BlockStep, ...]) -> None:
     """
-    WHAT: Enforces procedural order constraints: acquire before route, route needs acquire, warm_up after acquire.
+    WHAT: Enforces procedural order constraints: acquire before route, route needs acquire, warm_up after acquire,
+    and a scam step after acquire and before route.
 
     WHY: A syndicate cannot route stolen funds or warm up accounts without first acquiring mule accounts.
 
@@ -306,9 +350,14 @@ def _validate_step_ordering(gang_id: str, steps: tuple[BlockStep, ...]) -> None:
     has_acquired = False
     has_routed = False
 
-    for step in steps:
+    for idx, step in enumerate(steps):
         if step.block == "acquire":
             has_acquired = True
+        elif step.block == "scam":
+            if not has_acquired:
+                raise ValueError(f"Gang '{gang_id}' must acquire accounts before a scam step.")
+            if has_routed:
+                raise ValueError(f"Gang '{gang_id}' must scam before routing money, not after.")
         elif step.block == "take_control":
             if not has_acquired:
                 raise ValueError(f"Gang '{gang_id}' cannot take control before acquiring accounts.")
@@ -319,6 +368,15 @@ def _validate_step_ordering(gang_id: str, steps: tuple[BlockStep, ...]) -> None:
             if not has_acquired:
                 raise ValueError(f"Gang '{gang_id}' must acquire accounts before routing money.")
             has_routed = True
+        elif step.block == "cash_out":
+            if not has_routed:
+                raise ValueError(f"Gang '{gang_id}' must route money before cashing out.")
+        elif step.block == "split_below_threshold":
+            subsequent = [s.block for s in steps[idx + 1:]]
+            if not any(b in ("route", "cash_out") for b in subsequent):
+                raise ValueError(
+                    f"Gang '{gang_id}' split_below_threshold must be followed by a route or cash_out step."
+                )
 
     # 2. Assert that routing requires at least one acquisition step.
     if has_routed and not has_acquired:
@@ -402,6 +460,167 @@ def _validate_take_control_parameters(gang_id: str, steps: tuple[BlockStep, ...]
                 )
 
 
+def _validate_money_source(config: GangConfig) -> None:
+    """
+    WHAT: Asserts that the gang has exactly one money source: a fixture source or one scam step, never both and
+    never neither, and that start_minute is given exactly when there is no fixture source.
+
+    WHY: Money in the world must come from one declared place. A fixture source already carries its own start minute,
+    so a second one on the gang could silently disagree with it.
+
+    Args:
+        config: GangConfig to validate.
+
+    Returns:
+        None. Raises ValueError with one plain sentence when the rule is broken.
+
+    Example:
+        # A gang with no source and no scam step raises ValueError.
+        # _validate_money_source(GangConfig("g", 1, budget, None, (BlockStep("acquire"),), 0))
+    """
+    gang_id = config.gang_id
+    scam_steps = [step for step in config.steps if step.block == "scam"]
+    if config.source is None and not scam_steps:
+        raise ValueError(
+            f"Gang '{gang_id}' needs exactly one money source but has neither a fixture source nor a scam step."
+        )
+    if config.source is not None and scam_steps:
+        raise ValueError(
+            f"Gang '{gang_id}' needs exactly one money source but has both a fixture source and a scam step."
+        )
+    if len(scam_steps) > 1:
+        raise ValueError(f"Gang '{gang_id}' may have only one scam step, got {len(scam_steps)}.")
+    if config.source is not None and config.start_minute is not None:
+        raise ValueError(
+            f"Gang '{gang_id}' sets start_minute together with a fixture source, which already carries one."
+        )
+    if config.source is None:
+        start_minute = config.start_minute
+        if isinstance(start_minute, bool) or not isinstance(start_minute, int) or start_minute < 0:
+            raise ValueError(
+                f"Gang '{gang_id}' without a fixture source needs a start_minute of 0 or more, got {start_minute!r}."
+            )
+
+
+def _check_int_in_range(gang_id: str, name: str, value: Any, lower: int, upper: int) -> None:
+    """
+    WHAT: Asserts that a scam parameter is a true integer (not a boolean) between lower and upper inclusive.
+
+    WHY: Both scam counts feed integer draws and list sizes; a float or boolean would fail far from the config.
+
+    Args:
+        gang_id: Gang identifier for error diagnostics.
+        name: Parameter name for the error sentence.
+        value: The configured value.
+        lower: Smallest allowed value.
+        upper: Largest allowed value.
+
+    Returns:
+        None. Raises ValueError if the value is not an integer in range.
+
+    Example:
+        # _check_int_in_range("g", "receiving_mules", 3, 1, 10) passes; value 11 raises ValueError.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or not (lower <= value <= upper):
+        raise ValueError(f"Gang '{gang_id}' scam {name} must be an integer in [{lower}, {upper}], got {value!r}.")
+
+
+def _validate_scam_parameters(gang_id: str, steps: tuple[BlockStep, ...]) -> None:
+    """
+    WHAT: Asserts that a scam step names receiving_mules as an integer inside the block's configured range, and that
+    an explicit victims_per_receiving_mule is an integer inside the configured victims range.
+
+    WHY: Every victim is attached to a receiving mule, so the mule count must be explicit and bounded; the victim
+    count may be left out to be drawn.
+
+    Args:
+        gang_id: Gang identifier for error diagnostics.
+        steps: Sequence of BlockStep items to validate.
+
+    Returns:
+        None. Raises ValueError if a scam parameter is missing, not an integer, or out of range.
+
+    Example:
+        # _validate_scam_parameters("g", (BlockStep("scam"),)) raises: receiving_mules is required.
+    """
+    min_mules, max_mules = get_scam_receiving_mules_range()
+    min_victims, max_victims = get_scam_victims_per_mule_range()
+    for step in steps:
+        if step.block != "scam":
+            continue
+        params = step.params_dict
+        if "receiving_mules" not in params:
+            raise ValueError(f"Gang '{gang_id}' scam step needs receiving_mules.")
+        _check_int_in_range(gang_id, "receiving_mules", params["receiving_mules"], min_mules, max_mules)
+        if "victims_per_receiving_mule" in params:
+            _check_int_in_range(
+                gang_id, "victims_per_receiving_mule", params["victims_per_receiving_mule"], min_victims, max_victims
+            )
+
+
+def _validate_acquire_parameters(gang_id: str, steps: tuple[BlockStep, ...]) -> None:
+    """
+    WHAT: Asserts that an acquire step's origin_mix, when given, is one of the values allowed in
+    config/tactic_blocks.yaml.
+
+    WHY: A misspelled mix would otherwise be treated as a different, unintended mix by the planner.
+
+    Args:
+        gang_id: Gang identifier for error diagnostics.
+        steps: Sequence of BlockStep items to validate.
+
+    Returns:
+        None. Raises ValueError if origin_mix is not an allowed value.
+
+    Example:
+        # _validate_acquire_parameters("g", (BlockStep("acquire", (("origin_mix", "random"),)),)) raises.
+    """
+    allowed_values, _default = get_origin_mix_options()
+    for step in steps:
+        if step.block != "acquire":
+            continue
+        params = step.params_dict
+        if "origin_mix" in params and params["origin_mix"] not in allowed_values:
+            raise ValueError(
+                f"Gang '{gang_id}' acquire origin_mix must be one of {', '.join(allowed_values)}, "
+                f"got {params['origin_mix']!r}."
+            )
+
+
+def _validate_scam_route_agreement(gang_id: str, steps: tuple[BlockStep, ...]) -> None:
+    """
+    WHAT: When a gang has both a scam step and a route step, asserts that route accounts_per_layer equals the scam
+    step's receiving_mules and that the route step gives no amount_inr.
+
+    WHY: Layer 1 of the route must be exactly the receiving mules, and the route amount is the victim money that
+    arrives, so a configured amount could only disagree with it.
+
+    Args:
+        gang_id: Gang identifier for error diagnostics.
+        steps: Sequence of BlockStep items to validate.
+
+    Returns:
+        None. Raises ValueError if the route step disagrees with the scam step.
+
+    Example:
+        # scam receiving_mules=2 with route accounts_per_layer=3 raises ValueError.
+    """
+    scam_steps = [step for step in steps if step.block == "scam"]
+    route_steps = [step for step in steps if step.block == "route"]
+    if not scam_steps or not route_steps:
+        return
+    receiving_mules = scam_steps[0].params_dict["receiving_mules"]
+    for route_step in route_steps:
+        route_params = route_step.params_dict
+        if "amount_inr" in route_params:
+            raise ValueError(f"Gang '{gang_id}' route must not set amount_inr when its money comes from a scam step.")
+        if "accounts_per_layer" not in route_params or route_params["accounts_per_layer"] != receiving_mules:
+            raise ValueError(
+                f"Gang '{gang_id}' route accounts_per_layer must equal the scam step's "
+                f"receiving_mules of {receiving_mules}."
+            )
+
+
 def validate_gang_config(config: GangConfig) -> None:
     """
     WHAT: Comprehensive validator enforcing block schemas, strength constraints, step ordering, and dividing lines.
@@ -432,3 +651,9 @@ def validate_gang_config(config: GangConfig) -> None:
 
     # 5. Validate take control parameters.
     _validate_take_control_parameters(config.gang_id, config.steps)
+
+    # 6. Validate the money source, scam parameters, and the scam-to-route agreement.
+    _validate_money_source(config)
+    _validate_scam_parameters(config.gang_id, config.steps)
+    _validate_acquire_parameters(config.gang_id, config.steps)
+    _validate_scam_route_agreement(config.gang_id, config.steps)

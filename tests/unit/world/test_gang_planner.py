@@ -16,11 +16,11 @@ import numpy as np
 import pytest
 import yaml
 
+import world.tactic_config as tactic_config
 from core.config_validator import load_yaml
 from world.build_world import build_world
 from world.gang_config import BlockStep, FixtureSource, GangBudget, GangConfig
 from world.gang_planner import GangBudgetExceeded, plan_gang
-import world.tactic_config as tactic_config
 from world.tactic_config import TACTIC_COSTS_PATH, WORLD_RANGES_PATH
 
 GENEROUS_BUDGET = GangBudget(money_paise=50_000_000, time_minutes=50_000, max_risk=0.99)
@@ -350,4 +350,49 @@ def test_planner_follows_config_ranges(test_world, tmp_path, monkeypatch) -> Non
     # 7. Assert money cost equals 0.05 x the routed amount.
     routed_amount = sum(p.amount_paise for p in plan.payments if p.from_account == DEFAULT_SOURCE.account_id)
     assert plan.totals.money_paise == int(round(0.05 * routed_amount))
+
+
+def test_omitted_step_parameters_drawn_from_config(test_world, tmp_path, monkeypatch) -> None:
+    """
+    Checks that omitted count, days and devices step parameters are drawn from configured ranges.
+    Narrows mules_per_gang to [6, 6], mule_warmup_days to [7, 7] and devices to [3, 3] to prove
+    each step reads from config rather than hardcoded fallbacks.
+    """
+    ranges_data = load_yaml(WORLD_RANGES_PATH)
+    ranges_data["parameters"]["mules_per_gang"]["training"] = [6, 6]
+    ranges_data["parameters"]["mule_warmup_days"]["training"] = [7, 7]
+    temp_ranges_path = tmp_path / "world_ranges.yaml"
+    with open(temp_ranges_path, "w", encoding="utf-8") as file_handle:
+        yaml.safe_dump(ranges_data, file_handle)
+
+    blocks_data = load_yaml(tactic_config.TACTIC_BLOCKS_PATH)
+    blocks_data["tactic_blocks"]["blocks"]["take_control"]["parameters"]["devices"]["range"] = [3, 3]
+    temp_blocks_path = tmp_path / "tactic_blocks.yaml"
+    with open(temp_blocks_path, "w", encoding="utf-8") as file_handle:
+        yaml.safe_dump(blocks_data, file_handle)
+
+    monkeypatch.setattr(tactic_config, "WORLD_RANGES_PATH", temp_ranges_path)
+    monkeypatch.setattr(tactic_config, "TACTIC_BLOCKS_PATH", temp_blocks_path)
+
+    steps = (
+        BlockStep("acquire"),
+        BlockStep("take_control"),
+        BlockStep("warm_up"),
+        BlockStep("route", (("layers", 3), ("accounts_per_layer", 2))),
+    )
+    config = GangConfig("gang_omitted_defaults", 1, GENEROUS_BUDGET, DEFAULT_SOURCE, steps)
+    plan = plan_gang(config, test_world, np.random.default_rng(42))
+
+    # 1. Acquire drew count=6: 6 mules in roles (plus 1 collector).
+    mule_roles = [r for r in plan.truth.roles if r.role == "mule"]
+    assert len(mule_roles) == 6
+
+    # 2. Take_control drew devices=3.
+    device_ids = {d.device_id for d in plan.truth.device_control}
+    assert len(device_ids) == 3
+
+    # 3. Warm_up drew days=7: elapsed time cost is 7 * 1440 minutes.
+    warmup_cost = plan.costs[2]
+    assert warmup_cost.time_minutes == 7 * 1440
+
 

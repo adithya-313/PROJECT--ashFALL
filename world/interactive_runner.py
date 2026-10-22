@@ -62,6 +62,8 @@ from world.interactive_loop import run_fraud_on
 from world.interactive_records import (
     FraudInputs,
     HookDecision,
+    IllicitMoneyRule,
+    IllicitSeed,
     InteractiveRunResult,
     InteractiveWorldOutput,
     PaymentView,
@@ -161,8 +163,8 @@ def prepare_world(fast_settings: FastRunSettings, configs: WorldConfigs | None) 
 def check_switch(settings: RunnerSettings, fraud_inputs: FraudInputs, hook: Callable[[PaymentView], HookDecision],
                  state: Any) -> None:
     """
-    WHAT: Refuses fraud inputs, a custom hook or a prepared runner state when the fraud switch is off, with the plain
-    message "fraud inputs need fraud_enabled=True".
+    WHAT: Refuses fraud inputs, a custom hook or mid-run account openings when the fraud switch is off, with the plain
+    message "fraud inputs need fraud_enabled=True" or "account openings need fraud_enabled=True".
 
     WHY: With the switch off the runner falls back to Level 11, which cannot use any of these. Accepting them and
     quietly ignoring them would let someone believe a lien or a fraud payment was applied when it was not.
@@ -179,6 +181,8 @@ def check_switch(settings: RunnerSettings, fraud_inputs: FraudInputs, hook: Call
     Example:
         check_switch(RunnerSettings(), FraudInputs(payments=(payment,)), allow_all, None) raises the message.
     """
+    if not settings.fraud_enabled and settings.account_openings_enabled:
+        raise ValueError("account openings need fraud_enabled=True")
     # With the switch on, every input is allowed.
     if settings.fraud_enabled:
         return
@@ -279,6 +283,7 @@ def run_interactive(
     settings: RunnerSettings = RunnerSettings(), fraud_inputs: FraudInputs = FraudInputs(),
     hook: Callable[[PaymentView], HookDecision] = allow_all, run_id: str,
     runner_config: dict[str, Any] | None = None, state: Any = None,
+    account_openings_config: dict[str, Any] | None = None,
 ) -> InteractiveRunResult:
     """
     WHAT: Runs one prepared world. With the switch off it falls back to Level 11's run_world; with it on it runs the
@@ -299,6 +304,7 @@ def run_interactive(
         run_id: The run id.
         runner_config: The interactive_runner config block; None reads config/interactive_runner.yaml.
         state: A prepared runner state with extra registered accounts (switch on only), or None.
+        account_openings_config: Optional account openings configuration dictionary.
 
     Returns:
         The InteractiveRunResult.
@@ -315,28 +321,35 @@ def run_interactive(
     runner_state = state if state is not None else start_runner_state(world)
     return run_fraud_on(
         world, plan, rng, device_events, episode_payments, fraud_inputs=fraud_inputs, hook=hook, run_id=run_id,
-        runner_config=config, state=runner_state,
+        runner_config=config, state=runner_state, settings=settings,
+        account_openings_config=account_openings_config,
     )
 
 
 def effective_config_for(
     fast_settings: FastRunSettings, configs: WorldConfigs | None,
-    gang_configs: tuple[GangConfig, ...] = ()
+    gang_configs: tuple[GangConfig, ...] = (),
+    *,
+    runner_settings: RunnerSettings = RunnerSettings(),
+    account_openings_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     WHAT: Builds the effective configuration as plain data: the run settings plus the four config dictionaries the
-    world is built from (the given layered configs, or the four files as read from disk), plus gang configurations.
+    world is built from (the given layered configs, or the four files as read from disk), plus gang configurations
+    and account openings configurations if enabled.
 
     WHY: The run id must change when any setting changes, including one value deep inside a config file or a gang
-    tactical configuration. Folding the full configuration into the id guarantees that per Decision D5.
+    tactical configuration. Folding the full configuration into the id guarantees that per Decision D5 and D7.
 
     Args:
         fast_settings: The run settings.
         configs: Layered configs, or None for the files on disk.
         gang_configs: Sequence of GangConfig records, serialized to plain dictionaries only when non-empty.
+        runner_settings: RunnerSettings governing feature flags like account_openings_enabled.
+        account_openings_config: Optional account openings configuration dictionary.
 
     Returns:
-        {"settings": {...}, "world_configs": {...}} and optionally "gang_configs".
+        {"settings": {...}, "world_configs": {...}} and optionally "gang_configs" and account openings fields.
 
     Example:
         effective_config_for(FastRunSettings(101, 60, 12, 61, "training"), None)["settings"]["seed"] is 101.
@@ -346,6 +359,16 @@ def effective_config_for(
     result: dict[str, Any] = {"settings": asdict(fast_settings), "world_configs": asdict(world_configs)}
     if gang_configs:
         result["gang_configs"] = [gang_config_to_plain(gc) for gc in gang_configs]
+    if runner_settings.account_openings_enabled:
+        from world.account_openings_config import load_account_openings_config
+
+        openings_cfg = (
+            account_openings_config
+            if account_openings_config is not None
+            else load_account_openings_config()
+        )
+        result["account_openings_enabled"] = True
+        result["account_openings_config"] = openings_cfg
     return result
 
 
@@ -375,32 +398,68 @@ def _apply_gang_configs(
         # state, inputs = _apply_gang_configs(prepared, gang_configs, state, inputs, 101, config)
     """
     active_state = state if state is not None else start_runner_state(prepared.world)
+    seeds = list(fraud_inputs.illicit_seeds)
     for g in gang_configs:
+        # A gang whose money comes from a scam step has no fixture source to register or seed.
+        if g.source is None:
+            continue
         if g.source.account_id not in active_state.bank_map:
             active_state.register_account(
                 g.source.account_id, g.source.bank_index,
                 opening_balance_paise=g.source.opening_balance_paise, minute=g.source.start_minute,
             )
+        seeds.append(IllicitSeed(account_id=g.source.account_id, amount_paise=g.source.opening_balance_paise))
 
-    children = np.random.SeedSequence(seed).spawn(8)
+    children = np.random.SeedSequence(seed).spawn(10)
     dev_rng, plan_rng = np.random.default_rng(children[6]), np.random.default_rng(children[7])
-    reserved = {g.source.account_id for g in gang_configs}
-    pmts, roles, dev_ctrl, stories = list(fraud_inputs.payments), list(fraud_inputs.truth.roles), list(fraud_inputs.truth.device_control), list(fraud_inputs.truth.payment_stories)
+    reserved = {g.source.account_id for g in gang_configs if g.source is not None}
+    pmts = list(fraud_inputs.payments)
+    roles = list(fraud_inputs.truth.roles)
+    dev_ctrl = list(fraud_inputs.truth.device_control)
+    stories = list(fraud_inputs.truth.payment_stories)
     g_dev_events = list(fraud_inputs.gang_device_events)
+    rules = list(fraud_inputs.money_rules)
+    opening_events = list(fraud_inputs.outside_events)
+    withdrawals = list(fraud_inputs.withdrawals)
 
     for g in gang_configs:
         plan = plan_gang(g, prepared.world, plan_rng, reserved_accounts=reserved, gang_devices_rng=dev_rng)
-        reserved.update(r.account_id for r in plan.truth.roles if r.role == "mule")
+        # Mules, victims and collectors of this gang are unavailable to later gangs; a person cannot hold two
+        # overlapping roles in the truth.
+        reserved.update(r.account_id for r in plan.truth.roles)
+
+        # Refuse gang-planned route, scam, and cash-out payments without an illicit money rule.
+        plan_rules_by_index = {rule.input_index: rule for rule in plan.money_rules}
+        for i, _ in enumerate(plan.payments):
+            story = plan.truth.payment_stories[i]
+            if story.block in ("route", "scam", "cash_out") and i not in plan_rules_by_index:
+                raise ValueError(f"Gang '{g.gang_id}' {story.block} payment at index {i} has no illicit money rule.")
+
+        base_offset = len(pmts)
+        for rule in plan.money_rules:
+            rules.append(
+                IllicitMoneyRule(
+                    input_index=base_offset + rule.input_index,
+                    spends_illicit=rule.spends_illicit,
+                    credits_illicit=rule.credits_illicit,
+                    requires_credit_from=rule.requires_credit_from,
+                )
+            )
+
         pmts.extend(plan.payments)
         roles.extend(plan.truth.roles)
         dev_ctrl.extend(plan.truth.device_control)
         stories.extend(plan.truth.payment_stories)
         g_dev_events.extend(plan.gang_device_events)
+        opening_events.extend(plan.outside_events)
+        withdrawals.extend(plan.withdrawals)
 
     new_truth = TruthFacts(roles=tuple(roles), device_control=tuple(dev_ctrl), payment_stories=tuple(stories))
     return active_state, FraudInputs(
-        payments=tuple(pmts), outside_events=fraud_inputs.outside_events, truth=new_truth,
+        payments=tuple(pmts), outside_events=tuple(opening_events), truth=new_truth,
         gang_device_events=tuple(g_dev_events),
+        money_rules=tuple(rules), illicit_seeds=tuple(seeds),
+        withdrawals=tuple(withdrawals),
     )
 
 
@@ -409,6 +468,7 @@ def run_interactive_world(
     fraud_inputs: FraudInputs = FraudInputs(), hook: Callable[[PaymentView], HookDecision] = allow_all,
     configs: WorldConfigs | None = None, code_version: str | None = None, state_factory: Any = None,
     gang_configs: tuple[GangConfig, ...] = (),
+    account_openings_config: dict[str, Any] | None = None,
 ) -> InteractiveWorldOutput:
     """
     WHAT: Builds and runs a whole world: prepares it as Level 11 does, names the run (seed, effective configuration,
@@ -426,6 +486,7 @@ def run_interactive_world(
         code_version: The version to record, or None to look it up.
         state_factory: A function making the runner state from the prepared world (switch on only), or None.
         gang_configs: Gang configurations planned on child 7 and executed when fraud switch is on.
+        account_openings_config: Optional account openings configuration dictionary.
 
     Returns:
         The InteractiveWorldOutput.
@@ -434,10 +495,15 @@ def run_interactive_world(
         run_interactive_world(FastRunSettings(101, 60, 12, 61, "training"), code_version="d41b176") gives 2,915
         events whose event lines hash to 24fc0e25009d7946...
     """
+    if not runner_settings.fraud_enabled and runner_settings.account_openings_enabled:
+        raise ValueError("account openings need fraud_enabled=True")
     if not runner_settings.fraud_enabled and gang_configs:
         raise ValueError(SWITCH_OFF_MESSAGE)
     runner_config = load_runner_config()
-    effective_config = effective_config_for(fast_settings, configs, gang_configs)
+    effective_config = effective_config_for(
+        fast_settings, configs, gang_configs,
+        runner_settings=runner_settings, account_openings_config=account_openings_config,
+    )
     version = code_version if code_version is not None else find_code_version(
         os.environ, REPO_ROOT, runner_config["code_version_git_timeout_seconds"]
     )
@@ -451,7 +517,7 @@ def run_interactive_world(
     result = run_interactive(
         prepared.world, prepared.plan, prepared.run_rng, prepared.device_events, prepared.episode_payments,
         settings=runner_settings, fraud_inputs=fraud_inputs, hook=hook, run_id=run_id,
-        runner_config=runner_config, state=state,
+        runner_config=runner_config, state=state, account_openings_config=account_openings_config,
     )
     return InteractiveWorldOutput(
         prepared.world, prepared.plan, prepared.episodes, prepared.episode_report, prepared.device_events,
