@@ -782,7 +782,7 @@ def record_event(context: LoopContext, event: PaymentEvent, queued: QueuedPaymen
     context.event_fraud_input_index.append(queued.input_index)
 
     # Telemetry trigger (2): failed events on held accounts notify the controlling syndicate.
-    if context.gang_reactions_enabled and event.domain == SENDER_BANK_DOMAIN:
+    if context.gang_reactions_enabled and event.failure_domain == SENDER_BANK_DOMAIN:
         if event.reason == REASON_DECLINED_BY_BANK:
             holding_gang = find_holding_gang(context.gang_holdings, event.from_account, event.minute)
             if holding_gang is not None:

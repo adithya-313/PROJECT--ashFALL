@@ -650,14 +650,14 @@ issues:
   G3:
     title: "Mule lifecycle; heavy-tailed victims per mule"
     origin: level_11
-    status: partial
+    status: built
     levels: [12]
-    parts: [12c]
+    parts: [12c, 12d]
     v1_status: built
     evidence:
       - {kind: test, file: tests/unit/world/test_heavy_tailed_victims.py, name: test_exact_check_bulk_of_mules_within_typical_range}
       - {kind: test, file: tests/unit/world/test_mule_lifecycle.py, name: test_phase_at_gives_phases_at_right_minutes}
-    later_work: ["Level 12d: burn a mule after an observed lien"]
+      - {kind: test, file: tests/unit/world/test_gang_reactions.py, name: test_stop_rule_cancels_subsequent_flows_and_curtails_mule_lifecycle}
   G6:
     title: "Scam-type payment schedules"
     origin: level_11
@@ -683,11 +683,16 @@ issues:
   G4:
     title: "Fixed gang reactions; gang observation feed"
     origin: level_11
-    status: planned
+    status: partial
     levels: [12]
     parts: [12d]
     v1_status: built
-    later_work: ["Level 12d: gang structure and tactics"]
+    evidence:
+      - {kind: amendment, id: A-017}
+      - {kind: config, file: config/gang_reactions.yaml, name: gang_reactions}
+      - {kind: test, file: tests/unit/world/test_gang_feed.py, name: test_gang_observation_validation_and_timing_invariants}
+      - {kind: test, file: tests/unit/world/test_gang_reactions.py, name: test_stop_rule_cancels_subsequent_flows_and_curtails_mule_lifecycle}
+    later_work: ["Level 12d: rotation, splitting and the feed for real liens"]
   G5:
     title: "Account market shared by gangs"
     origin: level_11
