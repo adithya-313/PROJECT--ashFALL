@@ -10,28 +10,27 @@ Rigorous unit tests verify isolation and correct mathematical behaviors across s
 """
 
 from dataclasses import FrozenInstanceError
-from pathlib import Path
-import pytest
+
 import numpy as np
+import pytest
 
 from world.gang_feed import (
     OBSERVATION_KINDS,
+    GangFeedSettings,
     GangHolding,
     GangObservation,
-    GangFeedSettings,
+    build_gang_holdings_from_roles,
+    draw_gang_feed_settings,
+    find_holding_gang,
     load_gang_reactions_config,
     resolve_feed_delay_range,
     resolve_feed_miss_share_range,
-    draw_gang_feed_settings,
-    find_holding_gang,
-    build_gang_holdings_from_roles,
 )
 from world.gang_reactions import (
     GangReactionState,
-    resolve_stop_rule_share_range,
-    draw_stop_rule_flag,
-    update_gang_reaction,
     may_move_money,
+    resolve_stop_rule_share_range,
+    update_gang_reaction,
 )
 from world.interactive_records import FraudInputs
 from world.opening_handles import resolve_opening_handles
@@ -181,10 +180,22 @@ def test_find_holding_gang_locates_controlling_syndicate() -> None:
 def test_build_gang_holdings_from_roles_excludes_victims() -> None:
     """Ensures that build_gang_holdings_from_roles retains mules, collectors, and cash-outs while dropping victims."""
     roles = (
-        RoleSpan(account_id="acc_victim", role="victim", gang_id="gang_alpha", depth=None, valid_from=0, valid_to=None),
-        RoleSpan(account_id="acc_mule", role="mule", gang_id="gang_alpha", depth=1, valid_from=100, valid_to=500, origin="bought_account"),
-        RoleSpan(account_id="acc_collector", role="collector", gang_id="gang_alpha", depth=None, valid_from=200, valid_to=600),
-        RoleSpan(account_id="acc_cash_out", role="cash_out", gang_id="gang_alpha", depth=None, valid_from=300, valid_to=700),
+        RoleSpan(
+            account_id="acc_victim", role="victim", gang_id="gang_alpha",
+            depth=None, valid_from=0, valid_to=None,
+        ),
+        RoleSpan(
+            account_id="acc_mule", role="mule", gang_id="gang_alpha",
+            depth=1, valid_from=100, valid_to=500, origin="bought_account",
+        ),
+        RoleSpan(
+            account_id="acc_collector", role="collector", gang_id="gang_alpha",
+            depth=None, valid_from=200, valid_to=600,
+        ),
+        RoleSpan(
+            account_id="acc_cash_out", role="cash_out", gang_id="gang_alpha",
+            depth=None, valid_from=300, valid_to=700,
+        ),
     )
     holdings = build_gang_holdings_from_roles(roles)
     # Only mule, collector, and cash_out roles should produce holdings.
@@ -195,7 +206,9 @@ def test_build_gang_holdings_from_roles_excludes_victims() -> None:
 
 
 def test_resolve_opening_handles_updates_gang_holdings() -> None:
-    """Verifies that resolve_opening_handles rewrites opening handles to assigned account identifiers in gang holdings."""
+    """
+    Verifies that resolve_opening_handles rewrites opening handles to assigned account identifiers in gang holdings.
+    """
     handle = "new:gang_test:0"
     inputs = FraudInputs(
         outside_events=(

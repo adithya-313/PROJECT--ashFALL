@@ -19,7 +19,7 @@ from typing import Any
 import numpy as np
 
 from core.config_validator import load_yaml
-from world.gang_feed import GANG_REACTIONS_CONFIG_PATH, WORLD_RANGES_PATH, GangObservation, load_gang_reactions_config
+from world.gang_feed import WORLD_RANGES_PATH, GangObservation, load_gang_reactions_config
 
 
 @dataclass
@@ -67,7 +67,11 @@ def resolve_stop_rule_share_range(
     Returns:
         Tuple of (min_share, max_share).
     """
-    if config is not None and "parameters" in config and "gang_stops_using_liened_account_share" in config["parameters"]:
+    if (
+        config is not None
+        and "parameters" in config
+        and "gang_stops_using_liened_account_share" in config["parameters"]
+    ):
         param_entry = config["parameters"]["gang_stops_using_liened_account_share"]
         if isinstance(param_entry, dict) and split in param_entry:
             bounds = param_entry[split]

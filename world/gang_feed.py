@@ -65,6 +65,22 @@ class GangHolding:
     valid_from: int
     valid_to: int | None
 
+    def __post_init__(self) -> None:
+        """
+        WHAT: Validates temporal validity and non-empty identity fields.
+        WHY: Rejects corrupted holdings where valid_to <= valid_from or identifiers are empty.
+        """
+        if not self.gang_id:
+            raise ValueError("GangHolding gang_id must be a non-empty string.")
+        if not self.account_id:
+            raise ValueError("GangHolding account_id must be a non-empty string.")
+        if self.valid_from < 0:
+            raise ValueError(f"GangHolding valid_from ({self.valid_from}) cannot be negative.")
+        if self.valid_to is not None and self.valid_to <= self.valid_from:
+            raise ValueError(
+                f"GangHolding valid_to ({self.valid_to}) must be greater than valid_from ({self.valid_from})."
+            )
+
     def covers(self, minute: int) -> bool:
         """
         WHAT: Checks whether this holding span covers the given simulation minute.
@@ -146,6 +162,86 @@ class GangFeedSettings:
     miss_share: float
 
 
+def validate_gang_reactions_config(config: dict[str, Any]) -> None:
+    """
+    WHAT: Validates that gang reactions configuration complies with schema constraints.
+    WHY: Enforces that fixture overrides pass identical validation to file configs on disk.
+
+    Args:
+        config: Gang reactions configuration dictionary to validate.
+
+    Raises:
+        ValueError: If required keys are missing, values fall outside valid bounds, or label is missing.
+    """
+    if not isinstance(config, dict):
+        raise ValueError("gang_reactions_config must be a dictionary.")
+
+    cfg = config.get("gang_reactions", config)
+    if not isinstance(cfg, dict):
+        raise ValueError("gang_reactions section must be a dictionary.")
+
+    label = cfg.get("label")
+    if not label or not isinstance(label, str) or not label.strip():
+        raise ValueError("gang_reactions config must contain a non-empty 'label' attribute.")
+
+    required_keys = (
+        "derived_from",
+        "reason",
+        "issue_ids_v2",
+        "gang_feed_delay_minutes",
+        "gang_feed_miss_share",
+        "gang_stops_using_liened_account_share",
+    )
+    for key in required_keys:
+        if key not in cfg:
+            raise ValueError(f"gang_reactions config missing required key '{key}'.")
+
+    metadata_keys = ("label", "reason", "world_ranges_reference", "derived_from")
+
+    # Validate delay entries if explicit bounds are supplied
+    delay_entry = cfg["gang_feed_delay_minutes"]
+    if isinstance(delay_entry, dict):
+        for split, bounds in delay_entry.items():
+            if split in metadata_keys:
+                continue
+            if not isinstance(bounds, (list, tuple)) or len(bounds) != 2:
+                raise ValueError(f"delay range for split '{split}' must be a pair [lower, upper].")
+            lower, upper = bounds
+            if not isinstance(lower, int) or not isinstance(upper, int) or lower < 0 or lower > upper:
+                raise ValueError(
+                    f"delay range for split '{split}' must be non-negative integers with lower <= upper, got {bounds}."
+                )
+
+    # Validate miss share entries if explicit bounds are supplied
+    miss_entry = cfg["gang_feed_miss_share"]
+    if isinstance(miss_entry, dict):
+        for split, bounds in miss_entry.items():
+            if split in metadata_keys:
+                continue
+            if not isinstance(bounds, (list, tuple)) or len(bounds) != 2:
+                raise ValueError(f"miss share range for split '{split}' must be a pair [lower, upper].")
+            lower, upper = bounds
+            if not (0.0 <= lower <= 1.0) or not (0.0 <= upper <= 1.0) or lower > upper:
+                raise ValueError(
+                    f"miss share range for split '{split}' must be floats in [0, 1] with lower <= upper, got {bounds}."
+                )
+
+    # Validate stop rule share entries if explicit bounds are supplied
+    stop_entry = cfg["gang_stops_using_liened_account_share"]
+    if isinstance(stop_entry, dict):
+        for split, bounds in stop_entry.items():
+            if split in metadata_keys:
+                continue
+            if not isinstance(bounds, (list, tuple)) or len(bounds) != 2:
+                raise ValueError(f"stop rule share range for split '{split}' must be a pair [lower, upper].")
+            lower, upper = bounds
+            if not (0.0 <= lower <= 1.0) or not (0.0 <= upper <= 1.0) or lower > upper:
+                raise ValueError(
+                    f"stop rule share range for split '{split}' must be floats in [0, 1] "
+                    f"with lower <= upper, got {bounds}."
+                )
+
+
 def load_gang_reactions_config(path: Path | None = None) -> dict[str, Any]:
     """
     WHAT: Reads config/gang_reactions.yaml, returning its parsed dictionary.
@@ -155,10 +251,12 @@ def load_gang_reactions_config(path: Path | None = None) -> dict[str, Any]:
         path: Optional file path override for testing.
 
     Returns:
-        Parsed configuration dictionary.
+        Parsed and validated configuration dictionary.
     """
     resolved_path = path if path is not None else GANG_REACTIONS_CONFIG_PATH
-    return load_yaml(resolved_path)
+    cfg = load_yaml(resolved_path)
+    validate_gang_reactions_config(cfg)
+    return cfg
 
 
 def resolve_feed_delay_range(

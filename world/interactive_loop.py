@@ -934,25 +934,31 @@ def process_payment(context: LoopContext, queued: QueuedPayment) -> None:
     apply_due_device_events(context, payment.minute)
 
     # For a fraud-origin payment, cancel before stamping/drawing if either account is stopped by the gang mind.
-    if context.gang_reactions_enabled and queued.origin == "fraud" and queued.input_index is not None:
+    if context.gang_reactions_enabled and queued.origin == "fraud":
+        if queued.input_index is None or queued.input_index >= len(context.truth.payment_stories):
+            raise ValueError(
+                f"Missing payment story for fraud payment from {payment.from_account} "
+                f"to {payment.to_account} at minute {payment.minute}."
+            )
         story = context.truth.payment_stories[queued.input_index]
         gang_id = story.gang_id
-        reaction_state = context.gang_reaction_states.get(gang_id)
-        if reaction_state is not None:
-            from_stopped = not may_move_money(reaction_state, payment.from_account)
-            to_stopped = not may_move_money(reaction_state, payment.to_account)
-            if from_stopped or to_stopped:
-                reason = "from_account_stopped" if from_stopped else "to_account_stopped"
-                context.cancelled_by_gang.append(
-                    GangCancellation(
-                        minute=payment.minute,
-                        gang=gang_id,
-                        accounts=(payment.from_account, payment.to_account),
-                        amount=payment.amount_paise,
-                        reason=reason,
-                    )
+        if gang_id not in context.gang_reaction_states:
+            raise ValueError(f"Unknown gang id '{gang_id}' for fraud payment at index {queued.input_index}.")
+        reaction_state = context.gang_reaction_states[gang_id]
+        from_stopped = not may_move_money(reaction_state, payment.from_account)
+        to_stopped = not may_move_money(reaction_state, payment.to_account)
+        if from_stopped or to_stopped:
+            reason = "from_account_stopped" if from_stopped else "to_account_stopped"
+            context.cancelled_by_gang.append(
+                GangCancellation(
+                    minute=payment.minute,
+                    gang=gang_id,
+                    accounts=(payment.from_account, payment.to_account),
+                    amount=payment.amount_paise,
+                    reason=reason,
                 )
-                return
+            )
+            return
 
     if pause_owner_payment(context, queued, banks):
         return
@@ -977,7 +983,9 @@ def process_payment(context: LoopContext, queued: QueuedPayment) -> None:
         if context.gang_reactions_enabled:
             holding_gang = find_holding_gang(context.gang_holdings, payment.from_account, payment.minute)
             if holding_gang is not None:
-                _maybe_emit_gang_observation(context, holding_gang, payment.from_account, "payment_held", payment.minute)
+                _maybe_emit_gang_observation(
+                    context, holding_gang, payment.from_account, "payment_held", payment.minute
+                )
         # A planned payment still uses up its draws at its planned place; fraud and resumed ones use nothing.
         if queued.source in ("planned", "opened_routine"):
             for _ in pieces:
@@ -1167,7 +1175,9 @@ def run_fraud_on(
 
     # 5. Take items off in order: outside events, gang device events, cash withdrawals, observations, or payments.
     while context.queue:
-        item: OutsideEvent | GangDeviceEvent | QueuedPayment | CashWithdrawal | GangObservation = heapq.heappop(context.queue)[-1]
+        item: (
+            OutsideEvent | GangDeviceEvent | QueuedPayment | CashWithdrawal | GangObservation
+        ) = heapq.heappop(context.queue)[-1]
         if isinstance(item, OutsideEvent):
             apply_outside_event(context, item)
         elif isinstance(item, GangDeviceEvent):

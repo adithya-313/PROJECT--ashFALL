@@ -218,8 +218,13 @@ def process_cash_withdrawal(context: Any, withdrawal: CashWithdrawal) -> None:
 
         holding_gang = find_holding_gang(context.gang_holdings, withdrawal.account_id, withdrawal.minute)
         if holding_gang is not None:
-            reaction_state = context.gang_reaction_states.get(holding_gang)
-            if reaction_state is not None and not may_move_money(reaction_state, withdrawal.account_id):
+            if holding_gang not in context.gang_reaction_states:
+                raise ValueError(
+                    f"Unknown gang id '{holding_gang}' holding account '{withdrawal.account_id}' "
+                    f"at minute {withdrawal.minute}."
+                )
+            reaction_state = context.gang_reaction_states[holding_gang]
+            if not may_move_money(reaction_state, withdrawal.account_id):
                 context.cancelled_by_gang.append(
                     GangCancellation(
                         minute=withdrawal.minute,

@@ -350,12 +350,14 @@ def effective_config_for(
         fast_settings: The run settings.
         configs: Layered configs, or None for the files on disk.
         gang_configs: Sequence of GangConfig records, serialized to plain dictionaries only when non-empty.
-        runner_settings: RunnerSettings governing feature flags like account_openings_enabled and gang_reactions_enabled.
+        runner_settings: RunnerSettings governing feature flags like account_openings_enabled
+            and gang_reactions_enabled.
         account_openings_config: Optional account openings configuration dictionary.
         gang_reactions_config: Optional gang reactions configuration dictionary.
 
     Returns:
-        {"settings": {...}, "world_configs": {...}} and optionally "gang_configs", account openings, and gang reactions fields.
+        {"settings": {...}, "world_configs": {...}} and optionally "gang_configs",
+        account openings, and gang reactions fields.
 
     Example:
         effective_config_for(FastRunSettings(101, 60, 12, 61, "training"), None)["settings"]["seed"] is 101.
@@ -376,13 +378,14 @@ def effective_config_for(
         result["account_openings_enabled"] = True
         result["account_openings_config"] = openings_cfg
     if runner_settings.gang_reactions_enabled:
-        from world.gang_feed import load_gang_reactions_config
+        from world.gang_feed import load_gang_reactions_config, validate_gang_reactions_config
 
         reactions_cfg = (
             gang_reactions_config
             if gang_reactions_config is not None
             else load_gang_reactions_config()
         )
+        validate_gang_reactions_config(reactions_cfg)
         result["gang_reactions_enabled"] = True
         result["gang_reactions_config"] = reactions_cfg
     return result
