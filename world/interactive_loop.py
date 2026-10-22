@@ -55,10 +55,13 @@ from world.encumbrance import EncumbranceBook
 from world.failure_decision import decide_failure
 from world.failures import PaymentEvent, make_event
 from world.gang_devices import GangDeviceEvent
+from world.gang_feed import GangFeedSettings, GangHolding, GangObservation, draw_gang_feed_settings, find_holding_gang
+from world.gang_reactions import GangReactionState, draw_stop_rule_flag, may_move_money, update_gang_reaction
 from world.interactive_records import (
     HOOK_DECISIONS,
     ForwardAdjustment,
     FraudInputs,
+    GangCancellation,
     HookDecision,
     IllicitMoneyRule,
     InteractiveRunResult,
@@ -71,7 +74,7 @@ from world.opening_handles import resolve_opening_handles
 from world.outside_events import OutsideEvent, validate_outside_event
 from world.rented_owner_activity import OwnerActivity, PausedOwnerPayment, plan_owner_activity
 from world.run_identity import make_payment_id
-from world.truth_records import TruthFacts, validate_truth_facts
+from world.truth_records import RoleSpan, TruthFacts, validate_role_lifecycle, validate_truth_facts
 from world.world_plan import WorldPlan
 
 # The failure reasons this runner adds; both are failures of the sender's bank.
@@ -189,6 +192,11 @@ class LoopContext:
     money_withdrawn_paise: int = 0
     withdrawal_sequence: int = 0
     daily_atm_withdrawn: dict[tuple[str, int], int] = field(default_factory=dict)
+    gang_reactions_enabled: bool = False
+    gang_feed_settings: dict[str, GangFeedSettings] = field(default_factory=dict)
+    gang_reaction_states: dict[str, GangReactionState] = field(default_factory=dict)
+    gang_holdings: tuple[GangHolding, ...] = ()
+    cancelled_by_gang: list[GangCancellation] = field(default_factory=list)
 
 
 def build_component_streams(seed: int, children: dict[str, int]) -> dict[str, np.random.Generator]:
@@ -329,6 +337,99 @@ def queue_initial_items(context: LoopContext, planned: Sequence[PlannedPayment],
         push(context, withdrawal.minute, "cash_withdrawals", order, withdrawal)
 
 
+def _maybe_emit_gang_observation(
+    context: LoopContext,
+    gang_id: str,
+    account_id: str,
+    kind: str,
+    happened_minute: int,
+) -> None:
+    """
+    WHAT: Evaluates feed miss probability and delivery latency for telemetry on a gang-held account.
+    If kept by the loss draw on child 14, queues a GangObservation at happened_minute + delay_minutes.
+
+    WHY: Amendment A-017 models operational friction: syndicates receive delayed, lossy telemetry
+    concerning friction on their accounts rather than directly observing banking ledger ground truth.
+
+    Args:
+        context: Active simulation LoopContext.
+        gang_id: Identifier of the syndicate holding the account.
+        account_id: Identifier of the account experiencing friction.
+        kind: External friction category, one of OBSERVATION_KINDS.
+        happened_minute: Simulation minute when the external friction occurred.
+
+    Returns:
+        None.
+    """
+    gang_settings = context.gang_feed_settings.get(gang_id)
+    if gang_settings is None:
+        return
+    # The miss draw comes first on child 14 (gang_observation_feed).
+    stream = context.streams["gang_observation_feed"]
+    miss_draw = float(stream.uniform(0.0, 1.0))
+    if miss_draw < gang_settings.miss_share:
+        return
+    # Packet delivery is delayed by the syndicate's operational response latency in minutes.
+    seen_minute = happened_minute + gang_settings.delay_minutes
+    obs = GangObservation(
+        gang_id=gang_id,
+        account_id=account_id,
+        kind=kind,
+        happened_minute=happened_minute,
+        seen_minute=seen_minute,
+    )
+    push(context, seen_minute, "gang_observations", 0, obs)
+
+
+def apply_gang_observation(context: LoopContext, obs: GangObservation) -> None:
+    """
+    WHAT: Delivers a popped GangObservation to the recipient syndicate's isolated mental decision state.
+    Updates stopped accounts under the stop rule, and curtails mule RoleSpan lifecycles in context.truth.
+
+    WHY: Syndicates reactively abandon compromised accounts to protect funds; when a mule is stopped,
+    its ground-truth operational lifespan terminates at the minute the syndicate learned of the lien.
+
+    Args:
+        context: Active simulation LoopContext.
+        obs: Delivered GangObservation telemetry packet.
+
+    Returns:
+        None.
+    """
+    reaction_state = context.gang_reaction_states.get(obs.gang_id)
+    if reaction_state is None:
+        return
+    was_stopped = obs.account_id in reaction_state.stopped_accounts
+    update_gang_reaction(reaction_state, obs)
+    is_stopped = obs.account_id in reaction_state.stopped_accounts
+
+    # Under amendment A-017, stopping a mule replaces its RoleSpan so burned_from is updated.
+    if not was_stopped and is_stopped:
+        new_roles: list[RoleSpan] = []
+        for role_span in context.truth.roles:
+            if (
+                role_span.role == "mule"
+                and role_span.gang_id == obs.gang_id
+                and role_span.account_id == obs.account_id
+            ):
+                old_burned = role_span.burned_from
+                new_burned = obs.seen_minute if old_burned is None else min(old_burned, obs.seen_minute)
+                old_active = role_span.active_from
+                new_active = min(old_active, new_burned) if old_active is not None else None
+                if new_active is None:
+                    new_active = min(role_span.valid_from, new_burned)
+                updated_role = dataclasses.replace(
+                    role_span,
+                    burned_from=new_burned,
+                    active_from=new_active,
+                )
+                validate_role_lifecycle(updated_role)
+                new_roles.append(updated_role)
+            else:
+                new_roles.append(role_span)
+        context.truth = dataclasses.replace(context.truth, roles=tuple(new_roles))
+
+
 def apply_outside_event(context: LoopContext, event: OutsideEvent) -> None:
     """
     WHAT: Applies one outside event: a lien or debit hold is placed in the encumbrance book (under its given id or a
@@ -353,8 +454,17 @@ def apply_outside_event(context: LoopContext, event: OutsideEvent) -> None:
         encumbrance_id = event.encumbrance_id or make_payment_id("enc", context.encumbrance_sequence, context.digits)
         context.encumbrance_sequence += 1
         context.book.place(event, encumbrance_id)
+        if context.gang_reactions_enabled and event.account_id is not None:
+            holding_gang = find_holding_gang(context.gang_holdings, event.account_id, event.minute)
+            if holding_gang is not None:
+                kind = "lien_placed" if event.kind == "lien" else "debit_hold_placed"
+                _maybe_emit_gang_observation(context, holding_gang, event.account_id, kind, event.minute)
     elif event.kind == "release":
-        context.book.release(str(event.encumbrance_id), event.minute)
+        released_enc = context.book.release(str(event.encumbrance_id), event.minute)
+        if context.gang_reactions_enabled and released_enc.account_id is not None:
+            holding_gang = find_holding_gang(context.gang_holdings, released_enc.account_id, event.minute)
+            if holding_gang is not None:
+                _maybe_emit_gang_observation(context, holding_gang, released_enc.account_id, "released", event.minute)
     elif event.kind == "open_account":
         stream_name = str(event.opening_stream)
         if stream_name not in context.streams:
@@ -671,6 +781,21 @@ def record_event(context: LoopContext, event: PaymentEvent, queued: QueuedPaymen
     context.events_resumed.append(queued.source == "resumed")
     context.event_fraud_input_index.append(queued.input_index)
 
+    # Telemetry trigger (2): failed events on held accounts notify the controlling syndicate.
+    if context.gang_reactions_enabled and event.domain == SENDER_BANK_DOMAIN:
+        if event.reason == REASON_DECLINED_BY_BANK:
+            holding_gang = find_holding_gang(context.gang_holdings, event.from_account, event.minute)
+            if holding_gang is not None:
+                _maybe_emit_gang_observation(
+                    context, holding_gang, event.from_account, "payment_declined", event.minute
+                )
+        elif event.reason == REASON_FUNDS_ON_HOLD:
+            holding_gang = find_holding_gang(context.gang_holdings, event.from_account, event.minute)
+            if holding_gang is not None:
+                _maybe_emit_gang_observation(
+                    context, holding_gang, event.from_account, "payment_blocked_by_hold", event.minute
+                )
+
 
 def cap_forward_to_illicit_balance(context: LoopContext, queued: QueuedPayment) -> QueuedPayment | None:
     """
@@ -807,6 +932,28 @@ def process_payment(context: LoopContext, queued: QueuedPayment) -> None:
     banks = banks_for(context, payment)
     # Phones change first, then the payment is named and stamped once.
     apply_due_device_events(context, payment.minute)
+
+    # For a fraud-origin payment, cancel before stamping/drawing if either account is stopped by the gang mind.
+    if context.gang_reactions_enabled and queued.origin == "fraud" and queued.input_index is not None:
+        story = context.truth.payment_stories[queued.input_index]
+        gang_id = story.gang_id
+        reaction_state = context.gang_reaction_states.get(gang_id)
+        if reaction_state is not None:
+            from_stopped = not may_move_money(reaction_state, payment.from_account)
+            to_stopped = not may_move_money(reaction_state, payment.to_account)
+            if from_stopped or to_stopped:
+                reason = "from_account_stopped" if from_stopped else "to_account_stopped"
+                context.cancelled_by_gang.append(
+                    GangCancellation(
+                        minute=payment.minute,
+                        gang=gang_id,
+                        accounts=(payment.from_account, payment.to_account),
+                        amount=payment.amount_paise,
+                        reason=reason,
+                    )
+                )
+                return
+
     if pause_owner_payment(context, queued, banks):
         return
     queued = first_look(context, queued)
@@ -827,6 +974,10 @@ def process_payment(context: LoopContext, queued: QueuedPayment) -> None:
     stream = stream_for(context, queued.source)
     pieces = pieces_of(context, payment, banks[0])
     if decision == "hold":
+        if context.gang_reactions_enabled:
+            holding_gang = find_holding_gang(context.gang_holdings, payment.from_account, payment.minute)
+            if holding_gang is not None:
+                _maybe_emit_gang_observation(context, holding_gang, payment.from_account, "payment_held", payment.minute)
         # A planned payment still uses up its draws at its planned place; fraud and resumed ones use nothing.
         if queued.source in ("planned", "opened_routine"):
             for _ in pieces:
@@ -903,6 +1054,7 @@ def finish_run(context: LoopContext, money_created_paise: int) -> InteractiveRun
         paused_owner_payments=context.paused_owner_payments,
         cash_withdrawals=context.cash_withdrawals,
         money_withdrawn_paise=context.money_withdrawn_paise,
+        cancelled_by_gang=context.cancelled_by_gang,
     )
 
 
@@ -912,6 +1064,7 @@ def run_fraud_on(
     hook: Callable[[PaymentView], HookDecision], run_id: str, runner_config: dict[str, Any], state: RunnerState,
     settings: RunnerSettings = RunnerSettings(fraud_enabled=True),
     account_openings_config: dict[str, Any] | None = None,
+    gang_reactions_config: dict[str, Any] | None = None,
 ) -> InteractiveRunResult:
     """
     WHAT: Runs a world with the fraud switch on. It plans genuine payments exactly as run_world does (on the run stream,
@@ -932,8 +1085,9 @@ def run_fraud_on(
         run_id: The run id.
         runner_config: The interactive_runner config block.
         state: The runner's lookup tables.
-        settings: RunnerSettings governing feature flags like account_openings_enabled.
+        settings: RunnerSettings governing feature flags like account_openings_enabled and gang_reactions_enabled.
         account_openings_config: Optional account openings configuration dictionary.
+        gang_reactions_config: Optional gang reactions configuration dictionary.
 
     Returns:
         The InteractiveRunResult.
@@ -980,15 +1134,48 @@ def run_fraud_on(
     context.owner_activity = plan_owner_activity(
         context.truth.roles, plan.range_name, streams["rented_owner_activity"]
     )
-    # 5. Take items off in order: outside events, gang device events, or payments.
+
+    # Reactive syndicates (Level 12d, A-017): draw feed settings on child 14, then stop rules on child 15.
+    if settings.gang_reactions_enabled:
+        # Collect gangs in stable insertion order from holdings and truth role spans.
+        gang_ids: list[str] = []
+        for h in effective_fraud_inputs.gang_holdings:
+            if h.gang_id not in gang_ids:
+                gang_ids.append(h.gang_id)
+        for r in effective_fraud_inputs.truth.roles:
+            if r.gang_id not in gang_ids:
+                gang_ids.append(r.gang_id)
+
+        # Draw feed delay and miss share per gang on child 14.
+        feed_stream = streams["gang_observation_feed"]
+        for gang_id in gang_ids:
+            context.gang_feed_settings[gang_id] = draw_gang_feed_settings(
+                plan.range_name, feed_stream, config=gang_reactions_config
+            )
+
+        # Draw stop rule adherence flag per gang on child 15.
+        reactions_stream = streams["gang_reactions"]
+        for gang_id in gang_ids:
+            follows_stop = draw_stop_rule_flag(
+                plan.range_name, reactions_stream, config=gang_reactions_config
+            )
+            context.gang_reaction_states[gang_id] = GangReactionState(
+                gang_id=gang_id, follows_stop_rule=follows_stop
+            )
+        context.gang_reactions_enabled = True
+        context.gang_holdings = effective_fraud_inputs.gang_holdings
+
+    # 5. Take items off in order: outside events, gang device events, cash withdrawals, observations, or payments.
     while context.queue:
-        item: OutsideEvent | GangDeviceEvent | QueuedPayment | CashWithdrawal = heapq.heappop(context.queue)[-1]
+        item: OutsideEvent | GangDeviceEvent | QueuedPayment | CashWithdrawal | GangObservation = heapq.heappop(context.queue)[-1]
         if isinstance(item, OutsideEvent):
             apply_outside_event(context, item)
         elif isinstance(item, GangDeviceEvent):
             context.applied_gang_device_events.append(item)
         elif isinstance(item, CashWithdrawal):
             process_cash_withdrawal(context, item)
+        elif isinstance(item, GangObservation):
+            apply_gang_observation(context, item)
         else:
             process_payment(context, item)
     # 6. Final device events, Level 11's guard, and the result.

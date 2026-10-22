@@ -285,6 +285,7 @@ def run_interactive(
     hook: Callable[[PaymentView], HookDecision] = allow_all, run_id: str,
     runner_config: dict[str, Any] | None = None, state: Any = None,
     account_openings_config: dict[str, Any] | None = None,
+    gang_reactions_config: dict[str, Any] | None = None,
 ) -> InteractiveRunResult:
     """
     WHAT: Runs one prepared world. With the switch off it falls back to Level 11's run_world; with it on it runs the
@@ -306,6 +307,7 @@ def run_interactive(
         runner_config: The interactive_runner config block; None reads config/interactive_runner.yaml.
         state: A prepared runner state with extra registered accounts (switch on only), or None.
         account_openings_config: Optional account openings configuration dictionary.
+        gang_reactions_config: Optional gang reactions configuration dictionary.
 
     Returns:
         The InteractiveRunResult.
@@ -324,6 +326,7 @@ def run_interactive(
         world, plan, rng, device_events, episode_payments, fraud_inputs=fraud_inputs, hook=hook, run_id=run_id,
         runner_config=config, state=runner_state, settings=settings,
         account_openings_config=account_openings_config,
+        gang_reactions_config=gang_reactions_config,
     )
 
 
@@ -333,11 +336,12 @@ def effective_config_for(
     *,
     runner_settings: RunnerSettings = RunnerSettings(),
     account_openings_config: dict[str, Any] | None = None,
+    gang_reactions_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     WHAT: Builds the effective configuration as plain data: the run settings plus the four config dictionaries the
-    world is built from (the given layered configs, or the four files as read from disk), plus gang configurations
-    and account openings configurations if enabled.
+    world is built from (the given layered configs, or the four files as read from disk), plus gang configurations,
+    account openings configurations, and gang reactions configurations if enabled.
 
     WHY: The run id must change when any setting changes, including one value deep inside a config file or a gang
     tactical configuration. Folding the full configuration into the id guarantees that per Decision D5 and D7.
@@ -346,11 +350,12 @@ def effective_config_for(
         fast_settings: The run settings.
         configs: Layered configs, or None for the files on disk.
         gang_configs: Sequence of GangConfig records, serialized to plain dictionaries only when non-empty.
-        runner_settings: RunnerSettings governing feature flags like account_openings_enabled.
+        runner_settings: RunnerSettings governing feature flags like account_openings_enabled and gang_reactions_enabled.
         account_openings_config: Optional account openings configuration dictionary.
+        gang_reactions_config: Optional gang reactions configuration dictionary.
 
     Returns:
-        {"settings": {...}, "world_configs": {...}} and optionally "gang_configs" and account openings fields.
+        {"settings": {...}, "world_configs": {...}} and optionally "gang_configs", account openings, and gang reactions fields.
 
     Example:
         effective_config_for(FastRunSettings(101, 60, 12, 61, "training"), None)["settings"]["seed"] is 101.
@@ -370,6 +375,16 @@ def effective_config_for(
         )
         result["account_openings_enabled"] = True
         result["account_openings_config"] = openings_cfg
+    if runner_settings.gang_reactions_enabled:
+        from world.gang_feed import load_gang_reactions_config
+
+        reactions_cfg = (
+            gang_reactions_config
+            if gang_reactions_config is not None
+            else load_gang_reactions_config()
+        )
+        result["gang_reactions_enabled"] = True
+        result["gang_reactions_config"] = reactions_cfg
     return result
 
 
@@ -473,6 +488,7 @@ def run_interactive_world(
     configs: WorldConfigs | None = None, code_version: str | None = None, state_factory: Any = None,
     gang_configs: tuple[GangConfig, ...] = (),
     account_openings_config: dict[str, Any] | None = None,
+    gang_reactions_config: dict[str, Any] | None = None,
 ) -> InteractiveWorldOutput:
     """
     WHAT: Builds and runs a whole world: prepares it as Level 11 does, names the run (seed, effective configuration,
@@ -491,6 +507,7 @@ def run_interactive_world(
         state_factory: A function making the runner state from the prepared world (switch on only), or None.
         gang_configs: Gang configurations planned on child 7 and executed when fraud switch is on.
         account_openings_config: Optional account openings configuration dictionary.
+        gang_reactions_config: Optional gang reactions configuration dictionary.
 
     Returns:
         The InteractiveWorldOutput.
@@ -501,12 +518,17 @@ def run_interactive_world(
     """
     if not runner_settings.fraud_enabled and runner_settings.account_openings_enabled:
         raise ValueError("account openings need fraud_enabled=True")
+    if not runner_settings.fraud_enabled and runner_settings.gang_reactions_enabled:
+        raise ValueError("gang reactions need fraud_enabled=True")
+    if runner_settings.gang_reactions_enabled and not gang_configs:
+        raise ValueError("gang reactions need at least one gang")
     if not runner_settings.fraud_enabled and gang_configs:
         raise ValueError(SWITCH_OFF_MESSAGE)
     runner_config = load_runner_config()
     effective_config = effective_config_for(
         fast_settings, configs, gang_configs,
         runner_settings=runner_settings, account_openings_config=account_openings_config,
+        gang_reactions_config=gang_reactions_config,
     )
     version = code_version if code_version is not None else find_code_version(
         os.environ, REPO_ROOT, runner_config["code_version_git_timeout_seconds"]
@@ -522,6 +544,7 @@ def run_interactive_world(
         prepared.world, prepared.plan, prepared.run_rng, prepared.device_events, prepared.episode_payments,
         settings=runner_settings, fraud_inputs=fraud_inputs, hook=hook, run_id=run_id,
         runner_config=runner_config, state=state, account_openings_config=account_openings_config,
+        gang_reactions_config=gang_reactions_config,
     )
     return InteractiveWorldOutput(
         prepared.world, prepared.plan, prepared.episodes, prepared.episode_report, prepared.device_events,

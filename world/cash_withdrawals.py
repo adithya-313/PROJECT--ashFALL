@@ -211,6 +211,26 @@ def process_cash_withdrawal(context: Any, withdrawal: CashWithdrawal) -> None:
            reason 'insufficient_balance' if short, posting no legs.
         6. Ledger post_debit: Split amount into legal legs at bank's upi_limit_paise under single transfer id.
     """
+    if getattr(context, "gang_reactions_enabled", False):
+        from world.gang_feed import find_holding_gang
+        from world.gang_reactions import may_move_money
+        from world.interactive_records import GangCancellation
+
+        holding_gang = find_holding_gang(context.gang_holdings, withdrawal.account_id, withdrawal.minute)
+        if holding_gang is not None:
+            reaction_state = context.gang_reaction_states.get(holding_gang)
+            if reaction_state is not None and not may_move_money(reaction_state, withdrawal.account_id):
+                context.cancelled_by_gang.append(
+                    GangCancellation(
+                        minute=withdrawal.minute,
+                        gang=holding_gang,
+                        accounts=(withdrawal.account_id,),
+                        amount=withdrawal.amount_paise,
+                        reason="account_stopped",
+                    )
+                )
+                return
+
     # Generate canonical withdrawal identifier: <run_id>-w-NNNNNN
     w_id = f"{context.run_id}-w-{context.withdrawal_sequence:06d}"
     context.withdrawal_sequence += 1

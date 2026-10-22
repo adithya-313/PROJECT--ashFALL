@@ -64,6 +64,7 @@ class RunnerSettings:
 
     fraud_enabled: bool = False
     account_openings_enabled: bool = False
+    gang_reactions_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -204,6 +205,37 @@ def allow_all(payment: PaymentView) -> HookDecision:
 
 
 @dataclass(frozen=True)
+class GangCancellation:
+    """
+    WHAT: Audit record for a payment or withdrawal cancelled by a gang's reactive decision engine.
+    WHY: Amendment A-017 requires tracking all actions prevented by a gang mind upon observing account friction.
+
+    Args:
+        minute: Simulation minute when the cancellation occurred.
+        gang: Identifier of the syndicate deciding to cancel.
+        accounts: Tuple of account identifiers involved in the cancelled transfer or withdrawal.
+        amount: Integer amount of the cancelled action in paise.
+        reason: Explanation of the cancellation decision.
+    """
+
+    minute: int
+    gang: str
+    accounts: tuple[str, ...]
+    amount: int
+    reason: str
+
+    @property
+    def gang_id(self) -> str:
+        """Exposes the syndicate identifier alias for downstream report compatibility."""
+        return self.gang
+
+    @property
+    def amount_paise(self) -> int:
+        """Returns the cancelled transaction monetary amount in integer paise units."""
+        return self.amount
+
+
+@dataclass(frozen=True)
 class InteractiveRunResult:
     """
     WHAT: Everything one interactive run produced. run_result is shaped exactly like Level 11's RunResult; the other
@@ -262,6 +294,7 @@ class InteractiveRunResult:
     paused_owner_payments: list[PausedOwnerPayment] = field(default_factory=list)
     cash_withdrawals: list[CashWithdrawalRecord] = field(default_factory=list)
     money_withdrawn_paise: int = 0
+    cancelled_by_gang: list[GangCancellation] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
