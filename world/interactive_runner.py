@@ -522,7 +522,8 @@ def _apply_gang_configs(
         opening_events.extend(plan.outside_events)
         withdrawals.extend(plan.withdrawals)
 
-    holdings = list(fraud_inputs.gang_holdings) + list(build_gang_holdings_from_roles(roles))
+    gang_plan_roles = roles[len(fraud_inputs.truth.roles):]
+    holdings = list(fraud_inputs.gang_holdings) + list(build_gang_holdings_from_roles(gang_plan_roles))
 
     new_truth = TruthFacts(roles=tuple(roles), device_control=tuple(dev_ctrl), payment_stories=tuple(stories))
     return active_state, FraudInputs(

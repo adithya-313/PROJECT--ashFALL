@@ -494,17 +494,92 @@ def test_resale_share_zero_matches_market_off() -> None:
 
 def test_market_off_byte_identical_to_anchor() -> None:
     """
-    WHAT: Verifies that with account market disabled, runner outputs match the frozen anchor byte-for-byte.
-    WHY: Guarantees backward compatibility and strict byte-identical preservation of pre-existing anchors.
+    WHAT: Verifies a fraud-on, two-gang, reactions-on world with market OFF reproduces the exact 5ada8cf hash.
+    WHY: Proves adding the market switch and secondary resale machinery preserves pre-existing simulation outputs.
     """
+    # Event hash pinned at commit 5ada8cf (2,930 events).
+    expected_5ada8cf_hash = "1c7d05dde08a97409f0fbe980cb0e88b9def4b88e779138fd2dc6c2e3565f29d"
+    steps_1 = (
+        BlockStep("acquire", (("count", 4), ("origin_mix", "all_rented"))),
+        BlockStep("scam", (("receiving_mules", 2),)),
+        BlockStep("route", (("layers", 1), ("accounts_per_layer", 2))),
+    )
+    steps_2 = (
+        BlockStep("acquire", (("count", 4), ("origin_mix", "all_rented"))),
+        BlockStep("scam", (("receiving_mules", 2),)),
+        BlockStep("route", (("layers", 1), ("accounts_per_layer", 2))),
+    )
+    g1 = GangConfig("g1", 1, GENEROUS_BUDGET, None, steps_1, 1440)
+    g2 = GangConfig("g2", 2, GENEROUS_BUDGET, None, steps_2, 15840)
     out = run_interactive_world(
         TINY,
-        RunnerSettings(fraud_enabled=False, account_market_enabled=False),
-        code_version="test-anchor",
+        RunnerSettings(fraud_enabled=True, gang_reactions_enabled=True, account_market_enabled=False),
+        gang_configs=(g1, g2),
+        code_version="5ada8cf",
     )
     lines = event_lines(interactive_fast_output(out))
     digest = hashlib.sha256("".join(lines).encode("utf-8")).hexdigest()
-    assert digest == FROZEN_EVENTS["sha256"]
+    assert len(out.result.run_result.events) == 2930
+    assert digest == expected_5ada8cf_hash
+
+
+def test_no_seller_activity_on_sold_account_at_or_after_resale_minute() -> None:
+    """
+    WHAT: Verifies no payment, withdrawal or device event of seller gang occurs on sold accounts at or after resale.
+    WHY: Ground rule G5 terminates the seller gang's operational authority upon secondary market transfer.
+    """
+    g1, g2 = _build_two_scam_gangs()
+    out = run_interactive_world(
+        TINY,
+        RunnerSettings(fraud_enabled=True, account_market_enabled=True),
+        gang_configs=(g1, g2),
+        account_market_config=FIXTURE_MARKET_SHARE_1,
+    )
+    res = out.result
+    assert len(res.account_resales) >= 1
+
+    for r in res.account_resales:
+        sold = r.sold_account
+        rmin = r.resale_minute
+        seller = r.previous_gang
+
+        # Match payment events to gangs through event_fraud_input_index -> truth.payment_stories[index].gang_id:
+        seller_pmts_before = [
+            e for e, idx in zip(res.run_result.events, res.event_fraud_input_index)
+            if idx is not None
+            and res.truth.payment_stories[idx].gang_id == seller
+            and (e.from_account == sold or e.to_account == sold)
+            and e.minute < rmin
+        ]
+        seller_pmts_at_or_after = [
+            e for e, idx in zip(res.run_result.events, res.event_fraud_input_index)
+            if idx is not None
+            and res.truth.payment_stories[idx].gang_id == seller
+            and (e.from_account == sold or e.to_account == sold)
+            and e.minute >= rmin
+        ]
+        assert len(seller_pmts_before) > 0, f"Expected seller gang '{seller}' activity before resale on {sold}"
+        assert len(seller_pmts_at_or_after) == 0, (
+            f"Found unexpected seller payments on {sold} at or after {rmin}: {seller_pmts_at_or_after}"
+        )
+
+        # Withdrawals planned by seller on sold account at or after resale_minute:
+        seller_w_at_or_after = [
+            w for w in res.cash_withdrawals
+            if w.account == sold and w.minute >= rmin
+        ]
+        assert len(seller_w_at_or_after) == 0, (
+            f"Found unexpected seller withdrawals on {sold} at or after {rmin}: {seller_w_at_or_after}"
+        )
+
+        # Applied gang device events for sold account at or after resale_minute:
+        seller_d_at_or_after = [
+            d for d in res.applied_gang_device_events
+            if d.account_id == sold and d.minute >= rmin
+        ]
+        assert len(seller_d_at_or_after) == 0, (
+            f"Found unexpected seller device events on {sold} at or after {rmin}: {seller_d_at_or_after}"
+        )
 
 
 def test_resale_determinism() -> None:
