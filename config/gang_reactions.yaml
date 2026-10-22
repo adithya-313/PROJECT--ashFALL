@@ -25,3 +25,19 @@ gang_reactions:
     label: policy
     world_ranges_reference: gang_stops_using_liened_account_share
     reason: "Fraction of gangs that adopt the stop-account rule on liened accounts; referenced from config/world_ranges.yaml."
+
+  gang_rotates_to_spare_account_share:
+    label: policy
+    world_ranges_reference: gang_rotates_to_spare_account_share
+    reason: "Fraction of gangs that rotate to a spare account when an account is stopped; referenced from config/world_ranges.yaml."
+
+  gang_splits_amounts_share:
+    label: policy
+    world_ranges_reference: gang_splits_amounts_share
+    reason: "Fraction of gangs that adopt the amount-splitting rule after observing trouble; referenced from config/world_ranges.yaml."
+
+  gang_split_threshold_inr:
+    label: policy
+    tactic_blocks_reference: split_below_threshold.threshold_inr
+    reason: "Threshold in INR above which reactive gangs split payments; referenced from config/tactic_blocks.yaml."
+

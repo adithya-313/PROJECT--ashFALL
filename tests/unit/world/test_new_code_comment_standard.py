@@ -196,6 +196,7 @@ NEW_CODE_FILES: list[str] = [
     "world/gang_reactions.py",
     "tests/unit/world/test_gang_feed.py",
     "tests/unit/world/test_gang_reactions.py",
+    "tests/unit/world/test_gang_rotation_split.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [

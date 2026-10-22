@@ -65,6 +65,7 @@ class GangHolding:
     account_id: str
     valid_from: int
     valid_to: int | None
+    depth: int | None = None
 
     def __post_init__(self) -> None:
         """
@@ -81,6 +82,8 @@ class GangHolding:
             raise ValueError(
                 f"GangHolding valid_to ({self.valid_to}) must be greater than valid_from ({self.valid_from})."
             )
+        if self.depth is not None and self.depth < 1:
+            raise ValueError(f"GangHolding depth ({self.depth}) must be >= 1 when set.")
 
     def covers(self, minute: int) -> bool:
         """
@@ -197,7 +200,23 @@ def validate_gang_reactions_config(config: dict[str, Any]) -> None:
         if key not in cfg:
             raise ValueError(f"gang_reactions config missing required key '{key}'.")
 
-    metadata_keys = ("label", "reason", "world_ranges_reference", "derived_from")
+    if label != "fixture":
+        new_required_keys = (
+            "gang_rotates_to_spare_account_share",
+            "gang_splits_amounts_share",
+            "gang_split_threshold_inr",
+        )
+        for key in new_required_keys:
+            if key not in cfg:
+                raise ValueError(f"gang_reactions config missing required key '{key}'.")
+
+    metadata_keys = (
+        "label",
+        "reason",
+        "world_ranges_reference",
+        "tactic_blocks_reference",
+        "derived_from",
+    )
 
     # Validate delay entries if explicit bounds are supplied
     delay_entry = cfg["gang_feed_delay_minutes"]
@@ -240,6 +259,120 @@ def validate_gang_reactions_config(config: dict[str, Any]) -> None:
                 raise ValueError(
                     f"stop rule share range for split '{split}' must be floats in [0, 1] "
                     f"with lower <= upper, got {bounds}."
+                )
+
+    # Validate rotation rule share entries if explicit bounds are supplied
+    if "gang_rotates_to_spare_account_share" in cfg:
+        rot_entry = cfg["gang_rotates_to_spare_account_share"]
+        if isinstance(rot_entry, dict):
+            for split, bounds in rot_entry.items():
+                if split in metadata_keys:
+                    continue
+                if not isinstance(bounds, (list, tuple)) or len(bounds) != 2:
+                    raise ValueError(f"rotation share range for split '{split}' must be a pair [lower, upper].")
+                lower, upper = bounds
+                if (
+                    not isinstance(lower, (int, float))
+                    or not isinstance(upper, (int, float))
+                    or isinstance(lower, bool)
+                    or isinstance(upper, bool)
+                ):
+                    raise ValueError(f"rotation share bounds for split '{split}' must be numeric.")
+                if not (0.0 <= lower <= 1.0) or not (0.0 <= upper <= 1.0) or lower > upper:
+                    raise ValueError(
+                        f"rotation share range for split '{split}' must be floats in [0, 1] "
+                        f"with lower <= upper, got {bounds}."
+                    )
+        elif isinstance(rot_entry, (list, tuple)):
+            if len(rot_entry) != 2:
+                raise ValueError("rotation share range must be a pair [lower, upper].")
+            lower, upper = rot_entry
+            if (
+                not isinstance(lower, (int, float))
+                or not isinstance(upper, (int, float))
+                or isinstance(lower, bool)
+                or isinstance(upper, bool)
+            ):
+                raise ValueError("rotation share bounds must be numeric.")
+            if not (0.0 <= lower <= 1.0) or not (0.0 <= upper <= 1.0) or lower > upper:
+                raise ValueError(
+                    f"rotation share range must be floats in [0, 1] with lower <= upper, got {rot_entry}."
+                )
+
+    # Validate split rule share entries if explicit bounds are supplied
+    if "gang_splits_amounts_share" in cfg:
+        split_entry = cfg["gang_splits_amounts_share"]
+        if isinstance(split_entry, dict):
+            for split, bounds in split_entry.items():
+                if split in metadata_keys:
+                    continue
+                if not isinstance(bounds, (list, tuple)) or len(bounds) != 2:
+                    raise ValueError(f"split share range for split '{split}' must be a pair [lower, upper].")
+                lower, upper = bounds
+                if (
+                    not isinstance(lower, (int, float))
+                    or not isinstance(upper, (int, float))
+                    or isinstance(lower, bool)
+                    or isinstance(upper, bool)
+                ):
+                    raise ValueError(f"split share bounds for split '{split}' must be numeric.")
+                if not (0.0 <= lower <= 1.0) or not (0.0 <= upper <= 1.0) or lower > upper:
+                    raise ValueError(
+                        f"split share range for split '{split}' must be floats in [0, 1] "
+                        f"with lower <= upper, got {bounds}."
+                    )
+        elif isinstance(split_entry, (list, tuple)):
+            if len(split_entry) != 2:
+                raise ValueError("split share range must be a pair [lower, upper].")
+            lower, upper = split_entry
+            if (
+                not isinstance(lower, (int, float))
+                or not isinstance(upper, (int, float))
+                or isinstance(lower, bool)
+                or isinstance(upper, bool)
+            ):
+                raise ValueError("split share bounds must be numeric.")
+            if not (0.0 <= lower <= 1.0) or not (0.0 <= upper <= 1.0) or lower > upper:
+                raise ValueError(
+                    f"split share range must be floats in [0, 1] with lower <= upper, got {split_entry}."
+                )
+
+    # Validate split threshold in INR entries if explicit bounds are supplied
+    if "gang_split_threshold_inr" in cfg:
+        thresh_entry = cfg["gang_split_threshold_inr"]
+        if isinstance(thresh_entry, dict):
+            for split, bounds in thresh_entry.items():
+                if split in metadata_keys:
+                    continue
+                if not isinstance(bounds, (list, tuple)) or len(bounds) != 2:
+                    raise ValueError(f"split threshold range for split '{split}' must be a pair [lower, upper].")
+                lower, upper = bounds
+                if (
+                    not isinstance(lower, (int, float))
+                    or not isinstance(upper, (int, float))
+                    or isinstance(lower, bool)
+                    or isinstance(upper, bool)
+                ):
+                    raise ValueError(f"split threshold bounds for split '{split}' must be numeric.")
+                if lower <= 0 or upper <= 0 or lower > upper:
+                    raise ValueError(
+                        f"split threshold range for split '{split}' must be positive numbers (> 0) "
+                        f"with lower <= upper, got {bounds}."
+                    )
+        elif isinstance(thresh_entry, (list, tuple)):
+            if len(thresh_entry) != 2:
+                raise ValueError("split threshold range must be a pair [lower, upper].")
+            lower, upper = thresh_entry
+            if (
+                not isinstance(lower, (int, float))
+                or not isinstance(upper, (int, float))
+                or isinstance(lower, bool)
+                or isinstance(upper, bool)
+            ):
+                raise ValueError("split threshold bounds must be numeric.")
+            if lower <= 0 or upper <= 0 or lower > upper:
+                raise ValueError(
+                    f"split threshold range must be positive numbers (> 0) with lower <= upper, got {thresh_entry}."
                 )
 
 
@@ -428,6 +561,7 @@ def build_gang_holdings_from_roles(roles: Sequence[RoleSpan]) -> tuple[GangHoldi
                     account_id=r.account_id,
                     valid_from=r.valid_from,
                     valid_to=r.valid_to,
+                    depth=r.depth,
                 )
             )
     return tuple(holdings)
