@@ -197,6 +197,9 @@ NEW_CODE_FILES: list[str] = [
     "tests/unit/world/test_gang_feed.py",
     "tests/unit/world/test_gang_reactions.py",
     "tests/unit/world/test_gang_rotation_split.py",
+    # Level 12d account market resale planner and test suite.
+    "world/account_market.py",
+    "tests/unit/world/test_account_market.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [

@@ -1,0 +1,318 @@
+"""
+WHAT: Unit and integration tests for the account market resale planner and gang planning integration (Level 12d, G5).
+Verifies configuration loading and validation, resale share resolution and drawing, offer filtering, resale planning,
+and comprehensive GangPlan identity substitution across all account-bearing dataclass fields.
+
+WHY: Police cases document syndicates acquiring accounts from common suppliers who resell burned kits.
+Guarantees deterministic resale behavior, constant random draw streams, and strict non-overlapping temporal role spans.
+"""
+
+from typing import Any
+
+import numpy as np
+import pytest
+
+from world.account_market import (
+    apply_resale,
+    draw_resale_share,
+    find_resale_offers,
+    load_account_market_config,
+    plan_resales,
+    resolve_resale_share_range,
+    validate_account_market_config,
+)
+from world.calendar_runner import PlannedPayment
+from world.cash_withdrawals import CashWithdrawal
+from world.gang_devices import GangDeviceEvent
+from world.gang_planner import BlockCost, GangPlan
+from world.interactive_records import IllicitMoneyRule, Resale
+from world.outside_events import OutsideEvent
+from world.truth_records import DeviceControlSpan, PaymentStory, RoleSpan, TruthFacts
+
+
+def test_account_market_config_validation_success() -> None:
+    """
+    WHAT: Verifies that load_account_market_config and validate_account_market_config pass on valid configs.
+    WHY: Enforces that policy configurations conform strictly to labelled block requirements.
+    """
+    cfg = load_account_market_config()
+    assert "account_market" in cfg
+    assert cfg["account_market"]["label"] == "policy"
+    assert "G5" in cfg["account_market"]["issue_ids_v2"]
+
+    fixture_cfg: dict[str, Any] = {
+        "account_market": {
+            "label": "fixture",
+            "derived_from": "amendment A-017",
+            "reason": "Test fixture configuration.",
+            "issue_ids_v2": ["G5"],
+            "share_of_accounts_sold_to_several_gangs": {
+                "training": [0.1, 0.4],
+                "test": [0.05, 0.5],
+            },
+        }
+    }
+    validate_account_market_config(fixture_cfg)
+
+
+def test_account_market_config_validation_failures() -> None:
+    """
+    WHAT: Tests that validate_account_market_config raises plain ValueErrors on invalid structures or bounds.
+    WHY: Invalid or malformed configuration must be rejected immediately rather than silently defaulting.
+    """
+    with pytest.raises(ValueError, match="must be a dictionary"):
+        validate_account_market_config(["not", "a", "dict"])  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="non-empty 'label'"):
+        validate_account_market_config({"account_market": {"label": ""}})
+
+    with pytest.raises(ValueError, match="missing required key"):
+        validate_account_market_config({"account_market": {"label": "policy"}})
+
+    bad_bounds_cfg: dict[str, Any] = {
+        "account_market": {
+            "label": "fixture",
+            "derived_from": "amendment A-017",
+            "reason": "Invalid bounds fixture.",
+            "issue_ids_v2": ["G5"],
+            "share_of_accounts_sold_to_several_gangs": {
+                "training": [0.5, 0.2],
+            },
+        }
+    }
+    with pytest.raises(ValueError, match="lower <= upper"):
+        validate_account_market_config(bad_bounds_cfg)
+
+    negative_bounds_cfg: dict[str, Any] = {
+        "account_market": {
+            "label": "fixture",
+            "derived_from": "amendment A-017",
+            "reason": "Negative bounds fixture.",
+            "issue_ids_v2": ["G5"],
+            "share_of_accounts_sold_to_several_gangs": {
+                "training": [-0.1, 0.2],
+            },
+        }
+    }
+    with pytest.raises(ValueError, match="floats in \\[0, 1\\]"):
+        validate_account_market_config(negative_bounds_cfg)
+
+
+def test_resolve_and_draw_resale_share_always_draws() -> None:
+    """
+    WHAT: Asserts that draw_resale_share always takes a draw regardless of whether the range is degenerate.
+    WHY: Ground rule G5 requires stream position invariance across degenerate and non-degenerate bounds.
+    """
+    low, high = resolve_resale_share_range("training")
+    assert 0.0 <= low <= high <= 1.0
+
+    degen_cfg = {
+        "account_market": {
+            "share_of_accounts_sold_to_several_gangs": {"training": [0.25, 0.25]}
+        }
+    }
+    non_degen_cfg = {
+        "account_market": {
+            "share_of_accounts_sold_to_several_gangs": {"training": [0.10, 0.50]}
+        }
+    }
+    rng1 = np.random.default_rng(42)
+    rng2 = np.random.default_rng(42)
+
+    val1 = draw_resale_share("training", rng1, config=degen_cfg)
+    val2 = draw_resale_share("training", rng2, config=non_degen_cfg)
+
+    assert val1 == 0.25
+    assert 0.10 <= val2 <= 0.50
+    # Both RNGs must have advanced by exactly 1 draw, so the next draw from each is identical.
+    assert rng1.random() == rng2.random()
+
+
+def test_find_resale_offers_picks_only_rented_burned_open_ended_mules() -> None:
+    """
+    WHAT: Validates that find_resale_offers filters earlier role spans to only rented, burned, open-ended mules.
+    WHY: Excludes unburned accounts, borrowed/business mules, non-mules, and closed spans from resale offers.
+    """
+    eligible1 = RoleSpan("acc_01", "mule", "gang_1", 1, 100, None, origin="rented", burned_from=300)
+    eligible2 = RoleSpan("acc_02", "mule", "gang_1", 2, 100, None, origin="rented", burned_from=400)
+    unburned = RoleSpan("acc_03", "mule", "gang_1", 1, 100, None, origin="rented", burned_from=None)
+    closed = RoleSpan("acc_04", "mule", "gang_1", 1, 100, 500, origin="rented", burned_from=350)
+    borrowed = RoleSpan("acc_05", "mule", "gang_1", 1, 100, None, origin="borrowed_kyc", burned_from=300)
+    business = RoleSpan("acc_06", "mule", "gang_1", 1, 100, None, origin="business", burned_from=300)
+    collector = RoleSpan("acc_07", "collector", "gang_1", None, 100, None, origin=None, burned_from=300)
+    cash_out = RoleSpan("acc_08", "cash_out", "gang_1", None, 100, None, origin=None, burned_from=300)
+
+    spans = [eligible1, unburned, eligible2, closed, borrowed, business, collector, cash_out]
+    offers = find_resale_offers(spans)
+
+    assert offers == [eligible1, eligible2]
+
+
+def test_plan_resales_stream_position_and_offer_constraints() -> None:
+    """
+    WHAT: Asserts that plan_resales draws exactly once per rented mule and enforces offer burned_from limits.
+    WHY: Each rented mule must advance the stream position regardless of offer availability or acceptance.
+    """
+    offer1 = RoleSpan("acc_old_1", "mule", "gang_1", 1, 100, None, origin="rented", burned_from=500)
+    offer2 = RoleSpan("acc_old_2", "mule", "gang_1", 1, 100, None, origin="rented", burned_from=800)
+    offers = [offer1, offer2]
+
+    # New gang has 3 rented mules, 1 borrowed mule, and 1 cash_out.
+    mule_a = RoleSpan("acc_new_a", "mule", "gang_2", 1, 600, None, origin="rented")
+    mule_b = RoleSpan("acc_new_b", "mule", "gang_2", 1, 700, None, origin="rented")
+    mule_c = RoleSpan("acc_new_c", "mule", "gang_2", 1, 900, None, origin="rented")
+    mule_borrowed = RoleSpan("acc_new_d", "mule", "gang_2", 1, 600, None, origin="borrowed_kyc")
+    cash_out = RoleSpan("acc_new_e", "cash_out", "gang_2", None, 600, None, origin=None)
+
+    new_roles = [mule_a, mule_borrowed, mule_b, cash_out, mule_c]
+
+    # With share = 1.0, every draw < share is True.
+    rng_test = np.random.default_rng(123)
+    rng_control = np.random.default_rng(123)
+
+    resales = plan_resales(new_roles, offers, share=1.0, rng=rng_test)
+
+    # 3 rented mules -> exactly 3 uniform draws taken.
+    _ = [rng_control.uniform(0.0, 1.0) for _ in range(3)]
+    assert rng_test.random() == rng_control.random()
+
+    # mule_a (valid_from=600): picks offer1 (burned_from=500 <= 600)
+    # mule_b (valid_from=700): offer2 has burned_from=800 > 700, so cannot be used yet!
+    # mule_c (valid_from=900): picks offer2 (burned_from=800 <= 900)
+    assert len(resales) == 2
+    assert resales[0] == Resale(
+        new_gang="gang_2",
+        new_account="acc_new_a",
+        sold_account="acc_old_1",
+        previous_gang="gang_1",
+        resale_minute=600,
+    )
+    assert resales[1] == Resale(
+        new_gang="gang_2",
+        new_account="acc_new_c",
+        sold_account="acc_old_2",
+        previous_gang="gang_1",
+        resale_minute=900,
+    )
+
+    # Verify no offer is used twice:
+    sold_accounts = [r.sold_account for r in resales]
+    assert len(sold_accounts) == len(set(sold_accounts))
+
+
+def test_apply_resale_leaves_no_trace_of_new_account() -> None:
+    """
+    WHAT: Tests that apply_resale replaces new_account with sold_account across every account-bearing field.
+    WHY: Scanning every field ensures no synthetic placeholder escapes substitution in the resulting GangPlan.
+    """
+    old_acc = "acc_placeholder_001"
+    sold_acc = "acc_real_001"
+    other_acc = "acc_other_002"
+
+    p1 = PlannedPayment(
+        minute=100,
+        from_account=old_acc,
+        to_account=other_acc,
+        amount_paise=1000,
+        creation_index=0,
+        purpose="fraud",
+    )
+    p2 = PlannedPayment(
+        minute=200,
+        from_account=other_acc,
+        to_account=old_acc,
+        amount_paise=2000,
+        creation_index=1,
+        purpose="fraud",
+    )
+    role_span = RoleSpan(
+        account_id=old_acc,
+        role="mule",
+        gang_id="gang_2",
+        depth=1,
+        valid_from=100,
+        valid_to=None,
+        origin="rented",
+    )
+    dev_span = DeviceControlSpan("dev_01", old_acc, "gang_2", 100, None, False, False, False, False)
+    story = PaymentStory("gang_2", "route", 1, "Story without account id")
+    truth = TruthFacts(roles=(role_span,), device_control=(dev_span,), payment_stories=(story,))
+    dev_event = GangDeviceEvent(
+        minute=100,
+        device_id="dev_01",
+        account_id=old_acc,
+        kind="device_acquired",
+        platform="android",
+        os_generation=12,
+        fingerprint="fp",
+    )
+    money_rule = IllicitMoneyRule(
+        input_index=0,
+        spends_illicit=True,
+        credits_illicit=True,
+        requires_credit_from=old_acc,
+    )
+    outside_event = OutsideEvent(minute=100, kind="lien", account_id=old_acc, amount_paise=5000)
+    withdrawal = CashWithdrawal(minute=150, account_id=old_acc, amount_paise=3000, channel="atm")
+    cost = BlockCost(money_paise=100, time_minutes=50, risk=0.01)
+
+    plan = GangPlan(
+        payments=(p1, p2),
+        truth=truth,
+        costs=(cost,),
+        totals=cost,
+        gang_device_events=(dev_event,),
+        money_rules=(money_rule,),
+        outside_events=(outside_event,),
+        withdrawals=(withdrawal,),
+    )
+
+    resale = Resale(
+        new_gang="gang_2",
+        new_account=old_acc,
+        sold_account=sold_acc,
+        previous_gang="gang_1",
+        resale_minute=100,
+    )
+
+    new_plan = apply_resale(plan, resale)
+
+    # 1. Planned payments
+    assert new_plan.payments[0].from_account == sold_acc
+    assert new_plan.payments[0].to_account == other_acc
+    assert new_plan.payments[1].from_account == other_acc
+    assert new_plan.payments[1].to_account == sold_acc
+
+    # 2. Roles
+    assert new_plan.truth.roles[0].account_id == sold_acc
+
+    # 3. Device control
+    assert new_plan.truth.device_control[0].account_id == sold_acc
+
+    # 4. Gang device events
+    assert new_plan.gang_device_events[0].account_id == sold_acc
+
+    # 5. Money rules
+    assert new_plan.money_rules[0].requires_credit_from == sold_acc
+
+    # 6. Outside events
+    assert new_plan.outside_events[0].account_id == sold_acc
+
+    # 7. Cash withdrawals
+    assert new_plan.withdrawals[0].account_id == sold_acc
+
+    # Exhaustive scan: old_acc must not appear in any attribute or nested object in new_plan.
+    scan_queue: list[Any] = [new_plan]
+    visited_ids: set[int] = set()
+    while scan_queue:
+        current = scan_queue.pop()
+        current_id = id(current)
+        if current_id in visited_ids:
+            continue
+        visited_ids.add(current_id)
+        if isinstance(current, str):
+            assert old_acc not in current, f"Found lingering {old_acc} in string {current}"
+        elif isinstance(current, (list, tuple)):
+            scan_queue.extend(current)
+        elif hasattr(current, "__dict__"):
+            scan_queue.extend(current.__dict__.values())

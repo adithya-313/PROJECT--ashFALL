@@ -301,6 +301,34 @@ class GangSplit:
 
 
 @dataclass(frozen=True)
+class Resale:
+    """
+    WHAT: Audit record for an account resold by a supplier to a subsequent criminal gang.
+    Captures the acquiring gang, the temporary account being replaced, the resold account,
+    the previous holding gang, and the simulation minute when resale became effective.
+
+    WHY: Ground rule G5 and amendment A-017 simulate overlapping criminal infrastructure
+    where account suppliers resell burned rented mule accounts to later syndicates.
+
+    Args:
+        new_gang: Identifier of the acquiring gang purchasing the resold account.
+        new_account: Temporary placeholder or planned account identifier being replaced.
+        sold_account: Real historical account identifier being resold into the new gang.
+        previous_gang: Identifier of the prior gang that formerly operated the account.
+        resale_minute: Simulation minute timestamp when the resale transaction takes effect.
+
+    Returns:
+        A frozen Resale audit record.
+    """
+
+    new_gang: str
+    new_account: str
+    sold_account: str
+    previous_gang: str
+    resale_minute: int
+
+
+@dataclass(frozen=True)
 class InteractiveRunResult:
     """
     WHAT: Everything one interactive run produced. run_result is shaped exactly like Level 11's RunResult; the other

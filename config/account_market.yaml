@@ -1,0 +1,17 @@
+# Account market resale configuration (Level 12d, amendment A-017).
+#
+# TERM: account market = secondary resale of rented mule accounts between criminal syndicates.
+# TERM: resale share = fraction of rented mule accounts resold to subsequent gangs.
+#
+# Checked by: python -m core.config_validator config/account_market.yaml
+
+account_market:
+  label: policy
+  reason: "Configuration for account market resale between criminal syndicates per amendment A-017."
+  issue_ids_v2: [G5]
+  derived_from: "amendment A-017"
+
+  share_of_accounts_sold_to_several_gangs:
+    label: policy
+    world_ranges_reference: share_of_accounts_sold_to_several_gangs
+    reason: "Fraction of rented mule accounts resold to subsequent gangs; referenced from config/world_ranges.yaml."
