@@ -669,3 +669,96 @@ def test_resold_account_liened_while_held_by_gang_2() -> None:
     assert all(c.gang == "g2" for c in res.cancelled_by_gang)
     assert any("acc_person_000006" in c.accounts for c in res.cancelled_by_gang)
 
+
+def test_fixture_role_in_truth_roles_does_not_become_gang_holding() -> None:
+    """
+    WHAT: Asserts that an outside fixture RoleSpan passed in via fraud_inputs.truth.roles does not become
+    a gang holding, ensuring that subsequent liens on that fixture account emit no gang feed observations
+    and cause zero gang cancellations on subsequent transfers.
+    WHY: Proves gang holdings are constructed solely from gang plan roles, preventing external fixture roles
+    from leaking into syndicate infrastructure and triggering spurious reactions.
+    """
+    g1, g2 = _build_two_scam_gangs()
+    fixture_acc = "acc_person_000001"
+    recipient_acc = "acc_person_000003"
+
+    fixture_role = RoleSpan(
+        account_id=fixture_acc,
+        role="mule",
+        gang_id="g1",
+        depth=1,
+        valid_from=1,
+        valid_to=None,
+        origin="rented",
+    )
+    lien = OutsideEvent(
+        minute=2000,
+        kind="lien",
+        account_id=fixture_acc,
+        amount_paise=50000,
+        encumbrance_id="enc-fixture-guard",
+    )
+    pmt = PlannedPayment(
+        minute=4000,
+        from_account=fixture_acc,
+        to_account=recipient_acc,
+        amount_paise=1000,
+        creation_index=0,
+        purpose="everyday",
+    )
+    story = PaymentStory(
+        gang_id="g1",
+        block="scam",
+        layer=1,
+        description="Scam transfer",
+    )
+    inputs = FraudInputs(
+        payments=(pmt,),
+        outside_events=(lien,),
+        truth=TruthFacts(
+            roles=(fixture_role,),
+            payment_stories=(story,),
+        ),
+    )
+
+    out = run_interactive_world(
+        TINY,
+        RunnerSettings(fraud_enabled=True, gang_reactions_enabled=True, account_market_enabled=True),
+        fraud_inputs=inputs,
+        gang_configs=(g1, g2),
+        account_market_config=FIXTURE_MARKET_SHARE_1,
+        gang_reactions_config=FIXTURE_REACTIONS,
+    )
+    res = out.result
+
+    # 1. Prove the lien really was placed in the encumbrance log.
+    lien_entries = [
+        entry for entry in res.encumbrance_log
+        if entry[1] == "place_lien" and entry[2] == "enc-fixture-guard"
+    ]
+    assert len(lien_entries) == 1, f"Expected placed lien in encumbrance_log, got {res.encumbrance_log}"
+
+    # 2. Assert no gang observes it: no feed item was processed, so burned_from remains None.
+    matching_roles = [r for r in res.truth.roles if r.account_id == fixture_acc]
+    assert len(matching_roles) == 1
+    assert matching_roles[0].burned_from is None, (
+        f"Fixture role was unexpectedly curtailed to {matching_roles[0].burned_from}"
+    )
+
+    # 3. Assert no cancellation on the fixture account.
+    fixture_cancellations = [
+        c for c in res.cancelled_by_gang
+        if fixture_acc in c.accounts
+    ]
+    assert len(fixture_cancellations) == 0, (
+        f"Fixture account unexpectedly suffered gang cancellations: {fixture_cancellations}"
+    )
+
+    # 4. Prove the payment from the fixture account actually executed (non-vacuous proof).
+    executed_pmts = [
+        e for e in res.run_result.events
+        if e.from_account == fixture_acc and e.to_account == recipient_acc and e.minute == 4000
+    ]
+    assert len(executed_pmts) == 1, f"Expected payment from {fixture_acc} to execute"
+
+
