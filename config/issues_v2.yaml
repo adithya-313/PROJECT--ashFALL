@@ -692,7 +692,21 @@ issues:
       - {kind: config, file: config/gang_reactions.yaml, name: gang_reactions}
       - {kind: test, file: tests/unit/world/test_gang_feed.py, name: test_gang_observation_validation_and_timing_invariants}
       - {kind: test, file: tests/unit/world/test_gang_reactions.py, name: test_stop_rule_cancels_subsequent_flows_and_curtails_mule_lifecycle}
-    later_work: ["Level 12d: rotation, splitting and the feed for real liens"]
+      - {kind: test, file: tests/unit/world/test_gang_rotation_split.py, name: test_gang_reactions_config_validation_for_new_keys}
+      - {kind: test, file: tests/unit/world/test_gang_rotation_split.py, name: test_gang_holding_depth_and_role_propagation}
+      - {kind: test, file: tests/unit/world/test_gang_rotation_split.py, name: test_choose_spare_account_skips_stopped_and_returns_none_when_exhausted}
+      - {kind: test, file: tests/unit/world/test_gang_rotation_split.py, name: test_has_seen_trouble_flips_on_first_observation}
+      - {kind: test, file: tests/unit/world/test_gang_rotation_split.py, name: test_rotation_and_split_draw_functions}
+      - {kind: test, file: tests/unit/world/test_gang_rotation_split.py, name: test_rotation_on_reroutes_payments_to_spare_and_preserves_balance_bounds}
+      - {kind: test, file: tests/unit/world/test_gang_rotation_split.py, name: test_rotation_on_with_all_spares_stopped_cancels_with_no_spare_account}
+      - {kind: test, file: tests/unit/world/test_gang_rotation_split.py, name: test_rotation_off_cancels_as_in_d1_without_redirect}
+      - {kind: test, file: tests/unit/world/test_gang_rotation_split.py, name: test_split_on_partitions_payments_above_threshold_only_after_trouble}
+      - {kind: test, file: tests/unit/world/test_gang_rotation_split.py, name: test_split_on_below_slow_drip_line_raises_value_error_in_training}
+      - {kind: test, file: tests/unit/world/test_gang_rotation_split.py, name: test_gang_rotation_split_determinism_across_identical_runs}
+      - {kind: test, file: tests/unit/world/test_gang_rotation_split.py, name: test_d1_reactions_equality_with_no_friction}
+      - {kind: test, file: tests/unit/world/test_gang_rotation_split.py, name: test_edge_case_lien_on_spare_itself_later}
+      - {kind: test, file: tests/unit/world/test_gang_rotation_split.py, name: test_edge_case_redirect_at_exact_minute_lien_is_seen}
+    later_work: ["Level 13: real liens from holds reach gangs through the same feed"]
   G5:
     title: "Account market shared by gangs"
     origin: level_11
