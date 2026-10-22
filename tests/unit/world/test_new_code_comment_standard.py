@@ -200,6 +200,9 @@ NEW_CODE_FILES: list[str] = [
     # Level 12d account market resale planner and test suite.
     "world/account_market.py",
     "tests/unit/world/test_account_market.py",
+    # Level 12d tactic family guard and test suite.
+    "world/tactic_families.py",
+    "tests/unit/world/test_tactic_family_guard.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [

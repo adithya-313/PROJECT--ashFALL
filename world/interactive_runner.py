@@ -75,6 +75,12 @@ from world.interactive_records import (
 from world.interactive_state import start_runner_state
 from world.payments import find_ledger_for_account
 from world.run_identity import REPO_ROOT, find_code_version, load_runner_config, make_payment_id, make_run_id
+from world.tactic_families import (
+    check_family_lists_agree,
+    load_evaluation_config,
+    load_tactic_families,
+    validate_gang_families,
+)
 from world.truth_records import TruthFacts
 from world.world_configs import WorldConfigs, read_world_configs
 from world.world_plan import WorldPlan, draw_world_plan, spawn_life_streams, spawn_world_streams
@@ -582,6 +588,11 @@ def run_interactive_world(
         raise ValueError("gang reactions need at least one gang")
     if not runner_settings.fraud_enabled and gang_configs:
         raise ValueError(SWITCH_OFF_MESSAGE)
+    if any(g.family is not None for g in gang_configs):
+        families = load_tactic_families()
+        eval_cfg = load_evaluation_config()
+        check_family_lists_agree(families, eval_cfg)
+        validate_gang_families(gang_configs, fast_settings.range_name, families=families)
     runner_config = load_runner_config()
     effective_config = effective_config_for(
         fast_settings, configs, gang_configs,
