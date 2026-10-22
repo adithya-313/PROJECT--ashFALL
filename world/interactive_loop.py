@@ -77,6 +77,7 @@ from world.interactive_records import (
     IllicitMoneyRule,
     InteractiveRunResult,
     PaymentView,
+    Resale,
     RunnerSettings,
 )
 from world.interactive_state import RunnerState
@@ -128,6 +129,44 @@ class QueuedPayment:
     planned_payment_id: str | None = None
     stamp: DeviceStamp | None = None
     input_index: int | None = None
+
+
+@dataclass(frozen=True)
+class MultiSpanOwnerActivity:
+    """
+    WHAT: Owner activity tracking across multiple disjoint role spans for a resold rented mule.
+    Tracks the drawn kept share and the collection of half-open active intervals.
+
+    WHY: Ground rule G5 resells rented mules across successive syndicates, resulting in
+    distinct active periods punctuated by inactive intervals between resale handoffs.
+
+    Args:
+        kept_share: Probability in [0, 1] that an outgoing owner transaction inside active spans is kept.
+        intervals: Sequence of (valid_from, span_end) half-open minute intervals.
+
+    Returns:
+        A frozen MultiSpanOwnerActivity instance.
+    """
+
+    kept_share: float
+    intervals: tuple[tuple[int, int | None], ...]
+
+    def covers(self, minute: int) -> bool:
+        """
+        WHAT: Checks whether the given minute falls into any active rented mule interval.
+
+        WHY: Routine owner payments occurring during any gang's active hold are subject to pausing.
+
+        Args:
+            minute: A payment's minute.
+
+        Returns:
+            True when minute lies within at least one half-open active span.
+        """
+        return any(
+            start <= minute and (end is None or minute < end)
+            for start, end in self.intervals
+        )
 
 
 @dataclass
@@ -196,7 +235,7 @@ class LoopContext:
     skipped_forwards: list[ForwardAdjustment] = field(default_factory=list)
     capped_forwards: list[ForwardAdjustment] = field(default_factory=list)
     opening_ids: dict[str, str] = field(default_factory=dict)
-    owner_activity: dict[str, OwnerActivity] = field(default_factory=dict)
+    owner_activity: dict[str, Any] = field(default_factory=dict)
     no_routine_share: float | None = None
     opened_routine_index: int = 0
     paused_owner_payments: list[PausedOwnerPayment] = field(default_factory=list)
@@ -211,6 +250,7 @@ class LoopContext:
     cancelled_by_gang: list[GangCancellation] = field(default_factory=list)
     redirected_by_gang: list[GangRedirect] = field(default_factory=list)
     split_by_gang: list[GangSplit] = field(default_factory=list)
+    account_resales: list[Resale] = field(default_factory=list)
 
 
 def build_component_streams(seed: int, children: dict[str, int]) -> dict[str, np.random.Generator]:
@@ -349,6 +389,7 @@ def queue_initial_items(context: LoopContext, planned: Sequence[PlannedPayment],
     for order, withdrawal in enumerate(fraud_inputs.withdrawals):
         validate_cash_withdrawal(withdrawal, context.state)
         push(context, withdrawal.minute, "cash_withdrawals", order, withdrawal)
+    context.account_resales = list(fraud_inputs.account_resales)
 
 
 def _maybe_emit_gang_observation(
@@ -1229,6 +1270,7 @@ def finish_run(context: LoopContext, money_created_paise: int) -> InteractiveRun
         cancelled_by_gang=context.cancelled_by_gang,
         redirected_by_gang=context.redirected_by_gang,
         split_by_gang=context.split_by_gang,
+        account_resales=context.account_resales,
     )
 
 
@@ -1307,9 +1349,31 @@ def run_fraud_on(
     )
     queue_initial_items(context, planned, effective_fraud_inputs)
     # Rented mules keep part of their owner's life: draw each one's kept share once, before the loop starts.
-    context.owner_activity = plan_owner_activity(
-        context.truth.roles, plan.range_name, streams["rented_owner_activity"]
-    )
+    rented_roles = [
+        role for role in context.truth.roles
+        if role.role == "mule" and role.origin == "rented"
+    ]
+    rented_accounts = {role.account_id for role in rented_roles}
+    if len(rented_accounts) == len(rented_roles):
+        context.owner_activity = plan_owner_activity(
+            context.truth.roles, plan.range_name, streams["rented_owner_activity"]
+        )
+    else:
+        from world.tactic_config import get_rented_owner_kept_share_range
+
+        low_share, high_share = get_rented_owner_kept_share_range(plan.range_name)
+        roles_by_acc: dict[str, list[RoleSpan]] = {}
+        for role in rented_roles:
+            roles_by_acc.setdefault(role.account_id, []).append(role)
+        multi_activity: dict[str, OwnerActivity | MultiSpanOwnerActivity] = {}
+        for acc_id in sorted(roles_by_acc.keys()):
+            kept = float(streams["rented_owner_activity"].uniform(low_share, high_share))
+            spans_list: list[tuple[int, int | None]] = []
+            for r in roles_by_acc[acc_id]:
+                span_end = r.burned_from if r.burned_from is not None else r.valid_to
+                spans_list.append((r.valid_from, span_end))
+            multi_activity[acc_id] = MultiSpanOwnerActivity(kept_share=kept, intervals=tuple(spans_list))
+        context.owner_activity = multi_activity
 
     # Reactive syndicates (Level 12d, A-017): draw feed settings on child 14, then stop rules on child 15.
     if settings.gang_reactions_enabled:

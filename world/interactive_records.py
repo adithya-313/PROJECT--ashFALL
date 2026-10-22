@@ -54,6 +54,8 @@ class RunnerSettings:
     Args:
         fraud_enabled: True to run the fraud-on loop, False to fall back to Level 11.
         account_openings_enabled: True to schedule genuine mid-run account openings, False by default.
+        gang_reactions_enabled: True to activate syndicate observation feeds and reactions, False by default.
+        account_market_enabled: True to simulate secondary account resale across gangs, False by default.
 
     Returns:
         A frozen RunnerSettings.
@@ -65,6 +67,7 @@ class RunnerSettings:
     fraud_enabled: bool = False
     account_openings_enabled: bool = False
     gang_reactions_enabled: bool = False
+    account_market_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -120,6 +123,34 @@ class ForwardAdjustment:
 
 
 @dataclass(frozen=True)
+class Resale:
+    """
+    WHAT: Audit record for an account resold by a supplier to a subsequent criminal gang.
+    Captures the acquiring gang, the temporary account being replaced, the resold account,
+    the previous holding gang, and the simulation minute when resale became effective.
+
+    WHY: Ground rule G5 and amendment A-017 simulate overlapping criminal infrastructure
+    where account suppliers resell burned rented mule accounts to later syndicates.
+
+    Args:
+        new_gang: Identifier of the acquiring gang purchasing the resold account.
+        new_account: Temporary placeholder or planned account identifier being replaced.
+        sold_account: Real historical account identifier being resold into the new gang.
+        previous_gang: Identifier of the prior gang that formerly operated the account.
+        resale_minute: Simulation minute timestamp when the resale transaction takes effect.
+
+    Returns:
+        A frozen Resale audit record.
+    """
+
+    new_gang: str
+    new_account: str
+    sold_account: str
+    previous_gang: str
+    resale_minute: int
+
+
+@dataclass(frozen=True)
 class FraudInputs:
     """
     WHAT: Inputs for a world run with the fraud switch on: fraud payments to interleave with genuine ones, outside
@@ -152,6 +183,7 @@ class FraudInputs:
     illicit_seeds: tuple[IllicitSeed, ...] = ()
     withdrawals: tuple[CashWithdrawal, ...] = ()
     gang_holdings: tuple[GangHolding, ...] = ()
+    account_resales: tuple[Resale, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -301,34 +333,6 @@ class GangSplit:
 
 
 @dataclass(frozen=True)
-class Resale:
-    """
-    WHAT: Audit record for an account resold by a supplier to a subsequent criminal gang.
-    Captures the acquiring gang, the temporary account being replaced, the resold account,
-    the previous holding gang, and the simulation minute when resale became effective.
-
-    WHY: Ground rule G5 and amendment A-017 simulate overlapping criminal infrastructure
-    where account suppliers resell burned rented mule accounts to later syndicates.
-
-    Args:
-        new_gang: Identifier of the acquiring gang purchasing the resold account.
-        new_account: Temporary placeholder or planned account identifier being replaced.
-        sold_account: Real historical account identifier being resold into the new gang.
-        previous_gang: Identifier of the prior gang that formerly operated the account.
-        resale_minute: Simulation minute timestamp when the resale transaction takes effect.
-
-    Returns:
-        A frozen Resale audit record.
-    """
-
-    new_gang: str
-    new_account: str
-    sold_account: str
-    previous_gang: str
-    resale_minute: int
-
-
-@dataclass(frozen=True)
 class InteractiveRunResult:
     """
     WHAT: Everything one interactive run produced. run_result is shaped exactly like Level 11's RunResult; the other
@@ -390,6 +394,7 @@ class InteractiveRunResult:
     cancelled_by_gang: list[GangCancellation] = field(default_factory=list)
     redirected_by_gang: list[GangRedirect] = field(default_factory=list)
     split_by_gang: list[GangSplit] = field(default_factory=list)
+    account_resales: list[Resale] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

@@ -7,11 +7,15 @@ WHY: Police cases document syndicates acquiring accounts from common suppliers w
 Guarantees deterministic resale behavior, constant random draw streams, and strict non-overlapping temporal role spans.
 """
 
+import hashlib
+from dataclasses import asdict
 from typing import Any
 
 import numpy as np
 import pytest
 
+from core.config_validator import load_yaml
+from evaluation.truth import TruthStore
 from world.account_market import (
     apply_resale,
     draw_resale_share,
@@ -23,11 +27,21 @@ from world.account_market import (
 )
 from world.calendar_runner import PlannedPayment
 from world.cash_withdrawals import CashWithdrawal
+from world.fast_mode import FastRunSettings, event_lines
+from world.gang_config import BlockStep, GangBudget, GangConfig
 from world.gang_devices import GangDeviceEvent
 from world.gang_planner import BlockCost, GangPlan
-from world.interactive_records import IllicitMoneyRule, Resale
+from world.interactive_records import FraudInputs, IllicitMoneyRule, Resale, RunnerSettings
+from world.interactive_runner import interactive_fast_output, run_interactive_world
 from world.outside_events import OutsideEvent
-from world.truth_records import DeviceControlSpan, PaymentStory, RoleSpan, TruthFacts
+from world.run_identity import REPO_ROOT
+from world.truth_records import (
+    DeviceControlSpan,
+    PaymentStory,
+    RoleSpan,
+    TruthFacts,
+    validate_no_overlapping_role_spans,
+)
 
 
 def test_account_market_config_validation_success() -> None:
@@ -316,3 +330,267 @@ def test_apply_resale_leaves_no_trace_of_new_account() -> None:
             scan_queue.extend(current)
         elif hasattr(current, "__dict__"):
             scan_queue.extend(current.__dict__.values())
+
+
+FROZEN_EVENTS = load_yaml(REPO_ROOT / "config" / "frozen_anchors.yaml")["frozen_anchors"]["fraud_off_events"]
+TINY = FastRunSettings(
+    seed=FROZEN_EVENTS["seed"],
+    n_people=FROZEN_EVENTS["n_people"],
+    n_shops=FROZEN_EVENTS["n_shops"],
+    n_days=FROZEN_EVENTS["n_days"],
+    range_name=FROZEN_EVENTS["range_name"],
+)
+GENEROUS_BUDGET = GangBudget(money_paise=50_000_000, time_minutes=500_000, max_risk=0.99)
+
+FIXTURE_MARKET_SHARE_1: dict[str, Any] = {
+    "account_market": {
+        "label": "fixture",
+        "derived_from": "amendment A-017",
+        "reason": "Test fixture full resale share.",
+        "issue_ids_v2": ["G5"],
+        "share_of_accounts_sold_to_several_gangs": {
+            "training": [1.0, 1.0],
+            "test": [1.0, 1.0],
+        },
+    }
+}
+
+FIXTURE_MARKET_SHARE_0: dict[str, Any] = {
+    "account_market": {
+        "label": "fixture",
+        "derived_from": "amendment A-017",
+        "reason": "Test fixture zero resale share.",
+        "issue_ids_v2": ["G5"],
+        "share_of_accounts_sold_to_several_gangs": {
+            "training": [0.0, 0.0],
+            "test": [0.0, 0.0],
+        },
+    }
+}
+
+FIXTURE_REACTIONS: dict[str, Any] = {
+    "gang_reactions": {
+        "label": "fixture",
+        "derived_from": "amendment A-017",
+        "reason": "Test fixture observation reactions.",
+        "issue_ids_v2": ["G4"],
+        "gang_feed_delay_minutes": {"training": [10, 10]},
+        "gang_feed_miss_share": {"training": [0.0, 0.0]},
+        "gang_stops_using_liened_account_share": {"training": [1.0, 1.0]},
+        "gang_rotates_to_spare_account_share": {"training": [0.0, 0.0]},
+        "gang_splits_amounts_share": {"training": [0.0, 0.0]},
+        "gang_split_threshold_inr": {"training": [25000, 25000]},
+    }
+}
+
+
+def _build_two_scam_gangs() -> tuple[GangConfig, GangConfig]:
+    """
+    WHAT: Constructs two sequential scam syndicates using rented mule recruitment.
+    WHY: Supplies burned rented kits from gang 1 eligible for secondary market resale to gang 2.
+    """
+    steps_1 = (
+        BlockStep("acquire", (("count", 4), ("origin_mix", "all_rented"))),
+        BlockStep("scam", (("receiving_mules", 2),)),
+        BlockStep("route", (("layers", 1), ("accounts_per_layer", 2))),
+    )
+    steps_2 = (
+        BlockStep("acquire", (("count", 4), ("origin_mix", "all_rented"))),
+        BlockStep("scam", (("receiving_mules", 2),)),
+        BlockStep("route", (("layers", 1), ("accounts_per_layer", 2))),
+    )
+    g1 = GangConfig("g1", 1, GENEROUS_BUDGET, None, steps_1, 1440)
+    g2 = GangConfig("g2", 2, GENEROUS_BUDGET, None, steps_2, 15840)
+    return g1, g2
+
+
+def test_two_scam_gangs_resale_share_1_moves_money_and_transfers_truth_owner() -> None:
+    """
+    WHAT: Asserts that with resale share 1.0, burned rented accounts are resold from gang 1 to gang 2.
+    Verifies that evaluation truth owner transitions exactly at resale_minute, role spans do not overlap,
+    and both gangs successfully route illicit funds through the resold account in their active windows.
+    WHY: Proves end-to-end integration of secondary account market with non-overlapping temporal ownership.
+    """
+    g1, g2 = _build_two_scam_gangs()
+    out = run_interactive_world(
+        TINY,
+        RunnerSettings(fraud_enabled=True, account_market_enabled=True),
+        gang_configs=(g1, g2),
+        account_market_config=FIXTURE_MARKET_SHARE_1,
+    )
+    res = out.result
+    assert len(res.account_resales) >= 1
+    validate_no_overlapping_role_spans(res.truth.roles)
+
+    store = TruthStore(
+        [asdict(r) for r in res.truth.roles],
+        [asdict(d) for d in res.truth.device_control],
+        {},
+    )
+
+    resold_with_both_moves: list[str] = []
+    for r in res.account_resales:
+        sold = r.sold_account
+        rmin = r.resale_minute
+
+        # Evaluation truth owner changes exactly at resale_minute:
+        assert store.owner_at(sold, rmin - 1) == r.previous_gang
+        assert store.owner_at(sold, rmin) == r.new_gang
+        assert store.owner_at(sold, rmin + 1) == r.new_gang
+
+        # Spans don't overlap:
+        g1_spans = [s for s in res.truth.roles if s.account_id == sold and s.gang_id == r.previous_gang]
+        g2_spans = [s for s in res.truth.roles if s.account_id == sold and s.gang_id == r.new_gang]
+        assert len(g1_spans) == 1
+        assert len(g2_spans) == 1
+        assert g1_spans[0].valid_to == rmin
+        assert g2_spans[0].valid_from == rmin
+
+        # Both gangs move money through that account in their own windows:
+        g1_pmts = [
+            e for e, s in zip(res.run_result.events, res.event_sources)
+            if s == "fraud" and (e.from_account == sold or e.to_account == sold)
+            and e.minute < rmin and e.status == "success"
+        ]
+        g2_pmts = [
+            e for e, s in zip(res.run_result.events, res.event_sources)
+            if s == "fraud" and (e.from_account == sold or e.to_account == sold)
+            and e.minute >= rmin and e.status == "success"
+        ]
+        if (
+            len(g1_pmts) > 0
+            and sum(e.amount_paise for e in g1_pmts) > 0
+            and len(g2_pmts) > 0
+            and sum(e.amount_paise for e in g2_pmts) > 0
+        ):
+            resold_with_both_moves.append(sold)
+
+    assert len(resold_with_both_moves) >= 1
+
+
+def test_resale_share_zero_matches_market_off() -> None:
+    """
+    WHAT: Tests that setting resale share to [0.0, 0.0] produces events, truth, and withdrawals
+    identical to running with account market disabled.
+    WHY: Verifies that zero resale share introduces zero behavioral deviation from the unaugmented baseline.
+    """
+    g1, g2 = _build_two_scam_gangs()
+    out_zero = run_interactive_world(
+        TINY,
+        RunnerSettings(fraud_enabled=True, account_market_enabled=True),
+        gang_configs=(g1, g2),
+        account_market_config=FIXTURE_MARKET_SHARE_0,
+    )
+    out_off = run_interactive_world(
+        TINY,
+        RunnerSettings(fraud_enabled=True, account_market_enabled=False),
+        gang_configs=(g1, g2),
+    )
+    assert out_zero.result.run_result.events == out_off.result.run_result.events
+    assert out_zero.result.truth == out_off.result.truth
+    assert out_zero.result.cash_withdrawals == out_off.result.cash_withdrawals
+    assert len(out_zero.result.account_resales) == 0
+
+
+def test_market_off_byte_identical_to_anchor() -> None:
+    """
+    WHAT: Verifies that with account market disabled, runner outputs match the frozen anchor byte-for-byte.
+    WHY: Guarantees backward compatibility and strict byte-identical preservation of pre-existing anchors.
+    """
+    out = run_interactive_world(
+        TINY,
+        RunnerSettings(fraud_enabled=False, account_market_enabled=False),
+        code_version="test-anchor",
+    )
+    lines = event_lines(interactive_fast_output(out))
+    digest = hashlib.sha256("".join(lines).encode("utf-8")).hexdigest()
+    assert digest == FROZEN_EVENTS["sha256"]
+
+
+def test_resale_determinism() -> None:
+    """
+    WHAT: Confirms that two runs with the same master seed produce identical account_resales and event logs.
+    WHY: Demonstrates reproducibility and determinism of secondary account resale planning.
+    """
+    g1, g2 = _build_two_scam_gangs()
+    out1 = run_interactive_world(
+        TINY,
+        RunnerSettings(fraud_enabled=True, account_market_enabled=True),
+        gang_configs=(g1, g2),
+        account_market_config=FIXTURE_MARKET_SHARE_1,
+    )
+    out2 = run_interactive_world(
+        TINY,
+        RunnerSettings(fraud_enabled=True, account_market_enabled=True),
+        gang_configs=(g1, g2),
+        account_market_config=FIXTURE_MARKET_SHARE_1,
+    )
+    assert out1.result.account_resales == out2.result.account_resales
+    assert out1.result.run_result.events == out2.result.run_result.events
+
+
+def test_children_0_to_9_unchanged_when_child_16_used() -> None:
+    """
+    WHAT: Tests that spawning 17 children leaves the bit-generator states of children 0 through 9 unchanged.
+    WHY: Prevents secondary market planning on stream 16 from shifting any antecedent simulation draws.
+    """
+    seed = 101
+    c10 = np.random.SeedSequence(seed).spawn(10)
+    c17 = np.random.SeedSequence(seed).spawn(17)
+    for i in range(10):
+        assert c10[i].state == c17[i].state
+        rng10 = np.random.default_rng(c10[i])
+        rng17 = np.random.default_rng(c17[i])
+        assert rng10.integers(0, 1_000_000, size=50).tolist() == rng17.integers(0, 1_000_000, size=50).tolist()
+
+
+def test_no_eligible_offer_takes_draw_per_mule() -> None:
+    """
+    WHAT: Tests that when earlier gang offers have burned_from after the new gang's span starts, no resales occur
+    while exactly one draw is still consumed on the RNG stream for each of the new gang's rented mules.
+    WHY: Enforces offer temporal viability and stream position invariance regardless of offer availability.
+    """
+    offer = RoleSpan("acc_old", "mule", "g1", 1, 5000, None, origin="rented", burned_from=6000)
+    mule_a = RoleSpan("acc_new_a", "mule", "g2", 1, 1440, None, origin="rented")
+    mule_b = RoleSpan("acc_new_b", "mule", "g2", 1, 1440, None, origin="rented")
+
+    rng_test = np.random.default_rng(42)
+    rng_control = np.random.default_rng(42)
+
+    resales = plan_resales([mule_a, mule_b], [offer], share=1.0, rng=rng_test)
+    assert len(resales) == 0
+
+    _ = [rng_control.uniform(0.0, 1.0) for _ in range(2)]
+    assert rng_test.random() == rng_control.random()
+
+
+def test_resold_account_liened_while_held_by_gang_2() -> None:
+    """
+    WHAT: Asserts that an outside lien event placed on a resold account during gang 2's ownership window
+    is delivered solely to gang 2, while gang 1 receives no telemetry and remains completely unaffected.
+    WHY: Validates operational isolation and dynamic holding lookup for resold infrastructure.
+    """
+    g1, g2 = _build_two_scam_gangs()
+    lien = OutsideEvent(
+        minute=16000,
+        kind="lien",
+        account_id="acc_person_000006",
+        amount_paise=50000,
+        encumbrance_id="enc-g2-lien",
+    )
+    inputs = FraudInputs(outside_events=(lien,))
+
+    out = run_interactive_world(
+        TINY,
+        RunnerSettings(fraud_enabled=True, gang_reactions_enabled=True, account_market_enabled=True),
+        fraud_inputs=inputs,
+        gang_configs=(g1, g2),
+        account_market_config=FIXTURE_MARKET_SHARE_1,
+        gang_reactions_config=FIXTURE_REACTIONS,
+    )
+    res = out.result
+    assert len(res.account_resales) >= 1
+    assert len(res.cancelled_by_gang) > 0
+    assert all(c.gang == "g2" for c in res.cancelled_by_gang)
+    assert any("acc_person_000006" in c.accounts for c in res.cancelled_by_gang)
+
