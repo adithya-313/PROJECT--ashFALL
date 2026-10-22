@@ -236,6 +236,77 @@ class GangCancellation:
 
 
 @dataclass(frozen=True)
+class GangRedirect:
+    """
+    WHAT: Audit record for a payment redirected from a stopped mule to an operational spare mule.
+    WHY: Amendment A-017 / Level 12d requires forensic tracking of account rotation reactions.
+
+    Args:
+        minute: Simulation minute when the redirection occurred.
+        gang: Identifier of the syndicate operating the rotation.
+        planned_to: Originally scheduled receiver account identifier that was stopped.
+        new_to: Spare mule account identifier receiving the redirected payment.
+        amount: Payment transfer amount in paise.
+    """
+
+    minute: int
+    gang: str
+    planned_to: str
+    new_to: str
+    amount: int
+
+    @property
+    def gang_id(self) -> str:
+        """Syndicate identifier alias."""
+        return self.gang
+
+    @property
+    def amount_paise(self) -> int:
+        """Transfer amount in paise units."""
+        return self.amount
+
+    def __iter__(self):
+        return iter((self.minute, self.gang, self.planned_to, self.new_to, self.amount))
+
+
+@dataclass(frozen=True)
+class GangSplit:
+    """
+    WHAT: Audit record for a fraud payment partitioned into smaller equal pieces below a threshold.
+    WHY: Amendment A-017 / Level 12d requires tracking structured evasion splits following observed friction.
+
+    Args:
+        minute: Simulation minute when the split occurred.
+        gang: Identifier of the syndicate splitting the transfer.
+        amount: Original unpartitioned payment transfer amount in paise.
+        piece_count: Number of equal partitioned pieces generated.
+    """
+
+    minute: int
+    gang: str
+    amount: int
+    piece_count: int
+
+    @property
+    def pieces(self) -> int:
+        """Number of partitioned pieces alias."""
+        return self.piece_count
+
+    @property
+    def gang_id(self) -> str:
+        """Syndicate identifier alias."""
+        return self.gang
+
+    @property
+    def amount_paise(self) -> int:
+        """Transfer amount in paise units."""
+        return self.amount
+
+    def __iter__(self):
+        return iter((self.minute, self.gang, self.amount, self.piece_count))
+
+
+@dataclass(frozen=True)
 class InteractiveRunResult:
     """
     WHAT: Everything one interactive run produced. run_result is shaped exactly like Level 11's RunResult; the other
@@ -295,6 +366,8 @@ class InteractiveRunResult:
     cash_withdrawals: list[CashWithdrawalRecord] = field(default_factory=list)
     money_withdrawn_paise: int = 0
     cancelled_by_gang: list[GangCancellation] = field(default_factory=list)
+    redirected_by_gang: list[GangRedirect] = field(default_factory=list)
+    split_by_gang: list[GangSplit] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

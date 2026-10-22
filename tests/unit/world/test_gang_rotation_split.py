@@ -1,7 +1,8 @@
 """
 WHAT: Unit and integration tests for Level 12d gang rotation and amount-splitting reactions.
 Validates configuration schema constraints for new keys, GangHolding depth propagation,
-pure account rotation selection via choose_spare_account, and trouble telemetry updates.
+pure account rotation selection via choose_spare_account, trouble telemetry updates,
+and end-to-end interactive simulation of account rotation, splitting, edge cases, and determinism.
 
 WHY: Demonstrates that reactive criminal syndicates evaluate operational resilience
 mechanisms without violating information isolation or corrupting random streams.
@@ -16,6 +17,8 @@ from typing import Any
 import numpy as np
 import pytest
 
+from world.fast_mode import FastRunSettings
+from world.gang_config import BlockStep, GangBudget, GangConfig
 from world.gang_feed import (
     GangHolding,
     GangObservation,
@@ -34,7 +37,26 @@ from world.gang_reactions import (
     resolve_split_threshold_range,
     update_gang_reaction,
 )
+from world.interactive_records import FraudInputs, RunnerSettings
+from world.interactive_runner import run_interactive_world
+from world.outside_events import OutsideEvent
 from world.truth_records import RoleSpan
+
+TINY = FastRunSettings(101, 60, 12, 61, "training")
+GENEROUS_BUDGET = GangBudget(money_paise=50_000_000, time_minutes=500_000, max_risk=0.99)
+
+
+def _build_fixture_gang() -> GangConfig:
+    """
+    WHAT: Constructs a reproducible scam gang with 4 acquired mules, a scam campaign, and a 2x2 laundering route.
+    WHY: Supplies multi-hop fraud flows through layer-1 mules to test reactive flow rotations and splits.
+    """
+    steps = (
+        BlockStep("acquire", (("count", 4),)),
+        BlockStep("scam", (("receiving_mules", 2),)),
+        BlockStep("route", (("layers", 2), ("accounts_per_layer", 2))),
+    )
+    return GangConfig("g1", 1, GENEROUS_BUDGET, None, steps, 1440)
 
 
 def test_gang_reactions_config_validation_for_new_keys() -> None:
@@ -241,3 +263,441 @@ def test_rotation_and_split_draw_functions() -> None:
     # Must be whole rupees converted to paise (divisible by 100).
     assert thresh_paise % 100 == 0
     assert thresh_range[0] * 100 <= thresh_paise <= thresh_range[1] * 100
+
+
+def test_rotation_on_reroutes_payments_to_spare_and_preserves_balance_bounds() -> None:
+    """
+    WHAT: Verifies rotation reaction redirects payments into a stopped mule to an active same-depth spare.
+    WHY: Confirms redirected_by_gang records the events, no payments reach the stopped mule afterwards,
+    and the spare mule never forwards more money than it legitimately received.
+    """
+    gang = _build_fixture_gang()
+    mule_account = "acc_person_000010"
+    spare_account = "acc_person_000006"
+    minute_l = 3000
+
+    fixture_cfg: dict[str, Any] = {
+        "gang_reactions": {
+            "label": "fixture",
+            "derived_from": "amendment A-017",
+            "reason": "rotation test fixture",
+            "issue_ids_v2": ["G4"],
+            "gang_feed_delay_minutes": {"training": [1100, 1100]},
+            "gang_feed_miss_share": {"training": [0.0, 0.0]},
+            "gang_stops_using_liened_account_share": {"training": [1.0, 1.0]},
+            "gang_rotates_to_spare_account_share": {"training": [1.0, 1.0]},
+        }
+    }
+    seen_time = minute_l + 1100
+
+    lien = OutsideEvent(
+        minute=minute_l,
+        kind="lien",
+        account_id=mule_account,
+        amount_paise=50000,
+        encumbrance_id="enc-rot-01",
+    )
+    inputs = FraudInputs(outside_events=(lien,))
+
+    out = run_interactive_world(
+        TINY,
+        RunnerSettings(fraud_enabled=True, gang_reactions_enabled=True),
+        fraud_inputs=inputs,
+        gang_configs=(gang,),
+        gang_reactions_config=fixture_cfg,
+    )
+
+    # 1. Assert redirected_by_gang is not empty and targets the same-depth spare.
+    assert len(out.result.redirected_by_gang) > 0, "redirected_by_gang should record redirections"
+    for r in out.result.redirected_by_gang:
+        assert r.planned_to == mule_account
+        assert r.new_to == spare_account
+        assert r.minute >= seen_time
+
+    # 2. No payment lands on the stopped mule after seen_time.
+    for i, ev in enumerate(out.result.run_result.events):
+        if out.result.event_sources[i] == "fraud" and ev.minute >= seen_time:
+            assert ev.to_account != mule_account, f"Payment reached stopped mule {mule_account} at {ev.minute}"
+
+    # 3. Total spare outflow <= total spare inflow across all successful fraud events.
+    spare_inflow = sum(
+        ev.amount_paise
+        for i, ev in enumerate(out.result.run_result.events)
+        if out.result.event_sources[i] == "fraud" and ev.to_account == spare_account and ev.status == "success"
+    )
+    spare_outflow = sum(
+        ev.amount_paise
+        for i, ev in enumerate(out.result.run_result.events)
+        if out.result.event_sources[i] == "fraud" and ev.from_account == spare_account and ev.status == "success"
+    )
+    assert spare_outflow <= spare_inflow, f"Spare outflow ({spare_outflow}) exceeded inflow ({spare_inflow})"
+
+
+def test_rotation_on_with_all_spares_stopped_cancels_with_no_spare_account() -> None:
+    """
+    WHAT: Tests rotation reaction when every available spare mule at that depth is already stopped.
+    WHY: Verifies the payment is cancelled with explicit reason 'no_spare_account'.
+    """
+    gang = _build_fixture_gang()
+    mule_1 = "acc_person_000006"
+    mule_2 = "acc_person_000010"
+    minute_l = 3000
+
+    fixture_cfg: dict[str, Any] = {
+        "gang_reactions": {
+            "label": "fixture",
+            "derived_from": "amendment A-017",
+            "reason": "rotation exhaustion test fixture",
+            "issue_ids_v2": ["G4"],
+            "gang_feed_delay_minutes": {"training": [1100, 1100]},
+            "gang_feed_miss_share": {"training": [0.0, 0.0]},
+            "gang_stops_using_liened_account_share": {"training": [1.0, 1.0]},
+            "gang_rotates_to_spare_account_share": {"training": [1.0, 1.0]},
+        }
+    }
+
+    # Inject liens on BOTH depth-1 mules simultaneously.
+    lien1 = OutsideEvent(minute=minute_l, kind="lien", account_id=mule_1, amount_paise=50000, encumbrance_id="enc-ex-1")
+    lien2 = OutsideEvent(minute=minute_l, kind="lien", account_id=mule_2, amount_paise=50000, encumbrance_id="enc-ex-2")
+    inputs = FraudInputs(outside_events=(lien1, lien2))
+
+    out = run_interactive_world(
+        TINY,
+        RunnerSettings(fraud_enabled=True, gang_reactions_enabled=True),
+        fraud_inputs=inputs,
+        gang_configs=(gang,),
+        gang_reactions_config=fixture_cfg,
+    )
+
+    # All candidate spares are stopped, so no redirection can succeed.
+    no_spare_cancels = [c for c in out.result.cancelled_by_gang if c.reason == "no_spare_account"]
+    assert len(no_spare_cancels) > 0, "Expected cancellations with reason 'no_spare_account'"
+
+
+def test_rotation_off_cancels_as_in_d1_without_redirect() -> None:
+    """
+    WHAT: Verifies that when rotation rule is disabled, a stopped to_account cancels with to_account_stopped.
+    WHY: Confirms backward compatibility with Level 12d D-1 behavior when rotation share is 0.
+    """
+    gang = _build_fixture_gang()
+    mule_account = "acc_person_000010"
+    minute_l = 3000
+
+    fixture_cfg: dict[str, Any] = {
+        "gang_reactions": {
+            "label": "fixture",
+            "derived_from": "amendment A-017",
+            "reason": "rotation disabled test fixture",
+            "issue_ids_v2": ["G4"],
+            "gang_feed_delay_minutes": {"training": [1100, 1100]},
+            "gang_feed_miss_share": {"training": [0.0, 0.0]},
+            "gang_stops_using_liened_account_share": {"training": [1.0, 1.0]},
+            "gang_rotates_to_spare_account_share": {"training": [0.0, 0.0]},
+        }
+    }
+
+    lien = OutsideEvent(
+        minute=minute_l, kind="lien", account_id=mule_account, amount_paise=50000, encumbrance_id="enc-off-1"
+    )
+    inputs = FraudInputs(outside_events=(lien,))
+
+    out = run_interactive_world(
+        TINY,
+        RunnerSettings(fraud_enabled=True, gang_reactions_enabled=True),
+        fraud_inputs=inputs,
+        gang_configs=(gang,),
+        gang_reactions_config=fixture_cfg,
+    )
+
+    # Redirection list must be empty.
+    assert len(out.result.redirected_by_gang) == 0
+    # Cancellations after seen_time have reason to_account_stopped.
+    to_stopped_cancels = [c for c in out.result.cancelled_by_gang if c.reason == "to_account_stopped"]
+    assert len(to_stopped_cancels) > 0
+
+
+def test_split_on_partitions_payments_above_threshold_only_after_trouble() -> None:
+    """
+    WHAT: Tests that payment splitting occurs strictly after trouble is observed,
+    pieces do not exceed threshold or breach slow_drip, and pieces sum to original amount.
+    WHY: Validates structured evasion reactions while preventing leakage into held-out tactics.
+    """
+    gang = _build_fixture_gang()
+    threshold_inr = 25000
+    threshold_paise = threshold_inr * 100
+    minute_l = 3000
+    delay_minutes = 1100
+    seen_time = minute_l + delay_minutes
+
+    fixture_cfg: dict[str, Any] = {
+        "gang_reactions": {
+            "label": "fixture",
+            "derived_from": "amendment A-017",
+            "reason": "splitting test fixture",
+            "issue_ids_v2": ["G4"],
+            "gang_feed_delay_minutes": {"training": [delay_minutes, delay_minutes]},
+            "gang_feed_miss_share": {"training": [0.0, 0.0]},
+            "gang_stops_using_liened_account_share": {"training": [0.0, 0.0]},
+            "gang_rotates_to_spare_account_share": {"training": [0.0, 0.0]},
+            "gang_splits_amounts_share": {"training": [1.0, 1.0]},
+            "gang_split_threshold_inr": {"training": [threshold_inr, threshold_inr]},
+        }
+    }
+
+    # Lien placed on mule at 3000 signals trouble delivered at 4100.
+    lien = OutsideEvent(
+        minute=minute_l, kind="lien", account_id="acc_person_000010", amount_paise=50000, encumbrance_id="enc-sp-1"
+    )
+    inputs = FraudInputs(outside_events=(lien,))
+
+    out = run_interactive_world(
+        TINY,
+        RunnerSettings(fraud_enabled=True, gang_reactions_enabled=True),
+        fraud_inputs=inputs,
+        gang_configs=(gang,),
+        gang_reactions_config=fixture_cfg,
+    )
+
+    # 1. No split should occur prior to seen_time.
+    for split_item in out.result.split_by_gang:
+        assert split_item.minute >= seen_time, f"Split occurred before trouble seen: {split_item}"
+
+    # 2. Splits occur after seen_time.
+    assert len(out.result.split_by_gang) > 0, "Expected splits to occur after trouble observed"
+
+    # 3. For each split, verify piece bounds and amount conservation.
+    for split_item in out.result.split_by_gang:
+        assert split_item.amount > threshold_paise
+        n = split_item.piece_count
+        base = split_item.amount // n
+        rem = split_item.amount % n
+        pieces = [base + (1 if k < rem else 0) for k in range(n)]
+        assert sum(pieces) == split_item.amount
+        for p in pieces:
+            assert p <= threshold_paise
+            assert p >= 200000  # slow_drip dividing line: 2000 INR = 200000 paise
+
+
+def test_split_on_below_slow_drip_line_raises_value_error_in_training() -> None:
+    """
+    WHAT: Tests that forcing split threshold below the slow_drip dividing line in training raises ValueError.
+    WHY: Protects training worlds from data leakage into the held-out slow_drip tactic family.
+    """
+    gang = _build_fixture_gang()
+    minute_l = 3000
+
+    # 500 INR is valid (> 0) under validate_gang_reactions_config, but below 2000 INR slow_drip line.
+    fixture_cfg: dict[str, Any] = {
+        "gang_reactions": {
+            "label": "fixture",
+            "derived_from": "amendment A-017",
+            "reason": "sub-slow-drip split fixture",
+            "issue_ids_v2": ["G4"],
+            "gang_feed_delay_minutes": {"training": [100, 100]},
+            "gang_feed_miss_share": {"training": [0.0, 0.0]},
+            "gang_stops_using_liened_account_share": {"training": [0.0, 0.0]},
+            "gang_rotates_to_spare_account_share": {"training": [0.0, 0.0]},
+            "gang_splits_amounts_share": {"training": [1.0, 1.0]},
+            "gang_split_threshold_inr": {"training": [500, 500]},
+        }
+    }
+
+    lien = OutsideEvent(
+        minute=minute_l, kind="lien", account_id="acc_person_000010", amount_paise=50000, encumbrance_id="enc-leak-1"
+    )
+    inputs = FraudInputs(outside_events=(lien,))
+
+    with pytest.raises(ValueError, match="slow_drip_max_amount_inr"):
+        run_interactive_world(
+            TINY,
+            RunnerSettings(fraud_enabled=True, gang_reactions_enabled=True),
+            fraud_inputs=inputs,
+            gang_configs=(gang,),
+            gang_reactions_config=fixture_cfg,
+        )
+
+
+def test_gang_rotation_split_determinism_across_identical_runs() -> None:
+    """
+    WHAT: Asserts that running two simulations with identical seed and reactions config yields identical results.
+    WHY: Ensures RNG draw order on child 15 and execution ordering remain deterministic.
+    """
+    gang = _build_fixture_gang()
+    minute_l = 3000
+
+    fixture_cfg: dict[str, Any] = {
+        "gang_reactions": {
+            "label": "fixture",
+            "derived_from": "amendment A-017",
+            "reason": "determinism fixture",
+            "issue_ids_v2": ["G4"],
+            "gang_feed_delay_minutes": {"training": [1100, 1100]},
+            "gang_feed_miss_share": {"training": [0.0, 0.0]},
+            "gang_stops_using_liened_account_share": {"training": [1.0, 1.0]},
+            "gang_rotates_to_spare_account_share": {"training": [1.0, 1.0]},
+            "gang_splits_amounts_share": {"training": [1.0, 1.0]},
+            "gang_split_threshold_inr": {"training": [25000, 25000]},
+        }
+    }
+
+    lien = OutsideEvent(
+        minute=minute_l, kind="lien", account_id="acc_person_000010", amount_paise=50000, encumbrance_id="enc-det-1"
+    )
+    inputs = FraudInputs(outside_events=(lien,))
+
+    out1 = run_interactive_world(
+        TINY,
+        RunnerSettings(fraud_enabled=True, gang_reactions_enabled=True),
+        fraud_inputs=inputs,
+        gang_configs=(gang,),
+        gang_reactions_config=fixture_cfg,
+    )
+
+    out2 = run_interactive_world(
+        TINY,
+        RunnerSettings(fraud_enabled=True, gang_reactions_enabled=True),
+        fraud_inputs=inputs,
+        gang_configs=(gang,),
+        gang_reactions_config=fixture_cfg,
+    )
+
+    assert out1.result.run_result.events == out2.result.run_result.events
+    assert out1.result.redirected_by_gang == out2.result.redirected_by_gang
+    assert out1.result.split_by_gang == out2.result.split_by_gang
+    assert out1.result.cancelled_by_gang == out2.result.cancelled_by_gang
+
+
+def test_d1_reactions_equality_with_no_friction() -> None:
+    """
+    WHAT: Asserts that with reactions enabled and no external friction, output matches reactions disabled.
+    WHY: Proves reactions engine remains strictly dormant without observations.
+    """
+    gang = _build_fixture_gang()
+
+    out_off = run_interactive_world(
+        TINY,
+        RunnerSettings(fraud_enabled=True, gang_reactions_enabled=False),
+        gang_configs=(gang,),
+    )
+
+    out_on = run_interactive_world(
+        TINY,
+        RunnerSettings(fraud_enabled=True, gang_reactions_enabled=True),
+        gang_configs=(gang,),
+    )
+
+    assert out_on.result.run_result.events == out_off.result.run_result.events
+    assert len(out_on.result.redirected_by_gang) == 0
+    assert len(out_on.result.split_by_gang) == 0
+
+
+def test_edge_case_lien_on_spare_itself_later() -> None:
+    """
+    WHAT: Tests edge case where a spare account itself receives a lien after the primary is stopped.
+    WHY: Rotation must cease using the spare once the spare's lien is observed, cancelling further flows.
+    """
+    gang = _build_fixture_gang()
+    primary = "acc_person_000010"
+    spare = "acc_person_000006"
+    delay = 1100
+
+    fixture_cfg: dict[str, Any] = {
+        "gang_reactions": {
+            "label": "fixture",
+            "derived_from": "amendment A-017",
+            "reason": "spare lien test fixture",
+            "issue_ids_v2": ["G4"],
+            "gang_feed_delay_minutes": {"training": [delay, delay]},
+            "gang_feed_miss_share": {"training": [0.0, 0.0]},
+            "gang_stops_using_liened_account_share": {"training": [1.0, 1.0]},
+            "gang_rotates_to_spare_account_share": {"training": [1.0, 1.0]},
+        }
+    }
+
+    # Primary lien at 2000 (seen at 3100), spare lien at 2500 (seen at 3600).
+    lien_primary = OutsideEvent(
+        minute=2000, kind="lien", account_id=primary, amount_paise=50000, encumbrance_id="enc-p"
+    )
+    lien_spare = OutsideEvent(
+        minute=2500, kind="lien", account_id=spare, amount_paise=50000, encumbrance_id="enc-s"
+    )
+    inputs = FraudInputs(outside_events=(lien_primary, lien_spare))
+
+    out = run_interactive_world(
+        TINY,
+        RunnerSettings(fraud_enabled=True, gang_reactions_enabled=True),
+        fraud_inputs=inputs,
+        gang_configs=(gang,),
+        gang_reactions_config=fixture_cfg,
+    )
+
+    # 1. Redirections happen while spare is operational.
+    assert any(r.planned_to == primary and r.new_to == spare for r in out.result.redirected_by_gang)
+
+    # 2. After spare is seen stopped (3600), no payment reaches spare.
+    for i, ev in enumerate(out.result.run_result.events):
+        if out.result.event_sources[i] == "fraud" and ev.minute >= 3600:
+            assert ev.to_account != spare
+            assert ev.to_account != primary
+
+
+def test_edge_case_redirect_at_exact_minute_lien_is_seen() -> None:
+    """
+    WHAT: Tests same-minute rule when an observation is delivered at the exact minute of a planned payment.
+    WHY: In tie_break_order, gang_observations is ranked last. A payment at minute M executes
+    before an observation at minute M is processed, so it is not redirected; payments scheduled
+    after minute M are redirected to the spare.
+    """
+    gang = _build_fixture_gang()
+    mule_account = "acc_person_000010"
+    spare_account = "acc_person_000006"
+    seen_time = 1670
+    minute_l = 1500
+    delay_d = seen_time - minute_l
+
+    fixture_cfg: dict[str, Any] = {
+        "gang_reactions": {
+            "label": "fixture",
+            "derived_from": "amendment A-017",
+            "reason": "same minute test fixture",
+            "issue_ids_v2": ["G4"],
+            "gang_feed_delay_minutes": {"training": [delay_d, delay_d]},
+            "gang_feed_miss_share": {"training": [0.0, 0.0]},
+            "gang_stops_using_liened_account_share": {"training": [1.0, 1.0]},
+            "gang_rotates_to_spare_account_share": {"training": [1.0, 1.0]},
+        }
+    }
+
+    lien = OutsideEvent(
+        minute=minute_l,
+        kind="lien",
+        account_id=mule_account,
+        amount_paise=50000,
+        encumbrance_id="enc-same-minute-01",
+    )
+    inputs = FraudInputs(outside_events=(lien,))
+
+    out = run_interactive_world(
+        TINY,
+        RunnerSettings(fraud_enabled=True, gang_reactions_enabled=True),
+        fraud_inputs=inputs,
+        gang_configs=(gang,),
+        gang_reactions_config=fixture_cfg,
+    )
+
+    # 1. Under the same-minute rule, payment at exactly seen_time (1670) executes before the observation.
+    pmts_at_m = [
+        ev for i, ev in enumerate(out.result.run_result.events)
+        if out.result.event_sources[i] == "fraud"
+        and ev.minute == seen_time
+        and ev.to_account == mule_account
+    ]
+    assert len(pmts_at_m) > 0, f"Payment at exactly {seen_time} must execute before observation"
+
+    # 2. Subsequent payments after seen_time are redirected to the spare.
+    redirects_after_m = [
+        r for r in out.result.redirected_by_gang
+        if r.minute > seen_time and r.planned_to == mule_account and r.new_to == spare_account
+    ]
+    assert len(redirects_after_m) > 0, "Payments after seen_time must be redirected to spare"
+

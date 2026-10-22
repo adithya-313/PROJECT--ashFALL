@@ -200,7 +200,7 @@ def validate_gang_reactions_config(config: dict[str, Any]) -> None:
         if key not in cfg:
             raise ValueError(f"gang_reactions config missing required key '{key}'.")
 
-    if label != "fixture":
+    if label == "policy":
         new_required_keys = (
             "gang_rotates_to_spare_account_share",
             "gang_splits_amounts_share",
