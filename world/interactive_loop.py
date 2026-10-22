@@ -363,7 +363,7 @@ def _maybe_emit_gang_observation(
     """
     gang_settings = context.gang_feed_settings.get(gang_id)
     if gang_settings is None:
-        return
+        raise ValueError(f"gang {gang_id} has no feed settings")
     # The miss draw comes first on child 14 (gang_observation_feed).
     stream = context.streams["gang_observation_feed"]
     miss_draw = float(stream.uniform(0.0, 1.0))
@@ -398,7 +398,7 @@ def apply_gang_observation(context: LoopContext, obs: GangObservation) -> None:
     """
     reaction_state = context.gang_reaction_states.get(obs.gang_id)
     if reaction_state is None:
-        return
+        raise ValueError(f"gang {obs.gang_id} has no reaction state")
     was_stopped = obs.account_id in reaction_state.stopped_accounts
     update_gang_reaction(reaction_state, obs)
     is_stopped = obs.account_id in reaction_state.stopped_accounts
@@ -1080,7 +1080,9 @@ def run_fraud_on(
     events, then takes items off the queue in order until it is empty, and finishes as run_world does.
 
     WHY: Planning first on the same stream gives the identical genuine plan. Taking everything from one ordered queue
-    makes every run with the same inputs repeat exactly.
+    makes every run with the same inputs repeat exactly. When gang_reactions_enabled is True, draws per-gang feed
+    settings on child 14 and stop rule flags on child 15 in the order gangs first appear in gang_holdings, then in truth
+    roles (not alphabetical).
 
     Args:
         world: The prepared World.
@@ -1145,7 +1147,7 @@ def run_fraud_on(
 
     # Reactive syndicates (Level 12d, A-017): draw feed settings on child 14, then stop rules on child 15.
     if settings.gang_reactions_enabled:
-        # Collect gangs in stable insertion order from holdings and truth role spans.
+        # Collect gangs in order: first appearance in gang_holdings, then truth roles (not alphabetical).
         gang_ids: list[str] = []
         for h in effective_fraud_inputs.gang_holdings:
             if h.gang_id not in gang_ids:

@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 
 import world.gang_reactions
+from world.calendar_runner import PlannedPayment
 from world.cash_withdrawals import CashWithdrawal
 from world.fast_mode import FastRunSettings
 from world.gang_config import BlockStep, FixtureSource, GangBudget, GangConfig
@@ -29,6 +30,7 @@ from world.interactive_runner import run_interactive_world
 from world.mule_origins import is_opening_handle
 from world.outside_events import OutsideEvent
 from world.run_identity import REPO_ROOT
+from world.truth_records import PaymentStory, TruthFacts
 
 FORBIDDEN_MODULES: tuple[str, ...] = (
     "world.truth_records",
@@ -121,9 +123,9 @@ def test_stop_rule_cancels_subsequent_flows_and_curtails_mule_lifecycle() -> Non
 
     fixture_reactions_cfg: dict[str, Any] = {
         "gang_reactions": {
-            "label": "policy",
+            "label": "fixture",
             "derived_from": "amendment A-017",
-            "reason": "fixture",
+            "reason": "test fixture",
             "issue_ids_v2": ["G4"],
             "gang_feed_delay_minutes": {"training": [1100, 1100]},
             "gang_feed_miss_share": {"training": [0.0, 0.0]},
@@ -190,12 +192,39 @@ def test_stop_rule_cancels_subsequent_flows_and_curtails_mule_lifecycle() -> Non
         assert c.gang == "g1"
         assert c.amount > 0
 
-    # 5. Assert truth burned_from == L+D when that is earlier than planned (7200).
+    # 5. Assert truth burned_from == L+D when that is earlier than planned burned_from.
     mule_roles = [r for r in out.result.truth.roles if r.account_id == mule_account]
     assert len(mule_roles) == 1
     role = mule_roles[0]
+    assert role.gang_id == "g1"
+    assert role.role == "mule"
+    assert role.depth == 1
+
+    # Planned burned_from is obtained from the same gang world run with stop share set to [0.0, 0.0].
+    no_stop_cfg: dict[str, Any] = {
+        "gang_reactions": {
+            "label": "fixture",
+            "derived_from": "amendment A-017",
+            "reason": "test fixture",
+            "issue_ids_v2": ["G4"],
+            "gang_feed_delay_minutes": {"training": [delay_d, delay_d]},
+            "gang_feed_miss_share": {"training": [0.0, 0.0]},
+            "gang_stops_using_liened_account_share": {"training": [0.0, 0.0]},
+        }
+    }
+    out_no_stop = run_interactive_world(
+        TINY,
+        RunnerSettings(fraud_enabled=True, gang_reactions_enabled=True),
+        fraud_inputs=inputs,
+        gang_configs=(gang,),
+        gang_reactions_config=no_stop_cfg,
+    )
+    role_no_stop = [r for r in out_no_stop.result.truth.roles if r.account_id == mule_account][0]
+    planned_burned_from = role_no_stop.burned_from
+    assert planned_burned_from is not None
+
     assert role.burned_from == seen_time
-    assert role.burned_from < 7200
+    assert role.burned_from < planned_burned_from
 
 
 def test_miss_share_forced_to_one_drops_observations_and_cancels_nothing() -> None:
@@ -206,9 +235,9 @@ def test_miss_share_forced_to_one_drops_observations_and_cancels_nothing() -> No
 
     fixture_reactions_cfg = {
         "gang_reactions": {
-            "label": "policy",
+            "label": "fixture",
             "derived_from": "amendment A-017",
-            "reason": "fixture",
+            "reason": "test fixture",
             "issue_ids_v2": ["G4"],
             "gang_feed_delay_minutes": {"training": [1100, 1100]},
             "gang_feed_miss_share": {"training": [1.0, 1.0]},
@@ -248,9 +277,9 @@ def test_stop_rule_forced_off_observes_lien_but_cancels_nothing() -> None:
 
     fixture_reactions_cfg = {
         "gang_reactions": {
-            "label": "policy",
+            "label": "fixture",
             "derived_from": "amendment A-017",
-            "reason": "fixture",
+            "reason": "test fixture",
             "issue_ids_v2": ["G4"],
             "gang_feed_delay_minutes": {"training": [1100, 1100]},
             "gang_feed_miss_share": {"training": [0.0, 0.0]},
@@ -345,9 +374,9 @@ def test_determinism_same_seed_produces_identical_cancellations_and_events() -> 
 
     fixture_reactions_cfg = {
         "gang_reactions": {
-            "label": "policy",
+            "label": "fixture",
             "derived_from": "amendment A-017",
-            "reason": "fixture",
+            "reason": "test fixture",
             "issue_ids_v2": ["G4"],
             "gang_feed_delay_minutes": {"training": [1100, 1100]},
             "gang_feed_miss_share": {"training": [0.0, 0.0]},
@@ -394,9 +423,9 @@ def test_lien_seen_on_mule_with_zero_illicit_balance_stops_and_curtails() -> Non
     minute_l = 1440
     fixture_reactions_cfg: dict[str, Any] = {
         "gang_reactions": {
-            "label": "policy",
+            "label": "fixture",
             "derived_from": "amendment A-017",
-            "reason": "fixture",
+            "reason": "test fixture",
             "issue_ids_v2": ["G4"],
             "gang_feed_delay_minutes": {"training": [100, 100]},
             "gang_feed_miss_share": {"training": [0.0, 0.0]},
@@ -453,9 +482,9 @@ def test_same_minute_rule_observation_processed_after_due_payments() -> None:
 
     fixture_reactions_cfg: dict[str, Any] = {
         "gang_reactions": {
-            "label": "policy",
+            "label": "fixture",
             "derived_from": "amendment A-017",
-            "reason": "fixture",
+            "reason": "test fixture",
             "issue_ids_v2": ["G4"],
             "gang_feed_delay_minutes": {"training": [delay_d, delay_d]},
             "gang_feed_miss_share": {"training": [0.0, 0.0]},
@@ -521,9 +550,9 @@ def test_lien_on_collector_account_cancels_payments_without_curtailing_lifecycle
 
     fixture_reactions_cfg: dict[str, Any] = {
         "gang_reactions": {
-            "label": "policy",
+            "label": "fixture",
             "derived_from": "amendment A-017",
-            "reason": "fixture",
+            "reason": "test fixture",
             "issue_ids_v2": ["G4"],
             "gang_feed_delay_minutes": {"training": [delay_d, delay_d]},
             "gang_feed_miss_share": {"training": [0.0, 0.0]},
@@ -576,9 +605,9 @@ def test_stopped_mule_with_planned_cash_withdrawal_cancels_withdrawal() -> None:
 
     fixture_reactions_cfg = {
         "gang_reactions": {
-            "label": "policy",
+            "label": "fixture",
             "derived_from": "amendment A-017",
-            "reason": "fixture",
+            "reason": "test fixture",
             "issue_ids_v2": ["G4"],
             "gang_feed_delay_minutes": {"training": [delay_d, delay_d]},
             "gang_feed_miss_share": {"training": [0.0, 0.0]},
@@ -628,9 +657,9 @@ def test_observation_seen_after_last_queued_item_never_delivered_and_run_finishe
 
     fixture_reactions_cfg = {
         "gang_reactions": {
-            "label": "policy",
+            "label": "fixture",
             "derived_from": "amendment A-017",
-            "reason": "fixture",
+            "reason": "test fixture",
             "issue_ids_v2": ["G4"],
             "gang_feed_delay_minutes": {"training": [delay_d, delay_d]},
             "gang_feed_miss_share": {"training": [0.0, 0.0]},
@@ -672,9 +701,9 @@ def test_lien_released_before_gang_sees_it_still_stops_gang() -> None:
 
     fixture_reactions_cfg = {
         "gang_reactions": {
-            "label": "policy",
+            "label": "fixture",
             "derived_from": "amendment A-017",
-            "reason": "fixture",
+            "reason": "test fixture",
             "issue_ids_v2": ["G4"],
             "gang_feed_delay_minutes": {"training": [delay_d, delay_d]},
             "gang_feed_miss_share": {"training": [0.0, 0.0]},
@@ -715,8 +744,8 @@ def test_lien_released_before_gang_sees_it_still_stops_gang() -> None:
 
 def test_validation_rejects_corrupted_holdings_and_configs() -> None:
     """
-    Asserts Section D: validates rejection of invalid holdings, missing stories, unknown gang IDs,
-    and invalid reaction configs.
+    Validates that GangHolding rejects inverted validity windows and
+    validate_gang_reactions_config rejects invalid configs.
     """
     # 1. GangHolding with valid_to <= valid_from raises ValueError
     with pytest.raises(ValueError, match="valid_to .* must be greater than valid_from"):
@@ -758,3 +787,77 @@ def test_validation_rejects_corrupted_holdings_and_configs() -> None:
     }
     with pytest.raises(ValueError, match="miss share range.*floats in \\[0, 1\\]"):
         validate_gang_reactions_config(bad_cfg2)
+
+
+def test_runner_rejects_fraud_payment_with_missing_payment_story() -> None:
+    """
+    WHAT: Asserts that processing a fraud payment without an accompanying payment story raises ValueError.
+    WHY: In interactive simulations with gang reactions enabled, every fraud payment must map to a
+    corresponding payment story to evaluate gang mind reaction state.
+    """
+    gang = GangConfig(
+        "g1", 1, GENEROUS_BUDGET,
+        FixtureSource("acc_person_000001", 0, 10_000_000, 1440),
+        (BlockStep("acquire", (("count", 2),)),),
+        None,
+    )
+    fixture_cfg = {
+        "gang_reactions": {
+            "label": "fixture",
+            "derived_from": "amendment A-017",
+            "reason": "test fixture",
+            "issue_ids_v2": ["G4"],
+            "gang_feed_delay_minutes": {"training": [100, 100]},
+            "gang_feed_miss_share": {"training": [0.0, 0.0]},
+            "gang_stops_using_liened_account_share": {"training": [1.0, 1.0]},
+        }
+    }
+    pmt = PlannedPayment(100, "acc_person_000000", "acc_person_000001", 1000, 0, "everyday")
+    inputs = FraudInputs(payments=(pmt,), truth=TruthFacts(payment_stories=()))
+
+    with pytest.raises(ValueError, match="Missing payment story for fraud payment"):
+        run_interactive_world(
+            TINY,
+            RunnerSettings(fraud_enabled=True, gang_reactions_enabled=True),
+            fraud_inputs=inputs,
+            gang_configs=(gang,),
+            gang_reactions_config=fixture_cfg,
+        )
+
+
+def test_runner_rejects_fraud_payment_with_unknown_gang_id() -> None:
+    """
+    WHAT: Asserts that processing a fraud payment with a story for an unconfigured gang raises ValueError.
+    WHY: If a payment story references a syndicate not registered in gang reaction states, the runner
+    must loudly reject the execution rather than silently proceeding.
+    """
+    gang = GangConfig(
+        "g1", 1, GENEROUS_BUDGET,
+        FixtureSource("acc_person_000001", 0, 10_000_000, 1440),
+        (BlockStep("acquire", (("count", 2),)),),
+        None,
+    )
+    fixture_cfg = {
+        "gang_reactions": {
+            "label": "fixture",
+            "derived_from": "amendment A-017",
+            "reason": "test fixture",
+            "issue_ids_v2": ["G4"],
+            "gang_feed_delay_minutes": {"training": [100, 100]},
+            "gang_feed_miss_share": {"training": [0.0, 0.0]},
+            "gang_stops_using_liened_account_share": {"training": [1.0, 1.0]},
+        }
+    }
+    pmt = PlannedPayment(100, "acc_person_000000", "acc_person_000001", 1000, 0, "everyday")
+    story = PaymentStory("unknown_syndicate", "scam", 0, "test payment story")
+    inputs = FraudInputs(payments=(pmt,), truth=TruthFacts(payment_stories=(story,)))
+
+    with pytest.raises(ValueError, match="Unknown gang id 'unknown_syndicate' for fraud payment at index 0"):
+        run_interactive_world(
+            TINY,
+            RunnerSettings(fraud_enabled=True, gang_reactions_enabled=True),
+            fraud_inputs=inputs,
+            gang_configs=(gang,),
+            gang_reactions_config=fixture_cfg,
+        )
+

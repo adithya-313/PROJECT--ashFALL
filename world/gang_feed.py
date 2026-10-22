@@ -22,6 +22,7 @@ from typing import Any
 import numpy as np
 
 from core.config_validator import load_yaml
+from world.truth_records import RoleSpan
 
 REPO_ROOT: Path = Path(__file__).resolve().parent.parent
 GANG_REACTIONS_CONFIG_PATH: Path = REPO_ROOT / "config" / "gang_reactions.yaml"
@@ -403,7 +404,7 @@ def find_holding_gang(
     return None
 
 
-def build_gang_holdings_from_roles(roles: Sequence[Any]) -> tuple[GangHolding, ...]:
+def build_gang_holdings_from_roles(roles: Sequence[RoleSpan]) -> tuple[GangHolding, ...]:
     """
     WHAT: Constructs GangHolding records from truth role spans for mules, collectors, and cash-outs.
     Victim role spans are strictly excluded.
@@ -420,7 +421,7 @@ def build_gang_holdings_from_roles(roles: Sequence[Any]) -> tuple[GangHolding, .
     holdings: list[GangHolding] = []
     # Only mule infrastructure generates gang ownership; victims are excluded by definition.
     for r in roles:
-        if getattr(r, "role", None) in ("mule", "collector", "cash_out"):
+        if r.role in ("mule", "collector", "cash_out"):
             holdings.append(
                 GangHolding(
                     gang_id=r.gang_id,
