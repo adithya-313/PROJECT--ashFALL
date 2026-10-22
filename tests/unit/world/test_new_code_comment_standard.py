@@ -191,6 +191,10 @@ NEW_CODE_FILES: list[str] = [
     # Level 12c routine life for new genuine people.
     "world/opened_routine.py",
     "tests/unit/world/test_opened_routine.py",
+    # Level 12d gang observation feed and reactive decision rules.
+    "world/gang_feed.py",
+    "world/gang_reactions.py",
+    "tests/unit/world/test_gang_feed.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [

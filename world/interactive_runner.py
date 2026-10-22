@@ -57,6 +57,7 @@ from world.episode_payments import plan_episode_payments
 from world.episodes import Episode, draw_episode_schedule
 from world.fast_mode import FastRunSettings
 from world.gang_config import GangConfig, gang_config_to_plain
+from world.gang_feed import build_gang_holdings_from_roles
 from world.gang_planner import plan_gang
 from world.interactive_loop import run_fraud_on
 from world.interactive_records import (
@@ -421,6 +422,7 @@ def _apply_gang_configs(
     rules = list(fraud_inputs.money_rules)
     opening_events = list(fraud_inputs.outside_events)
     withdrawals = list(fraud_inputs.withdrawals)
+    holdings = list(fraud_inputs.gang_holdings)
 
     for g in gang_configs:
         plan = plan_gang(g, prepared.world, plan_rng, reserved_accounts=reserved, gang_devices_rng=dev_rng)
@@ -453,6 +455,7 @@ def _apply_gang_configs(
         g_dev_events.extend(plan.gang_device_events)
         opening_events.extend(plan.outside_events)
         withdrawals.extend(plan.withdrawals)
+        holdings.extend(build_gang_holdings_from_roles(plan.truth.roles))
 
     new_truth = TruthFacts(roles=tuple(roles), device_control=tuple(dev_ctrl), payment_stories=tuple(stories))
     return active_state, FraudInputs(
@@ -460,6 +463,7 @@ def _apply_gang_configs(
         gang_device_events=tuple(g_dev_events),
         money_rules=tuple(rules), illicit_seeds=tuple(seeds),
         withdrawals=tuple(withdrawals),
+        gang_holdings=tuple(holdings),
     )
 
 

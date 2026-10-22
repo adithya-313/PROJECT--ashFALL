@@ -31,6 +31,7 @@ from world.cash_withdrawals import CashWithdrawal, CashWithdrawalRecord
 from world.device_events import DeviceEvent
 from world.episodes import Episode
 from world.gang_devices import GangDeviceEvent
+from world.gang_feed import GangHolding
 from world.outside_events import OutsideEvent
 from world.rented_owner_activity import PausedOwnerPayment
 from world.truth_records import TruthFacts
@@ -149,6 +150,7 @@ class FraudInputs:
     money_rules: tuple[IllicitMoneyRule, ...] = ()
     illicit_seeds: tuple[IllicitSeed, ...] = ()
     withdrawals: tuple[CashWithdrawal, ...] = ()
+    gang_holdings: tuple[GangHolding, ...] = ()
 
 
 @dataclass(frozen=True)

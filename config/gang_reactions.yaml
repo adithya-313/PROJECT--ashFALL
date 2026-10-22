@@ -1,0 +1,27 @@
+# Gang observation feed and reactive decision rules configuration (Level 12d, amendment A-017).
+#
+# TERM: observation feed = delayed, lossy external event telemetry visible to criminal syndicates.
+# TERM: stop rule = fixed gang reaction rule cancelling activity on accounts encumbered by liens.
+#
+# Checked by: python -m core.config_validator config/gang_reactions.yaml
+
+gang_reactions:
+  label: policy
+  reason: "Configuration for gang observation feeds and reactive decision rules per amendment A-017."
+  issue_ids_v2: [G4]
+  derived_from: "amendment A-017"
+
+  gang_feed_delay_minutes:
+    label: policy
+    world_ranges_reference: gang_feed_delay_minutes
+    reason: "Observation feed delivery delay in whole minutes; referenced from config/world_ranges.yaml."
+
+  gang_feed_miss_share:
+    label: policy
+    world_ranges_reference: gang_feed_miss_share
+    reason: "Fraction of feed items dropped and never observed by a gang; referenced from config/world_ranges.yaml."
+
+  gang_stops_using_liened_account_share:
+    label: policy
+    world_ranges_reference: gang_stops_using_liened_account_share
+    reason: "Fraction of gangs that adopt the stop-account rule on liened accounts; referenced from config/world_ranges.yaml."
