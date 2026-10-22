@@ -43,7 +43,7 @@ class GangReactionState:
         stopped_accounts: Set of account identifiers marked unusable by this gang mind.
         follows_rotation_rule: Boolean flag indicating if this gang rotates to spare accounts.
         follows_split_rule: Boolean flag indicating if this gang splits transfers above threshold.
-        split_threshold_paise: Drawn or configured threshold in integer paise for payment splitting.
+        split_threshold_paise: Drawn threshold in integer paise for payment splitting.
         has_seen_trouble: Boolean flag indicating if this gang has observed any friction event.
 
     Returns:
@@ -128,16 +128,9 @@ def draw_stop_rule_flag(
     Returns:
         Boolean indicating whether the gang adheres to the stop rule.
     """
-    # Allow fixture configs to force the flag directly.
-    if config is not None and "follows_stop_rule" in config:
-        return bool(config["follows_stop_rule"])
-
     bounds = resolve_stop_rule_share_range(split, config, world_ranges_path)
     low_share, high_share = bounds[0], bounds[1]
-    if low_share == high_share:
-        rule_prob = float(low_share)
-    else:
-        rule_prob = float(rng.uniform(low_share, high_share))
+    rule_prob = float(rng.uniform(low_share, high_share))
 
     # Second draw: Bernoulli trial against the drawn rule probability.
     decision_draw = float(rng.uniform(0.0, 1.0))
@@ -210,16 +203,9 @@ def draw_rotation_flag(
     Returns:
         Boolean indicating whether the gang adheres to the rotation rule.
     """
-    # Allow fixture configs to force the flag directly.
-    if config is not None and "follows_rotation_rule" in config:
-        return bool(config["follows_rotation_rule"])
-
     bounds = resolve_rotation_share_range(split, config, world_ranges_path)
     low_share, high_share = bounds[0], bounds[1]
-    if low_share == high_share:
-        rule_prob = float(low_share)
-    else:
-        rule_prob = float(rng.uniform(low_share, high_share))
+    rule_prob = float(rng.uniform(low_share, high_share))
 
     # Second draw: Bernoulli trial against the drawn rule probability.
     decision_draw = float(rng.uniform(0.0, 1.0))
@@ -292,16 +278,9 @@ def draw_split_flag(
     Returns:
         Boolean indicating whether the gang adheres to the splitting rule.
     """
-    # Allow fixture configs to force the flag directly.
-    if config is not None and "follows_split_rule" in config:
-        return bool(config["follows_split_rule"])
-
     bounds = resolve_split_share_range(split, config, world_ranges_path)
     low_share, high_share = bounds[0], bounds[1]
-    if low_share == high_share:
-        rule_prob = float(low_share)
-    else:
-        rule_prob = float(rng.uniform(low_share, high_share))
+    rule_prob = float(rng.uniform(low_share, high_share))
 
     # Second draw: Bernoulli trial against the drawn rule probability.
     decision_draw = float(rng.uniform(0.0, 1.0))
@@ -373,15 +352,10 @@ def draw_split_threshold_paise(
     Returns:
         Integer threshold in paise units (whole rupees * 100).
     """
-    # Allow fixture configs to force the threshold directly.
-    if config is not None and "split_threshold_paise" in config:
-        return int(config["split_threshold_paise"])
-    if config is not None and "split_threshold_inr" in config:
-        return int(config["split_threshold_inr"]) * 100
-
     bounds = resolve_split_threshold_range(split, config, tactic_blocks_path)
     low_inr, high_inr = bounds[0], bounds[1]
     if low_inr == high_inr:
+        _ = rng.integers(0, 2)
         inr = low_inr
     else:
         inr = int(rng.integers(low_inr, high_inr + 1))

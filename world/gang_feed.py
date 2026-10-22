@@ -499,16 +499,14 @@ def draw_gang_feed_settings(
     # Delay is an integer number of whole minutes drawn uniformly across the range bounds.
     low_delay, high_delay = delay_bounds[0], delay_bounds[1]
     if low_delay == high_delay:
+        _ = rng.integers(0, 2)
         delay = low_delay
     else:
         delay = int(rng.integers(low_delay, high_delay + 1))
 
     # Miss share is a continuous float fraction in [low_miss, high_miss].
     low_miss, high_miss = miss_bounds[0], miss_bounds[1]
-    if low_miss == high_miss:
-        miss_share = float(low_miss)
-    else:
-        miss_share = float(rng.uniform(low_miss, high_miss))
+    miss_share = float(rng.uniform(low_miss, high_miss))
 
     return GangFeedSettings(delay_minutes=delay, miss_share=miss_share)
 

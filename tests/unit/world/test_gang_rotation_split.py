@@ -23,6 +23,7 @@ from world.gang_feed import (
     GangHolding,
     GangObservation,
     build_gang_holdings_from_roles,
+    draw_gang_feed_settings,
     load_gang_reactions_config,
     validate_gang_reactions_config,
 )
@@ -32,6 +33,7 @@ from world.gang_reactions import (
     draw_rotation_flag,
     draw_split_flag,
     draw_split_threshold_paise,
+    draw_stop_rule_flag,
     resolve_rotation_share_range,
     resolve_split_share_range,
     resolve_split_threshold_range,
@@ -700,4 +702,155 @@ def test_edge_case_redirect_at_exact_minute_lien_is_seen() -> None:
         if r.minute > seen_time and r.planned_to == mule_account and r.new_to == spare_account
     ]
     assert len(redirects_after_m) > 0, "Payments after seen_time must be redirected to spare"
+
+
+def test_stopped_cash_out_with_rotation_on_is_never_redirected() -> None:
+    """
+    WHAT: Tests that a stopped cash_out account with rotation ON is cancelled rather than redirected.
+    WHY: Rotation must only swap mule for mule. Accounts with depth None cannot rotate or be spares.
+    """
+    gang = GangConfig(
+        "g1",
+        1,
+        GENEROUS_BUDGET,
+        None,
+        (
+            BlockStep("acquire", (("count", 4),)),
+            BlockStep("scam", (("receiving_mules", 1),)),
+            BlockStep("route", (("layers", 1), ("accounts_per_layer", 1))),
+            BlockStep("cash_out", ()),
+        ),
+        1440,
+    )
+    fixture_cfg: dict[str, Any] = {
+        "gang_reactions": {
+            "label": "fixture",
+            "derived_from": "amendment A-017",
+            "reason": "cash_out rotation test",
+            "issue_ids_v2": ["G4"],
+            "gang_feed_delay_minutes": {"training": [10, 10]},
+            "gang_feed_miss_share": {"training": [0.0, 0.0]},
+            "gang_stops_using_liened_account_share": {"training": [1.0, 1.0]},
+            "gang_rotates_to_spare_account_share": {"training": [1.0, 1.0]},
+        }
+    }
+    # An extra cash_out holding with depth=None exists. Under buggy rotation, this would be chosen as spare.
+    spare_cash_out = GangHolding("g1", "acc_person_000008", 4000, 10000, depth=None)
+    cash_out_target = "acc_person_000060"
+    mule_source = "acc_person_000006"
+    lien_minute = 4065
+
+    lien = OutsideEvent(
+        minute=lien_minute,
+        kind="lien",
+        account_id=cash_out_target,
+        amount_paise=50000,
+        encumbrance_id="enc-co-1",
+    )
+    inputs = FraudInputs(outside_events=(lien,), gang_holdings=(spare_cash_out,))
+
+    out = run_interactive_world(
+        TINY,
+        RunnerSettings(fraud_enabled=True, gang_reactions_enabled=True),
+        fraud_inputs=inputs,
+        gang_configs=(gang,),
+        gang_reactions_config=fixture_cfg,
+    )
+
+    # 1. Prove the scenario really happened: payment to cash_out existed and was cancelled.
+    matched_cancels = [
+        c
+        for c in out.result.cancelled_by_gang
+        if c.reason == "no_spare_account" and c.accounts == (mule_source, cash_out_target)
+    ]
+    assert len(matched_cancels) == 1, (
+        f"Expected 1 cancelled payment to stopped cash_out account {cash_out_target}, "
+        f"got: {out.result.cancelled_by_gang}"
+    )
+
+    # 2. Assert redirected_by_gang has no entry whose planned_to has depth None.
+    assert len(out.result.redirected_by_gang) == 0
+    assert not any(r.planned_to == cash_out_target for r in out.result.redirected_by_gang)
+
+    # 3. No payment ever landed on the stopped cash_out account.
+    for i, ev in enumerate(out.result.run_result.events):
+        if out.result.event_sources[i] == "fraud":
+            assert ev.to_account != cash_out_target
+
+
+def test_draw_functions_preserve_stream_position_across_degenerate_and_non_degenerate_ranges() -> None:
+    """
+    WHAT: Asserts that each draw function advances the RNG stream identically on degenerate and non-degenerate ranges.
+    WHY: Proves the number of random draws remains strictly constant and decoupled from configuration bounds.
+    """
+    # 1. draw_gang_feed_settings (child 14)
+    cfg_degen_feed = {
+        "gang_reactions": {
+            "gang_feed_delay_minutes": {"training": [100, 100]},
+            "gang_feed_miss_share": {"training": [0.1, 0.1]},
+        }
+    }
+    cfg_non_degen_feed = {
+        "gang_reactions": {
+            "gang_feed_delay_minutes": {"training": [100, 200]},
+            "gang_feed_miss_share": {"training": [0.1, 0.5]},
+        }
+    }
+    rng1 = np.random.default_rng(101)
+    rng2 = np.random.default_rng(101)
+    draw_gang_feed_settings("training", rng1, config=cfg_degen_feed)
+    draw_gang_feed_settings("training", rng2, config=cfg_non_degen_feed)
+    assert rng1.random() == rng2.random(), "feed settings draw count mismatch"
+
+    # 2. draw_stop_rule_flag (child 15)
+    cfg_degen_stop = {
+        "gang_reactions": {"gang_stops_using_liened_account_share": {"training": [1.0, 1.0]}}
+    }
+    cfg_non_degen_stop = {
+        "gang_reactions": {"gang_stops_using_liened_account_share": {"training": [0.2, 0.8]}}
+    }
+    rng1 = np.random.default_rng(102)
+    rng2 = np.random.default_rng(102)
+    draw_stop_rule_flag("training", rng1, config=cfg_degen_stop)
+    draw_stop_rule_flag("training", rng2, config=cfg_non_degen_stop)
+    assert rng1.random() == rng2.random(), "stop rule draw count mismatch"
+
+    # 3. draw_rotation_flag (child 15)
+    cfg_degen_rot = {
+        "gang_reactions": {"gang_rotates_to_spare_account_share": {"training": [0.0, 0.0]}}
+    }
+    cfg_non_degen_rot = {
+        "gang_reactions": {"gang_rotates_to_spare_account_share": {"training": [0.3, 0.7]}}
+    }
+    rng1 = np.random.default_rng(103)
+    rng2 = np.random.default_rng(103)
+    draw_rotation_flag("training", rng1, config=cfg_degen_rot)
+    draw_rotation_flag("training", rng2, config=cfg_non_degen_rot)
+    assert rng1.random() == rng2.random(), "rotation rule draw count mismatch"
+
+    # 4. draw_split_flag (child 15)
+    cfg_degen_split = {
+        "gang_reactions": {"gang_splits_amounts_share": {"training": [1.0, 1.0]}}
+    }
+    cfg_non_degen_split = {
+        "gang_reactions": {"gang_splits_amounts_share": {"training": [0.2, 0.8]}}
+    }
+    rng1 = np.random.default_rng(104)
+    rng2 = np.random.default_rng(104)
+    draw_split_flag("training", rng1, config=cfg_degen_split)
+    draw_split_flag("training", rng2, config=cfg_non_degen_split)
+    assert rng1.random() == rng2.random(), "split rule draw count mismatch"
+
+    # 5. draw_split_threshold_paise (child 15)
+    cfg_degen_thresh = {
+        "gang_reactions": {"gang_split_threshold_inr": {"training": [25000, 25000]}}
+    }
+    cfg_non_degen_thresh = {
+        "gang_reactions": {"gang_split_threshold_inr": {"training": [10000, 50000]}}
+    }
+    rng1 = np.random.default_rng(105)
+    rng2 = np.random.default_rng(105)
+    draw_split_threshold_paise("training", rng1, config=cfg_degen_thresh)
+    draw_split_threshold_paise("training", rng2, config=cfg_non_degen_thresh)
+    assert rng1.random() == rng2.random(), "split threshold draw count mismatch"
 

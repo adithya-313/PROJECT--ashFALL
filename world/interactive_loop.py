@@ -994,58 +994,7 @@ def process_payment(context: LoopContext, queued: QueuedPayment) -> None:
             return
 
         if to_stopped:
-            if reaction_state.follows_rotation_rule:
-                # Find operational depth of the stopped account's holding covering this minute.
-                stopped_depth: int | None = None
-                for h in context.gang_holdings:
-                    if h.gang_id == gang_id and h.account_id == payment.to_account and h.covers(payment.minute):
-                        stopped_depth = h.depth
-                        break
-                if stopped_depth is None:
-                    for h in context.gang_holdings:
-                        if h.gang_id == gang_id and h.account_id == payment.to_account:
-                            stopped_depth = h.depth
-                            break
-
-                # Candidate spare accounts: same gang, same depth, held at this minute, not equal to from_account.
-                candidates: list[str] = []
-                for h in context.gang_holdings:
-                    if (
-                        h.gang_id == gang_id
-                        and h.depth == stopped_depth
-                        and h.covers(payment.minute)
-                        and h.account_id != payment.from_account
-                        and h.account_id not in candidates
-                    ):
-                        candidates.append(h.account_id)
-
-                spare = choose_spare_account(reaction_state, candidates)
-                if spare is not None:
-                    planned_to = payment.to_account
-                    payment = dataclasses.replace(payment, to_account=spare)
-                    queued = dataclasses.replace(queued, payment=payment)
-                    banks = banks_for(context, payment)
-                    context.redirected_by_gang.append(
-                        GangRedirect(
-                            minute=payment.minute,
-                            gang=gang_id,
-                            planned_to=planned_to,
-                            new_to=spare,
-                            amount=payment.amount_paise,
-                        )
-                    )
-                else:
-                    context.cancelled_by_gang.append(
-                        GangCancellation(
-                            minute=payment.minute,
-                            gang=gang_id,
-                            accounts=(payment.from_account, payment.to_account),
-                            amount=payment.amount_paise,
-                            reason="no_spare_account",
-                        )
-                    )
-                    return
-            else:
+            if not reaction_state.follows_rotation_rule:
                 context.cancelled_by_gang.append(
                     GangCancellation(
                         minute=payment.minute,
@@ -1053,6 +1002,74 @@ def process_payment(context: LoopContext, queued: QueuedPayment) -> None:
                         accounts=(payment.from_account, payment.to_account),
                         amount=payment.amount_paise,
                         reason="to_account_stopped",
+                    )
+                )
+                return
+
+            # Find operational holding of this gang covering the stopped account at this minute.
+            stopped_holding: GangHolding | None = None
+            for h in context.gang_holdings:
+                if h.gang_id == gang_id and h.account_id == payment.to_account and h.covers(payment.minute):
+                    stopped_holding = h
+                    break
+            if stopped_holding is None:
+                raise ValueError(
+                    f"No holding of gang '{gang_id}' covers stopped account '{payment.to_account}' "
+                    f"at minute {payment.minute}."
+                )
+
+            # Rotation applies only when the stopped to_account's holding at this minute has depth not None.
+            # Otherwise cancel with reason "no_spare_account".
+            if stopped_holding.depth is None:
+                context.cancelled_by_gang.append(
+                    GangCancellation(
+                        minute=payment.minute,
+                        gang=gang_id,
+                        accounts=(payment.from_account, payment.to_account),
+                        amount=payment.amount_paise,
+                        reason="no_spare_account",
+                    )
+                )
+                return
+
+            stopped_depth = stopped_holding.depth
+            # Candidate spare accounts: same gang, same depth (not None), held at this minute,
+            # not equal to from_account.
+            candidates: list[str] = []
+            for h in context.gang_holdings:
+                if (
+                    h.gang_id == gang_id
+                    and h.depth is not None
+                    and h.depth == stopped_depth
+                    and h.covers(payment.minute)
+                    and h.account_id != payment.from_account
+                    and h.account_id not in candidates
+                ):
+                    candidates.append(h.account_id)
+
+            spare = choose_spare_account(reaction_state, candidates)
+            if spare is not None:
+                planned_to = payment.to_account
+                payment = dataclasses.replace(payment, to_account=spare)
+                queued = dataclasses.replace(queued, payment=payment)
+                banks = banks_for(context, payment)
+                context.redirected_by_gang.append(
+                    GangRedirect(
+                        minute=payment.minute,
+                        gang=gang_id,
+                        planned_to=planned_to,
+                        new_to=spare,
+                        amount=payment.amount_paise,
+                    )
+                )
+            else:
+                context.cancelled_by_gang.append(
+                    GangCancellation(
+                        minute=payment.minute,
+                        gang=gang_id,
+                        accounts=(payment.from_account, payment.to_account),
+                        amount=payment.amount_paise,
+                        reason="no_spare_account",
                     )
                 )
                 return
@@ -1078,49 +1095,51 @@ def process_payment(context: LoopContext, queued: QueuedPayment) -> None:
 
     pieces: list[int]
     is_split_by_gang = False
-    if (
-        context.gang_reactions_enabled
-        and queued.origin == "fraud"
-        and queued.input_index is not None
-        and queued.input_index < len(context.truth.payment_stories)
-    ):
+    if context.gang_reactions_enabled and queued.origin == "fraud":
+        if queued.input_index is None or queued.input_index >= len(context.truth.payment_stories):
+            raise ValueError(
+                f"Missing payment story for fraud payment from {payment.from_account} "
+                f"to {payment.to_account} at minute {payment.minute}."
+            )
         story = context.truth.payment_stories[queued.input_index]
         gang_id = story.gang_id
-        if gang_id in context.gang_reaction_states:
-            reaction_state = context.gang_reaction_states[gang_id]
-            if (
-                reaction_state.follows_split_rule
-                and reaction_state.has_seen_trouble
-                and reaction_state.split_threshold_paise is not None
-                and payment.amount_paise > reaction_state.split_threshold_paise
-            ):
-                is_split_by_gang = True
-                threshold = reaction_state.split_threshold_paise
-                equal_pieces = partition_equal_pieces(payment.amount_paise, threshold)
+        if gang_id not in context.gang_reaction_states:
+            raise ValueError(f"Unknown gang id '{gang_id}' for fraud payment at index {queued.input_index}.")
+        reaction_state = context.gang_reaction_states[gang_id]
+        if reaction_state.split_threshold_paise is None:
+            raise ValueError(f"Gang '{gang_id}' has split_threshold_paise as None.")
+        if (
+            reaction_state.follows_split_rule
+            and reaction_state.has_seen_trouble
+            and payment.amount_paise > reaction_state.split_threshold_paise
+        ):
+            is_split_by_gang = True
+            threshold = reaction_state.split_threshold_paise
+            equal_pieces = partition_equal_pieces(payment.amount_paise, threshold)
 
-                if context.plan.range_name == "training":
-                    slow_drip_min_inr = float(resolve_dividing_line("slow_drip_max_amount_inr"))
-                    slow_drip_min_paise = int(round(slow_drip_min_inr * 100))
-                    min_piece = min(equal_pieces)
-                    if min_piece < slow_drip_min_paise:
-                        raise ValueError(
-                            f"Gang '{gang_id}' split piece amount {min_piece} paise is below "
-                            f"slow_drip_max_amount_inr dividing line of {slow_drip_min_paise} paise."
-                        )
-
-                context.split_by_gang.append(
-                    GangSplit(
-                        minute=payment.minute,
-                        gang=gang_id,
-                        amount=payment.amount_paise,
-                        piece_count=len(equal_pieces),
+            if context.plan.range_name == "training":
+                slow_drip_min_inr = float(resolve_dividing_line("slow_drip_max_amount_inr"))
+                slow_drip_min_paise = int(round(slow_drip_min_inr * 100))
+                min_piece = min(equal_pieces)
+                if min_piece < slow_drip_min_paise:
+                    raise ValueError(
+                        f"Gang '{gang_id}' split piece amount {min_piece} paise is below "
+                        f"slow_drip_max_amount_inr dividing line of {slow_drip_min_paise} paise."
                     )
-                )
 
-                limit = context.world.ledgers[banks[0]].upi_limit_paise
-                pieces = []
-                for eq_piece in equal_pieces:
-                    pieces.extend(split_into_legal_payments(eq_piece, limit))
+            context.split_by_gang.append(
+                GangSplit(
+                    minute=payment.minute,
+                    gang=gang_id,
+                    amount=payment.amount_paise,
+                    piece_count=len(equal_pieces),
+                )
+            )
+
+            limit = context.world.ledgers[banks[0]].upi_limit_paise
+            pieces = []
+            for eq_piece in equal_pieces:
+                pieces.extend(split_into_legal_payments(eq_piece, limit))
 
     if not is_split_by_gang:
         pieces = pieces_of(context, payment, banks[0])
