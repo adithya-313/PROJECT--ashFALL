@@ -209,6 +209,28 @@ NEW_CODE_FILES: list[str] = [
     "tests/unit/showcase/test_level_12_checks_d.py",
     # Level 12d handoff facts generator.
     "scripts/handoff_facts.py",
+    # Level 12e structured scam type on payment stories test suite.
+    "tests/unit/world/test_scam_story_fields.py",
+    # Level 12e complaint planners, label records and test suite.
+    "world/label_records.py",
+    "world/complaints.py",
+    "tests/unit/world/test_complaints.py",
+    # Level 12e label builder and test suite.
+    "world/label_builder.py",
+    "tests/unit/world/test_label_builder.py",
+    # Level 12e registry reports and test suite.
+    "world/registry_reports.py",
+    "tests/unit/world/test_registry_reports.py",
+    # Level 12e bulk confirmations and test suite.
+    "world/bulk_confirmations.py",
+    "tests/unit/world/test_bulk_confirmations.py",
+    # Level 12e simulated analyst and test suite.
+    "world/analyst.py",
+    "tests/unit/world/test_analyst.py",
+    # Level 12e showcase part e support, checks and test suite.
+    "showcase/level_12_support_e.py",
+    "showcase/level_12_checks_e.py",
+    "tests/unit/showcase/test_level_12_checks_e.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [

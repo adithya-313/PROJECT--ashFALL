@@ -44,7 +44,7 @@ from world.scam_config import (
     resolve_victims_per_mule_tail_exponent,
 )
 from world.tactic_config import get_block_risk_range, get_gang_payment_purpose
-from world.truth_records import PaymentStory, RoleSpan
+from world.truth_records import SCAM_STEP_PAYOUT_BACK, SCAM_STEP_VICTIM_PAYMENT, PaymentStory, RoleSpan
 
 MINUTES_PER_DAY: int = 1440
 SCAM_INVESTMENT: str = "investment"
@@ -483,6 +483,7 @@ def _build_schedule_records(
         if scam_payment.is_payout:
             sender, receiver = schedule.receiving_mule, schedule.victim_account
             description = f"Gang '{gang_id}' {schedule.scam_type} scam payout back"
+            scam_step = SCAM_STEP_PAYOUT_BACK
             rule = IllicitMoneyRule(
                 input_index=position,
                 spends_illicit=True,
@@ -495,11 +496,17 @@ def _build_schedule_records(
             description = (
                 f"Gang '{gang_id}' {schedule.scam_type} scam payment {victim_payment_number} of {victim_payment_total}"
             )
+            scam_step = SCAM_STEP_VICTIM_PAYMENT
             rule = IllicitMoneyRule(input_index=position, spends_illicit=False, credits_illicit=True)
         payments.append(
             PlannedPayment(scam_payment.minute, sender, receiver, scam_payment.amount_paise, 0, purpose)
         )
-        stories.append(PaymentStory(gang_id=gang_id, block="scam", layer=None, description=description))
+        stories.append(
+            PaymentStory(
+                gang_id=gang_id, block="scam", layer=None, description=description,
+                scam_type=schedule.scam_type, scam_step=scam_step,
+            )
+        )
         rules.append(rule)
     return payments, stories, rules
 

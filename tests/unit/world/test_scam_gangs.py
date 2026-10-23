@@ -14,6 +14,7 @@ TERM: fixture source: a pre-funded collector account that is a gang's money sour
 
 import hashlib
 import json
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -52,9 +53,31 @@ DEBIT_CHANCES = TypeChances(investment_or_job=0.0, investment_within=0.5)
 # Values the 12b fixture gang produced at commit a103b48, before the scam step existed. The plan value is a
 # projection: role spans reduced to their six original fields (the origin field came later), then payments,
 # stories, costs, totals and money rules. It was computed at a103b48 and still matches, so no draw changed.
+# Story fields are reduced to their four original fields (scam_type and scam_step came later, Level 12e).
 FIXTURE_PLAIN_SHA256 = "28615d91d9a0b0f0ab09d79c55d5241d051638fc8df4bf03cc5e59ee1252f30e"
 FIXTURE_RUN_ID = "f3dc93d7013b2eba"
 FIXTURE_PLAN_SHA256 = "ade10fcfd89f329ba9b8fa67712da4e6253e05c09ff884ac4caa68338b27fc07"
+
+
+@dataclass(frozen=True)
+class OriginalStoryFields:
+    """Stand-in for PaymentStory as it was at a103b48 (four fields), used only to keep the pinned plan hash.
+
+    Its repr reproduces the four-field PaymentStory repr exactly, so FIXTURE_PLAN_SHA256 keeps proving that no
+    plan value or random draw changed. scam_type and scam_step (Level 12e) are checked separately.
+    """
+
+    gang_id: str
+    block: str
+    layer: int | None
+    description: str
+
+    def __repr__(self) -> str:
+        """Prints the four fields in the exact text the four-field PaymentStory printed at a103b48."""
+        return (
+            f"PaymentStory(gang_id={self.gang_id!r}, block={self.block!r}, "
+            f"layer={self.layer!r}, description={self.description!r})"
+        )
 
 
 @pytest.fixture
@@ -584,11 +607,17 @@ def test_fixture_gang_plain_form_run_id_and_plan_are_unchanged() -> None:
         (rule.input_index, rule.spends_illicit, rule.credits_illicit)
         for rule in plan.money_rules
     )
+    original_story_fields = tuple(
+        OriginalStoryFields(story.gang_id, story.block, story.layer, story.description)
+        for story in plan.truth.payment_stories
+    )
+    # This 12b fixture is not a scam gang, so the later scam fields must be empty on every story.
+    assert all(story.scam_type is None and story.scam_step is None for story in plan.truth.payment_stories)
     plan_text = repr(
         (
             plan.payments,
             original_role_fields,
-            plan.truth.payment_stories,
+            original_story_fields,
             plan.costs,
             plan.totals,
             original_money_rules,

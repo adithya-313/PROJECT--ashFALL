@@ -237,3 +237,39 @@ No model code exists yet (models start in Level 18; `world/` is simulator code).
 | Why | The 12d brief requires the family mapping to be checked before the first gang world, and held-out families to appear only in test and stress worlds, so a model cannot be trained on a held-out tactic. No model code exists yet for the new engine (models start in Level 18); `models/` and `scripts/fraud_*` hold only v1 PaySim work, excluded by `earlier_work_note`. |
 | Results exist? | No. |
 
+## A-020
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-10-23 |
+| Issue IDs | None |
+| Issue IDs v2 | L1, L2, A3, G6, X8 |
+| Files | `config/labels.yaml` (new), `world/truth_records.py`, `world/scam_planner.py`, `world/truth_writer.py`, `world/label_records.py` (new), `world/complaints.py` (new), `world/label_builder.py` (new), `config/interactive_runner.yaml`, `docs/research/amendments.md` |
+| What changed | Level 12e round E-1, complaints as label events. (a) Label events are built after a run from the finished result, the same way truth files are; the runner, `run_world`, `make_payment`, the events file and random children 0-16 are unchanged. (b) A label event carries only what a bank could know: arrival minute, the complaining account and its bank, the reported account and its bank, the payment ids, and the type the complainant claims. Whether a complaint is true is never written on it; evaluation finds it by matching `payment_id` against the truth's payment stories. (c) `PaymentStory` gains two optional fields, `scam_type` and `scam_step`, so the scam type no longer lives only in description text. (d) Per-world numbers (victim complaint share, false-complaint rate, merchant weight) are drawn once per world inside the split's range. Each delay is drawn per complaint inside the split's range, in whole minutes; day ranges are converted to minutes first. (e) A victim complains at most once, about every successful payment it made to its mule, measured from its last successful payment. A victim whose payments all failed lost nothing and does not complain. Payouts back are never complained about. (f) A false complaint is made by the payer of one successful genuine payment. A payment to a shop is `false_complaint_merchant_weight` times as likely to draw one as a payment to a person, and the expected total equals the configured rate per 100,000 genuine payments. A false complaint claims the remainder scam type and uses its delay range. (g) Ranges are read from the run's layered `world_ranges`, so stress layers such as `complaint-backlog` change label delays with no extra code (task 23). (h) Statistical checks use a minimum sample and a tolerance of a fixed number of standard errors, both in `config/labels.yaml`. (i) New random children: 17 `label_world_settings`, 18 `true_complaints`, 19 `false_complaints`. |
+| Why | The 12e brief makes labels events with rates, delays and errors by scam type (L1), keeps the victim complaint share separate from bank reporting (L2), weights false complaints toward merchants (A3), and finishes G6's complaint-delay work. Keeping labels outside the runner protects the frozen anchors (ground rule 27). Keeping truth off the label event follows ground rules 15 and 29. Every wrong registry entry will later come from these false complaints and nowhere else (X8). No model code exists yet for the new engine (models start in Level 18); `models/` and `scripts/fraud_*` hold only v1 PaySim work, excluded by `earlier_work_note`. |
+| Results exist? | No. |
+
+## A-021
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-10-23 |
+| Issue IDs | None |
+| Issue IDs v2 | L2, L5, X8, 12-5, 12-12 |
+| Files | `config/labels.yaml`, `docs/interfaces/national_systems.md`, `world/label_records.py`, `world/registry_reports.py` (new), `world/bulk_confirmations.py` (new), `world/label_builder.py`, `config/interactive_runner.yaml`, `showcase/fixtures/level_12/bulk_short_lag.yaml` (new), `docs/research/amendments.md` |
+| What changed | Level 12e round E-2. (a) Until bank decisions exist (Levels 13 and 22), a bank treats an account as confirmed at the arrival minute of the first complaint that names it. (b) Each world draws one bank reporting share from `share_reported_to_shared_database`. Each confirmed account is reported with that chance, after a delay drawn per report from `registry_report_delay_minutes` (new, in `config/labels.yaml`). (c) The victim complaint share and the bank reporting share use separate random streams, so changing one never changes the other's outcomes (L2). (d) A wrong registry entry is a report about an account that holds no mule-side role at its confirmation minute. With (a), it can only come from a false complaint; no second error rate exists anywhere (X8). (e) Registry reports are world events in a written contract (`docs/interfaces/national_systems.md`, Level 12e section) that Level 13 ingests (12-5). (f) Bulk confirmations: each world draws the number of crackdowns as a Poisson count with mean events-per-year × days / 365. Each crackdown picks a cut-off minute, a region, a size and a delay. It confirms up to that many mule-side accounts in that region whose role began at or before the cut-off, and it arrives at cut-off + delay. Requested and confirmed counts are both recorded, never silently capped. Accounts opened mid-run have no region and are never swept; their number is reported. (g) Short worlds rarely contain a crackdown, so tests and the showcase use a labelled short-lag fixture layer (12-12). |
+| Why | The 12e brief requires the two L2 parameters to vary independently, bulk-label events (L5), wrong registry entries only from 12e (X8), and a written registry-report contract (12-5). Police crackdowns are assumed to confirm only true mules; no source gives a crackdown error rate. No model code exists yet for the new engine (models start in Level 18); `models/` and `scripts/fraud_*` hold only v1 PaySim work, excluded by `earlier_work_note`. |
+| Results exist? | No. |
+
+## A-022
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-10-23 |
+| Issue IDs | None |
+| Issue IDs v2 | L4, 12-4 |
+| Files | `config/analyst.yaml` (new), `world/analyst.py` (new), `tests/unit/world/test_analyst.py` (new), `docs/research/amendments.md` |
+| What changed | Level 12e simulated analyst (L4, 12-4). (a) A pure function decides one case from the truth (is it a mule), evidence strength in [0, 1], queue load (open cases ÷ daily capacity), an optional model score in [0, 1], the world's analyst parameters, and two uniform draws supplied by the caller. It touches no state and no random generator. (b) Accuracy = base − weak-evidence drop × (1 − evidence strength) − overload drop × overload fraction. The overload fraction is 0 when load ≤ 1 and (load − 1) ÷ load above it. Accuracy is floored at `accuracy_floor` (0.5, policy: an analyst is no worse than a coin flip). The unfloored value is returned too, so the floor is visible. (c) With a model score present and the first draw below the follow share, the verdict is "mule" exactly when the score ≥ `score_threshold` (automation bias). Otherwise the verdict is correct when the second draw is below the accuracy. (d) Daily capacity = analysts on shift × shift minutes ÷ minutes per case (L4 "capacity and time per case"). (e) Not yet wired to any queue or run. Level 22 connects it, so 12-4 stays partial. |
+| Why | The 12e brief asks for the analyst as a pure function with capacity and time per case, accepting a score now and wired in Level 22. Passing draws in keeps it pure and testable. No model code exists yet for the new engine (models start in Level 18); `models/` and `scripts/fraud_*` hold only v1 PaySim work, excluded by `earlier_work_note`. |
+| Results exist? | No. |
+

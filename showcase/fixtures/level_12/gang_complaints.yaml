@@ -1,0 +1,26 @@
+# Configuration fixture for Level 12 Showcase Part E check 21 (complaints arriving against the truth).
+#
+# TERM: scam gang = syndicate funded through victim fraud payments rather than a fixture source.
+# TERM: receiving mule = an acquired mule account that victims pay.
+# TERM: victim = an ordinary person who pays a receiving mule because of a scam.
+#
+# The gang plans 2 receiving mules with 12 victims each (24 planned). In the 60-person showcase world 17 of them
+# make at least one successful payment, so the complaint share the world draws for itself (no forced value, 0.22
+# at seed 101) gives 3 complaints. A smaller gang would often give none.
+
+gang:
+  gang_id: gang_complaints
+  strength: 1
+  budget:
+    money_paise: 50000000
+    time_minutes: 500000
+    max_risk: 0.99
+  start_minute: 1440
+  steps:
+    - block: acquire
+      params:
+        count: 6
+    - block: scam
+      params:
+        receiving_mules: 2
+        victims_per_receiving_mule: 12

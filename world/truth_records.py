@@ -23,6 +23,11 @@ from core.config_validator import load_yaml
 REPO_ROOT: Path = Path(__file__).resolve().parent.parent
 TRUTH_CONFIG_PATH: Path = REPO_ROOT / "config" / "truth_store.yaml"
 
+# The two steps of a scam payment; labels use them to tell what a victim lost from what a mule paid back.
+SCAM_STEP_VICTIM_PAYMENT: str = "victim_payment"
+SCAM_STEP_PAYOUT_BACK: str = "payout_back"
+SCAM_STEPS: tuple[str, str] = (SCAM_STEP_VICTIM_PAYMENT, SCAM_STEP_PAYOUT_BACK)
+
 
 @dataclass(frozen=True)
 class RoleSpan:
@@ -113,9 +118,16 @@ class PaymentStory:
         block: Descriptive tactic phase or execution block, e.g. "initial_compromise" or "route".
         layer: Payment hop or layer depth in a multi-hop money movement scheme, or None.
         description: Natural-language narrative summary of the fraudulent transfer.
+        scam_type: The scam type of a scam payment (investment, job or the remainder type); None for every other
+            payment. Kept here so no code has to read the type out of description text.
+        scam_step: SCAM_STEP_VICTIM_PAYMENT for a victim paying a mule, SCAM_STEP_PAYOUT_BACK for a mule paying a
+            victim; None for every other payment.
 
     Returns:
         A frozen PaymentStory.
+
+    Raises:
+        ValueError: If scam_step is set without scam_type, or is not one of the two scam step constants.
 
     Example:
         PaymentStory("gang_alpha", "route", 1, "First-hop dispersion transfer from compromised account")
@@ -125,6 +137,20 @@ class PaymentStory:
     block: str
     layer: int | None
     description: str
+    scam_type: str | None = None
+    scam_step: str | None = None
+
+    def __post_init__(self) -> None:
+        """
+        Checks the scam fields when a story is built, so a story with a step but no type can never exist. Raises
+        ValueError for a scam_step that is set without scam_type or that is not one of SCAM_STEPS.
+        """
+        if self.scam_step is None:
+            return
+        if self.scam_type is None:
+            raise ValueError(f"PaymentStory scam_step '{self.scam_step}' is set but scam_type is None")
+        if self.scam_step not in SCAM_STEPS:
+            raise ValueError(f"PaymentStory scam_step '{self.scam_step}' must be one of {SCAM_STEPS}")
 
 
 @dataclass(frozen=True)

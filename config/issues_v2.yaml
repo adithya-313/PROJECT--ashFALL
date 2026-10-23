@@ -188,10 +188,13 @@ issues:
   X8:
     title: "Wrong registry entries would have been generated twice"
     origin: revision_2
-    status: planned
+    status: built
     levels: [12, 13]
     parts: [12e]
-    later_work: ["Level 12e: Errors only in 12e"]
+    evidence:
+      - {kind: amendment, id: A-021}
+      - {kind: config, file: config/labels.yaml, name: labels}
+      - {kind: test, file: tests/unit/world/test_registry_reports.py, name: test_wrong_registry_entries_come_only_from_false_complaints}
   F1:
     title: "Exactly 28 built, 2 planned, 1 deferred; a fixed set of 31 IDs; config issue_ids limited to those IDs"
     origin: revision_2
@@ -275,17 +278,25 @@ issues:
   12-4:
     title: "The analyst needed a queue and a score that don't exist yet"
     origin: revision_2
-    status: planned
+    status: partial
     levels: [12, 22]
     parts: [12e]
-    later_work: ["Level 12e: Pure function now, wired in Level 22"]
+    evidence:
+      - {kind: amendment, id: A-022}
+      - {kind: config, file: config/analyst.yaml, name: analyst}
+      - {kind: test, file: tests/unit/world/test_analyst.py, name: test_decide_case_is_pure_and_uses_no_global_random_state}
+      - {kind: test, file: tests/unit/world/test_analyst.py, name: test_drawing_parameters_takes_exactly_six_draws_whatever_the_config}
+    later_work: ["Level 22: wire the analyst to the real case queue"]
   12-5:
     title: "Registry-report ownership with Level 13 was unclear"
     origin: revision_2
-    status: planned
+    status: built
     levels: [12]
     parts: [12e]
-    later_work: ["Level 12e: World-emitted report events with a written contract"]
+    evidence:
+      - {kind: amendment, id: A-021}
+      - {kind: doc, file: docs/interfaces/national_systems.md, text: "## Level 12e: registry-report events emitted by the world"}
+      - {kind: test, file: tests/unit/world/test_registry_reports.py, name: test_registry_report_fields_match_the_written_contract}
   12-6:
     title: "\"Almost perfectly\" had no number"
     origin: revision_2
@@ -348,10 +359,13 @@ issues:
   12-12:
     title: "Bulk-label lag exceeds the 2-month showcase world"
     origin: revision_2
-    status: planned
+    status: built
     levels: [12]
     parts: [12e]
-    later_work: ["Level 12e: Labelled short-lag fixture or a 6-month world"]
+    evidence:
+      - {kind: amendment, id: A-021}
+      - {kind: doc, file: showcase/fixtures/level_12/bulk_short_lag.yaml, text: "Labelled fixture, not a real range"}
+      - {kind: test, file: tests/unit/world/test_bulk_confirmations.py, name: test_fixture_layer_gives_batches_with_mule_side_accounts_in_their_region}
   12-13:
     title: "Edge-case expectations depend on later levels"
     origin: revision_2
@@ -697,7 +711,7 @@ issues:
   G6:
     title: "Scam-type payment schedules"
     origin: level_11
-    status: partial
+    status: built
     levels: [12]
     parts: [12c]
     v1_status: built
@@ -706,7 +720,8 @@ issues:
       - {kind: test, file: tests/unit/world/test_scam_gangs.py, name: test_job_schedule_has_the_same_shape_as_investment}
       - {kind: test, file: tests/unit/world/test_victim_money_route.py, name: test_victim_to_layer_one_to_layer_two_never_forwards_more_than_received}
       - {kind: test, file: tests/unit/world/test_victim_money_route.py, name: test_outage_stops_a_victim_payment_and_the_mule_forwards_nothing}
-    later_work: ["Level 12e: complaint delays by scam type"]
+      - {kind: test, file: tests/unit/world/test_complaints.py, name: test_delays_stay_in_bounds_and_average_the_midpoint}
+      - {kind: doc, file: docs/research/amendments.md, text: "## A-020"}
   A2:
     title: "Genuine shops downstream of mules"
     origin: level_11
@@ -758,43 +773,67 @@ issues:
   L1:
     title: "Complaint delay by scam type"
     origin: level_11
-    status: planned
+    status: built
     levels: [12]
     parts: [12e]
     v1_status: built
-    later_work: ["Level 12e: report and lien timing"]
+    evidence:
+      - {kind: config, file: config/labels.yaml, name: labels}
+      - {kind: test, file: tests/unit/world/test_complaints.py, name: test_investment_delays_are_longer_than_unauthorised_debit_delays}
+      - {kind: test, file: tests/unit/world/test_complaints.py, name: test_day_ranges_are_converted_to_whole_minutes}
+      - {kind: test, file: tests/unit/world/test_label_builder.py, name: test_complaint_backlog_layer_moves_scam_complaint_delays_into_the_layered_bounds}
+      - {kind: doc, file: docs/research/amendments.md, text: "## A-020"}
   L2:
     title: "Victim complaint share vs bank registry reporting"
     origin: level_11
-    status: planned
+    status: built
     levels: [12]
     parts: [12e]
     v1_status: built
-    later_work: ["Level 12e: lien behaviour"]
+    evidence:
+      - {kind: config, file: config/labels.yaml, name: labels}
+      - {kind: test, file: tests/unit/world/test_complaints.py, name: test_victim_complaint_share_matches_the_drawn_share}
+      - {kind: test, file: tests/unit/world/test_registry_reports.py, name: test_victim_share_and_bank_share_are_independent}
+      - {kind: test, file: tests/unit/world/test_registry_reports.py, name: test_observed_reporting_share_matches_the_drawn_share}
+      - {kind: doc, file: docs/research/amendments.md, text: "## A-021"}
   L4:
     title: "Analyst accuracy depends on evidence, load and score"
     origin: level_11
-    status: planned
+    status: partial
     levels: [12]
     parts: [12e]
     v1_status: built
-    later_work: ["Level 12e: lien limits"]
+    evidence:
+      - {kind: config, file: config/analyst.yaml, name: analyst}
+      - {kind: test, file: tests/unit/world/test_analyst.py, name: test_accuracy_falls_with_load_and_with_weaker_evidence}
+      - {kind: test, file: tests/unit/world/test_analyst.py, name: test_measured_accuracy_matches_the_formula}
+      - {kind: test, file: tests/unit/world/test_analyst.py, name: test_automation_bias_copies_the_score_and_a_zero_share_ignores_it}
+      - {kind: doc, file: docs/research/amendments.md, text: "## A-022"}
+    later_work: ["Level 22: wire the analyst to the real case queue"]
   L5:
     title: "Bulk-label events"
     origin: level_11
-    status: planned
+    status: built
     levels: [12]
     parts: [12e]
     v1_status: built
-    later_work: ["Level 12e: action types"]
+    evidence:
+      - {kind: config, file: config/labels.yaml, name: labels}
+      - {kind: test, file: tests/unit/world/test_bulk_confirmations.py, name: test_fixture_layer_gives_batches_with_mule_side_accounts_in_their_region}
+      - {kind: test, file: tests/unit/world/test_bulk_confirmations.py, name: test_requested_size_above_available_records_both_numbers}
+      - {kind: test, file: tests/unit/world/test_bulk_confirmations.py, name: test_accounts_opened_mid_run_are_never_swept_and_are_counted}
+      - {kind: doc, file: docs/research/amendments.md, text: "## A-021"}
   A3:
     title: "False complaints weighted to merchants"
     origin: level_11
-    status: planned
+    status: built
     levels: [12]
     parts: [12e]
     v1_status: built
-    later_work: ["Level 12e: analyst workload"]
+    evidence:
+      - {kind: config, file: config/labels.yaml, name: labels}
+      - {kind: test, file: tests/unit/world/test_complaints.py, name: test_false_complaints_match_the_expected_total_and_the_merchant_ratio}
+      - {kind: doc, file: docs/research/amendments.md, text: "## A-020"}
   E1:
     title: "Base rate and inflation factor"
     origin: level_11

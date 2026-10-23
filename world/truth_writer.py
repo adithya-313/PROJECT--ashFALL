@@ -118,6 +118,8 @@ def _build_payment_story_rows(result: Any, truth: TruthFacts) -> list[dict[str, 
             "payment_id": payment_id,
             "planned_payment_id": result.planned_payment_ids[position],
             "resumed": result.events_resumed[position],
+            "scam_step": story.scam_step if story else None,
+            "scam_type": story.scam_type if story else None,
         })
     return story_rows
 
