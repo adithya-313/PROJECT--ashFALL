@@ -1,3 +1,46 @@
+# =====================================================================
+# LIVE MODE: replaying a finished world as a stream of payments
+# =====================================================================
+#
+# What this file is
+#   Live mode takes the payment events of a finished world and sends them,
+#   one at a time and in order, to a receiver over HTTP (the way web pages
+#   are fetched), so a streaming system can be rehearsed. This file says
+#   where it sends by default and what it does when a send fails.
+#
+# Who reads it
+#   world/live_mode.py (read_live_policy) loads it. world/fast_mode.py runs
+#   live mode, and the Level 11 showcase tests it against a receiver on
+#   this same computer.
+#
+# How to read an entry
+#   label       "policy": our own rule, not a fact about the world.
+#   reason      why the values were chosen (below, as the plan author wrote it).
+#
+# Where the full reasoning lives
+#   docs/decisions/level-11c4-live-mode-decisions.md
+# =====================================================================
+
+# ---------------------------------------------------------------------
+# live_mode: where to send, and how to retry
+#
+# The idea
+#   A send can fail: the receiver is busy, or off. The program tries again
+#   a few times, waiting longer each time, and if it still fails it stops
+#   and reports how far it got. It never skips an event.
+#     default_host 127.0.0.1         the address of this computer itself, so
+#                                    nothing leaves the machine unless a
+#                                    person names another target
+#     retry_attempts 4               the most tries per event
+#     first_wait_seconds 0.5         the pause after the first failed try
+#     wait_growth_factor 2           each later pause is twice the one before
+#     request_timeout_seconds 5      a receiver that has not answered in 5
+#                                    seconds counts as a failed try
+#
+# Example
+#   With these values a failing event is tried 4 times, with pauses of
+#   0.5, 1 and 2 seconds between the tries, and then live mode stops.
+# ---------------------------------------------------------------------
 live_mode:
   label: policy
   default_host: 127.0.0.1

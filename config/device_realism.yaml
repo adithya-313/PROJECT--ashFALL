@@ -1,10 +1,49 @@
-# Device realism parameters for Level 11B-2b (device dynamics and OS update waves).
-# Grounded in empirical hardware replacement cycles and mobile platform telemetry where published,
-# with conservative assumption intervals where data is not published.
-# NOTE: The market share split between Android and iOS is intentionally not duplicated here;
-# the existing placeholder ANDROID_SHARE (94% Android, 6% iOS) stays as it is in world/placeholders.py.
+# =====================================================================
+# DEVICE REALISM: how people's phones change over time
+# =====================================================================
+#
+# What this file is
+#   People swap phones, reinstall their payment app, and update their phone's
+#   operating system (OS). Each of these changes the phone's "fingerprint"
+#   or its software version, and a payment made from a phone the bank has not
+#   seen before is marked as coming from a new device. This file gives the
+#   allowed range for how often each change happens in the simulated world.
+#   It belongs to Level 11 (the everyday-payments world), which is frozen:
+#   do not change values.
+#
+# Who reads it
+#   world/device_events.py (draw_device_settings) draws the phone-change and
+#   reinstall settings, and world/device_schedule.py draws the OS update
+#   waves and builds each world's schedule of changes. world/grounding.py
+#   counts the entries; scripts/verify_world.py and the Level 11 showcase
+#   rebuild the schedule from this file.
+#
+# How to read an entry
+#   label       "reported": a number seen in a second-hand source (see the
+#               source and reason); "assumption": our registered guess.
+#   unit        what the numbers count.
+#   training / test / stress
+#               the range for each kind of world (training: what the
+#               detector learns from; test: the final exam; stress: extreme
+#               cases). Training sits inside test, and test inside stress.
+#               Each world picks one value inside the range for its kind.
+#   reason      one sentence on why the range looks the way it does.
+#
+# Not in this file
+#   The split between Android and iOS phones is deliberately not repeated
+#   here. The placeholder ANDROID_SHARE (94% Android, 6% iOS) stays in
+#   world/placeholders.py.
+#
+# Checked by: python -m core.config_validator config/device_realism.yaml
+# =====================================================================
 
 parameters:
+  # ---- Changing the phone, and reinstalling the app ----
+
+  # Average months between two phone changes for one person. Each day a
+  # person changes phone with chance 1 / (months x days in a month). Example:
+  # training [33, 39] months means a person changes phone about every three
+  # years.
   phone_replacement_months:
     label: reported
     unit: "months between phone changes"
@@ -16,6 +55,9 @@ parameters:
       date: "2024-10-17"
     reason: "Secondary source reporting IDC research (the page names IDC, and The Hindu BusinessLine appears on the page); the cycle rose from 24 months to almost 36 months; one phone change per 36 months is about 0.09 percent of people per day (our arithmetic: 1 divided by 36 times 30 days); the range, test and stress widths are our choices."
 
+  # How much more likely a phone change is during the festival sale window
+  # (the extra is added to 1). Example: training [0.5, 2.0] means phone
+  # changes are 1.5 to 3 times as likely as on a normal day.
   phone_change_festival_sale_uplift:
     label: assumption
     unit: "extra fraction of the rate"
@@ -24,6 +66,8 @@ parameters:
     stress: [0.0, 8.0]
     reason: "Counterpoint says the festive season contributes 20-25 percent of annual Indian smartphone sales (Economic Times, 2024-10-10); that is a share of SALES, not of phone CHANGES, so no change-rate uplift is published; the range is an assumption."
 
+  # How many days the sale window lasts, counted from the main festival's
+  # peak day. Example: training [7, 21] means 7 to 21 days.
   phone_change_festival_sale_days:
     label: assumption
     unit: "days after the Diwali peak"
@@ -32,6 +76,9 @@ parameters:
     stress: [1, 45]
     reason: "Counterpoint says the festive season contributes 20-25 percent of annual Indian smartphone sales (Economic Times, 2024-10-10); that is a share of SALES, not of phone CHANGES, so no change-rate uplift is published; the range is an assumption."
 
+  # How many times a year one person deletes and reinstalls the payment app
+  # (which also changes the phone's fingerprint). Example: training
+  # [0.1, 0.5] means once every 2 to 10 years.
   app_reinstall_per_person_per_year:
     label: assumption
     unit: "reinstalls per person/year"
@@ -40,6 +87,11 @@ parameters:
     stress: [0.0, 3.0]
     reason: "No published rate found; assumption."
 
+  # ---- OS update waves ----
+  # A wave is a new OS version rolling out: over some weeks, a share of
+  # eligible phones update, most of them near the middle of the wave.
+
+  # How many waves a world has. Example: training [1, 2] waves.
   os_wave_count_per_world:
     label: assumption
     unit: "waves per world"
@@ -48,6 +100,8 @@ parameters:
     stress: [0, 5]
     reason: "No published figures for India; assumption."
 
+  # How many days one wave lasts, from the first update to the last. A run
+  # must be longer than the top value. Example: training [14, 42] days.
   os_wave_length_days:
     label: assumption
     unit: "days"
@@ -56,6 +110,8 @@ parameters:
     stress: [3, 90]
     reason: "No published figures for India; assumption."
 
+  # The share of eligible phones that have updated by the end of the wave.
+  # Example: training [0.3, 0.7] means 30% to 70%.
   os_wave_final_share_of_eligible:
     label: assumption
     unit: "share of eligible devices"

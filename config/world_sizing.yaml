@@ -1,3 +1,40 @@
+# =====================================================================
+# WORLD SIZING: how big a world can be on this computer, and how we guess
+# =====================================================================
+#
+# What this file is
+#   A bigger world means more payments, a longer wait, a bigger file and more
+#   memory. Before it builds a world, the program estimates what the world
+#   will cost, and refuses it if the computer cannot afford it. This file
+#   holds the rules for that: how the estimate is calibrated, four named
+#   sizes, and the limits. These are our own choices, not facts about the
+#   world.
+#
+# Who reads it
+#   world/estimates.py (calibration_world and payment_count_margin),
+#   world/world_sizing.py (presets), world/machine_limits.py (the limits)
+#   and world/fast_mode.py (the --preset and --max-minutes options).
+#   estimate_checks is read only by tests/unit/world/test_world_estimates.py.
+#
+# How to read an entry
+#   label       "policy": our own rule, not a number measured in the world.
+#   reason      why the value was chosen, with the measurements behind it.
+#
+# Where the full reasoning lives
+#   docs/decisions/level-11c2-sizing-decisions.md
+# =====================================================================
+
+# ---------------------------------------------------------------------
+# calibration_world: the small world run first to measure this computer
+#
+# The idea
+#   To guess how long a big world takes, the program first runs one small
+#   world and measures payments per second, payments per person per day,
+#   and bytes per payment. These are the settings of that small world:
+#   seed 101, 60 people, 12 shops, 61 days, training ranges. It is the same
+#   world as golden values G2 and G3 (scripts/golden_values.yaml), so the
+#   calibration run is itself a checked world.
+# ---------------------------------------------------------------------
 calibration_world:
   label: policy
   seed: 101
@@ -7,12 +44,44 @@ calibration_world:
   range_name: training
   reason: Same world as golden values G2 and G3, so the calibration run is itself a
     checked world; it is small enough to run in about a second on a normal laptop.
+# ---------------------------------------------------------------------
+# payment_count_margin: how far estimates are pushed upward
+#
+# The idea
+#   Estimated payments = people x days x payments per person per day (as
+#   measured by the calibration run) x this margin. A value of 1.15 raises the
+#   estimate by 15%, so the program errs towards "too big" rather than
+#   "too small".
+#
+# Example
+#   The calibration world measures about 0.80 payments per person per day.
+#   For 60 people over 61 days: 60 x 61 x 0.80 x 1.15 is about 3,350 payments.
+# ---------------------------------------------------------------------
 payment_count_margin:
   label: policy
   value: 1.15
   reason: Measured payments per person per day ranged from 0.816 to 0.889 across nine
     seeds and sizes (2026-10-15); the calibration world measures about 0.80, so
     estimates are raised by 15 percent to lean high rather than low.
+# ---------------------------------------------------------------------
+# estimate_checks: how good an estimate must be, in the tests
+#
+# The idea
+#   These ratios are used only by tests, to decide whether the estimates
+#   were close enough to a real run.
+#     payments_upper_ratio 1.5       estimated payments may be at most 1.5
+#                                    times the real count, and never below it
+#     file_bytes_upper_ratio 1.5     the same, for the events file size
+#     time_upper_ratio 2.0           a real run may take at most 2 times the
+#                                    estimated time
+#     steady_speed_min_ratio 0.5     a 1,000-person world must still run at
+#                                    least half as many payments per second
+#                                    as the calibration world
+#
+# Example
+#   If a real run has 3,000 payments, an estimate of 3,300 passes and
+#   an estimate of 4,600 (more than 4,500) fails.
+# ---------------------------------------------------------------------
 estimate_checks:
   label: policy
   payments_upper_ratio: 1.5
@@ -24,6 +93,19 @@ estimate_checks:
     may take at most 2 times the estimated time (other programs on the machine add
     noise). A 1000-person world must run at least half as many payments per second as
     the calibration world, which proves speed does not collapse as worlds grow.
+# ---------------------------------------------------------------------
+# presets: four named world sizes
+#
+# The idea
+#   Instead of typing every number, a person can ask for --preset tiny,
+#   small, medium or large. Each preset fixes the number of people, shops
+#   and days, and uses the training ranges. All run 61 days (September and
+#   October 2026, which covers the festival season).
+#
+# Example
+#   medium means 1,000 people, 120 shops, 61 days, which is about 54,000
+#   payments (measured 2026-10-15). tiny is the golden world of G2 and G3.
+# ---------------------------------------------------------------------
 presets:
   label: policy
   tiny:   {n_people: 60,   n_shops: 12,  n_days: 61, range_name: training}
@@ -35,6 +117,21 @@ presets:
     (September and October 2026, covering the festival season). tiny equals the golden
     world of G2 and G3; shops are about one per eight people. Measured on 2026-10-15:
     about 3,000 / 15,000 / 54,000 / 100,000 payments.
+# ---------------------------------------------------------------------
+# machine_limits: what share of this computer one world may use
+#
+# The idea
+#   When a run starts, the program measures the computer's free memory and
+#   free disk space and refuses a world whose estimate is too big.
+#     max_minutes 30   the estimated run time may be at most 30 minutes,
+#                      unless a person passes --max-minutes for one run
+#     memory_share 0.5 at most half of the free memory
+#     disk_share 0.5   at most half of the free disk space
+#
+# Example
+#   With 8 GB of memory free, a world estimated to need more than 4 GB is
+#   refused with an explanation.
+# ---------------------------------------------------------------------
 machine_limits:
   label: policy
   max_minutes: 30

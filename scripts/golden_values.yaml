@@ -1,4 +1,41 @@
-# Golden values baseline catalog for ashFALL simulation and issue register.
+# =====================================================================
+# GOLDEN VALUES: the exact results the simulated world must reproduce
+# =====================================================================
+#
+# What this file is
+#   A "golden value" is a fingerprint or a count that one fixed, small world
+#   must produce exactly, every time. It was recorded once, from a run
+#   everyone had checked. If code later changes in a way that alters the
+#   old world even slightly, the fingerprint no longer matches and the
+#   check fails. A fingerprint here is a SHA-256 hash: a long string of
+#   letters and digits computed from some data, where changing one
+#   character of the data changes the whole string.
+#
+# Who reads it
+#   scripts/verify_world.py runs every check below and prints PASS or FAIL
+#   for each (python -B scripts/verify_world.py). tests/unit/world/
+#   test_frozen_anchors.py fingerprints this file's DATA, so a golden value
+#   cannot be refreshed unnoticed. Comments and layout do not change that
+#   fingerprint, only the values do (config/frozen_anchors.yaml holds it).
+#
+# How to read an entry
+#   expected   the recorded result the check compares against.
+#   setup      how the world for that check is built, in plain words.
+#   reason     what the check proves.
+#   set_by     the Level 11 step that recorded the value.
+#
+# Where the full reasoning lives
+#   config/frozen_anchors.yaml (ground rule 27); the reason lines below.
+# =====================================================================
+
+# ---------------------------------------------------------------------
+# fp: the fingerprint of a freshly built world
+#
+# The idea
+#   Build a world of 300 people and 40 shops from seed 7 (a starting number
+#   that fixes every random choice) and fingerprint all its people, shops,
+#   banks and starting balances. Nothing has been paid yet.
+# ---------------------------------------------------------------------
 fp:
   expected:
     fingerprint: 0f09c489d4055fa0343316c6619fd5e254e074779c0e30d9a4bc315308f5986f
@@ -6,6 +43,20 @@ fp:
   reason: Verifies Level 11A bit-for-bit world entity initialization reproducibility.
   set_by: 11A (PR #43)
 
+# ---------------------------------------------------------------------
+# g1: one month of everyday payments
+#
+# The idea
+#   The same 300-person world, then one month of routine payments (salaries,
+#   rents, bills, shopping) with its own random seed 11. Two things must match:
+#     ledger_hash  the fingerprint of every bank ledger entry (a ledger is
+#                  the bank's list of money moving in and out)
+#     counts       how many payments worked and how many failed
+#
+# Example
+#   counts says 7,310 payments went through ("ok") and 9 failed for lack of
+#   money ("insufficient_balance").
+# ---------------------------------------------------------------------
 g1:
   expected:
     ledger_hash: 1ede1d085a0a503bbe7873588ff25a0f6c5b83b49b8850b75a183be7afad16da
@@ -16,6 +67,22 @@ g1:
   reason: Verifies monthly routine execution outcomes and double-entry accounting ledger entries.
   set_by: 11A routine; recorded in 11B-3a cleanup (PR #48)
 
+# ---------------------------------------------------------------------
+# g2: a 61-day world with festivals, outages and failures
+#
+# The idea
+#   A smaller world (60 people, 12 shops, seed 101) is run for 61 days
+#   with the calendar, festivals and outages switched on, but no phone
+#   changes. This is the "tiny world" used by the showcases.
+#     event_hash   the fingerprint of every payment event
+#     counts       totals: attempts, successes, failures, and failures
+#                  grouped by who caused them (sender bank, central system,
+#                  app or network, receiver bank, customer)
+#
+# Example
+#   2,915 payments were attempted: 2,865 succeeded and 50 failed. Of the
+#   50 failures, 22 were the sender's bank and 5 were the customer.
+# ---------------------------------------------------------------------
 g2:
   expected:
     event_hash: 12921b27db24a71a00be469709e768408a8e1a52cd568fd5db4f4dcea9d9f8dd
@@ -32,6 +99,22 @@ g2:
   reason: Verifies calendar runner transaction event dispatch, ledger updates, and outage failure breakdown.
   set_by: 11B-3a (PR #47)
 
+# ---------------------------------------------------------------------
+# g3: the same 61-day world with phone changes and updates
+#
+# The idea
+#   Same world as g2, but now people change phones, reinstall the app and
+#   update their operating system, using the settings in
+#   config/device_realism.yaml. Three things must match:
+#     stamp_hash     the fingerprint of the phone details attached to every
+#                    payment
+#     device_counts  how many phone events were applied and how many payments
+#                    came from a phone not seen before
+#     people_hash    the fingerprint of every person's phone at the end
+#
+# Example
+#   32 phone events are applied and 7 payments come from a new device.
+# ---------------------------------------------------------------------
 g3:
   expected:
     stamp_hash: d826b197411f9a2d80e77970ceafc3be071525c794ac32b06385376b22d76b46
@@ -43,6 +126,15 @@ g3:
   reason: Verifies device lifecycle dynamics, OS version increments, and sender device telemetry stamping.
   set_by: 11B-3b (PR #49)
 
+# ---------------------------------------------------------------------
+# issues: the Level 11 problem list, counted
+#
+# The idea
+#   Runs the register checker (python -m core.issue_register) on
+#   config/issues.yaml and expects exactly the summary line below: 31
+#   problems in total, 28 built, 2 planned, 1 deferred. The reason line
+#   keeps the previous value for the record.
+# ---------------------------------------------------------------------
 issues:
   expected:
     summary: "OK: 31 issues checked (built 28, planned 2, deferred 1)"
