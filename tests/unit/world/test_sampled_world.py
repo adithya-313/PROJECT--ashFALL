@@ -94,18 +94,39 @@ def test_pinned_entries_are_flat_and_the_rest_is_untouched(
     pinned = pinned_configs(spec, cfg, base)
     pinned_references = set()
     for name, value in spec.key_values:
-        reference = cfg["key_parameters"][name]["world_ranges_reference"]
+        setting = cfg["key_parameters"][name]
+        if setting["scope"] == "gang":
+            continue
+        reference = setting["world_ranges_reference"]
         pinned_references.add(reference)
         entry = pinned.world_ranges["parameters"][reference]
         for column in ("training", "test", "stress"):
             assert entry[column] == [value, value]
+    assert len(pinned_references) == 5
     for reference, entry in base.world_ranges["parameters"].items():
         if reference not in pinned_references:
             assert pinned.world_ranges["parameters"][reference] == entry
+    # Gang scope is never pinned: the ranges that gang centres reference stay exactly as they were.
+    for reference in ("hops_to_cash_out", "minutes_money_stays_in_mule_account", "victims_per_mule_typical"):
+        assert pinned.world_ranges["parameters"][reference] == base.world_ranges["parameters"][reference]
     assert pinned.background_realism == base.background_realism
     assert pinned.failure_realism == base.failure_realism
     assert pinned.device_realism == base.device_realism
     assert base == before
+
+
+def test_disk_read_parameters_are_not_key_parameters(cfg: dict[str, Any]) -> None:
+    """Parameters whose readers load world_ranges.yaml from disk cannot be pinned, so they are not key parameters."""
+    # See the note above key_parameters in config/world_sampler.yaml (amendment A-023).
+    disk_read = (
+        "share_of_accounts_sold_to_several_gangs",
+        "mule_origin_share_business",
+        "share_of_scams_investment_or_job",
+    )
+    for name in disk_read:
+        assert name not in cfg["key_parameters"]
+        for setting in cfg["key_parameters"].values():
+            assert setting.get("world_ranges_reference") != name
 
 
 def test_value_outside_original_range_is_refused(spec: WorldSpec, cfg: dict[str, Any], base: WorldConfigs) -> None:

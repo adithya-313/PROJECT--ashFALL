@@ -106,10 +106,20 @@ def _check_parameters(cfg: dict[str, Any], world_ranges: dict[str, Any]) -> None
     parameters = world_ranges.get("parameters", {})
     mapping = cfg["range_name_for_split"]["mapping"]
     for name, setting in cfg["key_parameters"].items():
+        if setting.get("scope") not in ("world", "gang"):
+            raise ValueError(f"key parameter '{name}' needs scope world or gang, got {setting.get('scope')!r}")
+        if not isinstance(setting.get("integer"), bool):
+            raise ValueError(f"key parameter '{name}' needs integer: true or false")
+        if "range" in setting:
+            low, high = setting["range"]
+            if low > high:
+                raise ValueError(f"key parameter '{name}' has an own range [{low}, {high}] that is not ordered")
+            continue
         reference = setting["world_ranges_reference"]
         if reference not in parameters:
             raise ValueError(f"unknown parameter '{reference}' for key parameter '{name}'")
-        for range_name in set(mapping.values()):
+        columns = set(mapping.values()) if setting["scope"] == "world" else {"training"}
+        for range_name in columns:
             if range_name not in parameters[reference]:
                 raise ValueError(f"parameter '{reference}' has no '{range_name}' range")
 
@@ -200,6 +210,31 @@ def _map_to_range(unit: float, low: float, high: float, is_integer: bool) -> flo
     return min(value, high_int)
 
 
+def key_parameter_range(setting: dict[str, Any], range_name: str, world_ranges: dict[str, Any]) -> tuple[float, float]:
+    """
+    WHAT: Returns the [low, high] range a key parameter's Latin hypercube value is mapped onto: its own range when it
+    has one, else the world_ranges column named by range_name for scope world, or always the training column for
+    scope gang.
+
+    WHY: Gang-scope centres feed gangs that must obey the route dividing lines in every split, so they never use the
+    stress column; world-scope values follow the split's column.
+
+    Args:
+        setting: One entry of key_parameters.
+        range_name: The spec's range column ("training" or "stress").
+        world_ranges: The dictionary read from config/world_ranges.yaml.
+
+    Returns:
+        (low, high).
+    """
+    if "range" in setting:
+        own_low, own_high = setting["range"]
+        return own_low, own_high
+    column = "training" if setting["scope"] == "gang" else range_name
+    low, high = world_ranges["parameters"][setting["world_ranges_reference"]][column]
+    return low, high
+
+
 def _make_spec(
     split: str, index: int, seed: int, range_name: str, cfg: dict[str, Any],
     world_ranges: dict[str, Any], point: list[float],
@@ -210,8 +245,7 @@ def _make_spec(
     for dim in range(len(names)):
         name = names[dim]
         setting = cfg["key_parameters"][name]
-        entry = world_ranges["parameters"][setting["world_ranges_reference"]]
-        low, high = entry[range_name]
+        low, high = key_parameter_range(setting, range_name, world_ranges)
         values.append((name, _map_to_range(point[dim], low, high, bool(setting["integer"]))))
     return WorldSpec(f"{split}-{index:04d}", split, seed, range_name, tuple(values))
 

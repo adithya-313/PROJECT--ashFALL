@@ -424,13 +424,14 @@ def family_guard_split(world_split: str | None, range_name: str) -> str:
 
 
 def _check_split_and_range(world_split: str, range_name: str) -> None:
-    """Refuses an unknown split, or a split paired with a range column that does not fit it."""
-    if world_split not in ("training", "validation", "test", "stress"):
+    """Accepts exactly the split and range column pairs of Section 6 and refuses every other pairing by name."""
+    allowed = {"training": "training", "validation": "training", "test": "training", "stress": "stress"}
+    if world_split not in allowed:
         raise ValueError(f"world_split '{world_split}' must be training, validation, test or stress")
-    if world_split in ("training", "validation") and range_name == "stress":
-        raise ValueError(f"world_split '{world_split}' cannot use the stress range column")
-    if world_split == "stress" and range_name == "training":
-        raise ValueError("world_split 'stress' cannot use the training range column")
+    if allowed[world_split] != range_name:
+        raise ValueError(
+            f"world_split '{world_split}' cannot use the {range_name} range column; it must use {allowed[world_split]}"
+        )
 
 
 def _apply_gang_configs(

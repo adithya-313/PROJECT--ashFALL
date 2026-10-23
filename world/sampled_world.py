@@ -22,8 +22,9 @@ from typing import Any
 from core.config_validator import contains
 from world.fast_mode import FastRunSettings
 from world.gang_config import GangConfig
+from world.gang_mix import generate_gang_mix, load_gang_mix_config
 from world.interactive_records import InteractiveWorldOutput, RunnerSettings
-from world.interactive_runner import run_interactive_world
+from world.interactive_runner import prepare_world, run_interactive_world
 from world.world_configs import WorldConfigs, read_world_configs
 from world.world_sampler import (
     DEFAULT_SAMPLER_PATH,
@@ -99,7 +100,12 @@ def pinned_configs(
     for name, value in spec.key_values:
         if name not in sampler_cfg["key_parameters"]:
             raise ValueError(f"key parameter '{name}' of {spec.world_id} is not in the sampler config")
-        reference = sampler_cfg["key_parameters"][name]["world_ranges_reference"]
+        setting = sampler_cfg["key_parameters"][name]
+        # A gang-scope value is only the centre of a per-gang draw (world/gang_mix.py). Writing it into the ranges
+        # would also pin ranges that other readers use, so gang-scope values never enter world_ranges.
+        if setting["scope"] == "gang":
+            continue
+        reference = setting["world_ranges_reference"]
         entry = new_ranges["parameters"][reference]
         low, high = start.world_ranges["parameters"][reference][spec.range_name]
         if not low <= value <= high:
@@ -146,19 +152,21 @@ def fast_settings_for(spec: WorldSpec, preset_name: str) -> FastRunSettings:
 def run_sampled_world(
     spec: WorldSpec,
     preset_name: str,
-    gang_configs: tuple[GangConfig, ...],
+    gang_configs: tuple[GangConfig, ...] | None,
     sampler_cfg: dict[str, Any],
     code_version: str,
 ) -> InteractiveWorldOutput:
     """
-    WHAT: Runs one planned world with fraud on, using pinned configs and the spec's seed and range name.
+    WHAT: Runs one planned world with fraud on, using pinned configs and the spec's seed and range name. When
+    gang_configs is None the world's gang mix is generated from the spec (world/gang_mix.py); explicit gangs still work.
 
     WHY: A sampled world is a fraud-on world, so a run without gangs is refused rather than run as a quiet world.
+    Generating the mix is what makes sampled worlds differ in their fraud and not only in their labels.
 
     Args:
         spec: The planned world.
         preset_name: A preset of config/world_sizing.yaml.
-        gang_configs: The gangs to run; at least one.
+        gang_configs: The gangs to run (at least one), or None to generate the mix from the spec.
         sampler_cfg: The world_sampler dictionary.
         code_version: The code version to record in the run id.
 
@@ -166,15 +174,24 @@ def run_sampled_world(
         The InteractiveWorldOutput of the run.
 
     Raises:
-        ValueError: If gang_configs is empty, or if pinning or the preset is refused.
+        ValueError: If gang_configs is an empty tuple, or if pinning, the preset or the mix is refused.
     """
-    if not gang_configs:
+    if gang_configs is not None and not gang_configs:
         raise ValueError("a sampled world is a fraud-on world and needs at least one gang")
+    settings = fast_settings_for(spec, preset_name)
+    configs = pinned_configs(spec, sampler_cfg)
+    gangs = gang_configs
+    if gangs is None:
+        # Eligible people are counted in the same world the run will build, so the capacity check is exact.
+        world = prepare_world(settings, configs).world
+        shop_accounts = {shop.account_id for shop in world.shops}
+        eligible = len([person for person in world.people if person.account_id not in shop_accounts])
+        gangs = generate_gang_mix(spec, sampler_cfg, load_gang_mix_config(), eligible, configs.world_ranges)
     return run_interactive_world(
-        fast_settings_for(spec, preset_name),
+        settings,
         RunnerSettings(fraud_enabled=True),
-        configs=pinned_configs(spec, sampler_cfg),
-        gang_configs=gang_configs,
+        configs=configs,
+        gang_configs=gangs,
         code_version=code_version,
         world_split=spec.split,
     )

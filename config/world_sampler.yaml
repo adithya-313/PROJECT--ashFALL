@@ -34,40 +34,85 @@ world_sampler:
   # key_parameters: the values that differ from world to world
   #
   # The idea
-  #   Only these parameters are pinned per world. Everything else is still
-  #   drawn inside the world from its own range, as before.
+  #   Each world gets one value per key parameter from a Latin hypercube.
+  #   scope world: the value is pinned in the world's own copy of the ranges.
+  #   scope gang:  the value is a CENTRE; each gang of the world draws its own
+  #                value around it (config/gang_mix.yaml), so it is never
+  #                written into the ranges. Gang-scope values always use the
+  #                training column (or their own range), whatever the split,
+  #                because the route dividing lines apply in every split.
+  #   range:       an own [low, high] used instead of a world_ranges column.
   #
   # Left out on purpose
-  #   share_of_accounts_sold_to_several_gangs is NOT listed. In
-  #   world/account_market.py, draw_resale_share reads world_ranges.yaml from
-  #   disk, so it would ignore a value pinned for one world.
+  #   share_of_accounts_sold_to_several_gangs, mule_origin_share_business and
+  #   share_of_scams_investment_or_job are not stratified: their readers
+  #   (world/account_market.py:191 draw_resale_share, world/mule_origins.py:85
+  #   through world/tactic_config.py:596, and world/scam_planner.py:209
+  #   through world/scam_config.py:173-176) load world_ranges.yaml from disk,
+  #   so a pinned value would be ignored. Each world still draws them inside
+  #   the training range. Recorded in amendment A-023.
   # ---------------------------------------------------------------------
   key_parameters:
     number_of_regions:
       world_ranges_reference: number_of_regions
+      scope: world
       integer: true
       label: policy
       reason: "How many regions the town has; a whole number, so it is rounded (issue 12-14)."
     victim_complaint_share:
       world_ranges_reference: victim_complaint_share
+      scope: world
       integer: false
       label: policy
       reason: "Share of scammed victims who complain; changes how many true labels a world has (issue 12-14)."
     false_complaints_per_100000_genuine_payments:
       world_ranges_reference: false_complaints_per_100000_genuine_payments
+      scope: world
       integer: false
       label: policy
       reason: "Rate of wrong complaints about ordinary payments; changes label noise (issue 12-14)."
     false_complaint_merchant_weight:
       world_ranges_reference: false_complaint_merchant_weight
+      scope: world
       integer: false
       label: policy
       reason: "How much likelier a shop payment draws a wrong complaint; changes label noise (issue 12-14)."
     share_reported_to_shared_database:
       world_ranges_reference: share_reported_to_shared_database
+      scope: world
       integer: false
       label: policy
       reason: "Share of confirmed mules that banks report to the shared registry (issue 12-14)."
+    gang_count:
+      range: [2, 4]
+      scope: gang
+      integer: true
+      label: assumption
+      reason: "Two gangs are needed for the account market (G5); four fits a small world; reviewed design."
+    route_layers:
+      world_ranges_reference: hops_to_cash_out
+      scope: gang
+      integer: true
+      label: policy
+      reason: "Centre of how many layers a gang's route has; each gang draws around it (issue 12-14)."
+    dwell_minutes:
+      world_ranges_reference: minutes_money_stays_in_mule_account
+      scope: gang
+      integer: true
+      label: policy
+      reason: "Centre of the minutes money rests in a mule account before forwarding; each gang draws around it (issue 12-14)."
+    devices_per_gang:
+      range: [1, 5]
+      scope: gang
+      integer: true
+      label: assumption
+      reason: "Centre of the gang phones count; the range is the take_control devices schema range in config/tactic_blocks.yaml."
+    victims_per_receiving_mule:
+      world_ranges_reference: victims_per_mule_typical
+      scope: gang
+      integer: true
+      label: policy
+      reason: "Centre of the victims paying each receiving mule; each gang draws around it (issue 12-14)."
 
   # ---------------------------------------------------------------------
   # seed_blocks: which seeds each split may use

@@ -89,6 +89,19 @@ def test_wrong_split_and_range_pairing_fails_before_any_world_is_built() -> None
     assert time.perf_counter() - started < 2.0
 
 
+@pytest.mark.parametrize(
+    "world_split, range_name",
+    [("training", "test"), ("validation", "test"), ("test", "test"), ("test", "stress"), ("stress", "test")],
+)
+def test_pairings_outside_the_section_6_table_are_refused(world_split: str, range_name: str) -> None:
+    """Only the Section 6 pairs are accepted (stress on stress, the rest on training); any other names the pair."""
+    settings = FastRunSettings(101, 60, 12, 61, range_name)
+    started = time.perf_counter()
+    with pytest.raises(ValueError, match=f"world_split '{world_split}' cannot use the {range_name} range column"):
+        run_interactive_world(settings, RunnerSettings(), world_split=world_split)
+    assert time.perf_counter() - started < 2.0
+
+
 def test_every_planned_split_uses_the_training_or_stress_column() -> None:
     """One block of each split: validation and test read the training column, stress its own, never the test column."""
     cfg = load_sampler_config()

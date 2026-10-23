@@ -64,6 +64,16 @@ def _range_of(parameter: str, range_name: str) -> list[float]:
     return bounds
 
 
+def _expected_range(cfg: dict[str, Any], name: str, range_name: str) -> list[float]:
+    """Returns the range a key parameter must sit inside: its own range, or a column (gang scope always training)."""
+    setting = cfg["key_parameters"][name]
+    if "range" in setting:
+        own: list[float] = setting["range"]
+        return own
+    column = "training" if setting["scope"] == "gang" else range_name
+    return _range_of(setting["world_ranges_reference"], column)
+
+
 def test_each_dimension_has_one_point_per_stratum() -> None:
     """With n=10 and 4 dimensions, every dimension must hit each tenth of [0, 1) exactly once."""
     n = 10
@@ -83,8 +93,23 @@ def test_values_sit_inside_the_splits_own_range() -> None:
         for spec in sample_worlds(split, 30, 11, cfg, ranges):
             assert spec.range_name == mapping[split]
             for name, value in spec.key_values:
-                low, high = _range_of(cfg["key_parameters"][name]["world_ranges_reference"], mapping[split])
+                low, high = _expected_range(cfg, name, mapping[split])
                 assert low <= value <= high, f"{spec.world_id} {name}={value} outside [{low}, {high}]"
+
+
+def test_specs_carry_the_gang_scope_key_parameters_inside_their_ranges() -> None:
+    """Specs carry the five gang-scope centres, as whole numbers, inside their own or training range, in every split."""
+    cfg = _cfg()
+    gang_names = {"gang_count", "route_layers", "dwell_minutes", "devices_per_gang", "victims_per_receiving_mule"}
+    scoped = {name for name, setting in cfg["key_parameters"].items() if setting["scope"] == "gang"}
+    assert scoped == gang_names
+    for split in SPLITS:
+        for spec in sample_worlds(split, 25, 4, cfg, _ranges()):
+            values = dict(spec.key_values)
+            for name in gang_names:
+                low, high = _expected_range(cfg, name, "training")
+                assert isinstance(values[name], int)
+                assert low <= values[name] <= high
 
 
 def test_integer_parameter_is_a_whole_number() -> None:
@@ -100,7 +125,7 @@ def test_test_split_stays_inside_the_training_range() -> None:
     for spec in sample_worlds("test", 50, 13, cfg, _ranges()):
         assert spec.range_name == "training"
         for name, value in spec.key_values:
-            low, high = _range_of(cfg["key_parameters"][name]["world_ranges_reference"], "training")
+            low, high = _expected_range(cfg, name, "training")
             assert low <= value <= high
 
 
@@ -145,9 +170,21 @@ def test_one_block_is_a_full_latin_hypercube() -> None:
     for name in cfg["key_parameters"]:
         if cfg["key_parameters"][name]["integer"]:
             continue
-        low, high = _range_of(cfg["key_parameters"][name]["world_ranges_reference"], "training")
+        low, high = _expected_range(cfg, name, "training")
         strata = sorted(int((dict(spec.key_values)[name] - low) / (high - low) * size) for spec in block)
         assert strata == list(range(size))
+
+
+def test_bad_scope_and_unordered_own_range_are_refused() -> None:
+    """A scope other than world or gang, and an own range with low above high, are refused by name."""
+    cfg = _cfg()
+    cfg["key_parameters"]["gang_count"]["scope"] = "planet"
+    with pytest.raises(ValueError, match="scope world or gang"):
+        validate_sampler_config(cfg, _ranges())
+    cfg = _cfg()
+    cfg["key_parameters"]["gang_count"]["range"] = [4, 2]
+    with pytest.raises(ValueError, match="not ordered"):
+        validate_sampler_config(cfg, _ranges())
 
 
 def test_block_past_the_seed_block_is_refused() -> None:
@@ -210,7 +247,9 @@ def test_overlapping_blocks_are_refused() -> None:
 def test_unknown_parameter_is_refused() -> None:
     """A key parameter that world_ranges.yaml does not know must fail with an unknown-parameter message."""
     cfg = _cfg()
-    cfg["key_parameters"]["made_up"] = {"world_ranges_reference": "no_such_parameter", "integer": False}
+    cfg["key_parameters"]["made_up"] = {
+        "world_ranges_reference": "no_such_parameter", "scope": "world", "integer": False,
+    }
     with pytest.raises(ValueError, match="unknown parameter"):
         validate_sampler_config(cfg, _ranges())
 
