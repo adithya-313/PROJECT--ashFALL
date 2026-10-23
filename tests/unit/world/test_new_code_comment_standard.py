@@ -224,6 +224,9 @@ NEW_CODE_FILES: list[str] = [
     # Level 12e bulk confirmations and test suite.
     "world/bulk_confirmations.py",
     "tests/unit/world/test_bulk_confirmations.py",
+    # Level 12e simulated analyst and test suite.
+    "world/analyst.py",
+    "tests/unit/world/test_analyst.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
