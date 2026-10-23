@@ -1,0 +1,36 @@
+# A basic scam ring written in the tactic language, for training worlds.
+#
+# TERM: acquire = take over a number of ordinary accounts to use as mules.
+# TERM: scam = victims pay a receiving mule because they were tricked.
+# TERM: route = pass the money through layers of mule accounts.
+# TERM: cash_out = take the money out of the banking system.
+#
+# Adapted from showcase/fixtures/level_12/gang_complaints.yaml and gang_victims_cashout.yaml.
+# Strength 1 and no `family`, so it uses no held-out tactic family.
+
+pattern:
+  pattern_version: 1
+  name: scam_ring_basic
+  description: "Two receiving mules take payments from tricked victims; the money is passed on and cashed out."
+  gang:
+    gang_id: pattern_scam_ring_basic
+    strength: 1
+    budget:
+      money_paise: 50000000
+      time_minutes: 500000
+      max_risk: 0.99
+    start_minute: 1440
+    steps:
+      - block: acquire
+        params:
+          count: 4
+      - block: scam
+        params:
+          receiving_mules: 2
+          victims_per_receiving_mule: 8
+      - block: route
+        params:
+          layers: 2
+          accounts_per_layer: 2
+      - block: cash_out
+        params: {}

@@ -238,6 +238,9 @@ NEW_CODE_FILES: list[str] = [
     "world/sampled_world.py",
     "tests/unit/world/test_sampled_world.py",
     "scripts/measure_sampled_world_runtime.py",
+    # Level 12f pattern files module and test suite.
+    "world/pattern_files.py",
+    "tests/unit/world/test_pattern_files.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
