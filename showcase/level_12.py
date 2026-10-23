@@ -51,9 +51,16 @@ from showcase.level_12_checks_e import (
     run_complaint_share_large_batch_check,
     run_complaints_against_truth_check,
 )
+from showcase.level_12_checks_f import (
+    run_coverage_plot_check,
+    run_pattern_file_check,
+    run_plugin_block_check,
+    run_test_world_on_training_ranges_check,
+    run_validation_listed_apart_check,
+)
 
 LEVEL_NUMBER = 12
-LEVEL_TITLE = "World engine II: a world that can react (built: parts 12a-12e of 12a-12g)"
+LEVEL_TITLE = "World engine II: a world that can react (built: parts 12a-12f of 12a-12g)"
 NEEDS_DATABASE = False
 
 WHAT_YOU_SAW = (
@@ -67,7 +74,11 @@ WHAT_YOU_SAW = (
     "that gangs react to only after they learn of it, and tactic families that keep held-out tactics out of "
     "training worlds. "
     "Level 12e adds labels: complaints about payments that a bank could receive, with delays by scam type, "
-    "bulk confirmations by police crackdowns, and a simulated analyst whose accuracy falls as the queue grows."
+    "bulk confirmations by police crackdowns, and a simulated analyst whose accuracy falls as the queue grows. "
+    "Level 12f adds a many-worlds sampler (Latin hypercube blocks per split, disjoint seed blocks, test worlds on the "
+    "training ranges as Section 6 requires), a per-world gang mix, pattern files with a budget check and preview, "
+    "local plugins that may only spend time and money, and world invariant checks used by a sweep of 78 generated "
+    "worlds."
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -83,6 +94,9 @@ REQUIRED_FILES = [
     REPO_ROOT / "showcase" / "fixtures" / "level_12" / "gang_held_out_in_training.yaml",
     REPO_ROOT / "showcase" / "fixtures" / "level_12" / "gang_complaints.yaml",
     REPO_ROOT / "showcase" / "fixtures" / "level_12" / "bulk_short_lag.yaml",
+    REPO_ROOT / "patterns" / "examples" / "scam_ring_basic.yaml",
+    REPO_ROOT / "patterns" / "examples" / "scam_ring_over_budget.yaml",
+    REPO_ROOT / "patterns" / "plugins" / "cool_off.py",
 ]
 
 
@@ -432,14 +446,74 @@ def _get_checks_21_to_25() -> list[CheckDefinition]:
     return [check_21, check_22, check_23, check_24, check_25]
 
 
+def _get_checks_26_to_30() -> list[CheckDefinition]:
+    """
+    WHAT: Constructs check definition descriptors for Level 12f checks 26 through 30.
+    It builds CheckDefinition objects for the example pattern files, the example plugin block, the coverage plot of a
+    sampled block, validation worlds listed apart from training worlds, and a test-split world on the training ranges.
+
+    WHY: Decomposing check construction into modular subroutines keeps all functions under 30 code lines.
+    Separates the sampler, pattern and plugin checks of part f into a focused builder.
+
+    Returns:
+        List of CheckDefinition containers representing checks 26 through 30.
+
+    Example:
+        checks = _get_checks_26_to_30(); assert len(checks) == 5
+    """
+    check_26 = CheckDefinition(
+        "26. an example pattern file validates and previews; an over-budget version is refused", "edge",
+        "The example pattern file loads, previews and names its mule accounts, and the same ring with a budget of 100 "
+        "paise is refused with a plain reason that starts with 'over budget:'.",
+        run_pattern_file_check,
+        "The pattern loader, the budget check or the preview changed, or an example file was edited.",
+        "world/pattern_files.py, patterns/examples/scam_ring_basic.yaml, patterns/examples/scam_ring_over_budget.yaml",
+        part="f",
+    )
+    check_27 = CheckDefinition(
+        "27. the example custom building block runs", "edge",
+        "The cool_off plugin plans inside a gang and runs in a small world, its file hash is recorded in the run's "
+        "effective configuration, and the run id differs from the same world planned without the plugin step.",
+        run_plugin_block_check,
+        "The plugin registry, the planner hook or the gang's plain form stopped carrying the plugin hash.",
+        "world/tactic_plugins.py, patterns/plugins/cool_off.py, world/gang_config.py", part="f",
+    )
+    check_28 = CheckDefinition(
+        "28. a coverage plot of sampled worlds spread across two ranges", "normal",
+        "Training block 0 puts exactly one world in each of the 40 equal slices of the victim complaint share "
+        "range and of the registry report share range (40 and 40 on the two continuous axes). Integer settings "
+        "are listed as evidence only.",
+        run_coverage_plot_check,
+        "The hypercube stopped giving one point per stratum, or a range was changed under the plot.",
+        "world/world_sampler.py, config/world_sampler.yaml", part="f",
+    )
+    check_29 = CheckDefinition(
+        "29. validation worlds are listed apart from training worlds, with disjoint seeds", "consistency",
+        "Training and validation blocks are written to separate manifests, read back, and share no seed; the reserved "
+        "Level 11 seed 101 is in neither.",
+        run_validation_listed_apart_check,
+        "A split was planned from another split's seed block, or a manifest changed on the way to disk.",
+        "world/world_sampler.py, config/world_sampler.yaml", part="f",
+    )
+    check_30 = CheckDefinition(
+        "30. a test-split world runs on the training ranges and is still a test world", "edge",
+        "A test-split world reads the training range column, records world_split 'test', and every world invariant "
+        "holds after it runs with a generated gang mix.",
+        run_test_world_on_training_ranges_check,
+        "The split and range column were tied together again, or a gang-opened account broke a world invariant.",
+        "world/sampled_world.py, world/world_invariants.py, world/interactive_runner.py", part="f",
+    )
+    return [check_26, check_27, check_28, check_29, check_30]
+
+
 def get_checks(quick: bool = False) -> list[CheckDefinition]:
     """
-    WHAT: Constructs the ordered sequence of 25 Level 12 showcase verification checks (Parts 12a to 12e).
-    All checks span consistency, normal, edge, and negative check kinds across parts 'a' to 'e'.
+    WHAT: Constructs the ordered sequence of 30 Level 12 showcase verification checks across parts a to f.
+    All checks span consistency, normal, edge, and negative check kinds across parts 'a' to 'f'.
 
     WHY: Supplies the showcase execution engine with the authoritative test suite for Level 12.
     Enforces required coverage distribution across normal, edge, and negative categories while
-    tagging each check with part='a', 'b', 'c', 'd' or 'e' for selective execution.
+    tagging each check with part='a', 'b', 'c', 'd', 'e' or 'f' for selective execution.
 
     Args:
         quick: Boolean flag indicating whether quick execution mode is requested.
@@ -448,7 +522,7 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
         List of CheckDefinition instances configuring Level 12 showcase evaluations.
 
     Example:
-        checks = get_checks(quick=True); assert len(checks) == 25
+        checks = get_checks(quick=True); assert len(checks) == 30
     """
     # Concatenate checks from helper builders to construct complete Level 12 suite.
     checks: list[CheckDefinition] = []
@@ -460,6 +534,7 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
     checks.extend(_get_checks_14_to_15())
     checks.extend(_get_checks_16_to_20())
     checks.extend(_get_checks_21_to_25())
+    checks.extend(_get_checks_26_to_30())
     return checks
 
 

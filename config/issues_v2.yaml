@@ -330,7 +330,7 @@ issues:
       - {kind: test, file: tests/unit/world/test_tactic_family_guard.py, name: test_held_out_families_refused_in_training_worlds}
       - {kind: test, file: tests/unit/world/test_tactic_family_guard.py, name: test_unknown_family_name_is_refused}
       - {kind: test, file: tests/unit/world/test_tactic_plugins.py, name: test_plugin_result_cannot_carry_device_events}
-    later_work: ["Level undecided: held-out families need their own building blocks (A-017, A-023); generator makes training families only"]
+    later_work: ["Level 12h: real held-out families (slow_drip, device_rotation, fake_routine_life; pseudo_merchant_camouflage deferred) must exist before Levels 13, 15 and 17; the name-only family check (A-017) becomes a mechanism check"]
   12-9:
     title: "Tactic costs had no units"
     origin: revision_2
@@ -771,7 +771,7 @@ issues:
       - {kind: test, file: tests/unit/world/test_gang_rotation_split.py, name: test_d1_reactions_equality_with_no_friction}
       - {kind: test, file: tests/unit/world/test_gang_rotation_split.py, name: test_edge_case_lien_on_spare_itself_later}
       - {kind: test, file: tests/unit/world/test_gang_rotation_split.py, name: test_edge_case_redirect_at_exact_minute_lien_is_seen}
-    later_work: ["Level 13: real liens from holds reach gangs through the same feed", "Level undecided: Record gang observations in the runner output so a sweep can check no new money after an observed lien (A-023 (i))"]
+    later_work: ["Level 13: real liens from holds reach gangs through the same feed", "Level 12g: record gang observations in the runner output so a sweep can check no new money after an observed lien (A-023 (i))"]
   G5:
     title: "Account market shared by gangs"
     origin: level_11

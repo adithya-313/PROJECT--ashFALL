@@ -255,6 +255,10 @@ NEW_CODE_FILES: list[str] = [
     # Level 12f world invariant checks and test suite.
     "world/world_invariants.py",
     "tests/unit/world/test_world_invariants.py",
+    # Level 12f showcase part f support, checks and test suite.
+    "showcase/level_12_support_f.py",
+    "showcase/level_12_checks_f.py",
+    "tests/unit/showcase/test_level_12_checks_f.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [

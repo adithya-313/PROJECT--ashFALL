@@ -26,24 +26,23 @@ sys.path.insert(0, str(REPO_ROOT))
 from core.config_validator import load_yaml  # noqa: E402
 
 INTERFACE_MODULES: tuple[str, ...] = (
-    "world.label_records",
-    "world.complaints",
-    "world.registry_reports",
-    "world.bulk_confirmations",
-    "world.label_builder",
-    "world.analyst",
+    "world.world_sampler",
+    "world.sampled_world",
+    "world.gang_mix",
+    "world.pattern_files",
+    "world.tactic_plugins",
+    "world.world_invariants",
 )
-RECORDS_MODULE: str = "world.label_records"
-RECORD_NAMES: tuple[str, ...] = (
-    "LabelEvent", "VictimLoss", "GenuinePayment", "LabelWorldSettings", "RegistryReport", "BulkConfirmation",
-    "BulkConfirmationResult",
-)
+RECORDS_MODULE: str = "world.world_sampler"
+RECORD_NAMES: tuple[str, ...] = ("WorldSpec",)
 CONFIG_FILES: tuple[str, ...] = (
-    "config/labels.yaml",
-    "config/analyst.yaml",
+    "config/world_sampler.yaml",
+    "config/gang_mix.yaml",
+    "config/tactic_plugins.yaml",
+    "config/pattern_files.yaml",
     "config/interactive_runner.yaml",
 )
-REGISTER_IDS: tuple[str, ...] = ("L1", "L2", "L4", "L5", "A3", "G6", "X8", "12-4", "12-5", "12-12")
+REGISTER_IDS: tuple[str, ...] = ("12-8", "12-10", "12-14", "12-18", "G4")
 RUNNER_CONFIG_PATH: str = "config/interactive_runner.yaml"
 REGISTER_PATH: str = "config/issues_v2.yaml"
 
