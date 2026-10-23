@@ -16,10 +16,12 @@ from typing import Any
 import pytest
 import yaml
 
+from world.gang_planner import GangPlan
 from world.pattern_files import (
     PatternFileError,
     PatternPreview,
     load_pattern_file,
+    plan_pattern,
     validate_pattern_file,
 )
 
@@ -48,15 +50,42 @@ def basic_preview() -> PatternPreview:
     return validate_pattern_file(BASIC_PATH)
 
 
+@pytest.fixture(scope="module")
+def basic_plan() -> GangPlan:
+    """Plans the basic example once more, to give the tests the plan itself to check the preview against."""
+    return plan_pattern(load_pattern_file(BASIC_PATH))
+
+
 def test_basic_example_validates_and_previews(basic_preview: PatternPreview) -> None:
-    """The mule count equals the sum of acquire counts in the YAML, and the summary marks itself as an estimate."""
-    steps = _basic_document()["pattern"]["gang"]["steps"]
-    acquired = sum(step["params"]["count"] for step in steps if step["block"] == "acquire")
-    assert basic_preview.mule_accounts == acquired
+    """The summary text names a mule count and a weekly figure and marks itself as an estimate."""
     text = basic_preview.summary_text()
     assert "about" in text
     assert "per week" in text
     assert "ESTIMATE" in text
+
+
+def test_mule_count_is_bounded_and_every_mule_receives_a_payment(
+    basic_preview: PatternPreview, basic_plan: GangPlan
+) -> None:
+    """Mules are at most the accounts acquired, at least one, and each counted mule receives a planned payment."""
+    steps = _basic_document()["pattern"]["gang"]["steps"]
+    acquired = sum(step["params"]["count"] for step in steps if step["block"] == "acquire")
+    assert 1 <= basic_preview.mule_accounts <= acquired
+    assert basic_preview.mule_accounts == len(basic_preview.mule_account_ids)
+    receivers = {payment.to_account for payment in basic_plan.payments}
+    for account_id in basic_preview.mule_account_ids:
+        assert account_id in receivers
+
+
+def test_money_taken_in_equals_the_victim_payments(basic_preview: PatternPreview, basic_plan: GangPlan) -> None:
+    """The basic example is scam-funded, so money entering the mules equals the sum of its victim payments."""
+    victim_total = 0
+    for payment, story in zip(basic_plan.payments, basic_plan.truth.payment_stories):
+        if story.scam_step == "victim_payment":
+            victim_total += payment.amount_paise
+    assert victim_total > 0
+    assert basic_preview.money_taken_in_paise == victim_total
+    assert basic_preview.money_per_week_paise == victim_total * 7 // basic_preview.span_days
 
 
 def test_invalid_yaml_is_refused(tmp_path: Path) -> None:

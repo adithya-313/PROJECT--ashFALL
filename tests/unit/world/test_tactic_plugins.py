@@ -11,6 +11,7 @@ runs or tests without any error.
 TERM: lint: reading a file's syntax tree for forbidden names without running it.
 """
 
+import dataclasses
 import hashlib
 from pathlib import Path
 from typing import Any
@@ -173,6 +174,16 @@ def test_plain_form_is_unchanged_without_plugins_and_carries_a_hash_with_one() -
     assert with_plugin["steps"][1] == {"block": "cool_off", "params": [], "plugin_sha256": file_hash}
     for index in (0, 2, 3):
         assert "plugin_sha256" not in with_plugin["steps"][index]
+
+
+def test_plugin_result_cannot_carry_device_events() -> None:
+    """A plugin returns only minutes and money, and sees no world, ledger, truth or accounts (12-8 structurally)."""
+    result_fields = {field.name for field in dataclasses.fields(PluginStepResult)}
+    assert result_fields == {"minutes_advanced", "money_paise"}
+    context_fields = {field.name for field in dataclasses.fields(PluginContext)}
+    assert context_fields == {"params", "clock_minute", "strength", "rng"}
+    for forbidden in ("world", "ledger", "ledgers", "truth", "accounts"):
+        assert forbidden not in context_fields
 
 
 def test_bad_plugin_results_and_parameters_are_refused() -> None:

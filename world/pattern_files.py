@@ -93,7 +93,7 @@ class BudgetUse:
 class PatternPreview:
     """
     WHAT: What planning a pattern's gang once in the preview world showed: mule accounts, victims, planned payments,
-    money into mules, the span in days, money per week and the budget used.
+    money taken in, the span in days, money per week and the budget used.
 
     WHY: Gives a person a rough idea of a pattern before it is used; every number is an estimate from one plan.
 
@@ -101,21 +101,24 @@ class PatternPreview:
         mule_accounts: Distinct accounts with the role "mule".
         victims: Distinct payers of victim payments.
         payments_planned: Number of planned payments.
-        money_into_mules_paise: Sum of planned payments whose receiving account is a mule, in paise.
+        money_taken_in_paise: Sum of planned payments into a mule account from an account that is not a mule, in
+            paise: money entering the mule network from outside, counted once.
         span_days: Days from the first to the last planned payment, rounded up, at least 1.
-        money_per_week_paise: money_into_mules_paise * 7 / span_days, rounded down.
+        money_per_week_paise: money_taken_in_paise * 7 / span_days, rounded down.
         budget_used: The BudgetUse of the plan.
         preview_preset: Name of the size preset the preview world used.
+        mule_account_ids: The mule account ids counted in mule_accounts, sorted.
     """
 
     mule_accounts: int
     victims: int
     payments_planned: int
-    money_into_mules_paise: int
+    money_taken_in_paise: int
     span_days: int
     money_per_week_paise: int
     budget_used: BudgetUse
     preview_preset: str
+    mule_account_ids: tuple[str, ...]
 
     def summary_text(self) -> str:
         """Returns one plain sentence with the mule count and rupees per week, marked as an estimate."""
@@ -235,11 +238,11 @@ def load_pattern_file(path: Path | str, pattern_cfg: dict[str, Any] | None = Non
     return PatternFile(block["name"], block["description"], block["pattern_version"], gang, file_path)
 
 
-def _preview_from_plan(plan: GangPlan, gang: GangConfig, preset: str) -> PatternPreview:
+def preview_from_plan(plan: GangPlan, gang: GangConfig, preset: str) -> PatternPreview:
     """Turns a planned gang into the preview numbers described on PatternPreview."""
     mules = {span.account_id for span in plan.truth.roles if span.role == "mule"}
     victims: set[str] = set()
-    money_into_mules = 0
+    money_taken_in = 0
     first_minute = 0
     last_minute = 0
     for index in range(len(plan.payments)):
@@ -247,8 +250,10 @@ def _preview_from_plan(plan: GangPlan, gang: GangConfig, preset: str) -> Pattern
         story = plan.truth.payment_stories[index]
         if story.scam_step == SCAM_STEP_VICTIM_PAYMENT:
             victims.add(payment.from_account)
-        if payment.to_account in mules:
-            money_into_mules += payment.amount_paise
+        # Only money entering the mule network from outside counts. Hops between mules move the same money again,
+        # so counting them would inflate the total by about the number of layers; payouts back go mule -> victim.
+        if payment.to_account in mules and payment.from_account not in mules:
+            money_taken_in += payment.amount_paise
         if index == 0 or payment.minute < first_minute:
             first_minute = payment.minute
         if index == 0 or payment.minute > last_minute:
@@ -262,8 +267,8 @@ def _preview_from_plan(plan: GangPlan, gang: GangConfig, preset: str) -> Pattern
         plan.totals.risk, budget.max_risk,
     )
     return PatternPreview(
-        len(mules), len(victims), len(plan.payments), money_into_mules, span_days,
-        money_into_mules * 7 // span_days, used, preset,
+        len(mules), len(victims), len(plan.payments), money_taken_in, span_days,
+        money_taken_in * 7 // span_days, used, preset, tuple(sorted(mules)),
     )
 
 
@@ -288,6 +293,27 @@ def preview_pattern(pattern: PatternFile, preview_cfg: dict[str, Any] | None = N
             cannot supply what the gang needs.
     """
     cfg = load_pattern_config() if preview_cfg is None else preview_cfg
+    plan = plan_pattern(pattern, cfg)
+    return preview_from_plan(plan, pattern.gang, cfg["preview_world"]["preset"])
+
+
+def plan_pattern(pattern: PatternFile, preview_cfg: dict[str, Any] | None = None) -> GangPlan:
+    """
+    WHAT: Plans the pattern's gang once in the preview world and returns the GangPlan itself, before any summary.
+
+    WHY: A test or tool that wants to check a preview against the plan needs the plan; this is the one place it is made.
+
+    Args:
+        pattern: A PatternFile that passed load_pattern_file.
+        preview_cfg: The pattern_files block; defaults to config/pattern_files.yaml.
+
+    Returns:
+        The GangPlan.
+
+    Raises:
+        PatternFileError: "over budget: ..." or "cannot be planned: ...".
+    """
+    cfg = load_pattern_config() if preview_cfg is None else preview_cfg
     world_cfg = cfg["preview_world"]
     settings: FastRunSettings = resolve_settings(
         seed=world_cfg["seed"], preset=world_cfg["preset"], range_name="training"
@@ -305,7 +331,7 @@ def preview_pattern(pattern: PatternFile, preview_cfg: dict[str, Any] | None = N
         raise _fail(pattern.path, f"over budget: {problem}") from None
     except ValueError as problem:
         raise _fail(pattern.path, f"cannot be planned: {problem}") from None
-    return _preview_from_plan(plan, pattern.gang, world_cfg["preset"])
+    return plan
 
 
 def validate_pattern_file(path: Path | str) -> PatternPreview:

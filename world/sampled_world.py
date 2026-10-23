@@ -28,7 +28,7 @@ from world.world_configs import WorldConfigs, read_world_configs
 from world.world_sampler import (
     DEFAULT_SAMPLER_PATH,
     WorldSpec,
-    _file_sha256,
+    file_sha256,
     read_manifest_provenance,
     read_world_manifest,
 )
@@ -64,9 +64,9 @@ def load_manifest_checked(
     sampler_path = DEFAULT_SAMPLER_PATH if sampler_config_path is None else Path(sampler_config_path)
     ranges_path = DEFAULT_RANGES_PATH if world_ranges_path is None else Path(world_ranges_path)
     provenance = read_manifest_provenance(path)
-    if provenance["sampler_config_sha256"] != _file_sha256(sampler_path):
+    if provenance["sampler_config_sha256"] != file_sha256(sampler_path):
         raise ValueError(f"manifest {path} is stale: {sampler_path} changed since the plan was made")
-    if provenance["world_ranges_sha256"] != _file_sha256(ranges_path):
+    if provenance["world_ranges_sha256"] != file_sha256(ranges_path):
         raise ValueError(f"manifest {path} is stale: {ranges_path} changed since the plan was made")
     return read_world_manifest(path)
 

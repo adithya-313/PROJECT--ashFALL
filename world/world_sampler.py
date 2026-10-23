@@ -277,7 +277,7 @@ def check_seeds_disjoint(
             owner[spec.seed] = split
 
 
-def _file_sha256(path: Path | str) -> str:
+def file_sha256(path: Path | str) -> str:
     """Returns the hex SHA-256 of a file's raw bytes, so a manifest can name the exact inputs it came from."""
     with open(path, "rb") as handle:
         return hashlib.sha256(handle.read()).hexdigest()
@@ -325,8 +325,8 @@ def write_world_manifest(
         "split": split,
         "worlds": worlds,
         "sampler_seed": sampler_seed,
-        "sampler_config_sha256": _file_sha256(sampler_config_path),
-        "world_ranges_sha256": _file_sha256(world_ranges_path),
+        "sampler_config_sha256": file_sha256(sampler_config_path),
+        "world_ranges_sha256": file_sha256(world_ranges_path),
     }
     text = json.dumps(document, sort_keys=True, indent=2) + "\n"
     with open(path, "w", encoding="utf-8", newline="\n") as handle:

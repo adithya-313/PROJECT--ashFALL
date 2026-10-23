@@ -53,8 +53,14 @@ def main(argv: list[str] | None = None) -> int:
         output = run_sampled_world(spec, args.preset, (gang,), cfg, CODE_VERSION)
         seconds = time.perf_counter() - started
         seconds_list.append(seconds)
-        executed = len(output.result.run_result.events)
-        print(f"{spec.world_id} seed={spec.seed} payments_executed={executed} seconds={seconds:.2f}")
+        events = output.result.run_result.events
+        events_executed = len(events)
+        # A payment event is a success when its own status field says so (world/failures.py).
+        payments_executed = sum(1 for event in events if event.status == "success")
+        print(
+            f"{spec.world_id} seed={spec.seed} events_executed={events_executed} "
+            f"payments_executed={payments_executed} seconds={seconds:.2f}"
+        )
 
     print(f"mean_seconds={sum(seconds_list) / len(seconds_list):.2f} max_seconds={max(seconds_list):.2f}")
     print(f"python={platform.python_version()} cpu_count={os.cpu_count()} platform={platform.platform()}")
