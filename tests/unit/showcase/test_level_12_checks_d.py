@@ -27,7 +27,7 @@ from showcase.level_12_checks_d import (
 def test_level_12_part_d_checks_match_the_brief() -> None:
     """
     WHAT: Verifies that Level 12 exports 5 checks with part 'd' in exact brief order:
-    edge, edge, normal, edge, negative. Asserts that validate_checks passes across all 20 checks
+    edge, edge, normal, edge, negative. Asserts that validate_checks passes across all 24 checks
     of the complete level, and that find_missing_preconditions finds no errors.
 
     WHY: Enforces showcase framework contract requirements and ensures the complete Level 12

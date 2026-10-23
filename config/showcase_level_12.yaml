@@ -3,7 +3,7 @@
 # =====================================================================
 #
 # What this file is
-#   Level 12 is "a world that can react". Its showcase runs 20 checks
+#   Level 12 is "a world that can react". Its showcase runs 24 checks
 #   (python -m showcase --level 12). The first part (checks 1-5) needs a few
 #   fixed choices: which world to use, which code-version label to record,
 #   and where in a run to place a lien or a hold. They live here.

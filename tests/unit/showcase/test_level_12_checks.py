@@ -38,9 +38,9 @@ from world.outside_events import OutsideEvent
 
 def test_level_12_checks_match_the_brief() -> None:
     """
-    WHAT: Verifies that Level 12 exports 20 checks across parts 'a', 'b', 'c', and 'd' in quick and full modes.
-    Confirms the checks are tagged five each for parts a to d in order, part-a check kinds match the brief,
-    validate_checks succeeds, and find_missing_preconditions passes.
+    WHAT: Verifies that Level 12 exports 24 checks across parts 'a', 'b', 'c', 'd', and 'e' in quick and full modes.
+    Confirms the checks are tagged five each for parts a to d and four for part e in order, part-a check kinds
+    match the brief, validate_checks succeeds, and find_missing_preconditions passes.
 
     WHY: Enforces showcase framework contract requirements and guarantees that the level definition satisfies
     the mandatory coverage rules (at least 1 normal, 2 edge, and 1 negative check).

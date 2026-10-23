@@ -28,7 +28,7 @@ def test_level_12_part_c_checks_match_the_brief() -> None:
     """
     WHAT: Verifies that Level 12 exports 5 checks with part 'c' in exact brief order:
     normal, edge, edge, edge, negative. Asserts that validate_checks passes across
-    all 20 checks of the complete level, and that find_missing_preconditions finds no errors.
+    all 24 checks of the complete level, and that find_missing_preconditions finds no errors.
 
     WHY: Enforces showcase framework contract requirements and ensures the complete Level 12
     suite satisfies the mandatory coverage rules (at least 1 normal, 2 edge, and 1 negative check).

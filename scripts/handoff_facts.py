@@ -1,7 +1,7 @@
 """
-WHAT: Prints, in markdown, the facts a Level 12d handoff note needs, read from the code and the config files
+WHAT: Prints, in markdown, the facts a Level 12e handoff note needs, read from the code and the config files
 themselves: public function and dataclass signatures, dataclass fields, configuration keys, random stream
-children with the tie-break order, and the register status of the issues Level 12d touches.
+children with the tie-break order, and the register status of the issues Level 12e touches.
 
 WHY: A handoff note typed by hand drifts from the code. Pasting this script's output into the note keeps every
 signature, field and key exactly as the code has it, and a reader can run the same command to check the note.
@@ -26,21 +26,24 @@ sys.path.insert(0, str(REPO_ROOT))
 from core.config_validator import load_yaml  # noqa: E402
 
 INTERFACE_MODULES: tuple[str, ...] = (
-    "world.gang_feed",
-    "world.gang_reactions",
-    "world.account_market",
-    "world.tactic_families",
-    "world.rented_owner_activity",
+    "world.label_records",
+    "world.complaints",
+    "world.registry_reports",
+    "world.bulk_confirmations",
+    "world.label_builder",
+    "world.analyst",
 )
-RECORDS_MODULE: str = "world.interactive_records"
-RECORD_NAMES: tuple[str, ...] = ("GangCancellation", "GangRedirect", "GangSplit", "Resale")
+RECORDS_MODULE: str = "world.label_records"
+RECORD_NAMES: tuple[str, ...] = (
+    "LabelEvent", "VictimLoss", "GenuinePayment", "LabelWorldSettings", "RegistryReport", "BulkConfirmation",
+    "BulkConfirmationResult",
+)
 CONFIG_FILES: tuple[str, ...] = (
-    "config/gang_reactions.yaml",
-    "config/account_market.yaml",
+    "config/labels.yaml",
+    "config/analyst.yaml",
     "config/interactive_runner.yaml",
-    "config/tactic_families.yaml",
 )
-REGISTER_IDS: tuple[str, ...] = ("G3", "G4", "G5", "12-8")
+REGISTER_IDS: tuple[str, ...] = ("L1", "L2", "L4", "L5", "A3", "G6", "X8", "12-4", "12-5", "12-12")
 RUNNER_CONFIG_PATH: str = "config/interactive_runner.yaml"
 REGISTER_PATH: str = "config/issues_v2.yaml"
 
@@ -172,7 +175,7 @@ def print_public_interfaces() -> None:
 def print_records() -> None:
     """
     WHAT: Prints the "Records and Fields" section: the fields of every dataclass in the inspected modules, and of
-    the named Level 12d records in world/interactive_records.py. A named record that is missing is listed as such.
+    the named Level 12e records in world/label_records.py. A named record that is missing is listed as such.
 
     WHY: Field lists are the contract between the runner, the truth files and the showcase.
 
@@ -267,7 +270,7 @@ def print_streams() -> None:
 def print_register() -> None:
     """
     WHAT: Prints the "Register Changes" section: the id, title and status in config/issues_v2.yaml of each issue
-    Level 12d touches.
+    Level 12e touches.
 
     WHY: The note should state where those issues stand now, not where they stood when it was written.
 

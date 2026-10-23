@@ -94,21 +94,23 @@ def test_real_register_passes() -> None:
         None. The test fails and prints every error if the register is not valid.
 
     Example:
-        77 revision_2 IDs + 16 level_11 IDs = 93 entries; the counts are built 18, partial 11,
-        planned 63 and deferred 1, which also add up to 93. Level 12b moved 12-1 to built and
+        77 revision_2 IDs + 16 level_11 IDs = 93 entries; the counts are built 28, partial 12,
+        planned 52 and deferred 1, which also add up to 93. Level 12b moved 12-1 to built and
         12-17 and K5 to partial; Level 12c C-1 moved 12-19 to partial; Level 12c C-2 moved G6 to partial;
         Level 12c C-3a moved G1 to partial and 12-19 to built;
         Level 12c C-3b moved G1 to built and G3 to partial;
         Level 12c C-4 moved G2 to partial, and A2 and 12-17 to built.
         Level 12d D-1 moved G3 to built and G4 to partial.
         Level 12d D-3 moved G5 to built.
+        Level 12e E-3 moved L1, L2, L5, A3, X8, 12-5 and 12-12 to built, G6 from partial to built, and
+        L4 and 12-4 to partial.
     """
     register = real_register()
     assert check_register(register, REPO_ROOT) == []
     issues = register["issues"]
     assert len(EXPECTED_V2_IDS) == 77
     assert len(issues) == 93
-    assert count_statuses(issues) == {"built": 20, "partial": 11, "planned": 61, "deferred": 1}
+    assert count_statuses(issues) == {"built": 28, "partial": 12, "planned": 52, "deferred": 1}
 
 
 def test_missing_id_is_rejected() -> None:
