@@ -234,6 +234,10 @@ NEW_CODE_FILES: list[str] = [
     # Level 12f many-worlds sampler and test suite.
     "world/world_sampler.py",
     "tests/unit/world/test_world_sampler.py",
+    # Level 12f sampled world runner, its test suite and runtime measurement script.
+    "world/sampled_world.py",
+    "tests/unit/world/test_sampled_world.py",
+    "scripts/measure_sampled_world_runtime.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
