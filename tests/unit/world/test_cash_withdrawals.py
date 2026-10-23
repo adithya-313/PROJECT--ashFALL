@@ -742,6 +742,7 @@ def test_stream_position_after_short_balance_equals_successful_withdrawal() -> N
     book1 = EncumbranceBook()
     book2 = EncumbranceBook()
 
+    # The real LoopContext has this field; the fake context must mirror it.
     ctx1 = SimpleNamespace(
         run_id="run-1",
         withdrawal_sequence=0,
@@ -756,6 +757,7 @@ def test_stream_position_after_short_balance_equals_successful_withdrawal() -> N
         streams={"cash_withdrawal_failures": rng1},
         plan=prep1.plan,
         money_withdrawn_paise=0,
+        gang_reactions_enabled=False,
     )
 
     ctx2 = SimpleNamespace(
@@ -772,6 +774,7 @@ def test_stream_position_after_short_balance_equals_successful_withdrawal() -> N
         streams={"cash_withdrawal_failures": rng2},
         plan=prep2.plan,
         money_withdrawn_paise=0,
+        gang_reactions_enabled=False,
     )
 
     w = CashWithdrawal(minute=100, account_id=account, amount_paise=withdrawal_amount, channel=CHANNEL_BRANCH)

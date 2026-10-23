@@ -1,20 +1,86 @@
-# Settings for the Level 12a interactive runner (world/interactive_runner.py).
+# =====================================================================
+# RUNNER SETTINGS: how the "fraud-on" world is played out, minute by minute
+# =====================================================================
 #
-# TERM: interactive runner = the loop that runs a world when fraud is switched on; it can pause, hold or decline
-#       payments and apply outside events such as liens while the world runs.
-# TERM: random stream = one independent source of random numbers; two streams never share or shift each other's draws.
-# TERM: child = one of the numbered random streams split off a single seed; children 0-3 belong to Level 11.
-# TERM: tie-break order = which kind of item goes first when two items fall on the same minute.
-# TERM: run id = a short fingerprint of seed, settings and code version that names one run.
-# TERM: code version = which commit of the code produced a run, e.g. "d41b176", or "unknown" when it cannot be found.
+# What this file is
+#   The simulated world can run in two modes. With fraud OFF it is Level 11's
+#   world of everyday payments, exactly as it shipped. With fraud ON, a
+#   program called the "interactive runner" plays the same world and also
+#   lets gangs, banks and police act inside it: open accounts, move stolen
+#   money, place liens. This file holds the runner's fixed settings.
+#
+# Who reads it
+#   world/run_identity.py (load_runner_config) hands it to
+#   world/interactive_runner.py and world/interactive_loop.py. Those files
+#   must read these numbers from here and never type them in again.
+#
+# Words used below
+#   seed       a starting number (101 in most showcases). The same seed always
+#              gives the same world.
+#   lien       a bank's block on part of an account's money.
+#   mule       an ordinary-looking account that passes stolen money along.
+#   gang       a group of criminals running mule accounts in the world.
+#   label      "policy" means: our own rule, not a fact about the world.
+#   reason     one sentence saying why a setting exists.
+#   issue_ids_v2, derived_from
+#              which problem numbers (config/issues_v2.yaml) the block answers
+#              and where the idea came from.
+#
+# Where the full reasoning lives
+#   docs/research/amendments.md (A-017 for reactions, A-018 for the account
+#   market) and the reason lines in this file.
 #
 # Checked by: python -m core.config_validator config/interactive_runner.yaml
+# =====================================================================
 
+# ---------------------------------------------------------------------
+# interactive_runner: the one block in this file
+#
+# The idea
+#   Fraud-on worlds must leave Level 11's ordinary payments exactly as they
+#   were. Every setting below exists to protect that: who gets which random
+#   numbers, who goes first at the same minute, and how runs are named.
+# ---------------------------------------------------------------------
 interactive_runner:
   label: policy
   reason: Fraud-on worlds must leave Level 11's genuine payments exactly as they were. These settings fix which random streams the new components use, how same-minute items are ordered, and how runs and payments are named.
   issue_ids_v2: [K1, K3, 12-2, 12-11]
   derived_from: "policy; run id shape matches Level 11 live-mode event_id"
+  # ---------------------------------------------------------------------
+  # random_stream_children: which private supply of random numbers each feature uses
+  #
+  # The idea
+  #   The simulation needs random numbers: does this payment fail? when does
+  #   this person open an account? From one seed it makes numbered, separate
+  #   supplies, called "children". If two features shared one supply, adding a
+  #   feature would shift the other's numbers and change old results. So each
+  #   feature gets its own child, and the number below says which one.
+  #   Children 0 to 3 belong to Level 11 and are never used here.
+  #
+  # The numbers (a child number must be used by one feature only)
+  #    4  fraud_payment_failures   does a gang payment fail (bank down, network)?
+  #    5  resumed_payment_failures same, for a payment a bank held and later released
+  #    6  gang_devices             the phones and devices gangs use
+  #    7  gang_planning            gang choices: which mules, which victims, how much, when
+  #    8  genuine_account_openings when ordinary people and shops open new accounts
+  #    9  gang_account_openings    the same, for accounts gangs open
+  #   10  opened_account_routine   whether a newly opened ordinary person has everyday
+  #                                payments, and which ones
+  #   11  opened_routine_failures  whether those payments fail
+  #   12  rented_owner_activity    which of a rented account owner's own payments are paused
+  #   13  cash_withdrawal_failures whether ATM and branch withdrawals fail
+  #   14  gang_observation_feed    how late a gang hears about a lien, and whether it misses it
+  #   15  gang_reactions           which reaction rules each gang follows
+  #   16  account_market           which burned accounts are resold to a later gang
+  #
+  # Example
+  #   With seed 101, child 4 is the fifth supply split off that seed. Moving
+  #   gang_planning from 7 to 4 would make gang choices and payment failures
+  #   draw from the same supply, and every fraud-on result would change.
+  #
+  # Source: docs/research/amendments.md A-017 (children 14, 15) and A-018 (child 16);
+  #   the reason line below for the rest.
+  # ---------------------------------------------------------------------
   random_stream_children:
     fraud_payment_failures: 4
     resumed_payment_failures: 5
@@ -26,12 +92,74 @@ interactive_runner:
     opened_routine_failures: 11
     rented_owner_activity: 12
     cash_withdrawal_failures: 13
-  random_stream_children_reason: Children 0-3 belong to Level 11 and must never be touched. Children 4-5 handle failure decisions. Child 6 is reserved for gang devices (Level 12b B-2b) and child 7 provides planning randomness for gangs (D6). Children 8 and 9 handle mid-run account openings for genuine agents and criminal gangs respectively, isolating draw sequences across operational domains. Child 10 decides whether a new genuine person has a routine and plans it, child 11 takes the failure draws of those routine payments, child 12 decides which outgoing payments of a rented mule's owner are paused, and child 13 evaluates failure draws for cash withdrawals. Each component gets its own stream so its draws never shift another stream's draws.
-  tie_break_order: [outside_events, planned_payments, fraud_payments, resumed_payments, gang_device_events, opened_routine_payments, cash_withdrawals]
-  tie_break_order_reason: Outside events at minute m apply before any payment at m. Genuine and episode payments keep Level 11's order. Fraud and resumed payments come after genuine ones at the same minute. Gang device events and then the routine payments of newly opened genuine people are appended at the end so existing ranks never change. Cash withdrawals are appended last so all payment and routine ranks are untouched.
+    gang_observation_feed: 14
+    gang_reactions: 15
+    account_market: 16
+  # The reason for the numbers above, as the project wrote it (kept as is).
+  random_stream_children_reason: Children 0-3 belong to Level 11 and must never be touched. Children 4-5 handle failure decisions. Child 6 is reserved for gang devices (Level 12b B-2b) and child 7 provides planning randomness for gangs (D6). Children 8 and 9 handle mid-run account openings for genuine agents and criminal gangs respectively, isolating draw sequences across operational domains. Child 10 decides whether a new genuine person has a routine and plans it, child 11 takes the failure draws of those routine payments, child 12 decides which outgoing payments of a rented mule's owner are paused, child 13 evaluates failure draws for cash withdrawals, child 14 evaluates gang observation feed delivery delays and miss draws, child 15 evaluates gang reaction decision rules, and child 16 evaluates account market resale decisions between criminal syndicates. Each component gets its own stream so its draws never shift another stream's draws.
+  # ---------------------------------------------------------------------
+  # tie_break_order: who goes first when several things happen in the same minute
+  #
+  # The idea
+  #   The world counts time in whole minutes, and many things can land on the
+  #   same minute. Without a fixed order the result could change from run to
+  #   run. This list is that order, first to last:
+  #     outside_events          bank or police actions: liens, account openings
+  #     planned_payments        Level 11's everyday payments (their own order is kept)
+  #     fraud_payments          payments made by gangs
+  #     resumed_payments        payments a bank held and then let go
+  #     gang_device_events      gang phone and device changes
+  #     opened_routine_payments everyday payments of newly opened ordinary accounts
+  #     cash_withdrawals        ATM and branch cash-outs
+  #     gang_observations       news reaching a gang, delivered last
+  #   New kinds are only ever added at the end, so old kinds keep their place.
+  #
+  # Example
+  #   A lien is placed at minute 3000 and a payment from that account is also
+  #   due at minute 3000. The lien comes first, so the payment meets the lien.
+  #
+  # Source: the reason line below, and docs/research/amendments.md A-017.
+  # ---------------------------------------------------------------------
+  tie_break_order: [outside_events, planned_payments, fraud_payments, resumed_payments, gang_device_events, opened_routine_payments, cash_withdrawals, gang_observations]
+  tie_break_order_reason: Outside events at minute m apply before any payment at m. Genuine and episode payments keep Level 11's order. Fraud and resumed payments come after genuine ones at the same minute. Gang device events and then the routine payments of newly opened genuine people are appended at the end so existing ranks never change. Cash withdrawals are appended next, and gang observations are delivered last at each minute so feed arrivals never shift payment or withdrawal processing.
+  # ---------------------------------------------------------------------
+  # run_id_hex_length and position_digits: the shape of the names
+  #
+  # The idea
+  #   Every run gets a short name (the run id) made from a fingerprint of the
+  #   seed, the settings and the code version. Every payment in it is named
+  #   run id + dash + its position in the run.
+  #     run_id_hex_length  16 -> the run id has 16 characters (0-9 and a-f)
+  #     position_digits    6  -> the position is padded with zeros to 6 digits
+  #
+  # Example
+  #   Run id 66db9aa439b092ee, payment number 42 -> 66db9aa439b092ee-000042.
+  #   With 8 characters instead of 16, two different runs would be far more
+  #   likely to end up with the same name.
+  #
+  # Source: world/run_identity.py (make_run_id, make_payment_id).
+  # ---------------------------------------------------------------------
   run_id_hex_length: 16
   position_digits: 6
   id_shape_reason: The same shape as Level 11's live-mode event_id, 16 hex characters, a dash and a 6-digit position.
+  # ---------------------------------------------------------------------
+  # code_version_*: how the runner finds out which version of the code is running
+  #
+  # The idea
+  #   A run's name includes the code version, so the same inputs on different
+  #   code do not share a name. The runner looks in this order:
+  #     1. the environment variable named below (used inside containers, which
+  #        have no git history);
+  #     2. git's short commit name, with "-dirty" added if files are unsaved;
+  #     3. the word below, "unknown", if neither works. It never guesses.
+  #   code_version_git_timeout_seconds: 5 -> wait at most 5 seconds for each git
+  #   question before giving up.
+  #
+  # Example
+  #   On a laptop the answer is something like d41b176, or d41b176-dirty.
+  #
+  # Source: world/run_identity.py (find_code_version).
+  # ---------------------------------------------------------------------
   code_version_env_var: ASHFALL_CODE_VERSION
   code_version_git_timeout_seconds: 5
   unknown_code_version: unknown

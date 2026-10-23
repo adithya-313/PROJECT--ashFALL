@@ -31,6 +31,7 @@ from world.cash_withdrawals import CashWithdrawal, CashWithdrawalRecord
 from world.device_events import DeviceEvent
 from world.episodes import Episode
 from world.gang_devices import GangDeviceEvent
+from world.gang_feed import GangHolding
 from world.outside_events import OutsideEvent
 from world.rented_owner_activity import PausedOwnerPayment
 from world.truth_records import TruthFacts
@@ -53,6 +54,8 @@ class RunnerSettings:
     Args:
         fraud_enabled: True to run the fraud-on loop, False to fall back to Level 11.
         account_openings_enabled: True to schedule genuine mid-run account openings, False by default.
+        gang_reactions_enabled: True to activate syndicate observation feeds and reactions, False by default.
+        account_market_enabled: True to simulate secondary account resale across gangs, False by default.
 
     Returns:
         A frozen RunnerSettings.
@@ -63,6 +66,8 @@ class RunnerSettings:
 
     fraud_enabled: bool = False
     account_openings_enabled: bool = False
+    gang_reactions_enabled: bool = False
+    account_market_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -118,6 +123,34 @@ class ForwardAdjustment:
 
 
 @dataclass(frozen=True)
+class Resale:
+    """
+    WHAT: Audit record for an account resold by a supplier to a subsequent criminal gang.
+    Captures the acquiring gang, the temporary account being replaced, the resold account,
+    the previous holding gang, and the simulation minute when resale became effective.
+
+    WHY: Ground rule G5 and amendment A-017 simulate overlapping criminal infrastructure
+    where account suppliers resell burned rented mule accounts to later syndicates.
+
+    Args:
+        new_gang: Identifier of the acquiring gang purchasing the resold account.
+        new_account: Temporary placeholder or planned account identifier being replaced.
+        sold_account: Real historical account identifier being resold into the new gang.
+        previous_gang: Identifier of the prior gang that formerly operated the account.
+        resale_minute: Simulation minute timestamp when the resale transaction takes effect.
+
+    Returns:
+        A frozen Resale audit record.
+    """
+
+    new_gang: str
+    new_account: str
+    sold_account: str
+    previous_gang: str
+    resale_minute: int
+
+
+@dataclass(frozen=True)
 class FraudInputs:
     """
     WHAT: Inputs for a world run with the fraud switch on: fraud payments to interleave with genuine ones, outside
@@ -149,6 +182,8 @@ class FraudInputs:
     money_rules: tuple[IllicitMoneyRule, ...] = ()
     illicit_seeds: tuple[IllicitSeed, ...] = ()
     withdrawals: tuple[CashWithdrawal, ...] = ()
+    gang_holdings: tuple[GangHolding, ...] = ()
+    account_resales: tuple[Resale, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -199,6 +234,102 @@ def allow_all(payment: PaymentView) -> HookDecision:
     """
     # A bank that never intervenes.
     return "allow"
+
+
+@dataclass(frozen=True)
+class GangCancellation:
+    """
+    WHAT: Audit record for a payment or withdrawal cancelled by a gang's reactive decision engine.
+    WHY: Amendment A-017 requires tracking all actions prevented by a gang mind upon observing account friction.
+
+    Args:
+        minute: Simulation minute when the cancellation occurred.
+        gang: Identifier of the syndicate deciding to cancel.
+        accounts: Tuple of account identifiers involved in the cancelled transfer or withdrawal.
+        amount: Integer amount of the cancelled action in paise.
+        reason: Explanation of the cancellation decision.
+    """
+
+    minute: int
+    gang: str
+    accounts: tuple[str, ...]
+    amount: int
+    reason: str
+
+    @property
+    def gang_id(self) -> str:
+        """Exposes the syndicate identifier alias for downstream report compatibility."""
+        return self.gang
+
+    @property
+    def amount_paise(self) -> int:
+        """Returns the cancelled transaction monetary amount in integer paise units."""
+        return self.amount
+
+
+@dataclass(frozen=True)
+class GangRedirect:
+    """
+    WHAT: Audit record for a payment redirected from a stopped mule to an operational spare mule.
+    WHY: Amendment A-017 / Level 12d requires forensic tracking of account rotation reactions.
+
+    Args:
+        minute: Simulation minute when the redirection occurred.
+        gang: Identifier of the syndicate operating the rotation.
+        planned_to: Originally scheduled receiver account identifier that was stopped.
+        new_to: Spare mule account identifier receiving the redirected payment.
+        amount: Payment transfer amount in paise.
+    """
+
+    minute: int
+    gang: str
+    planned_to: str
+    new_to: str
+    amount: int
+
+    @property
+    def gang_id(self) -> str:
+        """Returns the syndicate identifier that operated this account rotation."""
+        return self.gang
+
+    @property
+    def amount_paise(self) -> int:
+        """Returns the redirected transaction amount in integer paise units."""
+        return self.amount
+
+
+@dataclass(frozen=True)
+class GangSplit:
+    """
+    WHAT: Audit record for a fraud payment partitioned into smaller equal pieces below a threshold.
+    WHY: Amendment A-017 / Level 12d requires tracking structured evasion splits following observed friction.
+
+    Args:
+        minute: Simulation minute when the split occurred.
+        gang: Identifier of the syndicate splitting the transfer.
+        amount: Original unpartitioned payment transfer amount in paise.
+        piece_count: Number of equal partitioned pieces generated.
+    """
+
+    minute: int
+    gang: str
+    amount: int
+    piece_count: int
+
+    @property
+    def pieces(self) -> int:
+        """Returns the number of partitioned sub-payments generated by this split."""
+        return self.piece_count
+
+    @property
+    def gang_id(self) -> str:
+        """Returns the syndicate identifier that structured this payment into pieces."""
+        return self.gang
+
+    @property
+    def amount_paise(self) -> int:
+        """Returns the original unpartitioned transaction amount in integer paise."""
+        return self.amount
 
 
 @dataclass(frozen=True)
@@ -260,6 +391,10 @@ class InteractiveRunResult:
     paused_owner_payments: list[PausedOwnerPayment] = field(default_factory=list)
     cash_withdrawals: list[CashWithdrawalRecord] = field(default_factory=list)
     money_withdrawn_paise: int = 0
+    cancelled_by_gang: list[GangCancellation] = field(default_factory=list)
+    redirected_by_gang: list[GangRedirect] = field(default_factory=list)
+    split_by_gang: list[GangSplit] = field(default_factory=list)
+    account_resales: list[Resale] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

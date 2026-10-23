@@ -1,0 +1,80 @@
+# Configuration fixture for Level 12 Showcase Part D checks 16 and 19 (account market and delayed lien feed).
+#
+# TERM: scam gang = syndicate funded through victim fraud payments rather than a fixture source.
+# TERM: account market = resale of burned rented mule accounts from one gang to a later gang.
+# TERM: resale share = chance that a later gang's rented mule is replaced by a burned account bought from an earlier gang.
+# TERM: feed delay = minutes between a lien being placed and the gang learning of it.
+# TERM: lien = a block on part of an account's money, placed by a bank.
+#
+# The second gang starts days after the first, so the first gang's mules are burned by the time it buys.
+# Every number here is a fixture value chosen for the showcase, not a calibrated range.
+
+gangs:
+  - gang_id: g1
+    strength: 1
+    budget:
+      money_paise: 50000000
+      time_minutes: 500000
+      max_risk: 0.99
+    start_minute: 1440
+    steps:
+      - block: acquire
+        params:
+          count: 4
+          origin_mix: all_rented
+      - block: scam
+        params:
+          receiving_mules: 2
+      - block: route
+        params:
+          layers: 1
+          accounts_per_layer: 2
+  - gang_id: g2
+    strength: 2
+    budget:
+      money_paise: 50000000
+      time_minutes: 500000
+      max_risk: 0.99
+    start_minute: 15840
+    steps:
+      - block: acquire
+        params:
+          count: 4
+          origin_mix: all_rented
+      - block: scam
+        params:
+          receiving_mules: 2
+      - block: route
+        params:
+          layers: 1
+          accounts_per_layer: 2
+
+account_market:
+  label: fixture
+  derived_from: "showcase fixture for amendment A-017"
+  reason: "Resale share of 1 so every rented mule of the second gang is bought from the first gang when an account is available."
+  issue_ids_v2: [G5]
+  share_of_accounts_sold_to_several_gangs:
+    training: [1.0, 1.0]
+    test: [1.0, 1.0]
+    stress: [1.0, 1.0]
+
+gang_reactions:
+  label: fixture
+  derived_from: "showcase fixture for amendment A-017"
+  reason: "A fixed feed delay with no missed items and a gang that always stops using a liened account."
+  issue_ids_v2: [G4]
+  gang_feed_delay_minutes:
+    training: [1100, 1100]
+  gang_feed_miss_share:
+    training: [0.0, 0.0]
+  gang_stops_using_liened_account_share:
+    training: [1.0, 1.0]
+
+lien:
+  label: fixture
+  reason: "A lien on the first layer-1 mule of the first gang, placed while money is flowing through it."
+  account_id: acc_person_000010
+  minute: 3000
+  amount_paise: 50000
+  encumbrance_id: enc-fixture-01

@@ -107,11 +107,42 @@ def test_no_rented_mule_reads_nothing_from_the_stream() -> None:
     assert rng.bit_generator.state == before
 
 
-def test_two_spans_for_one_rented_account_are_refused() -> None:
-    """Checks a rented account with two mule spans is refused, because the pause rule keeps one span per account."""
-    roles = [RoleSpan("acc_a", "mule", "g", 1, 0, 10, "rented"), RoleSpan("acc_a", "mule", "g", 1, 20, None, "rented")]
+def test_several_spans_for_one_rented_account_share_one_kept_share() -> None:
+    """Checks two non-overlapping spans of one rented account share one kept-share draw and covers both spans."""
+    roles = [
+        RoleSpan("acc_a", "mule", "g", 1, 0, 10, "rented"),
+        RoleSpan("acc_a", "mule", "g", 1, 20, 30, "rented"),
+    ]
+    rng = np.random.default_rng(5)
+    activity = plan_owner_activity(roles, "training", rng)
 
-    with pytest.raises(ValueError, match="more than one mule span"):
+    single_role = [RoleSpan("acc_a", "mule", "g", 1, 0, 10, "rented")]
+    single_rng = np.random.default_rng(5)
+    single_activity = plan_owner_activity(single_role, "training", single_rng)
+
+    assert activity["acc_a"].kept_share == single_activity["acc_a"].kept_share
+    assert rng.bit_generator.state == single_rng.bit_generator.state
+
+    act = activity["acc_a"]
+    assert act.covers(0) is True
+    assert act.covers(5) is True
+    assert act.covers(9) is True
+    assert act.covers(10) is False
+    assert act.covers(15) is False
+    assert act.covers(19) is False
+    assert act.covers(20) is True
+    assert act.covers(25) is True
+    assert act.covers(29) is True
+    assert act.covers(30) is False
+
+
+def test_overlapping_spans_for_one_rented_account_are_refused() -> None:
+    """Checks overlapping spans of one rented account raise a ValueError because intervals must not collide."""
+    roles = [
+        RoleSpan("acc_a", "mule", "g", 1, 0, 15, "rented"),
+        RoleSpan("acc_a", "mule", "g", 1, 10, 25, "rented"),
+    ]
+    with pytest.raises(ValueError, match="overlapping mule spans"):
         plan_owner_activity(roles, "training", np.random.default_rng(5))
 
 

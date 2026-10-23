@@ -36,7 +36,7 @@ TERM: run id: a 16-character fingerprint of seed, effective configuration and co
 import copy
 import os
 from collections.abc import Callable, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 import numpy as np
@@ -57,6 +57,7 @@ from world.episode_payments import plan_episode_payments
 from world.episodes import Episode, draw_episode_schedule
 from world.fast_mode import FastRunSettings
 from world.gang_config import GangConfig, gang_config_to_plain
+from world.gang_feed import build_gang_holdings_from_roles
 from world.gang_planner import plan_gang
 from world.interactive_loop import run_fraud_on
 from world.interactive_records import (
@@ -67,12 +68,19 @@ from world.interactive_records import (
     InteractiveRunResult,
     InteractiveWorldOutput,
     PaymentView,
+    Resale,
     RunnerSettings,
     allow_all,
 )
 from world.interactive_state import start_runner_state
 from world.payments import find_ledger_for_account
 from world.run_identity import REPO_ROOT, find_code_version, load_runner_config, make_payment_id, make_run_id
+from world.tactic_families import (
+    check_family_lists_agree,
+    load_evaluation_config,
+    load_tactic_families,
+    validate_gang_families,
+)
 from world.truth_records import TruthFacts
 from world.world_configs import WorldConfigs, read_world_configs
 from world.world_plan import WorldPlan, draw_world_plan, spawn_life_streams, spawn_world_streams
@@ -284,6 +292,7 @@ def run_interactive(
     hook: Callable[[PaymentView], HookDecision] = allow_all, run_id: str,
     runner_config: dict[str, Any] | None = None, state: Any = None,
     account_openings_config: dict[str, Any] | None = None,
+    gang_reactions_config: dict[str, Any] | None = None,
 ) -> InteractiveRunResult:
     """
     WHAT: Runs one prepared world. With the switch off it falls back to Level 11's run_world; with it on it runs the
@@ -305,6 +314,7 @@ def run_interactive(
         runner_config: The interactive_runner config block; None reads config/interactive_runner.yaml.
         state: A prepared runner state with extra registered accounts (switch on only), or None.
         account_openings_config: Optional account openings configuration dictionary.
+        gang_reactions_config: Optional gang reactions configuration dictionary.
 
     Returns:
         The InteractiveRunResult.
@@ -323,6 +333,7 @@ def run_interactive(
         world, plan, rng, device_events, episode_payments, fraud_inputs=fraud_inputs, hook=hook, run_id=run_id,
         runner_config=config, state=runner_state, settings=settings,
         account_openings_config=account_openings_config,
+        gang_reactions_config=gang_reactions_config,
     )
 
 
@@ -332,11 +343,13 @@ def effective_config_for(
     *,
     runner_settings: RunnerSettings = RunnerSettings(),
     account_openings_config: dict[str, Any] | None = None,
+    gang_reactions_config: dict[str, Any] | None = None,
+    account_market_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     WHAT: Builds the effective configuration as plain data: the run settings plus the four config dictionaries the
-    world is built from (the given layered configs, or the four files as read from disk), plus gang configurations
-    and account openings configurations if enabled.
+    world is built from (the given layered configs, or the four files as read from disk), plus gang configurations,
+    account openings configurations, and gang reactions configurations if enabled.
 
     WHY: The run id must change when any setting changes, including one value deep inside a config file or a gang
     tactical configuration. Folding the full configuration into the id guarantees that per Decision D5 and D7.
@@ -345,11 +358,14 @@ def effective_config_for(
         fast_settings: The run settings.
         configs: Layered configs, or None for the files on disk.
         gang_configs: Sequence of GangConfig records, serialized to plain dictionaries only when non-empty.
-        runner_settings: RunnerSettings governing feature flags like account_openings_enabled.
+        runner_settings: RunnerSettings governing feature flags like account_openings_enabled
+            and gang_reactions_enabled.
         account_openings_config: Optional account openings configuration dictionary.
+        gang_reactions_config: Optional gang reactions configuration dictionary.
 
     Returns:
-        {"settings": {...}, "world_configs": {...}} and optionally "gang_configs" and account openings fields.
+        {"settings": {...}, "world_configs": {...}} and optionally "gang_configs",
+        account openings, and gang reactions fields.
 
     Example:
         effective_config_for(FastRunSettings(101, 60, 12, 61, "training"), None)["settings"]["seed"] is 101.
@@ -369,12 +385,37 @@ def effective_config_for(
         )
         result["account_openings_enabled"] = True
         result["account_openings_config"] = openings_cfg
+    if runner_settings.gang_reactions_enabled:
+        from world.gang_feed import load_gang_reactions_config, validate_gang_reactions_config
+
+        reactions_cfg = (
+            gang_reactions_config
+            if gang_reactions_config is not None
+            else load_gang_reactions_config()
+        )
+        validate_gang_reactions_config(reactions_cfg)
+        result["gang_reactions_enabled"] = True
+        result["gang_reactions_config"] = reactions_cfg
+    if runner_settings.account_market_enabled:
+        from world.account_market import load_account_market_config, validate_account_market_config
+
+        market_cfg = (
+            account_market_config
+            if account_market_config is not None
+            else load_account_market_config()
+        )
+        validate_account_market_config(market_cfg)
+        result["account_market_enabled"] = True
+        result["account_market_config"] = market_cfg
     return result
 
 
 def _apply_gang_configs(
     prepared: PreparedWorld, gang_configs: tuple[GangConfig, ...], state: Any,
-    fraud_inputs: FraudInputs, seed: int, runner_config: dict[str, Any]
+    fraud_inputs: FraudInputs, seed: int, runner_config: dict[str, Any],
+    *,
+    account_market_enabled: bool = False,
+    account_market_config: dict[str, Any] | None = None,
 ) -> tuple[Any, FraudInputs]:
     """
     WHAT: Registers fixture source accounts in runner state, plans each gang campaign using the gang_planning
@@ -390,6 +431,8 @@ def _apply_gang_configs(
         fraud_inputs: Existing FraudInputs to extend.
         seed: Master simulation integer seed.
         runner_config: Interactive runner configuration dictionary.
+        account_market_enabled: Boolean flag indicating if secondary account market resales are active.
+        account_market_config: Optional account market configuration dictionary.
 
     Returns:
         Tuple of (updated runner state, combined FraudInputs).
@@ -422,8 +465,39 @@ def _apply_gang_configs(
     opening_events = list(fraud_inputs.outside_events)
     withdrawals = list(fraud_inputs.withdrawals)
 
-    for g in gang_configs:
+    resale_share: float | None = None
+    market_rng: np.random.Generator | None = None
+    all_resales: list[Resale] = []
+    if account_market_enabled:
+        from world.account_market import (
+            apply_resale,
+            draw_resale_share,
+            find_resale_offers,
+            plan_resales,
+        )
+
+        children_17 = np.random.SeedSequence(seed).spawn(17)
+        market_rng = np.random.default_rng(children_17[16])
+        resale_share = draw_resale_share(prepared.plan.range_name, market_rng, config=account_market_config)
+
+    for k, g in enumerate(gang_configs):
         plan = plan_gang(g, prepared.world, plan_rng, reserved_accounts=reserved, gang_devices_rng=dev_rng)
+
+        if k >= 1 and account_market_enabled and resale_share is not None and market_rng is not None:
+            offers = find_resale_offers(roles)
+            gang_resales = plan_resales(plan.truth.roles, offers, resale_share, market_rng)
+            for r in gang_resales:
+                plan = apply_resale(plan, r)
+                # Close the previous gang's span: valid_to = resale_minute (keep its lifecycle fields valid).
+                for idx, s in enumerate(roles):
+                    if s.gang_id == r.previous_gang and s.account_id == r.sold_account and s.valid_to is None:
+                        roles[idx] = replace(s, valid_to=r.resale_minute)
+                        break
+                for idx, d in enumerate(dev_ctrl):
+                    if d.gang_id == r.previous_gang and d.account_id == r.sold_account and d.valid_to is None:
+                        dev_ctrl[idx] = replace(d, valid_to=r.resale_minute)
+                all_resales.append(r)
+
         # Mules, victims and collectors of this gang are unavailable to later gangs; a person cannot hold two
         # overlapping roles in the truth.
         reserved.update(r.account_id for r in plan.truth.roles)
@@ -454,12 +528,17 @@ def _apply_gang_configs(
         opening_events.extend(plan.outside_events)
         withdrawals.extend(plan.withdrawals)
 
+    gang_plan_roles = roles[len(fraud_inputs.truth.roles):]
+    holdings = list(fraud_inputs.gang_holdings) + list(build_gang_holdings_from_roles(gang_plan_roles))
+
     new_truth = TruthFacts(roles=tuple(roles), device_control=tuple(dev_ctrl), payment_stories=tuple(stories))
     return active_state, FraudInputs(
         payments=tuple(pmts), outside_events=tuple(opening_events), truth=new_truth,
         gang_device_events=tuple(g_dev_events),
         money_rules=tuple(rules), illicit_seeds=tuple(seeds),
         withdrawals=tuple(withdrawals),
+        gang_holdings=tuple(holdings),
+        account_resales=tuple(all_resales),
     )
 
 
@@ -469,6 +548,8 @@ def run_interactive_world(
     configs: WorldConfigs | None = None, code_version: str | None = None, state_factory: Any = None,
     gang_configs: tuple[GangConfig, ...] = (),
     account_openings_config: dict[str, Any] | None = None,
+    gang_reactions_config: dict[str, Any] | None = None,
+    account_market_config: dict[str, Any] | None = None,
 ) -> InteractiveWorldOutput:
     """
     WHAT: Builds and runs a whole world: prepares it as Level 11 does, names the run (seed, effective configuration,
@@ -487,6 +568,8 @@ def run_interactive_world(
         state_factory: A function making the runner state from the prepared world (switch on only), or None.
         gang_configs: Gang configurations planned on child 7 and executed when fraud switch is on.
         account_openings_config: Optional account openings configuration dictionary.
+        gang_reactions_config: Optional gang reactions configuration dictionary.
+        account_market_config: Optional account market configuration dictionary.
 
     Returns:
         The InteractiveWorldOutput.
@@ -497,12 +580,25 @@ def run_interactive_world(
     """
     if not runner_settings.fraud_enabled and runner_settings.account_openings_enabled:
         raise ValueError("account openings need fraud_enabled=True")
+    if not runner_settings.fraud_enabled and runner_settings.gang_reactions_enabled:
+        raise ValueError("gang reactions need fraud_enabled=True")
+    if not runner_settings.fraud_enabled and runner_settings.account_market_enabled:
+        raise ValueError("account market needs fraud_enabled=True")
+    if runner_settings.gang_reactions_enabled and not gang_configs:
+        raise ValueError("gang reactions need at least one gang")
     if not runner_settings.fraud_enabled and gang_configs:
         raise ValueError(SWITCH_OFF_MESSAGE)
+    if any(g.family is not None for g in gang_configs):
+        families = load_tactic_families()
+        eval_cfg = load_evaluation_config()
+        check_family_lists_agree(families, eval_cfg)
+        validate_gang_families(gang_configs, fast_settings.range_name, families=families)
     runner_config = load_runner_config()
     effective_config = effective_config_for(
         fast_settings, configs, gang_configs,
         runner_settings=runner_settings, account_openings_config=account_openings_config,
+        gang_reactions_config=gang_reactions_config,
+        account_market_config=account_market_config,
     )
     version = code_version if code_version is not None else find_code_version(
         os.environ, REPO_ROOT, runner_config["code_version_git_timeout_seconds"]
@@ -512,12 +608,15 @@ def run_interactive_world(
     state = state_factory(prepared) if state_factory is not None else None
     if gang_configs:
         state, fraud_inputs = _apply_gang_configs(
-            prepared, gang_configs, state, fraud_inputs, fast_settings.seed, runner_config
+            prepared, gang_configs, state, fraud_inputs, fast_settings.seed, runner_config,
+            account_market_enabled=runner_settings.account_market_enabled,
+            account_market_config=account_market_config,
         )
     result = run_interactive(
         prepared.world, prepared.plan, prepared.run_rng, prepared.device_events, prepared.episode_payments,
         settings=runner_settings, fraud_inputs=fraud_inputs, hook=hook, run_id=run_id,
         runner_config=runner_config, state=state, account_openings_config=account_openings_config,
+        gang_reactions_config=gang_reactions_config,
     )
     return InteractiveWorldOutput(
         prepared.world, prepared.plan, prepared.episodes, prepared.episode_report, prepared.device_events,

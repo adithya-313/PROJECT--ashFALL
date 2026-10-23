@@ -185,9 +185,13 @@ def resolve_opening_handles(
         dataclasses.replace(event, account_id=_real_id(event.account_id, assigned_ids))
         for event in fraud_inputs.outside_events
     )
+    holdings = tuple(
+        dataclasses.replace(h, account_id=str(_real_id(h.account_id, assigned_ids)))
+        for h in fraud_inputs.gang_holdings
+    )
     resolved = dataclasses.replace(
         fraud_inputs, payments=payments, truth=truth, gang_device_events=device_events,
-        illicit_seeds=seeds, outside_events=outside_events,
+        illicit_seeds=seeds, outside_events=outside_events, gang_holdings=holdings,
     )
     return resolved, assigned_ids
 

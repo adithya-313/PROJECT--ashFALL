@@ -47,10 +47,11 @@ class OwnerActivity:
     kept_share: float
     valid_from: int
     valid_to: int | None
+    spans: tuple[tuple[int, int | None], ...] = ()
 
     def covers(self, minute: int) -> bool:
         """
-        WHAT: Tells whether a minute lies inside the mule span.
+        WHAT: Tells whether a minute lies inside any active mule span of the rented account.
 
         WHY: Payments before the account was rented, or after, are the owner's own and are never paused.
 
@@ -58,11 +59,13 @@ class OwnerActivity:
             minute: A payment's minute.
 
         Returns:
-            True when valid_from <= minute and the span has not ended.
+            True when valid_from <= minute and the span has not ended (or inside any configured span).
 
         Example:
             OwnerActivity(0.5, 1440, 2880).covers(2880) is False, because the span is half-open.
         """
+        if self.spans:
+            return any(s_from <= minute and (s_to is None or minute < s_to) for s_from, s_to in self.spans)
         return self.valid_from <= minute and (self.valid_to is None or minute < self.valid_to)
 
 
@@ -98,10 +101,10 @@ def plan_owner_activity(
 ) -> dict[str, OwnerActivity]:
     """
     WHAT: Draws a kept share for every rented mule role, in sorted account-id order, uniformly from the configured
-    range for the split, and records the role's span with it.
+    range for the split, and records the role's span (or collection of non-overlapping spans) with it.
 
     WHY: Sorting makes the draws independent of the order roles were listed in. Each rented mule gets one draw, so
-    adding a gang elsewhere never changes another mule's share.
+    adding a gang elsewhere never changes another mule's share. Reselling accounts gives multiple non-overlapping spans.
 
     Args:
         roles: The truth role spans of the run.
@@ -112,23 +115,36 @@ def plan_owner_activity(
         Account id -> OwnerActivity for rented mules only; empty when there are none, and then nothing is read.
 
     Raises:
-        ValueError: If a rented account has two mule spans, which the pausing rule cannot tell apart.
+        ValueError: If a rented account has overlapping mule spans, which violates temporal validity.
 
     Example:
         With one rented mule and a range [0.3, 0.8] the result has one entry with kept_share in that range.
     """
-    rented_roles = sorted(
-        (role for role in roles if role.role == "mule" and role.origin == RENTED_ORIGIN),
-        key=lambda role: role.account_id,
-    )
-    if not rented_roles:
+    roles_by_acc: dict[str, list[RoleSpan]] = {}
+    for role in roles:
+        if role.role == "mule" and role.origin == RENTED_ORIGIN:
+            roles_by_acc.setdefault(role.account_id, []).append(role)
+    if not roles_by_acc:
         return {}
     low_share, high_share = get_rented_owner_kept_share_range(split)
     activity: dict[str, OwnerActivity] = {}
-    for role in rented_roles:
-        if role.account_id in activity:
-            raise ValueError(f"Rented mule '{role.account_id}' has more than one mule span.")
+    for acc_id in sorted(roles_by_acc.keys()):
         kept_share = float(rng.uniform(low_share, high_share))
-        span_end = role.burned_from if role.burned_from is not None else role.valid_to
-        activity[role.account_id] = OwnerActivity(kept_share, role.valid_from, span_end)
+        acc_roles = sorted(roles_by_acc[acc_id], key=lambda r: r.valid_from)
+        for i in range(len(acc_roles) - 1):
+            end_i = acc_roles[i].burned_from if acc_roles[i].burned_from is not None else acc_roles[i].valid_to
+            start_next = acc_roles[i + 1].valid_from
+            if end_i is None or start_next < end_i:
+                raise ValueError(f"Rented mule '{acc_id}' has overlapping mule spans.")
+        if len(acc_roles) == 1:
+            span_end = acc_roles[0].burned_from if acc_roles[0].burned_from is not None else acc_roles[0].valid_to
+            activity[acc_id] = OwnerActivity(kept_share, acc_roles[0].valid_from, span_end)
+        else:
+            spans_list = tuple(
+                (r.valid_from, r.burned_from if r.burned_from is not None else r.valid_to)
+                for r in acc_roles
+            )
+            span_start = spans_list[0][0]
+            span_end = spans_list[-1][1] if all(s[1] is not None for s in spans_list) else None
+            activity[acc_id] = OwnerActivity(kept_share, span_start, span_end, spans=spans_list)
     return activity

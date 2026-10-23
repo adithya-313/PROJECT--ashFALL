@@ -37,9 +37,16 @@ from showcase.level_12_checks_c import (
     run_victim_payment_outage_check,
     run_victim_to_cashout_check,
 )
+from showcase.level_12_checks_d import (
+    run_account_market_check,
+    run_counts_by_family_check,
+    run_held_out_in_training_refusal_check,
+    run_late_lien_observation_check,
+    run_training_world_families_check,
+)
 
 LEVEL_NUMBER = 12
-LEVEL_TITLE = "World engine II: a world that can react (built: parts 12a-12c of 12a-12g)"
+LEVEL_TITLE = "World engine II: a world that can react (built: parts 12a-12d of 12a-12g)"
 NEEDS_DATABASE = False
 
 WHAT_YOU_SAW = (
@@ -48,7 +55,10 @@ WHAT_YOU_SAW = (
     "bit-for-bit equivalence with Level 11 under allow-all execution, and v2 issue tracking. "
     "Level 12b adds hidden truth isolation, a tactic language with budget enforcement, and gang device telemetry. "
     "Level 12c adds victim money routing, mule lifecycle transitions from warm-up to burned, "
-    "rented owner activity, and cash-out channels."
+    "rented owner activity, and cash-out channels. "
+    "Level 12d adds an account market where gangs buy burned accounts from each other, a delayed lien feed "
+    "that gangs react to only after they learn of it, and tactic families that keep held-out tactics out of "
+    "training worlds."
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -59,6 +69,9 @@ REQUIRED_FILES = [
     REPO_ROOT / "scripts" / "golden_values.yaml",
     REPO_ROOT / "showcase" / "fixtures" / "level_12" / "gang_two_layers.yaml",
     REPO_ROOT / "showcase" / "fixtures" / "level_12" / "gang_victims_cashout.yaml",
+    REPO_ROOT / "showcase" / "fixtures" / "level_12" / "gangs_market_two.yaml",
+    REPO_ROOT / "showcase" / "fixtures" / "level_12" / "gangs_families_training.yaml",
+    REPO_ROOT / "showcase" / "fixtures" / "level_12" / "gang_held_out_in_training.yaml",
 ]
 
 
@@ -295,14 +308,67 @@ def _get_checks_14_to_15() -> list[CheckDefinition]:
     return [check_14, check_15]
 
 
+def _get_checks_16_to_20() -> list[CheckDefinition]:
+    """
+    WHAT: Constructs check definition descriptors for Level 12d checks 16 through 20.
+    It builds CheckDefinition objects for the account market, tactic families in a training world, counts by
+    family, a lien observed after the feed delay, and the refusal of a held-out family in a training world.
+
+    WHY: Decomposing check construction into modular subroutines keeps all functions under 30 code lines.
+    Separates the market, family and reaction checks of part d into a focused builder.
+
+    Returns:
+        List of CheckDefinition containers representing checks 16 through 20.
+
+    Example:
+        checks = _get_checks_16_to_20(); assert len(checks) == 5
+    """
+    check_16 = CheckDefinition(
+        "16. two gangs share accounts bought from the market", "edge",
+        "A burned rented mule of one gang is resold to a later gang and the truth owner changes exactly at the resale.",
+        run_account_market_check,
+        "Resale matching, plan rewriting or truth span closing drifted from the resale minute.",
+        "world/account_market.py, showcase/fixtures/level_12/gangs_market_two.yaml", part="d",
+    )
+    check_17 = CheckDefinition(
+        "17. a training world contains no held-out family", "edge",
+        "A training world built from gangs of different training families contains no pre-registered held-out family.",
+        run_training_world_families_check,
+        "Family validation let a held-out family into a training world or the held-out list drifted.",
+        "world/tactic_families.py, config/tactic_families.yaml, config/evaluation.yaml", part="d",
+    )
+    check_18 = CheckDefinition(
+        "18. a gang world with counts by family", "normal",
+        "Fraud payments and gang accounts can be counted per tactic family and every family produced activity.",
+        run_counts_by_family_check,
+        "A gang family produced no payments or accounts, or gang ids no longer map to families.",
+        "world/gang_config.py, showcase/fixtures/level_12/gangs_families_training.yaml", part="d",
+    )
+    check_19 = CheckDefinition(
+        "19. a lien is observed late; money flows until observed, then stops", "edge",
+        "A gang keeps moving money through a liened mule until the feed delay passes, and not after.",
+        run_late_lien_observation_check,
+        "The observation feed delivered the lien early or late, or the stop rule did not cancel later flows.",
+        "world/gang_feed.py, world/gang_reactions.py", part="d",
+    )
+    check_20 = CheckDefinition(
+        "20. a training world file that names a held-out family is refused", "negative",
+        "A gang naming a held-out family in a training world is refused with a plain reason before any planning.",
+        run_held_out_in_training_refusal_check,
+        "The family check was skipped or ran after planning began.",
+        "world/tactic_families.py, world/interactive_runner.py", part="d",
+    )
+    return [check_16, check_17, check_18, check_19, check_20]
+
+
 def get_checks(quick: bool = False) -> list[CheckDefinition]:
     """
-    WHAT: Constructs the ordered sequence of 15 Level 12 showcase verification checks (Parts 12a, 12b, and 12c).
+    WHAT: Constructs the ordered sequence of 20 Level 12 showcase verification checks (Parts 12a to 12d).
     All checks span consistency, normal, edge, and negative check kinds across parts 'a', 'b', and 'c'.
 
     WHY: Supplies the showcase execution engine with the authoritative test suite for Level 12.
     Enforces required coverage distribution across normal, edge, and negative categories while
-    tagging each check with part='a', part='b', or part='c' for selective execution.
+    tagging each check with part='a', 'b', 'c' or 'd' for selective execution.
 
     Args:
         quick: Boolean flag indicating whether quick execution mode is requested.
@@ -311,7 +377,7 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
         List of CheckDefinition instances configuring Level 12 showcase evaluations.
 
     Example:
-        checks = get_checks(quick=True); assert len(checks) == 15
+        checks = get_checks(quick=True); assert len(checks) == 20
     """
     # Concatenate checks from helper builders to construct complete Level 12 suite.
     checks: list[CheckDefinition] = []
@@ -321,6 +387,7 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
     checks.extend(_get_checks_9_to_10())
     checks.extend(_get_checks_11_to_13())
     checks.extend(_get_checks_14_to_15())
+    checks.extend(_get_checks_16_to_20())
     return checks
 
 

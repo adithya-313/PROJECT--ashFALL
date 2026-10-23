@@ -1,36 +1,145 @@
-# Configuration for the hidden truth store (Level 12b).
+# =====================================================================
+# THE HIDDEN TRUTH: the answer key of the simulated world
+# =====================================================================
 #
-# TERM: hidden truth = facts known to the simulation engine but forbidden from bank feeds, including mule accounts,
-#       controlling gangs, attack stories, and compromised devices.
-# TERM: time span = a temporal interval [valid_from, valid_to) during which an account or device role remains active.
-# TERM: half-open span = an interval inclusive of valid_from and exclusive of valid_to; valid_to may be None if unending.
-# TERM: mule depth = distance in payment hops from the initial compromised victim to an illicit account (layer 1 is first mule).
-# TERM: payment story = explanatory metadata attributing a fraud transaction to a gang, attack block, layer, and description.
+# What this file is
+#   The simulation knows secrets a bank never would: which accounts are mules,
+#   which gang runs them, which payments are part of a scam. That answer key
+#   is the "hidden truth". It is written to separate files so a fraud
+#   detector can be marked against it later, and it must never reach the
+#   detector itself. This file says what the truth files are called, what
+#   labels they may contain, and who may open them.
+#
+# Who reads it
+#   world/truth_writer.py (writes the files), evaluation/truth.py (loads them
+#   and refuses wrong callers), world/truth_records.py (checks labels) and
+#   core/truth_import_check.py (scans the code to prove nothing leaks).
+#
+# Words used below
+#   mule      an ordinary-looking account that passes stolen money along.
+#   span      a stretch of time [from, to): the start minute counts, the end
+#             minute does not. An account is only a mule inside its span;
+#             before and after it is a normal account.
+#   depth     how many steps a mule is from the victims (1 = first mule).
+#   label / reason / issue_ids_v2 / derived_from
+#             "policy" = our own rule; the reason in one sentence; the problem
+#             numbers answered; the rule or brief it came from.
+#
+# Where the full reasoning lives
+#   Ground rule 15 (answers stay hidden); the reason lines in this file.
 #
 # Checked by: python -m core.config_validator config/truth_store.yaml
+# =====================================================================
 
+# ---------------------------------------------------------------------
+# truth_store: the one block in this file
+# ---------------------------------------------------------------------
 truth_store:
   label: policy
   reason: "The truth store records ground truth about illicit accounts, devices, and attack narratives separately from operational feeds so that only evaluation and benchmark tooling can inspect them."
   issue_ids_v2: [12-1, 12-17, K5]
   derived_from: "ground rule 15; Level 12b brief task 5"
+  # ---------------------------------------------------------------------
+  # format: the version stamp of the truth files
+  #
+  # The idea
+  #   Every run's truth folder has a manifest.json that records this stamp.
+  #   The loader refuses a folder whose stamp differs, so files from an old
+  #   or different layout are never read as if they matched.
+  #
+  # Example
+  #   The folder for run 66db9aa439b092ee must say "truth-v1" in its manifest.
+  #
+  # Source: evaluation/truth.py (load_truth).
+  # ---------------------------------------------------------------------
   format: "truth-v1"
+  # ---------------------------------------------------------------------
+  # file_names: what the four files in each run's truth folder are called
+  #
+  # The idea
+  #   roles.jsonl            who is a mule, victim, collector or cash-out, and when
+  #   device_control.jsonl   which gang device controlled which account, and when
+  #   payment_stories.jsonl  for each gang payment: which gang, which step, why
+  #   manifest.json          a fingerprint (SHA-256) and row count for each file,
+  #                          so any edit to a file is noticed when it is loaded
+  #   Each folder is named after the run id; one line per record (JSON lines).
+  #
+  # Source: world/truth_writer.py (write_truth_files), evaluation/truth.py.
+  # ---------------------------------------------------------------------
   file_names:
     roles: "roles.jsonl"
     device_control: "device_control.jsonl"
     payment_stories: "payment_stories.jsonl"
     manifest: "manifest.json"
   file_names_reason: "Four separate truth-v1 artifacts capturing account roles, device control spans, transaction stories, and a cryptographic integrity manifest."
+  # ---------------------------------------------------------------------
+  # roles: the labels an account can carry inside a span
+  #
+  # The idea
+  #   mule      passes stolen money along to the next account
+  #   collector gathers stolen money from many victims before it is passed on
+  #   cash_out  the last account, where money leaves as cash or other forms
+  #   victim    an ordinary person who was tricked or taken over and paid
+  #   "Genuine" is never written: an account outside every span is simply normal.
+  #   A role that is not in this list is refused.
+  #
+  # Example
+  #   acc_person_000006 is genuine at minute 1439 and a mule from minute 1440.
+  #
+  # Source: world/truth_records.py (validate_role_in_config); ground rule 15.
+  # ---------------------------------------------------------------------
   roles:
     mule: "An intermediary account that receives and forwards laundered funds across payment hops"
     collector: "An account aggregating stolen proceeds from multiple victims before laundering"
     cash_out: "A terminal account used to withdraw illicit funds to cash or external instruments"
     victim: "An ordinary target account deceived or compromised into initiating unauthorized payments"
   roles_reason: "Ground rule 15; genuine is never stored as it is the default state of any account outside active spans"
+  # ---------------------------------------------------------------------
+  # mule_origins: how a gang got hold of a mule account
+  #
+  # The idea
+  #   rented        a real person's existing account, rented out by its owner
+  #   borrowed_kyc  a new account opened on someone else's identity papers
+  #   business      a new business account
+  #   The origin is stored only on mule spans, and only one of these three is
+  #   allowed, so results can be compared by origin later.
+  #
+  # Source: world/truth_records.py (validate_role_origin); the reason line below.
+  # ---------------------------------------------------------------------
   mule_origins: [rented, borrowed_kyc, business]
   mule_origins_reason: "How a gang came to control a mule account: rented from its ordinary owner, opened on borrowed identity documents, or opened as a business account. Stored only on mule spans so evaluation can compare origins."
+  # ---------------------------------------------------------------------
+  # env_var: where the truth files go
+  #
+  # The idea
+  #   The folder for truth files comes from this named setting of the
+  #   computer (an "environment variable"), never from a built-in default.
+  #   If it is missing or empty, writing stops with an error rather than
+  #   guessing a place.
+  #
+  # Example
+  #   ASHFALL_TRUTH_DIR=runs/truth puts a run's truth in runs/truth/<run id>/.
+  #
+  # Source: world/truth_writer.py (truth_root_from_env).
+  # ---------------------------------------------------------------------
   env_var: ASHFALL_TRUTH_DIR
   env_var_reason: "Location where the runner writes truth files; configured via a dedicated environment variable"
+  # ---------------------------------------------------------------------
+  # allowed_reader_folders and ashfall_packages: who may and may not read the truth
+  #
+  # The idea
+  #   allowed_reader_folders  code folders that may load the truth: the
+  #                           evaluation code, the showcases and the tests
+  #   ashfall_packages        the real product's code folders (api, serving,
+  #                           features, models, online_learning, agent, core).
+  #                           They must never touch the truth.
+  #   Two guards use these lists. At run time, loading the truth from any
+  #   folder in ashfall_packages raises a PermissionError. Before that, a
+  #   code scan fails if such a folder imports the truth loader or mentions
+  #   the environment variable above.
+  #
+  # Source: evaluation/truth.py (load_truth), core/truth_import_check.py.
+  # ---------------------------------------------------------------------
   allowed_reader_folders: [evaluation, showcase, tests]
   allowed_reader_folders_reason: "Only evaluation routines, showcase demonstrations, and unit tests are permitted to inspect hidden truth"
   ashfall_packages: [api, serving, features, models, online_learning, agent, core]

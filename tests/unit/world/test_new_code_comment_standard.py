@@ -191,6 +191,24 @@ NEW_CODE_FILES: list[str] = [
     # Level 12c routine life for new genuine people.
     "world/opened_routine.py",
     "tests/unit/world/test_opened_routine.py",
+    # Level 12d gang observation feed and reactive decision rules.
+    "world/gang_feed.py",
+    "world/gang_reactions.py",
+    "tests/unit/world/test_gang_feed.py",
+    "tests/unit/world/test_gang_reactions.py",
+    "tests/unit/world/test_gang_rotation_split.py",
+    # Level 12d account market resale planner and test suite.
+    "world/account_market.py",
+    "tests/unit/world/test_account_market.py",
+    # Level 12d tactic family guard and test suite.
+    "world/tactic_families.py",
+    "tests/unit/world/test_tactic_family_guard.py",
+    # Level 12d showcase part d support, checks and test suite.
+    "showcase/level_12_support_d.py",
+    "showcase/level_12_checks_d.py",
+    "tests/unit/showcase/test_level_12_checks_d.py",
+    # Level 12d handoff facts generator.
+    "scripts/handoff_facts.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [

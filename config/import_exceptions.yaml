@@ -1,7 +1,32 @@
-# Imports in core/ and showcase/ that are NOT in requirements-dev.txt on purpose.
+# =====================================================================
+# IMPORT EXCEPTIONS: packages used on purpose but not in requirements-dev.txt
+# =====================================================================
 #
-# Each module below must be declared in the requirements file named next to it. The check
-# (python -m core.imports_check) fails if it is not, so an exception can never hide a missing package.
+# What this file is
+#   A Python package can work on one laptop only because it happens to be
+#   installed there. The automatic build (CI) installs ONLY the dev
+#   requirements file, so a package that core/, showcase/ or evaluation/
+#   imports but that file does not list would break later. A check looks for
+#   exactly that. This file lists the few packages that are allowed to be
+#   missing from that file because they are declared somewhere else.
+#
+# Who reads it
+#   core/imports_check.py (python -m core.imports_check), which reads the
+#   import lines of the folders core, showcase and evaluation and compares
+#   them with requirements-dev.txt and every file it includes.
+#
+# How to read an entry
+#   Under declared_in_other_files, "modules" holds "module: file" lines. One means: the package for that
+#   import is declared in that requirements file. The check still fails if
+#   the module is not declared in the file named next to it, so an exception
+#   can never hide a missing package.
+#
+# Example
+#   mlflow: requirements-ml.txt means mlflow may be imported even though
+#   requirements-dev.txt does not list it, because requirements-ml.txt does.
+#
+# Checked by: python -m core.imports_check
+# =====================================================================
 
 declared_in_other_files:
   label: policy

@@ -1,20 +1,63 @@
-# Written definitions of the mule tactic families, frozen before the first gang world exists (amendment A-014).
+# =====================================================================
+# TACTIC FAMILIES: the named ways a mule gang moves stolen money
+# =====================================================================
 #
-# TERM: tactic family = one named way a mule gang moves stolen money, e.g. "fast_pass_through" (money comes in
-#       and goes straight out again).
-# TERM: training family = a family that gang worlds used for training and tuning may contain.
-# TERM: held-out family = a family that appears ONLY in test and stress worlds, so we can see whether a model
-#       learned a real signal or only memorised the training tactics.
-# TERM: nearest training family = the training family a held-out family looks most like, so the difference
-#       between the two is the thing the held-out test measures.
-# TERM: trait = a feature any family may use; it is not a family itself, e.g. "low_balance_after_outflow".
-# TERM: signal family = a group of clues a detector can read, e.g. "amount and speed" or "shared-device signals".
-# TERM: typology row = a row number in docs/research/mule_typologies.md, which also records how well that
-#       pattern is sourced (confirmed, changed, reported or unverified).
+# What this file is
+#   A "tactic family" is one named pattern of how a gang moves stolen money,
+#   for example "fast_pass_through": money lands in an account and leaves
+#   again quickly. This file writes down a definition of each family. The
+#   definitions were frozen BEFORE the first gang world existed (amendment
+#   A-014), so no world could be shaped around a result.
 #
-# The held-out LIST is owned by config/evaluation.yaml (held_out_tactics). This file only describes each name.
-# Held-out definitions are project design (typology Row 8) and are NOT sourced.
+# Training families and held-out families
+#   training   families that worlds used for training and tuning may
+#              contain. Seven are defined below.
+#   held-out   families that appear ONLY in test and stress worlds. They
+#              exist to show whether a detector learned a real signal or just
+#              memorised the training tactics. Four are defined below.
+#   Every held-out family names its "nearest training family": the training
+#   family it looks most like. What differs between the two is exactly the
+#   thing the held-out test measures.
+#   A gang may carry an optional family. If it names a held-out family and
+#   the world is a training world (validation worlds count as training), the
+#   run is refused with an error before anything is planned
+#   (world/tactic_families.py). An unknown family name is refused too.
+#
+# Who reads it
+#   world/tactic_families.py (load_tactic_families, check_family_lists_agree
+#   and validate_gang_families), world/interactive_runner.py (the check
+#   before a gang world starts), and tests/unit/test_tactic_families.py.
+#
+# How to read an entry
+#   definition / mechanism   what the family does, and how.
+#   typology_rows            row numbers of the table in
+#                            docs/research/mule_typologies.md, which says how
+#                            well each real-world pattern is sourced. The
+#                            status words copy that table:
+#                              confirmed   a source says it;
+#                              changed     the source says something a bit
+#                                          different from the first plan;
+#                              reported    seen only in a second-hand or
+#                                          vendor source;
+#                              unverified  no source found yet.
+#   finding_ids              short names of single verified sources in the
+#                            same document.
+#   signal_families_used     the groups of clues a detector can read to spot
+#                            the family, for example "amount and speed" or
+#                            "shared-device signals".
+#   trait                    a feature any family may show; it is not a
+#                            family itself (see the traits section).
+#   what_differs, forbidden_in_training   (held-out only) how the family
+#                            differs from its nearest training family, and
+#                            what training worlds must never contain.
+#
+# Where the held-out LIST is owned
+#   config/evaluation.yaml (held_out_tactics). This file only describes each
+#   name, and a test fails if the two lists disagree. The held-out
+#   definitions are project design (typology row 8) and are NOT sourced.
+#
 # Checked by: tests/unit/test_tactic_families.py and python -m core.config_validator config/tactic_families.yaml
+# =====================================================================
 
 tactic_families:
   label: policy
@@ -23,6 +66,7 @@ tactic_families:
   derived_from: "amendment A-014"
   held_out_list_owner: config/evaluation.yaml held_out_tactics
 
+  # ---- Training families: allowed in every kind of world ----
   training:
     fast_pass_through:
       definition: A new or dormant account receives high-value credits and sends out similar amounts quickly.
@@ -77,6 +121,9 @@ tactic_families:
         - {row: 4, status: unverified}
       note: Unverified. Its parameter will be registered as an assumption in Level 12b.
 
+  # ---- Held-out families: test and stress worlds only ----
+  # A gang naming one of these in a training world is refused. Each differs
+  # from its nearest training family in one way only (see what_differs).
   held_out:
     slow_drip:
       definition: Money arrives and leaves in small amounts spread over days or weeks.

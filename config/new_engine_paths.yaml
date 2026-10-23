@@ -1,11 +1,39 @@
-# Paths that belong to the NEW engine (the simulator, the new features, the new model and the v1 API).
+# =====================================================================
+# NEW ENGINE PATHS: where the new engine's code is allowed to live
+# =====================================================================
 #
-# The Level 10 showcase compares the first commit that touched any of these paths with the commit of
-# config/evaluation.yaml. Nothing here may be older than the evaluation rules (pre-registration).
-# When a later level adds a new folder for the new engine, add its path here BEFORE adding any code to it.
-# A path ending in "/" is a folder. A path with "*" matches by pattern (git pathspec).
-# The v1 PaySim code (models/xgboost, scripts/data_split.py and so on) is NOT listed on purpose: it is older than
-# the rules by design (see earlier_work_note in config/evaluation.yaml).
+# What this file is
+#   The evaluation rules (config/evaluation.yaml) were committed BEFORE any
+#   code of the new engine, so the rules could not be shaped by results.
+#   This file lists the paths that count as "new engine" code, so a check can
+#   prove that order by looking at git history.
+#
+# Who reads it
+#   core/level10_check.py (preregistration_proof), which the Level 10 and
+#   Level 11 showcases run: it finds the first commit that touched any of
+#   these paths and compares it with the commit of config/evaluation.yaml.
+#   Nothing here may be older than the evaluation rules. core/folder_check.py
+#   also reads it, to make sure every engine folder is listed.
+#
+# How to read an entry
+#   A path ending in "/" is a folder: world/ is everything inside world/.
+#   A path with "*" matches by pattern (a git pathspec): models/mule_* is
+#   every file in models/ whose name starts with mule_.
+#   When a later level adds a new folder for the new engine, add its path
+#   here BEFORE adding any code to it.
+#
+# What is left out on purpose
+#   The v1 PaySim code (models/xgboost, scripts/data_split.py and so on) is
+#   not listed. It is older than the rules by design (see
+#   earlier_work_note in config/evaluation.yaml).
+#
+# Example
+#   A new file under world/ is new engine code, so its first commit must not
+#   come before the commit of config/evaluation.yaml. A file under docs/ is
+#   not listed, so it is not checked.
+#
+# Checked by: python -m core.folder_check and the Level 10 showcase
+# =====================================================================
 
 new_engine_paths:
   label: policy

@@ -1,18 +1,78 @@
-# Pre-registered evaluation rules for the Level 10 engine.
+# =====================================================================
+# HOW WE JUDGE THE FRAUD DETECTOR: the rules, written down in advance
+# =====================================================================
 #
-# This file is pre-registered: it must be committed BEFORE any new-engine
-# model is trained. The git commit date of this file is the proof.
-# The reasoning behind each value is in docs/decisions/level-10-evaluation-decisions.md.
+# What this file is
+#   These are the rules for deciding whether our fraud detector is any good.
+#   They were written and committed BEFORE any model of the new engine was
+#   built. That matters: if you write the rules after you see the results,
+#   it is easy (even by accident) to pick rules that make you look good.
+#   Git history shows the date this file was first committed. That date is
+#   the proof. This idea is called "pre-registration".
 #
-# Each decision block has a "label" (assumption or policy) and a "reason".
-#   assumption = no public source exists, this is our best guess.
-#   policy     = our own choice about how results are judged.
+# How to read each block
+#   Every block has a "label" and a "reason".
+#     label: assumption  -> nobody has published this number, so it is our
+#                           best guess. We say so openly.
+#     label: policy      -> our own choice about how results are judged.
+#                           It is not a fact about the world; it is a rule.
+#   Some newer blocks also have:
+#     issue_ids / issue_ids_v2 -> the problem number this block fixes, from
+#                           the issue list (config/issues.yaml or issues_v2.yaml).
+#     derived_from        -> the change record that added the block, in
+#                           docs/research/amendments.md (for example A-013).
+#
+# The four kinds of simulated world (more in world_splits below)
+#   training   -> the model learns from these.
+#   validation -> we set the model's alarm level here, and nowhere else.
+#   test       -> the final exam. Seen once, never used for adjusting.
+#   stress     -> extreme situations, to see what breaks.
+#
+# Where the full reasoning lives
+#   docs/decisions/level-10-evaluation-decisions.md (sections D1 to D5)
+#   docs/research/amendments.md (later changes, A-001 onwards)
+#
+# Changing this file
+#   Values here are never quietly edited. A real change gets a new entry
+#   in docs/research/amendments.md first.
+# =====================================================================
 
+# ---------------------------------------------------------------------
+# meta: who wrote these rules and their status
+#   level: 10              -> the rules were written in Level 10.
+#   author: adithya-313    -> written by the project owner.
+#   status: pre-registered -> fixed before any new-engine model existed.
+# ---------------------------------------------------------------------
 meta:
   level: 10
   author: adithya-313
   status: pre-registered
 
+# ---------------------------------------------------------------------
+# capacity: how many accounts the bank's fraud team can check per day
+#
+# The idea
+#   A detector raises alarms, and a person at the bank has to look at each
+#   one. A team can only check so many accounts a day. A detector that
+#   flags 10,000 accounts a day is useless if the team can check 25.
+#   So we measure: "of the fraud, how much is in the top N alarms the team
+#   actually has time to check?"
+#
+# The numbers
+#   Nobody publishes how big these teams are, so we do not bet on one
+#   number. We test a whole range and draw a curve:
+#     sweep_min ... 0.05  -> from 0.05% of active accounts per day
+#     sweep_max ... 1.0   -> up to 1% of active accounts per day
+#     headline ...  0.25  -> the one point we quote in summaries: 0.25%
+#   report_full_curve: true -> always show the whole curve, so nobody has
+#                              to trust the single headline number.
+#
+# Example
+#   A bank with 10,000 active accounts. At 0.25%, the team checks 25
+#   accounts a day (1 in every 400).
+#
+# Source: decisions doc D1. (An earlier version used one value, 0.5%.)
+# ---------------------------------------------------------------------
 capacity:
   label: assumption
   sweep_min_pct_active_accounts_per_day: 0.05
@@ -21,6 +81,39 @@ capacity:
   report_full_curve: true
   reason: Real review capacity is not public, so the whole curve is reported and 0.25 is only the headline.
 
+# ---------------------------------------------------------------------
+# fair_comparison: comparing the model and the simple rules fairly
+#
+# The idea
+#   It is easy to "catch more fraud" by blocking more people, including
+#   innocent ones. That is not a real win. So before comparing, we set
+#   both systems so they wrongly restrict the SAME share of genuine
+#   (innocent) customers. Only then do we ask which one caught more fraud.
+#
+# The settings
+#   method: match_operating_points -> set both systems to the same level
+#                                     of harm to innocent customers.
+#   tuned_on: validation_worlds    -> that setting is chosen on validation
+#                                     worlds, never on the final test
+#                                     worlds (that would be peeking).
+#   main_genuine_restriction_rate_pct: 0.5
+#                                  -> the main comparison: both systems
+#                                     wrongly restrict 0.5% of genuine
+#                                     accounts.
+#   extra_genuine_restriction_rate_pct: [0.25, 1.0]
+#                                  -> we also compare at 0.25% and 1%, to
+#                                     check the answer does not flip.
+#   report_full_tradeoff_curve: true -> also show the whole picture: how
+#                                     much fraud is caught at every level
+#                                     of harm.
+#
+# Example
+#   At 0.5%, each system may wrongly restrict at most 5 of every 1,000
+#   innocent accounts. Then we see which caught more fraud.
+#
+# Source: decisions doc D2. (An earlier rule allowed a 1-point
+# difference; even that let one system cause more harm, so it was dropped.)
+# ---------------------------------------------------------------------
 fair_comparison:
   label: policy
   method: match_operating_points
@@ -30,6 +123,46 @@ fair_comparison:
   report_full_tradeoff_curve: true
   reason: Matching the genuine-restriction rate removes unequal harm from the comparison, and tuning on validation worlds, never test worlds, avoids peeking.
 
+# ---------------------------------------------------------------------
+# ml_beats_rules: when are we allowed to say "the model beats the rules"?
+#
+# The idea
+#   The model must win clearly, in many worlds, and not by luck.
+#   ALL three conditions must be true together (all_conditions_must_hold),
+#   checked on the test worlds:
+#
+#   1. A big enough gap
+#      min_median_recall_difference_points: 5
+#      -> "recall" = the share of fraud a system catches. Across the test
+#         worlds, the model's typical (median) recall must be at least
+#         5 percentage points higher than the rules' (e.g. 65% vs 60%).
+#
+#   2. Wins in most worlds, not just a few
+#      min_share_of_test_worlds_ml_wins_pct: 70
+#      -> the model must catch more fraud than the rules in at least 70%
+#         of the test worlds.
+#
+#   3. Not luck
+#      confidence_level_pct: 95, confidence_interval_method:
+#      bootstrap_across_worlds, interval_must_exclude_zero: true
+#      -> "bootstrap" means: re-pick the test worlds at random many times
+#         and recompute the gap each time. This gives a range the true gap
+#         probably lies in (95% sure). That whole range must be above zero.
+#         If it touches zero, the win might just be luck.
+#
+#   min_test_worlds: 20 (an assumption)
+#      -> the conditions above only mean something with enough worlds, so
+#         use at least 20 test worlds. This may only be changed before any
+#         new-engine model is trained.
+#
+# Example
+#   20 test worlds. The rules catch 60% (median); the model catches 66%.
+#   The model wins in 15 of 20 worlds (75%). The bootstrap range of the
+#   gap is +2 to +9 points. All three pass -> "the model beats the rules".
+#   If the model won in only 12 of 20 (60%), it would NOT count.
+#
+# Source: decisions doc D3.
+# ---------------------------------------------------------------------
 ml_beats_rules:
   label: policy
   all_conditions_must_hold: true
@@ -44,6 +177,39 @@ ml_beats_rules:
     label: assumption
     reason: This is a suggestion needed for the 70% and bootstrap rules to be meaningful, and it may be changed ONLY before any new-engine model is trained.
 
+# ---------------------------------------------------------------------
+# latency: how fast a decision must come back
+#
+# The idea
+#   When a payment is made, the bank asks our system "is this OK?"
+#   (the POST /v1/decisions request). A slow answer holds up the payment,
+#   so we set a speed limit.
+#
+# The settings
+#   percentile: 99, max_ms: 100
+#                   -> 99 out of every 100 answers must take 100
+#                      milliseconds (one tenth of a second) or less.
+#                      We judge the slowest answers, not the average,
+#                      because the slow ones are what customers notice.
+#   measured: server_side     -> timed inside our server, so the user's
+#                                internet speed does not count.
+#   world_for_payment_rate: small -> requests arrive as fast as they would
+#                                in the "small" simulated world.
+#   warm_up_required: true    -> run some requests first, so the slow
+#                                start-up does not count.
+#   hardware: author_laptop   -> measured on the project owner's laptop,
+#                                so results can be compared over time.
+#   feature_computation_max_ms: 50 -> of the 100 ms, at most 50 ms may go
+#                                to working out the clues ("features")
+#                                about the payment.
+#
+# Why 100 ms
+#   No law or published figure sets a limit. A "30-60 seconds" figure
+#   came from a conference remark, so we chose a much stricter one on
+#   purpose.
+#
+# Source: decisions doc D4.
+# ---------------------------------------------------------------------
 latency:
   label: assumption
   endpoint: "POST /v1/decisions"
@@ -59,6 +225,25 @@ latency:
 # Amended 2026-10-10 (issues L3, N4, A2, E1; review items R3, R4).
 # Logged in docs/research/amendments.md. No model code exists yet.
 
+# ---------------------------------------------------------------------
+# money_held_and_returned: "frozen" money is not "returned" money
+#
+# The idea
+#   When fraud is found, the bank can put a "lien" on the mule's account:
+#   the money stays there but cannot be spent. That is NOT the same as the
+#   victim getting their money back, which can take weeks or never happen.
+#   So we always report two separate numbers, never one "recovered" number.
+#
+#   held_means     -> the share of stolen money that was frozen in time.
+#   returned_means -> the share actually given back to victims.
+#   always_report_both: true -> both numbers, every time.
+#
+# Example
+#   Rs 1,00,000 stolen. Rs 40,000 frozen on a lien; Rs 10,000 later
+#   returned. Report: held 40%, returned 10%. Never "40% recovered".
+#
+# Source: amendment A-001.
+# ---------------------------------------------------------------------
 money_held_and_returned:
   label: policy
   issue_ids: [L3, R3]
@@ -67,6 +252,36 @@ money_held_and_returned:
   always_report_both: true
   reason: Holding money is not the same as returning it. A lien can take weeks to become money back in the victim's hands, so a single "recovered" number would overstate success.
 
+# ---------------------------------------------------------------------
+# base_rate_reweighting: correcting for "too much fraud" in our worlds
+#
+# The idea
+#   Real life has very little fraud among millions of payments. Our small
+#   simulated worlds hold MUCH more fraud, on purpose, so there is enough
+#   to learn from. Side effect: some numbers look better than they would
+#   in real life. Example: if a third of payments are fraud, a random
+#   alarm is often right; in real life almost every random alarm is wrong.
+#   So for these numbers we report both the raw value and a corrected
+#   ("re-weighted") value that shows what it would be at real-life levels.
+#
+#   applies_to: [yield_rate, false_alarms_per_day]
+#       yield_rate          -> of the alarms raised, how many were real fraud.
+#       false_alarms_per_day -> how many innocent people get flagged per day.
+#   report -> always both: as measured, and re-weighted.
+#   inflation_factor_comes_from -> how much extra fraud a world holds is
+#       read from that world's "world card" (its summary sheet). Since
+#       amendment A-012 this means the MEASURED factor: the world's
+#       complaints per 100,000 payments, divided by the real-life figure.
+#   real_world_ratio_comes_from -> the real-life figure lives in
+#       config/world_ranges.yaml (real_world_complaints_per_100000_upi_payments),
+#       not here, so there is one place to change it.
+#
+# Example (made-up numbers, just to show the idea)
+#   A world holds 50 times more fraud than real life. Its raw yield looks
+#   high; re-weighted for real-life rarity it is much lower. Both are shown.
+#
+# Source: amendments A-001 and A-012.
+# ---------------------------------------------------------------------
 base_rate_reweighting:
   label: policy
   issue_ids: [E1, R4]
@@ -76,6 +291,28 @@ base_rate_reweighting:
   real_world_ratio_comes_from: a parameter that Level 11 adds to config/world_ranges.yaml (no number is written here on purpose)
   reason: Small simulated worlds hold far more fraud than real life, so precision-style numbers look better than they would in practice. Re-weighting shows the honest version beside the raw one.
 
+# ---------------------------------------------------------------------
+# genuine_harm: counting the damage done to innocent people
+#
+# The idea
+#   Catching fraud is only half the story. We also count the harm our
+#   actions cause to innocent ("genuine") people. Four things are counted:
+#     1. Innocent accounts restricted, and for how many days
+#        (restriction-days). Vulnerable people count for more.
+#     2. Innocent shops that happened to receive mule money and then got
+#        restricted or had money pulled back.
+#     3. How many days an innocent person waits for a wrong lien to lift.
+#     4. Warning messages shown to innocent people paying normally.
+#   The fair_comparison block above is not changed by this.
+#
+# Example
+#   A grocery shop sells Rs 2,000 of goods to a mule. The shop's account is
+#   then restricted for 5 days. That counts as 1 harmed shop and 5
+#   restriction-days.
+#
+# Source: amendment A-001. (How much more vulnerable people count is
+# not decided yet; see not_decided_here.)
+# ---------------------------------------------------------------------
 genuine_harm:
   label: policy
   issue_ids: [A2, N4, R3]
@@ -86,6 +323,38 @@ genuine_harm:
     - Warnings shown to genuine payers.
   reason: Harm is not only "accounts frozen". Genuine shops that sold goods to mules, and people waiting for a wrong lien to be lifted, are real harm. The fair_comparison block above stays unchanged.
 
+# ---------------------------------------------------------------------
+# held_out_tactics: tricks the model never sees while learning
+#
+# The idea
+#   If the model only ever meets tricks it practised on, a good score just
+#   means it memorised them. So we keep some criminal tricks completely
+#   out of training, and use them only in the test and stress worlds.
+#   That shows whether the model can spot something new.
+#
+#   used_only_in: [test_worlds, stress_worlds]
+#   tactics (the hidden tricks):
+#     slow_drip                  -> money moves in small amounts, spread
+#                                   over days or weeks, instead of fast.
+#     device_rotation            -> every mule account gets its own fresh
+#                                   phone, replaced on a schedule, so no
+#                                   shared-phone pattern appears.
+#     pseudo_merchant_camouflage -> a business account mixes in fake
+#                                   customer-like payments to look like a
+#                                   real shop.
+#     fake_routine_life          -> the gang makes up regular salary- and
+#                                   bill-like payments, so the account
+#                                   looks like a normal person's.
+#   kept_in_training: [basic_merchant_mule]
+#                                -> a plain business-account mule with no
+#                                   disguise. Well known to banks, so it is
+#                                   fair to train on.
+#   Each hidden trick attacks one kind of clue. If the model fails on one,
+#   we learn which clue is weak.
+#   Full definitions: config/tactic_families.yaml.
+#
+# Source: decisions doc D5 and amendment A-014.
+# ---------------------------------------------------------------------
 held_out_tactics:
   label: policy
   used_only_in: [test_worlds, stress_worlds]
@@ -93,6 +362,18 @@ held_out_tactics:
   kept_in_training: [basic_merchant_mule]
   reason: Each held-out tactic attacks one signal family, so a failure shows which signal is fragile.
 
+# ---------------------------------------------------------------------
+# world_splits: the four separate groups of simulated worlds
+#
+#   training   -> the model learns here.
+#   validation -> the alarm level ("threshold") is chosen here.
+#   test       -> the final exam; used once, never for adjusting anything.
+#   stress     -> extreme conditions (very busy days, outages, long delays).
+#
+# Why keep them apart
+#   If you adjust things using the exam questions, the exam no longer
+#   tells you the truth. Keeping the groups separate stops that leak.
+# ---------------------------------------------------------------------
 world_splits:
   - name: training
     purpose: The model learns here.
@@ -108,6 +389,41 @@ world_splits:
 # TERM: AUPRC = area under the precision-recall curve; 1.0 means a perfect ranking of fraud above genuine payments.
 # TERM: trivial world = a world where one single feature separates fraud so well that any model would look good.
 # TERM: fraud share = the fraction of payments in a world that are fraud; AUPRC is only meaningful beside it.
+
+# ---------------------------------------------------------------------
+# trivial_world_check: rejecting worlds that are too easy
+#
+# The idea
+#   If one single clue (for example "payment amount") is enough to find
+#   almost all the fraud, the world is too easy. Any model would look
+#   brilliant, and the result would mean nothing. This is exactly why the
+#   PaySim dataset was rejected in Level 9.
+#
+#   metric: best_single_feature_auprc
+#     -> for each single clue on its own, score how well it separates fraud
+#        from normal payments. "AUPRC" is that score: 1.0 = perfect,
+#        and a clue that knows nothing scores about the fraud share.
+#        Take the best single clue's score.
+#   fail_threshold: 0.90
+#     -> if the best single clue scores 0.90 or more, the world FAILS.
+#        0.90 is our chosen meaning of "almost perfect" (a policy, not a
+#        measurement).
+#   report_top_features: 3 -> always show the 3 strongest clues, so a
+#                             world getting close to the line is visible.
+#   report_alongside: fraud_share -> show the fraud share next to it,
+#                             because the score only makes sense beside it.
+#   run_on: validation_worlds -> run only on validation worlds, never on
+#                             test or stress worlds (ground rule 17).
+#
+# What happens on a failure
+#   The WORLD is made harder. The 0.90 line is never moved.
+#
+# Example
+#   Fraud share is 2%. The clue "account age" alone scores 0.93.
+#   0.93 >= 0.90 -> the world fails and its design must be fixed.
+#
+# Source: amendment A-013.
+# ---------------------------------------------------------------------
 trivial_world_check:
   label: policy
   issue_ids_v2: [12-6]
@@ -119,6 +435,25 @@ trivial_world_check:
   run_on: validation_worlds
   reason: PaySim was rejected in Level 9 because single features separated fraud almost perfectly. 0.90 marks "almost perfectly"; it is a policy decision, not a measurement. A failing world is fixed, never the threshold, and the check never runs on test or stress worlds (rule 17).
 
+# ---------------------------------------------------------------------
+# validation_worlds: the worlds where tuning is allowed
+#
+#   ranges: training  -> built from the same settings as training worlds.
+#   seeds: independent of training seeds
+#                     -> different random starting numbers, so they are
+#                        genuinely different worlds. Level 12f enforces
+#                        that no seed is shared.
+#   used_for: tuning  -> the only place the alarm level may be adjusted
+#                        (ground rule 17).
+#   counts: decided in 12f -> how many validation worlds to make is decided
+#                        later, from how long one world takes to run.
+#
+# Why
+#   Tuning needs its own worlds. Otherwise it happens on training worlds
+#   (and looks better than it is) or on test worlds (and spoils the exam).
+#
+# Source: amendment A-015.
+# ---------------------------------------------------------------------
 validation_worlds:
   label: policy
   issue_ids_v2: [12-18]
@@ -129,11 +464,27 @@ validation_worlds:
   counts: decided in 12f from measured run time
   reason: Tuning needs a split of its own, otherwise it would happen on training or test worlds and leak into the final judgement.
 
+# ---------------------------------------------------------------------
+# earlier_work_note: the old v1 model does not count
+#   The first model (v1, trained on PaySim) and its settings existed
+#   before these rules. It is left out of every comparison above. These
+#   rules apply only to the new engine and its simulated worlds.
+#   Source: decisions doc, "Earlier work".
+# ---------------------------------------------------------------------
 earlier_work_note: >-
   The v1 PaySim model, its data split and its thresholds (0.5, 0.42, 0.03)
   existed before this file. They are EXCLUDED from the pre-registered
   comparisons, which apply to the new engine and its worlds only.
 
+# ---------------------------------------------------------------------
+# not_decided_here: questions we deliberately left open
+#   These are NOT decided in this file. Listing them stops anyone from
+#   quietly picking a number later and pretending it was always the plan.
+#   The details of the simple rules baseline are in
+#   docs/research/rules_baseline_spec.md. World counts are decided in
+#   Level 12f. The rest are open; this file does not say when they will
+#   be decided.
+# ---------------------------------------------------------------------
 not_decided_here:
   - exact world counts for training, validation and stress
   - rules-baseline details

@@ -135,6 +135,7 @@ class GangConfig:
         steps: Ordered sequence of BlockStep items specifying the campaign itinerary.
         start_minute: Simulation minute at which the campaign begins when there is no fixture source (the fixture
             source carries its own start_minute); None when a fixture source is set.
+        family: Optional string identifier of the tactic family (e.g. 'fast_pass_through' or 'slow_drip'), or None.
 
     Returns:
         An initialized immutable GangConfig instance.
@@ -150,6 +151,7 @@ class GangConfig:
     source: FixtureSource | None = None
     steps: tuple[BlockStep, ...] = ()
     start_minute: int | None = None
+    family: str | None = None
 
 
 def gang_start_minute(config: GangConfig) -> int:
@@ -214,6 +216,8 @@ def gang_config_to_plain(config: GangConfig) -> dict[str, Any]:
         }
     if config.start_minute is not None:
         plain["start_minute"] = config.start_minute
+    if config.family is not None:
+        plain["family"] = config.family
     plain["steps"] = [
         {
             "block": step.block,
@@ -258,6 +262,7 @@ def gang_config_from_plain(data: dict[str, Any]) -> GangConfig:
             int(s_data["opening_balance_paise"]), int(s_data["start_minute"])
         )
     start_minute: int | None = int(target["start_minute"]) if "start_minute" in target else None
+    family: str | None = str(target["family"]) if "family" in target and target["family"] is not None else None
     # 2. Reconstruct tuple of BlockStep items with (name, value) parameter tuples.
     steps: list[BlockStep] = []
     for s in target.get("steps", []):
@@ -265,7 +270,9 @@ def gang_config_from_plain(data: dict[str, Any]) -> GangConfig:
         p_items = raw_p.items() if isinstance(raw_p, dict) else raw_p
         steps.append(BlockStep(str(s["block"]), tuple((str(k), v) for k, v in p_items)))
     # 3. Instantiate GangConfig and validate constraints before returning.
-    config = GangConfig(str(target["gang_id"]), int(target["strength"]), budget, source, tuple(steps), start_minute)
+    config = GangConfig(
+        str(target["gang_id"]), int(target["strength"]), budget, source, tuple(steps), start_minute, family
+    )
     validate_gang_config(config)
     return config
 

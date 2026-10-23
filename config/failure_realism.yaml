@@ -1,11 +1,53 @@
-# Failure realism parameters for the Level 11 simulated world.
+# =====================================================================
+# FAILURE REALISM: why a payment sometimes does not go through
+# =====================================================================
 #
-# Every parameter is registered as an assumption or reported observation with nested ranges [min, max].
-# Training sits inside test, and test sits inside stress.
-# Evaluated and validated by core.config_validator.
+# What this file is
+#   Real UPI payments (UPI is India's instant payment system) sometimes fail:
+#   the whole system has a bad hour, one bank is down, the phone loses its
+#   network, the customer types a wrong PIN. This file gives the allowed
+#   range for how often and how badly each happens in the simulated world.
+#   It belongs to Level 11 (the everyday-payments world), which is frozen:
+#   do not change values.
+#
+# Who reads it
+#   world/incidents.py draws the two kinds of incident (system-wide and one
+#   bank), world/failures.py draws the everyday failure rates,
+#   world/failure_decision.py uses both to decide each payment, and
+#   world/fast_mode.py loads the file. world/grounding.py counts the entries.
+#
+# How a payment is judged (world/failure_decision.py)
+#   1. If a system-wide incident is on, the payment passes only with that
+#      incident's success rate.
+#   2. Otherwise, if a downtime of the paying or receiving bank is on, it
+#      passes only with that downtime's success rate.
+#   3. Otherwise one random number decides between a wrong PIN, a network
+#      failure, a technical decline, or success. A technical decline is
+#      blamed at random on the central system, the sending bank or the
+#      receiving bank (the three-way split is a design choice).
+#
+# How to read an entry
+#   label       "assumption": our registered guess; "reported": a number seen
+#               in a second-hand source (see its source and reason).
+#   unit        what the numbers count. A fraction is 0 to 1: 0.01 means 1%.
+#   training / test / stress
+#               the range for each kind of world (training: what the
+#               detector learns from; test: the final exam; stress: extreme
+#               cases). Training sits inside test, and test inside stress.
+#               Each world picks one value inside the range for its kind.
+#   reason      one sentence on why the range looks the way it does.
+#
+# NPCI is the body that runs UPI.
+#
 # Checked by: python -m core.config_validator config/failure_realism.yaml
+# =====================================================================
 
 parameters:
+  # ---- System-wide incidents (NPCI) ----
+
+  # How many times per 30 days the whole system has a bad spell. The count
+  # is scaled to the length of the run. Example: training [0, 2] means 0 to 2
+  # incidents in 30 days, so a 61-day world has about 0 to 4.
   npci_incident_count_per_30_days:
     label: assumption
     unit: incidents per 30 days
@@ -14,6 +56,8 @@ parameters:
     stress: [0, 6]
     reason: "Assumption; no annual count published."
 
+  # How long one such bad spell lasts. Example: training [95, 180] means
+  # between about 1.5 and 3 hours.
   npci_incident_duration_minutes:
     label: assumption
     unit: minutes
@@ -22,6 +66,8 @@ parameters:
     stress: [30, 600]
     reason: "The only verified figures are 95 minutes of unscheduled downtime in March 2025 (a monthly total, not one incident) and about five hours below 80% success on 12 April 2025 (Economic Times, 2025-04-16); the 95-180 range is an assumption."
 
+  # The share of payments that still go through during such a spell.
+  # Example: training [0.5, 0.8] means 50 to 80 payments in every 100 succeed.
   npci_incident_success_rate:
     label: assumption
     unit: fraction succeeding
@@ -30,6 +76,11 @@ parameters:
     stress: [0.0, 0.95]
     reason: "Economic Times reported below 80% for about five hours; a Rediff report quoted an unnamed source at 50-60%; neither is an NPCI incident record; the range is an assumption."
 
+  # ---- One bank down ----
+
+  # How many downtimes each bank has per 30 days; every bank draws its own
+  # count, scaled to the length of the run. Example: training [1, 6] means 1
+  # to 6 downtimes per bank in 30 days.
   bank_downtime_count_per_bank_per_30_days:
     label: assumption
     unit: downtimes per bank/30d
@@ -38,6 +89,8 @@ parameters:
     stress: [0, 20]
     reason: "The 31 downtimes in May 2024 covered all banks together; this per-bank range is an assumption."
 
+  # How long one bank downtime lasts. Example: training [60, 120] means 1 to
+  # 2 hours.
   bank_downtime_duration_minutes:
     label: reported
     unit: minutes
@@ -49,6 +102,9 @@ parameters:
       date: "2024-06-08"
     reason: "Secondary source quoting NPCI data; 31 downtime instances from various banks totalling more than 47 hours in May 2024; 47 hours over 31 instances is about 91 minutes each (a derived figure, our arithmetic); the range is our choice around it."
 
+  # The share of payments touching that bank (as sender or receiver) that
+  # still go through while it is down. Example: training [0.2, 0.7] means 20
+  # to 70 in every 100 succeed.
   bank_downtime_success_rate:
     label: assumption
     unit: fraction succeeding
@@ -57,6 +113,12 @@ parameters:
     stress: [0.0, 0.95]
     reason: "No published rate for single-bank downtime; assumption."
 
+  # ---- Everyday failures, outside any incident ----
+  # The three rates below are chances for one payment. A wrong PIN is tested
+  # first, then a network failure, then a technical decline.
+
+  # The share of payments declined for technical reasons. Example: training
+  # [0.007, 0.008] means 7 to 8 payments in every 1,000.
   technical_decline_rate:
     label: reported
     unit: fraction of payments
@@ -68,6 +130,8 @@ parameters:
       date: "2024-11-20"
     reason: "Secondary source quoting NPCI's chief executive, technical decline rate 0.7-0.8 per cent; test and stress widths are our choices."
 
+  # The share of payments that fail because the customer typed a wrong PIN.
+  # Example: training [0.002, 0.01] means 2 to 10 in every 1,000.
   customer_wrong_pin_rate:
     label: assumption
     unit: fraction of payments
@@ -76,6 +140,8 @@ parameters:
     stress: [0.0005, 0.05]
     reason: "Sources say most failures are business-related and total declines are typically under 1 per cent, but give no wrong-PIN or network split; assumptions."
 
+  # The share of payments that fail because the app or the phone network
+  # drops. Example: training [0.001, 0.006] means 1 to 6 in every 1,000.
   app_network_failure_rate:
     label: assumption
     unit: fraction of payments
