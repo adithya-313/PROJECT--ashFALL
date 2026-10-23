@@ -1,0 +1,100 @@
+# =====================================================================
+# LABELS: how complaints about payments are made in the simulated world
+# =====================================================================
+#
+# What this file is
+#   After a world finishes, some payments get complaints. A real victim
+#   complains about money a scammer took (a "true" complaint); sometimes an
+#   ordinary payer complains about an ordinary payment (a "false" one).
+#   This file says where the numbers for that come from. Most numbers live in
+#   config/world_ranges.yaml and are only named here.
+#
+# Who reads it
+#   world/label_records.py, world/complaints.py and world/label_builder.py.
+#   Labels are made after the run, so this file never changes a run id.
+#
+# How to read each block
+#   world_ranges_reference: X  -> the range is the entry called X in
+#                              config/world_ranges.yaml, read from the run's
+#                              own (possibly stress-layered) copy.
+#   unit                       -> minutes or days, as in world_ranges.yaml.
+#   label: policy              -> our own design choice.
+#
+# Where the full reasoning lives
+#   docs/research/amendments.md, A-020.
+# =====================================================================
+
+labels:
+  label: policy
+  reason: "Configuration for complaints as label events per amendment A-020."
+  issue_ids_v2: [L1, L2, A3, G6, X8]
+  derived_from: "amendment A-020"
+
+  # ---------------------------------------------------------------------
+  # complaint_delay_by_scam_type: how late a complaint arrives
+  #
+  # The idea
+  #   Each complaint draws its own delay, in whole minutes, anywhere inside
+  #   the split's range for its scam type. Day ranges become minutes first
+  #   (1 day = 1440 minutes). The delay counts from the victim's last
+  #   successful payment to the mule.
+  #
+  # Example
+  #   An investment victim whose last payment was at minute 10,000 and who
+  #   drew 5 days (7,200 minutes) complains at minute 17,200.
+  # ---------------------------------------------------------------------
+  complaint_delay_by_scam_type:
+    investment:
+      world_ranges_reference: complaint_delay_investment_scam_days
+      unit: days
+    job:
+      world_ranges_reference: complaint_delay_job_scam_days
+      unit: days
+    unauthorised_debit:
+      world_ranges_reference: complaint_delay_unauthorised_debit_minutes
+      unit: minutes
+    reason: "One delay range per scam type (issue L1); the keys must equal the scam types the planner can draw."
+
+  # ---------------------------------------------------------------------
+  # victim_complaint_share: how many scammed victims complain at all
+  #
+  # The idea
+  #   Each world draws one share inside the split's range. Each victim then
+  #   complains with that chance. This is separate from how often a bank
+  #   reports a mule to the registry (issue L2, round E-2).
+  # ---------------------------------------------------------------------
+  victim_complaint_share:
+    world_ranges_reference: victim_complaint_share
+    reason: "Share of victims who complain; drawn once per world (issue L2)."
+
+  # ---------------------------------------------------------------------
+  # false complaints: ordinary payments that get a complaint anyway
+  #
+  # The idea
+  #   Each world draws a rate (complaints per 100,000 successful genuine
+  #   payments) and a merchant weight. A payment to a shop is "weight" times
+  #   as likely to get a false complaint as a payment to a person. The
+  #   chances are set so the expected total matches the rate. A false
+  #   complaint claims the account was debited without permission, so it
+  #   uses the unauthorised-debit delay range.
+  # ---------------------------------------------------------------------
+  false_complaint_rate_per_100000:
+    world_ranges_reference: false_complaints_per_100000_genuine_payments
+    reason: "Rate of false complaints (issue A3); drawn once per world."
+  false_complaint_merchant_weight:
+    world_ranges_reference: false_complaint_merchant_weight
+    reason: "How many times more likely a shop payment is to get a false complaint (issue A3); drawn once per world."
+
+  # ---------------------------------------------------------------------
+  # statistical check settings (used by tests and, later, the showcase)
+  #
+  # The idea
+  #   A measured share is accepted when it is within this many standard
+  #   errors of the share that was drawn, and only when at least this many
+  #   cases were measured. With 4 standard errors, an honest check fails by
+  #   chance about once in 15,000 tries; fixed seeds make each run repeat
+  #   exactly anyway.
+  # ---------------------------------------------------------------------
+  rate_check_min_sample: 2000
+  rate_check_standard_errors: 4
+  rate_check_reason: "Tolerance for comparing observed shares and mean delays with configuration (test a); amendment A-020."
