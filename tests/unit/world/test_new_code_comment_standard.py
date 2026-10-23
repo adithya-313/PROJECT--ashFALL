@@ -241,6 +241,10 @@ NEW_CODE_FILES: list[str] = [
     # Level 12f pattern files module and test suite.
     "world/pattern_files.py",
     "tests/unit/world/test_pattern_files.py",
+    # Level 12f tactic plugins module, example plugin and test suite.
+    "world/tactic_plugins.py",
+    "patterns/plugins/cool_off.py",
+    "tests/unit/world/test_tactic_plugins.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [

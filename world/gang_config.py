@@ -26,6 +26,7 @@ from world.tactic_config import (
     get_take_control_devices_range,
     resolve_dividing_line,
 )
+from world.tactic_plugins import get_registered_plugin
 
 
 @dataclass(frozen=True)
@@ -218,13 +219,15 @@ def gang_config_to_plain(config: GangConfig) -> dict[str, Any]:
         plain["start_minute"] = config.start_minute
     if config.family is not None:
         plain["family"] = config.family
-    plain["steps"] = [
-        {
-            "block": step.block,
-            "params": list(step.params),
-        }
-        for step in config.steps
-    ]
+    steps_plain: list[dict[str, Any]] = []
+    for step in config.steps:
+        step_plain: dict[str, Any] = {"block": step.block, "params": list(step.params)}
+        # A plugin step carries its file's hash, so the run id changes when the plugin code changes.
+        loaded_plugin = get_registered_plugin(step.block)
+        if loaded_plugin is not None:
+            step_plain["plugin_sha256"] = loaded_plugin.sha256
+        steps_plain.append(step_plain)
+    plain["steps"] = steps_plain
     return plain
 
 
