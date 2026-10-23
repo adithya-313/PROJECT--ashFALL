@@ -77,8 +77,8 @@ WHAT_YOU_SAW = (
     "bulk confirmations by police crackdowns, and a simulated analyst whose accuracy falls as the queue grows. "
     "Level 12f adds a many-worlds sampler (Latin hypercube blocks per split, disjoint seed blocks, test worlds on the "
     "training ranges as Section 6 requires), a per-world gang mix, pattern files with a budget check and preview, "
-    "local plugins that may only spend time and money, and world invariant checks used by a sweep of 78 generated "
-    "worlds."
+    "local plugins that may only spend time and money, and world invariant checks used by a sweep of 80 generated "
+    "world runs."
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

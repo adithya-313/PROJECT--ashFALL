@@ -285,3 +285,15 @@ No model code exists yet (models start in Level 18; `world/` is simulator code).
 | Why | Counts sized by what each split must show, from measured labels and run time, not by a time budget, and committed before any model exists so they cannot be tuned on results. Section 6 is the design reference for splits and stratification; where frozen config or missing mechanisms stop us following it, the gap is written down here instead of hidden. No model code exists yet for the new engine (models start in Level 18); `models/` and `scripts/fraud_*` hold only v1 PaySim work, excluded by `earlier_work_note`. |
 | Results exist? | No model results. World statistics only (labels, mules, run time), measured to size the splits. |
 
+## A-024
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-10-24 |
+| Issue IDs | None |
+| Issue IDs v2 | 12-18 |
+| Files | `docs/research/amendments.md`, `showcase/level_12.py` |
+| What changed | Correction to A-023 (i), which says "a sweep of 78 generated worlds". The correct count is 80 clean world runs: 70 distinct world plans (training block 0: 40; validation, test and stress: 10 each, stress counted from its rerun after the horizon fix) plus 10 variant runs of the first 5 training worlds (5 with the account market and gang reactions on, 5 with injected liens). None crashed and none had an invariant problem. The counts per split and every other statement in A-023 are unchanged. A-023 is left as written, because amendments are append-only. |
+| Why | Ground rule 1: a wrong number is corrected openly, not silently. The coding agent flagged the mismatch. No model code exists yet for the new engine (models start in Level 18); `models/` and `scripts/fraud_*` hold only v1 PaySim work, excluded by `earlier_work_note`. |
+| Results exist? | No model results. |
+
