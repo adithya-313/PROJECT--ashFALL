@@ -57,9 +57,9 @@ def test_level_12_checks_match_the_brief() -> None:
     # 1. Retrieve checks in quick and full modes and verify length and part sequences.
     quick_checks = level_12.get_checks(quick=True)
     full_checks = level_12.get_checks(quick=False)
-    assert len(quick_checks) == 20
-    assert len(full_checks) == 20
-    assert [check.part for check in quick_checks] == ["a"] * 5 + ["b"] * 5 + ["c"] * 5 + ["d"] * 5
+    assert len(quick_checks) == 24
+    assert len(full_checks) == 24
+    assert [check.part for check in quick_checks] == ["a"] * 5 + ["b"] * 5 + ["c"] * 5 + ["d"] * 5 + ["e"] * 4
 
     # 2. Assert check kinds follow the exact brief sequence for Part A.
     part_a_checks = quick_checks[:5]

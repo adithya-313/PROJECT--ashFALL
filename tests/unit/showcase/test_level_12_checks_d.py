@@ -43,7 +43,7 @@ def test_level_12_part_d_checks_match_the_brief() -> None:
         test_level_12_part_d_checks_match_the_brief()
     """
     all_checks = level_12.get_checks(quick=True)
-    assert len(all_checks) == 20
+    assert len(all_checks) == 24
     part_d_checks = [check for check in all_checks if check.part == "d"]
     assert len(part_d_checks) == 5
     assert [check.kind for check in part_d_checks] == ["edge", "edge", "normal", "edge", "negative"]

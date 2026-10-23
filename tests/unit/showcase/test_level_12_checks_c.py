@@ -44,7 +44,7 @@ def test_level_12_part_c_checks_match_the_brief() -> None:
     """
     # 1. Retrieve all checks from level_12 and filter for Part C.
     all_checks = level_12.get_checks(quick=True)
-    assert len(all_checks) == 20
+    assert len(all_checks) == 24
     part_c_checks = [check for check in all_checks if check.part == "c"]
     assert len(part_c_checks) == 5
 

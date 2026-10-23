@@ -44,9 +44,15 @@ from showcase.level_12_checks_d import (
     run_late_lien_observation_check,
     run_training_world_families_check,
 )
+from showcase.level_12_checks_e import (
+    run_analyst_queue_check,
+    run_bulk_batch_check,
+    run_complaint_delay_by_type_check,
+    run_complaints_against_truth_check,
+)
 
 LEVEL_NUMBER = 12
-LEVEL_TITLE = "World engine II: a world that can react (built: parts 12a-12d of 12a-12g)"
+LEVEL_TITLE = "World engine II: a world that can react (built: parts 12a-12e of 12a-12g)"
 NEEDS_DATABASE = False
 
 WHAT_YOU_SAW = (
@@ -58,7 +64,9 @@ WHAT_YOU_SAW = (
     "rented owner activity, and cash-out channels. "
     "Level 12d adds an account market where gangs buy burned accounts from each other, a delayed lien feed "
     "that gangs react to only after they learn of it, and tactic families that keep held-out tactics out of "
-    "training worlds."
+    "training worlds. "
+    "Level 12e adds labels: complaints about payments that a bank could receive, with delays by scam type, "
+    "bulk confirmations by police crackdowns, and a simulated analyst whose accuracy falls as the queue grows."
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -72,6 +80,8 @@ REQUIRED_FILES = [
     REPO_ROOT / "showcase" / "fixtures" / "level_12" / "gangs_market_two.yaml",
     REPO_ROOT / "showcase" / "fixtures" / "level_12" / "gangs_families_training.yaml",
     REPO_ROOT / "showcase" / "fixtures" / "level_12" / "gang_held_out_in_training.yaml",
+    REPO_ROOT / "showcase" / "fixtures" / "level_12" / "gang_complaints.yaml",
+    REPO_ROOT / "showcase" / "fixtures" / "level_12" / "bulk_short_lag.yaml",
 ]
 
 
@@ -361,14 +371,65 @@ def _get_checks_16_to_20() -> list[CheckDefinition]:
     return [check_16, check_17, check_18, check_19, check_20]
 
 
+def _get_checks_21_to_24() -> list[CheckDefinition]:
+    """
+    WHAT: Constructs check definition descriptors for Level 12e checks 21 through 24.
+    It builds CheckDefinition objects for complaints judged against the truth, complaint delays by scam type, the
+    analyst's accuracy against queue load, and one late bulk-label batch for a region.
+
+    WHY: Decomposing check construction into modular subroutines keeps all functions under 30 code lines.
+    Separates the label and analyst checks of part e into a focused builder.
+
+    Returns:
+        List of CheckDefinition containers representing checks 21 through 24.
+
+    Example:
+        checks = _get_checks_21_to_24(); assert len(checks) == 4
+    """
+    check_21 = CheckDefinition(
+        "21. complaints arriving against the truth", "normal",
+        "Complaints in a scam world name only successful victim payments of the complainant, never a payout back, "
+        "and the share of victims who complain follows the share the world drew.",
+        run_complaints_against_truth_check,
+        "Label building named a failed payment, a payout back or another account, or the complaint share drifted.",
+        "world/label_builder.py, world/complaints.py, showcase/fixtures/level_12/gang_complaints.yaml", part="e",
+    )
+    check_22 = CheckDefinition(
+        "22. complaint delay by scam type", "edge",
+        "Complaint delays stay inside each scam type's range and investment complaints come later than debit "
+        "complaints. The inputs are synthetic: 1,000 made-up victim losses per scam type, run through the real "
+        "planner.",
+        run_complaint_delay_by_type_check,
+        "Delay bounds were read from the wrong entry, converted wrongly from days, or drawn outside the range.",
+        "world/complaints.py, world/label_records.py, config/labels.yaml", part="e",
+    )
+    check_23 = CheckDefinition(
+        "23. analyst accuracy falls as the queue grows", "edge",
+        "The simulated analyst's accuracy never rises with queue load and is lower at load 6 than at load 1, "
+        "and measured accuracy matches the formula.",
+        run_analyst_queue_check,
+        "The overload term was dropped or the accuracy formula drifted from amendment A-022.",
+        "world/analyst.py, config/analyst.yaml", part="e",
+    )
+    check_24 = CheckDefinition(
+        "24. a bulk-label batch arrives late for one region", "edge",
+        "A crackdown batch confirms only mule-side accounts of one region, within the lag bounds, after the last "
+        "fraud payment it covers. The fixture values are labelled, not a real range.",
+        run_bulk_batch_check,
+        "Bulk planning ignored the region or cut-off, or the lag or arrival drifted from the fixture bounds.",
+        "world/bulk_confirmations.py, showcase/fixtures/level_12/bulk_short_lag.yaml", part="e",
+    )
+    return [check_21, check_22, check_23, check_24]
+
+
 def get_checks(quick: bool = False) -> list[CheckDefinition]:
     """
-    WHAT: Constructs the ordered sequence of 20 Level 12 showcase verification checks (Parts 12a to 12d).
-    All checks span consistency, normal, edge, and negative check kinds across parts 'a', 'b', and 'c'.
+    WHAT: Constructs the ordered sequence of 24 Level 12 showcase verification checks (Parts 12a to 12e).
+    All checks span consistency, normal, edge, and negative check kinds across parts 'a' to 'e'.
 
     WHY: Supplies the showcase execution engine with the authoritative test suite for Level 12.
     Enforces required coverage distribution across normal, edge, and negative categories while
-    tagging each check with part='a', 'b', 'c' or 'd' for selective execution.
+    tagging each check with part='a', 'b', 'c', 'd' or 'e' for selective execution.
 
     Args:
         quick: Boolean flag indicating whether quick execution mode is requested.
@@ -377,7 +438,7 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
         List of CheckDefinition instances configuring Level 12 showcase evaluations.
 
     Example:
-        checks = get_checks(quick=True); assert len(checks) == 20
+        checks = get_checks(quick=True); assert len(checks) == 24
     """
     # Concatenate checks from helper builders to construct complete Level 12 suite.
     checks: list[CheckDefinition] = []
@@ -388,6 +449,7 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
     checks.extend(_get_checks_11_to_13())
     checks.extend(_get_checks_14_to_15())
     checks.extend(_get_checks_16_to_20())
+    checks.extend(_get_checks_21_to_24())
     return checks
 
 
