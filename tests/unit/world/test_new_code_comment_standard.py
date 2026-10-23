@@ -245,6 +245,8 @@ NEW_CODE_FILES: list[str] = [
     "world/tactic_plugins.py",
     "patterns/plugins/cool_off.py",
     "tests/unit/world/test_tactic_plugins.py",
+    # Level 12f world split versus range column guard test suite.
+    "tests/unit/world/test_world_split_guard.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [

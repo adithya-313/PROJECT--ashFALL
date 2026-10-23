@@ -22,8 +22,8 @@ from core.config_validator import load_yaml
 from world.fast_mode import event_lines
 from world.gang_config import GangConfig, gang_config_from_plain
 from world.interactive_loop import build_component_streams
-from world.interactive_records import InteractiveWorldOutput
-from world.interactive_runner import interactive_fast_output
+from world.interactive_records import InteractiveWorldOutput, RunnerSettings
+from world.interactive_runner import effective_config_for, interactive_fast_output
 from world.label_records import draw_label_world_settings, load_labels_config
 from world.registry_reports import draw_bank_registry_report_share
 from world.run_identity import load_runner_config
@@ -173,6 +173,20 @@ def test_validation_spec_gets_the_training_range_name(cfg: dict[str, Any], base:
     settings = fast_settings_for(validation, PRESET)
     assert settings.range_name == "training"
     assert settings.seed == validation.seed
+
+
+def test_test_spec_reads_training_and_records_its_split(cfg: dict[str, Any], base: WorldConfigs) -> None:
+    """A planned test spec gets range_name 'training', and the effective config records world_split 'test'."""
+    test_spec = sample_worlds("test", 1, SAMPLER_SEED, cfg, base.world_ranges)[0]
+    settings = fast_settings_for(test_spec, PRESET)
+    assert settings.range_name == "training"
+    # The same arguments run_sampled_world hands to run_interactive_world, without running a second world.
+    recorded = effective_config_for(
+        settings, pinned_configs(test_spec, cfg, base), (_gang(),),
+        runner_settings=RunnerSettings(fraud_enabled=True), world_split=test_spec.split,
+    )
+    assert recorded["world_split"] == "test"
+    assert recorded["settings"]["range_name"] == "training"
 
 
 def test_stale_manifest_is_refused_and_fresh_one_accepted(

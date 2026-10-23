@@ -345,6 +345,7 @@ def effective_config_for(
     account_openings_config: dict[str, Any] | None = None,
     gang_reactions_config: dict[str, Any] | None = None,
     account_market_config: dict[str, Any] | None = None,
+    world_split: str | None = None,
 ) -> dict[str, Any]:
     """
     WHAT: Builds the effective configuration as plain data: the run settings plus the four config dictionaries the
@@ -362,6 +363,8 @@ def effective_config_for(
             and gang_reactions_enabled.
         account_openings_config: Optional account openings configuration dictionary.
         gang_reactions_config: Optional gang reactions configuration dictionary.
+        account_market_config: Optional account market configuration dictionary.
+        world_split: The world's split, written to the result as "world_split" only when it is not None.
 
     Returns:
         {"settings": {...}, "world_configs": {...}} and optionally "gang_configs",
@@ -407,7 +410,27 @@ def effective_config_for(
         validate_account_market_config(market_cfg)
         result["account_market_enabled"] = True
         result["account_market_config"] = market_cfg
+    # Written only when given, like "family", so every run id made without a world_split stays as it was.
+    if world_split is not None:
+        result["world_split"] = world_split
     return result
+
+
+def family_guard_split(world_split: str | None, range_name: str) -> str:
+    """Returns the name the 12d family guard is given: the world's split when one is given, else its range name."""
+    # A world's split decides which tactics it may hold; its range column decides its numbers. Section 6 makes
+    # these differ for test worlds (test split, training column), so the guard gets the split when there is one.
+    return world_split if world_split is not None else range_name
+
+
+def _check_split_and_range(world_split: str, range_name: str) -> None:
+    """Refuses an unknown split, or a split paired with a range column that does not fit it."""
+    if world_split not in ("training", "validation", "test", "stress"):
+        raise ValueError(f"world_split '{world_split}' must be training, validation, test or stress")
+    if world_split in ("training", "validation") and range_name == "stress":
+        raise ValueError(f"world_split '{world_split}' cannot use the stress range column")
+    if world_split == "stress" and range_name == "training":
+        raise ValueError("world_split 'stress' cannot use the training range column")
 
 
 def _apply_gang_configs(
@@ -550,6 +573,8 @@ def run_interactive_world(
     account_openings_config: dict[str, Any] | None = None,
     gang_reactions_config: dict[str, Any] | None = None,
     account_market_config: dict[str, Any] | None = None,
+    *,
+    world_split: str | None = None,
 ) -> InteractiveWorldOutput:
     """
     WHAT: Builds and runs a whole world: prepares it as Level 11 does, names the run (seed, effective configuration,
@@ -570,14 +595,22 @@ def run_interactive_world(
         account_openings_config: Optional account openings configuration dictionary.
         gang_reactions_config: Optional gang reactions configuration dictionary.
         account_market_config: Optional account market configuration dictionary.
+        world_split: The split the world belongs to (training, validation, test or stress), or None to use
+            fast_settings.range_name for both jobs as before. Recorded in the effective configuration only when given.
 
     Returns:
         The InteractiveWorldOutput.
+
+    Raises:
+        ValueError: For an unknown world_split, or a split paired with the wrong range column (training or validation
+            with stress, stress with training).
 
     Example:
         run_interactive_world(FastRunSettings(101, 60, 12, 61, "training"), code_version="d41b176") gives 2,915
         events whose event lines hash to 24fc0e25009d7946...
     """
+    if world_split is not None:
+        _check_split_and_range(world_split, fast_settings.range_name)
     if not runner_settings.fraud_enabled and runner_settings.account_openings_enabled:
         raise ValueError("account openings need fraud_enabled=True")
     if not runner_settings.fraud_enabled and runner_settings.gang_reactions_enabled:
@@ -592,13 +625,16 @@ def run_interactive_world(
         families = load_tactic_families()
         eval_cfg = load_evaluation_config()
         check_family_lists_agree(families, eval_cfg)
-        validate_gang_families(gang_configs, fast_settings.range_name, families=families)
+        validate_gang_families(
+            gang_configs, family_guard_split(world_split, fast_settings.range_name), families=families
+        )
     runner_config = load_runner_config()
     effective_config = effective_config_for(
         fast_settings, configs, gang_configs,
         runner_settings=runner_settings, account_openings_config=account_openings_config,
         gang_reactions_config=gang_reactions_config,
         account_market_config=account_market_config,
+        world_split=world_split,
     )
     version = code_version if code_version is not None else find_code_version(
         os.environ, REPO_ROOT, runner_config["code_version_git_timeout_seconds"]

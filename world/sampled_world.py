@@ -176,4 +176,5 @@ def run_sampled_world(
         configs=pinned_configs(spec, sampler_cfg),
         gang_configs=gang_configs,
         code_version=code_version,
+        world_split=spec.split,
     )

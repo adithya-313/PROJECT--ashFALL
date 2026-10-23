@@ -107,17 +107,33 @@ world_sampler:
   # range_name_for_split: which column of world_ranges.yaml a split reads
   #
   # The idea
-  #   Validation reads the TRAINING range, so tuning never sees values the
-  #   test split is meant to surprise it with (amendment A-015).
+  #   Validation and test both read the TRAINING range, drawn independently
+  #   (their own seeds and streams). Only stress reads a wider range. The
+  #   world_ranges.yaml "test" column is intentionally unused by sampled
+  #   worlds; a world's split (which tactics it may hold) is passed to the
+  #   runner separately from its range column (amendment A-023).
   # ---------------------------------------------------------------------
   range_name_for_split:
     mapping:
       training: training
       validation: training
-      test: test
+      test: training
       stress: stress
     label: policy
-    reason: "Validation uses the training range so it differs from training by seed only (A-015)."
+    reason: "Report Section 6: validation and test use the same ranges as training, drawn independently again; stress uses wider ranges. The yaml test column is intentionally unused by sampled worlds (A-023 records why)."
+
+  # ---------------------------------------------------------------------
+  # block_size: worlds per Latin hypercube block
+  #
+  # The idea
+  #   World k of block b uses seed first_seed + b * block_size + k. Each block
+  #   is its own complete Latin hypercube, so a later level can use 1, 2, 4 ...
+  #   blocks and each one still covers every key range.
+  # ---------------------------------------------------------------------
+  block_size:
+    value: 40
+    label: policy
+    reason: "Every block is its own complete Latin hypercube, so a later level can use 1, 2, 4 ... blocks; reviewed design, Level 12f."
 
   counts:
     label: policy

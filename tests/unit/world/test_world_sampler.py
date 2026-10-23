@@ -25,6 +25,7 @@ from world.world_sampler import (
     load_sampler_config,
     read_manifest_provenance,
     read_world_manifest,
+    sample_block,
     sample_worlds,
     validate_sampler_config,
     write_world_manifest,
@@ -77,7 +78,7 @@ def test_values_sit_inside_the_splits_own_range() -> None:
     """Sampled key values stay inside the range column the split reads; validation reads training."""
     cfg = _cfg()
     ranges = _ranges()
-    mapping = {"training": "training", "validation": "training", "test": "test", "stress": "stress"}
+    mapping = {"training": "training", "validation": "training", "test": "training", "stress": "stress"}
     for split in SPLITS:
         for spec in sample_worlds(split, 30, 11, cfg, ranges):
             assert spec.range_name == mapping[split]
@@ -93,16 +94,69 @@ def test_integer_parameter_is_a_whole_number() -> None:
         assert isinstance(values["number_of_regions"], int)
 
 
-def test_test_split_can_leave_the_training_range() -> None:
-    """The test range is wider than training, so at least one of 50 worlds should fall outside training."""
+def test_test_split_stays_inside_the_training_range() -> None:
+    """Report Section 6: test worlds read the training ranges, so no test key value may leave the training range."""
     cfg = _cfg()
-    outside = 0
     for spec in sample_worlds("test", 50, 13, cfg, _ranges()):
+        assert spec.range_name == "training"
         for name, value in spec.key_values:
             low, high = _range_of(cfg["key_parameters"][name]["world_ranges_reference"], "training")
-            if value < low or value > high:
-                outside += 1
-    assert outside > 0
+            assert low <= value <= high
+
+
+def test_any_split_mapped_to_the_test_column_is_refused() -> None:
+    """Mapping a split to the world_ranges test column must be refused by name, whichever split it is."""
+    cfg = _cfg()
+    cfg["range_name_for_split"]["mapping"]["stress"] = "test"
+    with pytest.raises(ValueError, match="test range column"):
+        validate_sampler_config(cfg, _ranges())
+
+
+def test_block_size_must_fit_in_every_seed_block() -> None:
+    """A block_size below 1 or above a seed block's size must be refused."""
+    cfg = _cfg()
+    cfg["block_size"]["value"] = 0
+    with pytest.raises(ValueError, match="block_size must be at least 1"):
+        validate_sampler_config(cfg, _ranges())
+    cfg["block_size"]["value"] = 10_000_000
+    with pytest.raises(ValueError, match="larger than"):
+        validate_sampler_config(cfg, _ranges())
+
+
+def test_blocks_have_contiguous_disjoint_seeds_and_different_values() -> None:
+    """Blocks 0 and 1 use back-to-back seed runs; their key values differ for one master seed."""
+    cfg = _cfg()
+    ranges = _ranges()
+    size = cfg["block_size"]["value"]
+    first = cfg["seed_blocks"]["validation"]["first_seed"]
+    block0 = sample_block("validation", 0, 5, cfg, ranges)
+    block1 = sample_block("validation", 1, 5, cfg, ranges)
+    assert [spec.seed for spec in block0] == list(range(first, first + size))
+    assert [spec.seed for spec in block1] == list(range(first + size, first + 2 * size))
+    assert block0[3].world_id == "validation-b00-0003"
+    assert {spec.key_values for spec in block0}.isdisjoint({spec.key_values for spec in block1})
+
+
+def test_one_block_is_a_full_latin_hypercube() -> None:
+    """In a block of 40 worlds, each continuous key parameter has exactly one value in each fortieth of its range."""
+    cfg = _cfg()
+    size = cfg["block_size"]["value"]
+    block = sample_block("training", 0, 9, cfg, _ranges())
+    for name in cfg["key_parameters"]:
+        if cfg["key_parameters"][name]["integer"]:
+            continue
+        low, high = _range_of(cfg["key_parameters"][name]["world_ranges_reference"], "training")
+        strata = sorted(int((dict(spec.key_values)[name] - low) / (high - low) * size) for spec in block)
+        assert strata == list(range(size))
+
+
+def test_block_past_the_seed_block_is_refused() -> None:
+    """A block number whose last seed passes the split's last seed must be refused."""
+    cfg = _cfg()
+    block = cfg["seed_blocks"]["stress"]
+    last_block = (block["last_seed"] - block["first_seed"] + 1) // cfg["block_size"]["value"]
+    with pytest.raises(ValueError, match="past the split's last seed"):
+        sample_block("stress", last_block, 1, cfg, _ranges())
 
 
 def test_seeds_are_disjoint_and_never_reserved() -> None:

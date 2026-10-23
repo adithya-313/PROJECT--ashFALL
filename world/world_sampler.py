@@ -14,6 +14,7 @@ TERM: seed block: a fixed run of integer seeds owned by one split, so no two spl
 TERM: manifest: the JSON file listing every planned world of one split.
 """
 
+import dataclasses
 import hashlib
 import json
 from dataclasses import dataclass
@@ -88,6 +89,16 @@ def _check_splits_and_mapping(cfg: dict[str, Any]) -> None:
             raise ValueError(f"split '{split}' needs both a seed block and a range mapping")
     if mapping["validation"] != "training":
         raise ValueError("validation must map to the training range (amendment A-015)")
+    for split, range_name in mapping.items():
+        # Section 6: sampled worlds draw only from the training or stress column; the test column stays unused.
+        if range_name == "test":
+            raise ValueError(f"split '{split}' is mapped to the test range column, which no sampled world may read")
+    size = int(cfg["block_size"]["value"])
+    if size < 1:
+        raise ValueError(f"block_size must be at least 1, got {size}")
+    for split, block in cfg["seed_blocks"].items():
+        if size > int(block["last_seed"]) - int(block["first_seed"]) + 1:
+            raise ValueError(f"block_size {size} is larger than the '{split}' seed block")
 
 
 def _check_parameters(cfg: dict[str, Any], world_ranges: dict[str, Any]) -> None:
@@ -125,8 +136,8 @@ def _check_seed_blocks(cfg: dict[str, Any]) -> None:
 def validate_sampler_config(cfg: dict[str, Any], world_ranges: dict[str, Any]) -> None:
     """
     WHAT: Checks the sampler config against world_ranges.yaml and refuses it with a plain reason: unknown
-    parameter, unknown split, validation not mapped to training, overlapping seed blocks, or a reserved seed
-    inside a block.
+    parameter, unknown split, validation not mapped to training, any split mapped to the test column, a bad
+    block_size, overlapping seed blocks, or a reserved seed inside a block.
 
     WHY: A bad block would silently let a validation world share a seed with a training world, and nothing
     downstream would notice; refusing early is cheaper than a leaked evaluation.
@@ -216,7 +227,8 @@ def sample_worlds(
     same plan, so a manifest can be rebuilt instead of trusted. Each split gets its own stream from the one master
     seed, built from [sampler_seed, split_number]: validation reads the same range as training, so a shared stream
     would give both splits the same key values. The order of EXPECTED_SPLITS is part of the plan, so reordering it
-    changes every manifest.
+    changes every manifest. Its seeds and streams are kept as they were; new code should use sample_block, whose
+    blocks are each a complete Latin hypercube.
 
     Args:
         split: training, validation, test or stress.
@@ -247,6 +259,50 @@ def sample_worlds(
     specs: list[WorldSpec] = []
     for index in range(count):
         specs.append(_make_spec(split, index, first + index, range_name, cfg, world_ranges, points[index]))
+    return specs
+
+
+def sample_block(
+    split: str, block_number: int, sampler_seed: int, cfg: dict[str, Any], world_ranges: dict[str, Any]
+) -> list[WorldSpec]:
+    """
+    WHAT: Plans one block of block_size worlds for a split. Block b uses seeds first_seed + b * block_size + i, its own
+    Latin hypercube stream SeedSequence([sampler_seed, split_number, b]), and world ids like "validation-b01-0003".
+
+    WHY: Every block is a complete Latin hypercube by itself, so a later level can use 1, 2, 4 ... blocks and still
+    cover each key parameter's whole range. Blocks use different streams, so two blocks do not repeat key values.
+
+    Args:
+        split: training, validation, test or stress.
+        block_number: Zero-based block index.
+        sampler_seed: Master seed for the hypercube streams (not a world seed).
+        cfg: The world_sampler dictionary.
+        world_ranges: The dictionary read from config/world_ranges.yaml.
+
+    Returns:
+        block_size WorldSpec records in seed order.
+
+    Raises:
+        ValueError: If the split is unknown, block_number is negative, or the block's last seed passes the split's.
+    """
+    if split not in cfg["seed_blocks"]:
+        raise ValueError(f"unknown split '{split}'")
+    if block_number < 0:
+        raise ValueError(f"block_number must be at least 0, got {block_number}")
+    size = int(cfg["block_size"]["value"])
+    seed_block = cfg["seed_blocks"][split]
+    block_first = int(seed_block["first_seed"]) + block_number * size
+    block_last = block_first + size - 1
+    if block_last > int(seed_block["last_seed"]):
+        raise ValueError(f"block {block_number} of '{split}' ends at seed {block_last}, past the split's last seed")
+    range_name = cfg["range_name_for_split"]["mapping"][split]
+    split_number = EXPECTED_SPLITS.index(split)
+    rng = np.random.default_rng(np.random.SeedSequence([sampler_seed, split_number, block_number]))
+    points = latin_hypercube(size, len(cfg["key_parameters"]), rng)
+    specs: list[WorldSpec] = []
+    for index in range(size):
+        spec = _make_spec(split, index, block_first + index, range_name, cfg, world_ranges, points[index])
+        specs.append(dataclasses.replace(spec, world_id=f"{split}-b{block_number:02d}-{index:04d}"))
     return specs
 
 
