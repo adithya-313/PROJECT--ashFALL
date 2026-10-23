@@ -13,7 +13,7 @@
 #   tiny_world.n_people and expected_invariants.k_sigma.
 #   tests/unit/world/test_frozen_anchors.py reads expected_invariants.events_sha256.
 #   A search of the code found no other reader. Blocks nobody reads are marked
-#   "NOT EXPLAINED IN SOURCE" below.
+#   "Recorded for reference only" below.
 #
 # Words used below
 #   seed        a starting number; the same seed always gives the same world.
@@ -39,8 +39,12 @@
 # What the code reads
 #   Only n_people (60): the festival check uses it to scale up to a bigger
 #   world. The check builds its own tiny world with the same numbers
-#   written in the code. The keys seed, n_shops, n_days and range_name are
-#   NOT EXPLAINED IN SOURCE: nothing reads them.
+#   written in the code.
+#
+#   For seed, n_shops, n_days and range_name:
+#   Recorded for reference only: no code reads this value. The tiny-world
+#   check uses the same value written in showcase/level_11_checks.py.
+#   Level 11 is frozen, so it is kept rather than removed.
 # ---------------------------------------------------------------------
 tiny_world:
   label: policy
@@ -112,9 +116,9 @@ comparison_world:
 # ---------------------------------------------------------------------
 # chart_geometry: sizes and colours for the showcase charts
 #
-# NOT EXPLAINED IN SOURCE: ask the architect. A search found no code that
-#   reads these keys. The reason line below says they match the design
-#   guidelines for the showcase page (index.html).
+# Recorded for reference only: no code reads this block (checked with git
+#   grep). It describes the chart sizes and colours the Level 11 page was
+#   designed with. Level 11 is frozen, so it is kept rather than removed.
 # ---------------------------------------------------------------------
 chart_geometry:
   label: policy
@@ -145,11 +149,11 @@ chart_geometry:
 #   events_sha256  the fingerprint of the tiny world's payment events. A
 #   test checks that it equals the frozen anchor in frozen_anchors.yaml.
 #
-# NOT EXPLAINED IN SOURCE: ask the architect, for amendments_count,
-#   issues_built, issues_planned, issues_deferred, grounding_total,
-#   grounding_assumptions and grounding_reported. A search found no code
-#   that reads them. (The 28/2/1 and 33/30/3 counts they repeat are
-#   checked from frozen_anchors.yaml instead.)
+# For amendments_count, issues_built, issues_planned, issues_deferred,
+#   grounding_total, grounding_assumptions and grounding_reported:
+#   Recorded for reference only: no code reads this value. The same number
+#   is checked in config/frozen_anchors.yaml and
+#   tests/unit/world/test_frozen_anchors.py (amendments: Level 11 check 1).
 #
 # Source: showcase/level_11_checks.py (k_sigma);
 #   tests/unit/world/test_frozen_anchors.py (events_sha256).
