@@ -10,6 +10,8 @@ TERM: stratum: one of n equal slices of [0, 1]; an n-point Latin hypercube puts 
 """
 
 import copy
+import functools
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +23,7 @@ from world.world_sampler import (
     check_seeds_disjoint,
     latin_hypercube,
     load_sampler_config,
+    read_manifest_provenance,
     read_world_manifest,
     sample_worlds,
     validate_sampler_config,
@@ -31,21 +34,26 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 SPLITS = ("training", "validation", "test", "stress")
 
 
+SAMPLER_PATH = REPO_ROOT / "config" / "world_sampler.yaml"
+RANGES_PATH = REPO_ROOT / "config" / "world_ranges.yaml"
+
+
+@functools.lru_cache(maxsize=None)
 def _yaml_file(name: str) -> dict[str, Any]:
-    """Reads a config file straight with yaml so the expected answers do not pass through the code under test."""
+    """Reads a config file once per module with yaml, so expected answers do not pass through the code under test."""
     with open(REPO_ROOT / "config" / name, encoding="utf-8") as handle:
         data: dict[str, Any] = yaml.safe_load(handle)
     return data
 
 
 def _cfg() -> dict[str, Any]:
-    """Returns a fresh copy of the world_sampler block read directly from the YAML file."""
+    """Returns a fresh deep copy of the cached world_sampler block, so a test may change it freely."""
     block: dict[str, Any] = copy.deepcopy(_yaml_file("world_sampler.yaml")["world_sampler"])
     return block
 
 
 def _ranges() -> dict[str, Any]:
-    """Returns the world_ranges.yaml contents read directly from the YAML file."""
+    """Returns the cached world_ranges.yaml contents; tests only read it and never change it."""
     return _yaml_file("world_ranges.yaml")
 
 
@@ -181,9 +189,9 @@ def test_same_sampler_seed_gives_identical_manifest_bytes(tmp_path: Path) -> Non
     first = tmp_path / "first.json"
     second = tmp_path / "second.json"
     other = tmp_path / "other.json"
-    write_world_manifest(sample_worlds("validation", 12, 99, cfg, ranges), first)
-    write_world_manifest(sample_worlds("validation", 12, 99, cfg, ranges), second)
-    write_world_manifest(sample_worlds("validation", 12, 100, cfg, ranges), other)
+    write_world_manifest(sample_worlds("validation", 12, 99, cfg, ranges), first, 99, SAMPLER_PATH, RANGES_PATH)
+    write_world_manifest(sample_worlds("validation", 12, 99, cfg, ranges), second, 99, SAMPLER_PATH, RANGES_PATH)
+    write_world_manifest(sample_worlds("validation", 12, 100, cfg, ranges), other, 100, SAMPLER_PATH, RANGES_PATH)
     assert first.read_bytes() == second.read_bytes()
     assert first.read_bytes() != other.read_bytes()
 
@@ -192,5 +200,38 @@ def test_manifest_round_trips_exactly(tmp_path: Path) -> None:
     """Reading a written manifest must give back equal WorldSpec records, int and float types included."""
     specs = sample_worlds("test", 15, 8, _cfg(), _ranges())
     path = tmp_path / "test_manifest.json"
-    write_world_manifest(specs, path)
+    write_world_manifest(specs, path, 8, SAMPLER_PATH, RANGES_PATH)
     assert read_world_manifest(path) == specs
+
+
+def test_manifest_provenance_matches_file_hashes(tmp_path: Path) -> None:
+    """The manifest must carry the sampler seed and the SHA-256 of both config files, computed here with hashlib."""
+    specs = sample_worlds("training", 5, 77, _cfg(), _ranges())
+    path = tmp_path / "provenance.json"
+    write_world_manifest(specs, path, 77, SAMPLER_PATH, RANGES_PATH)
+    provenance = read_manifest_provenance(path)
+    assert provenance["sampler_seed"] == 77
+    assert provenance["sampler_config_sha256"] == hashlib.sha256(SAMPLER_PATH.read_bytes()).hexdigest()
+    assert provenance["world_ranges_sha256"] == hashlib.sha256(RANGES_PATH.read_bytes()).hexdigest()
+
+
+def test_validation_key_values_differ_from_training_for_one_master_seed() -> None:
+    """With one master seed, training and validation must share no key-value tuple (shared-stream regression)."""
+    cfg = _cfg()
+    ranges = _ranges()
+    training = {spec.key_values for spec in sample_worlds("training", 20, 42, cfg, ranges)}
+    validation = {spec.key_values for spec in sample_worlds("validation", 20, 42, cfg, ranges)}
+    assert training.isdisjoint(validation)
+
+
+def test_integer_values_are_uniform() -> None:
+    """With n a multiple of the integer count, every whole number in the training range appears exactly 10 times."""
+    low, high = _range_of("number_of_regions", "training")
+    how_many = int(high) - int(low) + 1
+    specs = sample_worlds("training", 10 * how_many, 5, _cfg(), _ranges())
+    counts: dict[int, int] = {}
+    for spec in specs:
+        value = int(dict(spec.key_values)["number_of_regions"])
+        counts[value] = counts.get(value, 0) + 1
+    expected = {number: 10 for number in range(int(low), int(high) + 1)}
+    assert counts == expected

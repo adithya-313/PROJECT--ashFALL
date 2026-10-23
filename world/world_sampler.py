@@ -14,6 +14,7 @@ TERM: seed block: a fixed run of integer seeds owned by one split, so no two spl
 TERM: manifest: the JSON file listing every planned world of one split.
 """
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -176,11 +177,16 @@ def latin_hypercube(n: int, dims: int, rng: np.random.Generator) -> list[list[fl
 
 def _map_to_range(unit: float, low: float, high: float, is_integer: bool) -> float | int:
     """Maps a value in [0, 1) onto [low, high]; integers are rounded and kept inside the range."""
-    value = low + unit * (high - low)
     if not is_integer:
-        return float(value)
-    rounded = int(round(value))
-    return max(int(low), min(int(high), rounded))
+        return float(low + unit * (high - low))
+    low_int = int(low)
+    high_int = int(high)
+    how_many = high_int - low_int + 1
+    # Rounding gave the two end values half the weight of the others; flooring over the integer count is
+    # uniform, and with n a multiple of how_many every integer gets exactly n / how_many worlds.
+    value = low_int + int(unit * how_many)
+    # unit < 1 already keeps the value at or below high_int; the clamp is a guard against float edge cases.
+    return min(value, high_int)
 
 
 def _make_spec(
@@ -207,12 +213,15 @@ def sample_worlds(
     column the split reads (validation reads training); world k gets seed block_start + k.
 
     WHY: One call per split with its own seed block keeps splits apart, and the same sampler_seed always gives the
-    same plan, so a manifest can be rebuilt instead of trusted.
+    same plan, so a manifest can be rebuilt instead of trusted. Each split gets its own stream from the one master
+    seed, built from [sampler_seed, split_number]: validation reads the same range as training, so a shared stream
+    would give both splits the same key values. The order of EXPECTED_SPLITS is part of the plan, so reordering it
+    changes every manifest.
 
     Args:
         split: training, validation, test or stress.
         count: Number of worlds; must fit inside the split's seed block.
-        sampler_seed: Seed for the hypercube's generator (not a world seed).
+        sampler_seed: Master seed for the hypercube streams (not a world seed).
         cfg: The world_sampler dictionary.
         world_ranges: The dictionary read from config/world_ranges.yaml.
 
@@ -232,7 +241,8 @@ def sample_worlds(
     if count > block_size:
         raise ValueError(f"count {count} is larger than the '{split}' seed block of {block_size} seeds")
     range_name = cfg["range_name_for_split"]["mapping"][split]
-    rng = np.random.default_rng(sampler_seed)
+    split_number = EXPECTED_SPLITS.index(split)
+    rng = np.random.default_rng(np.random.SeedSequence([sampler_seed, split_number]))
     points = latin_hypercube(count, len(cfg["key_parameters"]), rng)
     specs: list[WorldSpec] = []
     for index in range(count):
@@ -267,17 +277,34 @@ def check_seeds_disjoint(
             owner[spec.seed] = split
 
 
-def write_world_manifest(specs: Sequence[WorldSpec], path: Path | str) -> None:
+def _file_sha256(path: Path | str) -> str:
+    """Returns the hex SHA-256 of a file's raw bytes, so a manifest can name the exact inputs it came from."""
+    with open(path, "rb") as handle:
+        return hashlib.sha256(handle.read()).hexdigest()
+
+
+def write_world_manifest(
+    specs: Sequence[WorldSpec],
+    path: Path | str,
+    sampler_seed: int,
+    sampler_config_path: Path | str,
+    world_ranges_path: Path | str,
+) -> None:
     """
     WHAT: Writes the planned worlds of one split to a JSON file with sorted keys, indented, with a final newline.
-    Line endings are always "\\n".
+    Line endings are always "\\n". The file also records the sampler seed and the SHA-256 of the sampler config and
+    of world_ranges.yaml, as top-level keys sampler_seed, sampler_config_sha256 and world_ranges_sha256.
 
     WHY: Sorted keys and fixed line endings make the same plan produce the same bytes on any machine, so two
-    manifests can be compared as files.
+    manifests can be compared as files. The seed and hashes show which inputs a plan came from, so a manifest
+    that no longer matches its configs can be spotted.
 
     Args:
         specs: Planned worlds; all must belong to the same split.
         path: Destination file.
+        sampler_seed: The master seed given to sample_worlds.
+        sampler_config_path: The world_sampler.yaml file the plan was made from.
+        world_ranges_path: The world_ranges.yaml file the plan was made from.
 
     Raises:
         ValueError: If specs is empty or mixes splits.
@@ -294,9 +321,39 @@ def write_world_manifest(specs: Sequence[WorldSpec], path: Path | str) -> None:
             "world_id": spec.world_id, "split": spec.split, "seed": spec.seed,
             "range_name": spec.range_name, "key_values": pairs,
         })
-    text = json.dumps({"split": split, "worlds": worlds}, sort_keys=True, indent=2) + "\n"
+    document = {
+        "split": split,
+        "worlds": worlds,
+        "sampler_seed": sampler_seed,
+        "sampler_config_sha256": _file_sha256(sampler_config_path),
+        "world_ranges_sha256": _file_sha256(world_ranges_path),
+    }
+    text = json.dumps(document, sort_keys=True, indent=2) + "\n"
     with open(path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(text)
+
+
+def read_manifest_provenance(path: Path | str) -> dict[str, Any]:
+    """
+    WHAT: Reads only the provenance keys of a manifest: sampler_seed, sampler_config_sha256 and
+    world_ranges_sha256.
+
+    WHY: A caller can compare these hashes with the current config files to learn whether the manifest is stale,
+    without loading the worlds.
+
+    Args:
+        path: Manifest file written by write_world_manifest.
+
+    Returns:
+        A dictionary with the three provenance keys.
+    """
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+    keys = ("sampler_seed", "sampler_config_sha256", "world_ranges_sha256")
+    provenance: dict[str, Any] = {}
+    for key in keys:
+        provenance[key] = data[key]
+    return provenance
 
 
 def read_world_manifest(path: Path | str) -> list[WorldSpec]:
