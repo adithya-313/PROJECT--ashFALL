@@ -203,6 +203,10 @@ NEW_CODE_FILES: list[str] = [
     # Level 12d tactic family guard and test suite.
     "world/tactic_families.py",
     "tests/unit/world/test_tactic_family_guard.py",
+    # Level 12d showcase part d support, checks and test suite.
+    "showcase/level_12_support_d.py",
+    "showcase/level_12_checks_d.py",
+    "tests/unit/showcase/test_level_12_checks_d.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [

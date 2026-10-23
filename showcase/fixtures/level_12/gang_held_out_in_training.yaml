@@ -1,0 +1,29 @@
+# Configuration fixture for Level 12 Showcase Part D check 20 (a held-out family in a training world).
+#
+# TERM: held-out family = a family that appears ONLY in test and stress worlds; config/evaluation.yaml owns the list.
+# TERM: training world = a world drawn from the training ranges; validation worlds use them too.
+#
+# This gang names a held-out family on purpose. The check runs it in a training world and expects a refusal
+# before any planning happens.
+
+gang:
+  gang_id: gang_held_out
+  strength: 1
+  family: slow_drip
+  budget:
+    money_paise: 50000000
+    time_minutes: 500000
+    max_risk: 0.99
+  start_minute: 1440
+  steps:
+    - block: acquire
+      params:
+        count: 4
+        origin_mix: all_rented
+    - block: scam
+      params:
+        receiving_mules: 2
+    - block: route
+      params:
+        layers: 1
+        accounts_per_layer: 2
