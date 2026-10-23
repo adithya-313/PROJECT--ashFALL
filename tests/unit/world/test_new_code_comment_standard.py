@@ -215,6 +215,9 @@ NEW_CODE_FILES: list[str] = [
     "world/label_records.py",
     "world/complaints.py",
     "tests/unit/world/test_complaints.py",
+    # Level 12e label builder and test suite.
+    "world/label_builder.py",
+    "tests/unit/world/test_label_builder.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
