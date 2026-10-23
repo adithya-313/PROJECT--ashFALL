@@ -216,6 +216,26 @@ world_sampler:
     label: policy
     reason: "a world must be at least as long as the longest thing a range lets happen in it; derived from config, never a fixed number"
 
+  # ---------------------------------------------------------------------
+  # counts: how many worlds each split has, committed in amendment A-023
+  #
+  # The idea
+  #   Every split is made of blocks of block_size worlds (40), each block its
+  #   own Latin hypercube. Nothing in the code reads these numbers yet:
+  #   validate_sampler_config does not check them, so a later level that
+  #   uses them must check them first.
+  # ---------------------------------------------------------------------
   counts:
+    worlds:
+      training: 320
+      validation: 120
+      test: 120
+      stress: 120
+    blocks_per_split:
+      training: 8
+      validation: 3
+      test: 3
+      stress: 3
+    derived_from: "amendment A-023"
     label: policy
-    reason: "not decided; committed by a later amendment from measured run time (12-18)"
+    reason: "Sized from measurement, not a time budget (A-023 (a)): a 61-day world yields about 5 true complaints and 20 true mules, 4 workers give about 3 times the serial speed, and the whole set takes about 1.9 hours; validation is 120 because labels are scarce, test and stress are 120 so the spread across worlds rests on more than a handful of worlds."

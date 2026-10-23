@@ -24,9 +24,9 @@
 
 gang_mix:
   label: policy
-  reason: "Configuration for the per-world gang mix (Level 12f task 9)."
+  reason: "Configuration for the per-world gang mix (Level 12f task 1 (many-worlds sampler))."
   issue_ids_v2: [12-14, 12-18]
-  derived_from: "Level 12f task 9; amendment A-023"
+  derived_from: "Level 12f task 1 (many-worlds sampler); amendment A-023"
 
   # ---------------------------------------------------------------------
   # spread_share_of_range: how far a gang may stray from the world's centre
@@ -56,7 +56,7 @@ gang_mix:
     time_minutes: 2000000
     max_risk: 0.99
     label: assumption
-    reason: "Generous on purpose, about ten times what a generated gang plans to spend, so a budget refusal here means a generator bug and not a tight limit."
+    reason: "Generous on purpose, measured use reached 0.309 of the money budget and 0.017 of the time budget across 10 stress worlds (A-023), so a refusal still means a generator bug."
 
   start_day_range:
     range: [1, 10]
