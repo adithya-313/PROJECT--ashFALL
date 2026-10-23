@@ -27,8 +27,8 @@
 labels:
   label: policy
   reason: "Configuration for complaints as label events per amendment A-020."
-  issue_ids_v2: [L1, L2, A3, G6, X8]
-  derived_from: "amendment A-020"
+  issue_ids_v2: [L1, L2, L5, A3, G6, X8, 12-5, 12-12]
+  derived_from: "amendments A-020 and A-021"
 
   # ---------------------------------------------------------------------
   # complaint_delay_by_scam_type: how late a complaint arrives
@@ -98,3 +98,45 @@ labels:
   rate_check_min_sample: 2000
   rate_check_standard_errors: 4
   rate_check_reason: "Tolerance for comparing observed shares and mean delays with configuration (test a); amendment A-020."
+
+  # ---------------------------------------------------------------------
+  # registry reports: a bank telling the national registry about an account
+  #
+  # The idea
+  #   Until real bank decisions exist (Levels 13 and 22), a bank treats an
+  #   account as "confirmed" when the first complaint about it arrives. Each
+  #   world draws one reporting share; each confirmed account is reported
+  #   with that chance, a while later. A genuine account with a false
+  #   complaint can be reported by mistake; that is the only way a wrong
+  #   registry entry appears.
+  # ---------------------------------------------------------------------
+  bank_registry_report_share:
+    world_ranges_reference: share_reported_to_shared_database
+    reason: "Share of confirmed accounts a bank reports to the registry; drawn once per world (issue L2)."
+  registry_report_delay_minutes:
+    label: assumption
+    unit: minutes
+    training: [60, 1440]
+    test: [30, 4320]
+    stress: [10, 20160]
+    reason: "Time from a bank confirming an account to its registry report. No figure is published; one hour to one day in training, up to two weeks under stress (amendment A-021)."
+
+  # ---------------------------------------------------------------------
+  # bulk confirmations: police crackdowns confirming many mules at once
+  #
+  # The idea
+  #   A crackdown confirms many mule accounts in one region, long after the
+  #   money moved. The number of crackdowns follows a Poisson draw from the
+  #   yearly rate; each one picks a region, a size and a delay.
+  # ---------------------------------------------------------------------
+  bulk_confirmation_events_per_year:
+    world_ranges_reference: bulk_confirmation_events_per_year
+    reason: "Crackdowns per year (issue L5)."
+  bulk_confirmation_size_accounts:
+    world_ranges_reference: bulk_confirmation_size_accounts
+    reason: "Accounts one crackdown tries to confirm (issue L5)."
+  bulk_confirmation_delay_days:
+    world_ranges_reference: bulk_confirmation_delay_days
+    reason: "Days from the crackdown's cut-off to its arrival (issue L5)."
+  mule_side_roles: [mule, collector, cash_out]
+  mule_side_roles_reason: "Truth roles that count as a mule for registry correctness and crackdowns; every name must exist in config/truth_store.yaml roles."
