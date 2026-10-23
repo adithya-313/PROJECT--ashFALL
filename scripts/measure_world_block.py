@@ -36,13 +36,14 @@ sys.path.insert(0, str(REPO_ROOT))
 from world.fast_mode import event_lines  # noqa: E402
 from world.gang_mix import generate_gang_mix, load_gang_mix_config  # noqa: E402
 from world.gang_planner import plan_gang  # noqa: E402
-from world.interactive_records import RunnerSettings  # noqa: E402
+from world.interactive_records import FraudInputs, RunnerSettings  # noqa: E402
 from world.interactive_runner import interactive_fast_output, prepare_world, run_interactive_world  # noqa: E402
 from world.label_builder import build_label_events, build_registry_reports  # noqa: E402
+from world.opening_handles import replay_openings  # noqa: E402
 from world.sampled_world import fast_settings_for, pinned_configs, run_sampled_world  # noqa: E402
 from world.truth_records import SCAM_STEP_VICTIM_PAYMENT  # noqa: E402
 from world.world_configs import read_world_configs  # noqa: E402
-from world.world_invariants import check_world  # noqa: E402
+from world.world_invariants import check_atm_daily_limits, check_world  # noqa: E402
 from world.world_sampler import WorldSpec, load_sampler_config, sample_block  # noqa: E402
 
 CODE_VERSION: str = "measure-world-block"
@@ -50,23 +51,29 @@ COLUMNS: tuple[str, ...] = (
     "world_id", "seed", "gang_count", "seconds_total", "seconds_planning_all_gangs", "seconds_planning_per_gang",
     "events", "payments_success", "true_complaints", "false_complaints", "registry_reports", "mule_accounts",
     "victims", "budget_money_used_share_max", "budget_time_used_share_max", "invariant_problems",
-    "event_lines_sha256", "run_label",
+    "atm_checked", "atm_skipped", "liens_injected", "liens_on_gang_opened", "gang_observed_lien_count",
+    "payments_blocked_funds_on_hold", "lien_note", "event_lines_sha256", "run_label",
 )
 NUMERIC_COLUMNS: tuple[str, ...] = (
     "gang_count", "seconds_total", "seconds_planning_all_gangs", "events", "payments_success", "true_complaints",
     "false_complaints", "registry_reports", "mule_accounts", "victims", "budget_money_used_share_max",
-    "budget_time_used_share_max", "invariant_problems",
+    "budget_time_used_share_max", "invariant_problems", "atm_checked", "atm_skipped", "liens_injected",
+    "liens_on_gang_opened", "gang_observed_lien_count", "payments_blocked_funds_on_hold",
 )
-# The fixed sweep: (label, split, block, limit or None for the whole block, account market and gang reactions on).
-SWEEP_PLAN: tuple[tuple[str, str, int, int | None, bool], ...] = (
-    ("training block 0", "training", 0, None, False),
-    ("validation block 0 (10)", "validation", 0, 10, False),
-    ("test block 0 (10)", "test", 0, 10, False),
-    ("stress block 0 (10)", "stress", 0, 10, False),
-    ("training market+reactions (5)", "training", 0, 5, True),
+# The fixed sweep: (row name, label, split, block, limit or None for the whole block, mode). Modes: "plain" is
+# run_sampled_world; "market" adds account market and gang reactions; "lien" adds both plus two injected liens.
+SWEEP_PLAN: tuple[tuple[str, str, str, int, int | None, str], ...] = (
+    ("training", "training block 0", "training", 0, None, "plain"),
+    ("validation", "validation block 0 (10)", "validation", 0, 10, "plain"),
+    ("test", "test block 0 (10)", "test", 0, 10, "plain"),
+    ("stress", "stress block 0 (10)", "stress", 0, 10, "plain"),
+    ("market", "training market+reactions (5)", "training", 0, 5, "market"),
+    ("lien", "training lien+reactions (5)", "training", 0, 5, "lien"),
 )
 TRACEBACK_LINES = 15
-Task = tuple[WorldSpec, str, bool, str]
+# A test injection, like the fixture liens of Level 12d: large enough to block any debit of the account it sits on.
+INJECTED_LIEN_PAISE = 500_000_000
+Task = tuple[WorldSpec, str, str, str]
 
 
 def read_arguments(argv: list[str]) -> argparse.Namespace:
@@ -80,6 +87,10 @@ def read_arguments(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=1, help="worker processes; 1 runs everything serially")
     parser.add_argument("--compare", type=int, default=0, help="also run the first K worlds serially and compare")
     parser.add_argument("--sweep", action="store_true", help="run the fixed sweep and ignore --split, --block, --limit")
+    parser.add_argument(
+        "--sweep-row", default=None, choices=[row[0] for row in SWEEP_PLAN],
+        help="run only this named row of the sweep and ignore --split, --block, --limit",
+    )
     parser.add_argument("--out", required=True, help="CSV file to write; must be outside the repository")
     args = parser.parse_args(argv)
     out_path = Path(args.out).resolve()
@@ -129,14 +140,76 @@ def _budget_shares(plans: list[Any], gangs: tuple[Any, ...]) -> tuple[float, flo
     return money_share, time_share
 
 
-def _atm_limits(plans: list[Any]) -> dict[str, int]:
-    """Collects each planned ATM withdrawal's daily card limit by account (the last plan wins if two share a mule)."""
+def _handle_ids(plans: list[Any], n_people: int, n_shops: int) -> dict[str, str]:
+    """
+    Gives every account a gang will open its real id before the run, by replaying the planned opening events in the
+    order the runner queues them (the gangs' events in gang order, then the run's own state counts). This is the same
+    replay the runner does in resolve_opening_handles; no genuine openings exist because account openings are off.
+    """
+    events = tuple(event for plan in plans for event in plan.outside_events)
+    assigned, _minutes = replay_openings(events, n_people, n_shops)
+    return assigned
+
+
+def _atm_limits(plans: list[Any], handle_ids: dict[str, str]) -> dict[str, int]:
+    """
+    Collects each planned ATM withdrawal's daily card limit by real account id (the last plan wins if two share a
+    mule). Plans name gang-opened accounts by handle, so handles are resolved first; otherwise the limit would never
+    match the run's withdrawal records and the check would silently skip them.
+    """
     limits: dict[str, int] = {}
     for plan in plans:
         for withdrawal in plan.withdrawals:
             if withdrawal.channel == "atm" and withdrawal.card_daily_limit_paise is not None:
-                limits[withdrawal.account_id] = withdrawal.card_daily_limit_paise
+                limits[handle_ids.get(withdrawal.account_id, withdrawal.account_id)] = withdrawal.card_daily_limit_paise
     return limits
+
+
+def _plan_liens(plans: list[Any], handle_ids: dict[str, str]) -> tuple[list[Any], str]:
+    """
+    Builds the two test liens (like the fixture liens of Level 12d, a test injection and not part of any plan).
+    Lien 1 sits on the first route mule of gang_mix_0 at the minute halfway between its first and last planned payment.
+    Lien 2 sits on a gang-opened account (other than lien 1's) at the halfway minute of its planned payments. If no gang
+    opened a second account, only lien 1 is placed and the note says so; no account is ever faked.
+    """
+    from world.outside_events import OutsideEvent  # imported here: only the lien row builds events
+
+    def span_of(account: str) -> tuple[int, int] | None:
+        """Returns the first and last planned payment minute that touches the account (handles resolved), or None."""
+        minutes = [
+            payment.minute for plan in plans for payment in plan.payments
+            if account in (handle_ids.get(payment.from_account, payment.from_account),
+                           handle_ids.get(payment.to_account, payment.to_account))
+        ]
+        return (min(minutes), max(minutes)) if minutes else None
+
+    liens: list[Any] = []
+    notes: list[str] = []
+    first_plan = plans[0]
+    route_mule = ""
+    for payment, story in zip(first_plan.payments, first_plan.truth.payment_stories):
+        if story.block == "route":
+            route_mule = handle_ids.get(payment.from_account, payment.from_account)
+            break
+    route_span = span_of(route_mule) if route_mule else None
+    if route_span is None:
+        notes.append("no route mule in gang_mix_0")
+    else:
+        liens.append(OutsideEvent(
+            (route_span[0] + route_span[1]) // 2, "lien", account_id=route_mule,
+            amount_paise=INJECTED_LIEN_PAISE, encumbrance_id="enc-test-1",
+        ))
+    opened = [real for real in handle_ids.values() if real != route_mule and span_of(real) is not None]
+    if not opened:
+        notes.append("no gang-opened account")
+    else:
+        opened_span = span_of(opened[0])
+        assert opened_span is not None
+        liens.append(OutsideEvent(
+            (opened_span[0] + opened_span[1]) // 2, "lien", account_id=opened[0],
+            amount_paise=INJECTED_LIEN_PAISE, encumbrance_id="enc-test-2",
+        ))
+    return liens, "; ".join(notes)
 
 
 def _count_labels(output: Any, labels: list[Any]) -> tuple[int, int, int]:
@@ -161,17 +234,21 @@ def _count_labels(output: Any, labels: list[Any]) -> tuple[int, int, int]:
     return true_count, len(labels) - true_count, len(reports)
 
 
-def _run_world(spec: WorldSpec, preset: str, cfg: dict[str, Any], gangs: tuple[Any, ...], market: bool) -> Any:
+def _run_world(
+    spec: WorldSpec, preset: str, cfg: dict[str, Any], gangs: tuple[Any, ...], mode: str, liens: list[Any]
+) -> Any:
     """
-    Runs the world. The normal case is run_sampled_world itself. With market on, account market and gang reactions are
-    switched on with their default configuration files (nothing else is needed: lien events are not used), and the same
-    pinned configs, generated gangs and world split are passed to the runner directly.
+    Runs the world. The "plain" mode is run_sampled_world itself. The "market" and "lien" modes switch on account market
+    and gang reactions with their default configuration files and pass the same pinned configs, generated gangs and
+    world split to the runner directly; "lien" also places the test liens through FraudInputs.outside_events, the path
+    Level 12d uses for its fixture lien.
     """
-    if not market:
+    if mode == "plain":
         return run_sampled_world(spec, preset, None, cfg, CODE_VERSION)
     return run_interactive_world(
-        fast_settings_for(spec, preset),
+        fast_settings_for(spec, preset, cfg),
         RunnerSettings(fraud_enabled=True, account_market_enabled=True, gang_reactions_enabled=True),
+        fraud_inputs=FraudInputs(outside_events=tuple(liens)),
         configs=pinned_configs(spec, cfg),
         gang_configs=gangs,
         code_version=CODE_VERSION,
@@ -179,7 +256,32 @@ def _run_world(spec: WorldSpec, preset: str, cfg: dict[str, Any], gangs: tuple[A
     )
 
 
-def measure_world(spec: WorldSpec, preset: str, market: bool, label: str) -> dict[str, Any]:
+def _lien_columns(output: Any, liens: list[Any], handle_ids: dict[str, str], note: str) -> dict[str, Any]:
+    """
+    Counts what the injected liens did. The runner keeps no record of what a gang observed, so a lien counts as observed
+    when the liened account shows up in a cancelled_by_gang record (the gang stopped using it after learning of it).
+    Payments blocked are the events that failed with reason funds_on_hold. A lien not found in the encumbrance log is
+    noted, so a lien that never took effect cannot pass as a placed one.
+    """
+    ids = {lien.encumbrance_id for lien in liens}
+    placed = {entry[2] for entry in output.result.encumbrance_log if entry[2] in ids}
+    cancelled_accounts = {account for record in output.result.cancelled_by_gang for account in record.accounts}
+    opened_by_gangs = set(handle_ids.values())
+    notes = [note] if note else []
+    if len(placed) != len(liens):
+        notes.append(f"{len(placed)} of {len(liens)} liens found in the encumbrance log")
+    return {
+        "liens_injected": len(liens),
+        "liens_on_gang_opened": len([lien for lien in liens if lien.account_id in opened_by_gangs]),
+        "gang_observed_lien_count": len([lien for lien in liens if lien.account_id in cancelled_accounts]),
+        "payments_blocked_funds_on_hold": sum(
+            1 for event in output.result.run_result.events if event.reason == "funds_on_hold"
+        ),
+        "lien_note": "; ".join(notes),
+    }
+
+
+def measure_world(spec: WorldSpec, preset: str, mode: str, label: str) -> dict[str, Any]:
     """
     WHAT: Plans the spec's gangs once to time them, runs the world, counts its events, labels, mules and victims, checks
     the world invariants, and returns one CSV row as a dictionary (with the problem sentences under "_problems").
@@ -189,7 +291,7 @@ def measure_world(spec: WorldSpec, preset: str, market: bool, label: str) -> dic
     Args:
         spec: A planned world from sample_block.
         preset: A size preset of config/world_sizing.yaml.
-        market: True to run with account market and gang reactions on.
+        mode: "plain", "market" (account market and gang reactions on) or "lien" (those plus two test liens).
         label: The sweep row or block name the world belongs to.
 
     Returns:
@@ -198,13 +300,19 @@ def measure_world(spec: WorldSpec, preset: str, market: bool, label: str) -> dic
     cfg = load_sampler_config()
     planning_seconds, gangs, plans = _time_planning(spec, preset, cfg)
     money_share, time_share = _budget_shares(plans, gangs)
+    settings = fast_settings_for(spec, preset, cfg)
+    handle_ids = _handle_ids(plans, settings.n_people, settings.n_shops)
+    liens, lien_note = _plan_liens(plans, handle_ids) if mode == "lien" else ([], "")
     started = time.perf_counter()
-    output = _run_world(spec, preset, cfg, gangs, market)
+    output = _run_world(spec, preset, cfg, gangs, mode, liens)
     total_seconds = time.perf_counter() - started
     events = output.result.run_result.events
     labels = build_label_events(output)
     true_count, false_count, report_count = _count_labels(output, labels)
-    problems = check_world(output, labels, _atm_limits(plans))
+    atm_limits = _atm_limits(plans, handle_ids)
+    problems = check_world(output, labels, atm_limits)
+    atm = check_atm_daily_limits(output, atm_limits)
+    lien_columns = _lien_columns(output, liens, handle_ids, lien_note)
     mules = {role.account_id for role in output.result.truth.roles if role.role == "mule"}
     victims: set[str] = set()
     for position, source in enumerate(output.result.event_sources):
@@ -222,7 +330,8 @@ def measure_world(spec: WorldSpec, preset: str, market: bool, label: str) -> dic
         "true_complaints": true_count, "false_complaints": false_count, "registry_reports": report_count,
         "mule_accounts": len(mules), "victims": len(victims),
         "budget_money_used_share_max": round(money_share, 6), "budget_time_used_share_max": round(time_share, 6),
-        "invariant_problems": len(problems),
+        "invariant_problems": len(problems), "atm_checked": atm.checked, "atm_skipped": atm.skipped,
+        **lien_columns,
         "event_lines_sha256": hashlib.sha256(lines_text.encode("utf-8")).hexdigest(),
         "run_label": label, "_problems": problems,
     }
@@ -233,9 +342,9 @@ def measure_task(task: Task) -> dict[str, Any]:
     Measures one task and never raises: a crash comes back as a record with "_crash" set, holding the world id, split,
     seed, exception type and message, and the last lines of the traceback, so a sweep goes on to the next world.
     """
-    spec, preset, market, label = task
+    spec, preset, mode, label = task
     try:
-        return measure_world(spec, preset, market, label)
+        return measure_world(spec, preset, mode, label)
     except Exception as error:  # noqa: BLE001 - a sweep must record every kind of crash and continue
         trace = traceback.format_exc().splitlines()[-TRACEBACK_LINES:]
         return {
@@ -260,15 +369,17 @@ def build_tasks(args: argparse.Namespace) -> list[Task]:
     cfg = load_sampler_config()
     ranges = read_world_configs().world_ranges
     tasks: list[Task] = []
-    if args.sweep:
-        for label, split, block, limit, market in SWEEP_PLAN:
+    if args.sweep or args.sweep_row:
+        for name, label, split, block, limit, mode in SWEEP_PLAN:
+            if args.sweep_row and name != args.sweep_row:
+                continue
             specs = sample_block(split, block, args.sampler_seed, cfg, ranges)
             for spec in specs[:limit]:
-                tasks.append((spec, args.preset, market, label))
+                tasks.append((spec, args.preset, mode, label))
         return tasks
     specs = sample_block(args.split, args.block, args.sampler_seed, cfg, ranges)
     for spec in specs[: args.limit]:
-        tasks.append((spec, args.preset, False, f"{args.split} block {args.block}"))
+        tasks.append((spec, args.preset, "plain", f"{args.split} block {args.block}"))
     return tasks
 
 
@@ -281,8 +392,14 @@ def write_outputs(results: list[dict[str, Any]], out_path: Path) -> None:
         writer.writeheader()
         writer.writerows(rows)
     problem_lines = [f"{row['world_id']}: {text}" for row in rows for text in row["_problems"]]
+    # A skipped ATM withdrawal (no planned limit to compare with) is stated, never silent.
+    atm_skipped = sum(int(row["atm_skipped"]) for row in rows)
+    atm_checked = sum(int(row["atm_checked"]) for row in rows)
+    problem_lines.append(
+        f"ATM daily-limit check: {atm_checked} withdrawals checked, {atm_skipped} skipped (no limit known)"
+    )
     with open(f"{out_path}.problems.txt", "w", encoding="utf-8", newline="") as handle:
-        handle.write("\n".join(problem_lines) + ("\n" if problem_lines else ""))
+        handle.write("\n".join(problem_lines) + "\n")
     crash_blocks = [format_crash(result) for result in results if result.get("_crash")]
     with open(f"{out_path}.crashes.txt", "w", encoding="utf-8", newline="") as handle:
         handle.write("\n\n".join(crash_blocks) + ("\n" if crash_blocks else ""))

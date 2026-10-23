@@ -14,7 +14,7 @@ TERM: opening entry: the ledger entry of kind "opening" that gives an account it
 """
 
 from collections import Counter
-from typing import Sequence
+from typing import NamedTuple, Sequence
 
 from world.checks import check_balances_equal_entry_sums, check_money_conserved, check_no_negative_balances
 from world.interactive_records import InteractiveWorldOutput
@@ -125,38 +125,57 @@ def check_truth_accounts_exist(output: InteractiveWorldOutput) -> list[str]:
     return problems
 
 
-def check_atm_daily_limits(output: InteractiveWorldOutput, atm_limits: dict[str, int] | None) -> list[str]:
+class AtmCheck(NamedTuple):
+    """
+    WHAT: The result of the ATM daily-limit check: its problem sentences, how many successful ATM withdrawals it could
+    compare with a planned limit (checked) and how many it could not (skipped, no limit known for the account).
+
+    WHY: A withdrawal the check cannot compare must never be skipped silently, so the skip count travels with it.
+    """
+
+    problems: list[str]
+    checked: int
+    skipped: int
+
+
+def check_atm_daily_limits(output: InteractiveWorldOutput, atm_limits: dict[str, int] | None) -> AtmCheck:
     """
     WHAT: Adds up each account's successful ATM withdrawals per day and flags any day above that account's daily card
-    limit. The limits come from the planned withdrawals, which the run's records do not carry; with no limits given the
-    check has nothing to compare and reports nothing.
+    limit. The limits come from the planned withdrawals, which the run's records do not carry. A successful ATM
+    withdrawal on an account with no known limit is counted as skipped, and with no limits at all every one is skipped.
 
     WHY: The runner enforces a daily ATM ceiling (Level 12c); reading only the success records means a bug in that
-    enforcement shows up here.
+    enforcement shows up here, and the counts show how much of the run the check really covered.
 
     Args:
         output: A finished run.
         atm_limits: Account id -> card_daily_limit_paise from the gang plans, or None.
 
     Returns:
-        Problem sentences starting with [atm_daily_limit], naming the account, day, total and limit.
+        An AtmCheck: problem sentences starting with [atm_daily_limit] (account, day, total, limit), and the checked and
+        skipped counts of successful ATM withdrawals.
     """
-    if not atm_limits:
-        return []
+    limits = atm_limits or {}
     totals: dict[tuple[str, int], int] = {}
+    checked = 0
+    skipped = 0
     for record in output.result.cash_withdrawals:
         if record.status == "success" and record.channel == "atm":
+            if record.account in limits:
+                checked += 1
+            else:
+                skipped += 1
             key = (record.account, record.minute // MINUTES_PER_DAY)
             totals[key] = totals.get(key, 0) + record.withdrawn
     problems: list[str] = []
     for (account_id, day), total in sorted(totals.items()):
-        limit = atm_limits.get(account_id)
+        limit = limits.get(account_id)
         if limit is not None and total > limit:
             problems.append(
                 f"[atm_daily_limit] account {account_id} withdrew {total} paise by ATM on day {day}, "
                 f"above its daily limit of {limit}"
             )
-    return problems
+    return AtmCheck(problems, checked, skipped)
 
 
 def check_payment_ids_unique(output: InteractiveWorldOutput) -> list[str]:
@@ -216,7 +235,8 @@ def check_world(
 ) -> list[str]:
     """
     WHAT: Runs every world invariant on a finished run and returns all problems found (an empty list means all passed).
-    The label check runs only when labels are given, and the ATM check only when the planned limits are given.
+    The label check runs only when labels are given. The ATM check compares only withdrawals whose account has a
+    planned limit; call check_atm_daily_limits directly to see how many it checked and how many it skipped.
 
     WHY: One call per world makes a sweep simple: a world is sound when the list is empty.
 
@@ -232,7 +252,7 @@ def check_world(
     problems += check_ledgers(output)
     problems += check_opening_times(output)
     problems += check_truth_accounts_exist(output)
-    problems += check_atm_daily_limits(output, atm_limits)
+    problems += check_atm_daily_limits(output, atm_limits).problems
     problems += check_payment_ids_unique(output)
     if labels is not None:
         problems += check_labels_after_payments(output, labels)

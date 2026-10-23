@@ -162,6 +162,31 @@ def validate_sampler_config(cfg: dict[str, Any], world_ranges: dict[str, Any]) -
     _check_splits_and_mapping(cfg)
     _check_parameters(cfg, world_ranges)
     _check_seed_blocks(cfg)
+    _check_horizon_limits(cfg, world_ranges)
+
+
+def _check_horizon_limits(cfg: dict[str, Any], world_ranges: dict[str, Any]) -> None:
+    """
+    Refuses a horizon_limits entry whose config is unknown or whose parameter is not in the config it names. The
+    world_ranges entries are checked against the given ranges; entries for the other configs are checked against the
+    config files on disk, read only when such an entry exists.
+    """
+    entries = cfg.get("horizon_limits", {}).get("entries", [])
+    other_configs: Any = None
+    for entry in entries:
+        config_name = entry["config"]
+        if config_name not in ("world_ranges", "background_realism", "failure_realism", "device_realism"):
+            raise ValueError(f"horizon_limits entry '{entry['parameter']}' names unknown config '{config_name}'")
+        if config_name == "world_ranges":
+            known = world_ranges.get("parameters", {})
+        else:
+            if other_configs is None:
+                from world.world_configs import read_world_configs  # imported here: only this check needs the files
+
+                other_configs = read_world_configs()
+            known = getattr(other_configs, config_name)["parameters"]
+        if entry["parameter"] not in known:
+            raise ValueError(f"unknown horizon_limits parameter '{entry['parameter']}' for config {config_name}")
 
 
 def latin_hypercube(n: int, dims: int, rng: np.random.Generator) -> list[list[float]]:

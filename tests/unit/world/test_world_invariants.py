@@ -12,6 +12,7 @@ TERM: break: a deliberate change to a copy of a finished run that violates exact
 
 import copy
 import dataclasses
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -27,7 +28,7 @@ from world.outside_events import OutsideEvent
 from world.sampled_world import run_sampled_world
 from world.truth_records import RoleSpan, TruthFacts
 from world.world_configs import read_world_configs
-from world.world_invariants import check_world, expected_total_paise
+from world.world_invariants import check_atm_daily_limits, check_world, expected_total_paise
 from world.world_sampler import load_sampler_config, sample_worlds
 
 TINY = FastRunSettings(101, 60, 12, 61, "training")
@@ -111,6 +112,21 @@ def test_an_atm_withdrawal_over_the_limit_is_reported_by_the_limit_check_only(ru
     problems = check_world(broken, atm_limits={OPENED: LIMIT})
     _only(problems, "atm_daily_limit")
     assert OPENED in problems[0] and f"above its daily limit of {LIMIT}" in problems[0]
+
+
+def test_the_atm_check_counts_checked_and_skipped_withdrawals() -> None:
+    """Two successful ATM withdrawals on accounts with a limit and one without give checked 2 and skipped 1."""
+    records = [
+        CashWithdrawalRecord("w1", 100, "acc_a", CHANNEL_ATM, 1_000, 1_000, "success"),
+        CashWithdrawalRecord("w2", 200, "acc_b", CHANNEL_ATM, 2_000, 2_000, "success"),
+        CashWithdrawalRecord("w3", 300, "acc_c", CHANNEL_ATM, 3_000, 3_000, "success"),
+        CashWithdrawalRecord("w4", 400, "acc_c", CHANNEL_ATM, 4_000, 0, "failed"),
+    ]
+    fake = SimpleNamespace(result=SimpleNamespace(cash_withdrawals=records))
+    outcome = check_atm_daily_limits(fake, {"acc_a": 5_000, "acc_b": 5_000})  # type: ignore[arg-type]
+    assert (outcome.checked, outcome.skipped, outcome.problems) == (2, 1, [])
+    no_limits = check_atm_daily_limits(fake, None)  # type: ignore[arg-type]
+    assert (no_limits.checked, no_limits.skipped) == (0, 3)
 
 
 def test_labels_before_their_payment_or_naming_a_missing_payment_are_reported_by_the_label_check_only(

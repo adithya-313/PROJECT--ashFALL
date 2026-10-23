@@ -187,6 +187,18 @@ def test_bad_scope_and_unordered_own_range_are_refused() -> None:
         validate_sampler_config(cfg, _ranges())
 
 
+def test_an_unknown_horizon_limit_parameter_is_refused_by_the_config_validator() -> None:
+    """An unknown horizon_limits parameter, in world_ranges or another config, is refused by validate_sampler_config."""
+    cfg = _cfg()
+    cfg["horizon_limits"]["entries"][0]["parameter"] = "no_such_parameter"
+    with pytest.raises(ValueError, match="unknown horizon_limits parameter 'no_such_parameter'"):
+        validate_sampler_config(cfg, _ranges())
+    other = _cfg()
+    other["horizon_limits"]["entries"][1]["parameter"] = "no_such_wave"
+    with pytest.raises(ValueError, match="unknown horizon_limits parameter 'no_such_wave' for config device_realism"):
+        validate_sampler_config(other, _ranges())
+
+
 def test_block_past_the_seed_block_is_refused() -> None:
     """A block number whose last seed passes the split's last seed must be refused."""
     cfg = _cfg()
