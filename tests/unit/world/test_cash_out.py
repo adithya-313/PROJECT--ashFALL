@@ -275,6 +275,60 @@ def test_crypto_collector_is_role_cash_out_and_gang_opened_with_normal_id(monkey
     assert plan.stories[0].block == "cash_out"
 
 
+def test_collector_opens_no_later_than_its_earliest_payment_when_mules_are_out_of_time_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mule A (arrives 1000) is processed before mule B (arrives 400); the collector must open by B's payment."""
+    world = build_world(TINY.seed, TINY.n_people, TINY.n_shops)
+
+    # The existing way to force the shares: replace draw_cash_out_shares so every mule sends only to crypto.
+    def mock_shares_crypto(*args: Any, **kwargs: Any) -> dict[str, float]:
+        return {"crypto": 1.0, "atm": 0.0, "branch": 0.0, "genuine_shop": 0.0}
+
+    monkeypatch.setattr("world.cash_out.draw_cash_out_shares", mock_shares_crypto)
+    plan = plan_cash_out_step(
+        world=world, gang_id="g_order", strength=1,
+        terminal_mules=[("acc_person_000015", 3_000_000, 1000), ("acc_person_000016", 2_000_000, 400)],
+        split="training", layers=2, opening_start_index=0, has_disguise=False, jitter=None,
+        fixed_dwell=15, dwell_param=None, rng=np.random.default_rng(5),
+    )
+
+    assert len(plan.outside_events) == 1
+    send_minutes = [payment.minute for payment in plan.payments]
+    assert len(send_minutes) == 2
+    # The expected opening is the earlier of the first mule's arrival (1000) and the earliest planned send.
+    expected_opening = min(1000, min(send_minutes))
+    assert plan.outside_events[0].minute == expected_opening
+    assert plan.outside_events[0].minute <= min(send_minutes)
+    assert min(send_minutes) < 1000
+
+
+def test_single_terminal_mule_opening_event_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With one terminal mule arriving at 1500 the collector still opens at 1500, exactly the event as before."""
+    from world.outside_events import OutsideEvent
+
+    world = build_world(TINY.seed, TINY.n_people, TINY.n_shops)
+
+    def mock_shares_crypto(*args: Any, **kwargs: Any) -> dict[str, float]:
+        return {"crypto": 1.0, "atm": 0.0, "branch": 0.0, "genuine_shop": 0.0}
+
+    monkeypatch.setattr("world.cash_out.draw_cash_out_shares", mock_shares_crypto)
+    plan = plan_cash_out_step(
+        world=world, gang_id="g_one", strength=1, terminal_mules=[("acc_person_000015", 3_000_000, 1500)],
+        split="training", layers=2, opening_start_index=0, has_disguise=False, jitter=None,
+        fixed_dwell=15, dwell_param=None, rng=np.random.default_rng(999),
+    )
+
+    # The pre-fix opening used the first-use arrival minute; the known input gives 1500, and the send is 1515.
+    assert plan.payments[0].minute == 1515
+    assert plan.outside_events == [
+        OutsideEvent(
+            1500, "open_account", owner_kind="person", opening_stream="gang_account_openings",
+            opening_handle="new:g_one:0",
+        )
+    ]
+
+
 def test_genuine_shop_receives_mule_money_and_role_is_none() -> None:
     """
     Verifies that a genuine merchant shop downstream of a terminal mule:
