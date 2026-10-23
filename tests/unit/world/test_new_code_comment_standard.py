@@ -231,6 +231,9 @@ NEW_CODE_FILES: list[str] = [
     "showcase/level_12_support_e.py",
     "showcase/level_12_checks_e.py",
     "tests/unit/showcase/test_level_12_checks_e.py",
+    # Level 12f many-worlds sampler and test suite.
+    "world/world_sampler.py",
+    "tests/unit/world/test_world_sampler.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [

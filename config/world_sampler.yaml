@@ -1,0 +1,124 @@
+# =====================================================================
+# WORLD SAMPLER: how many different worlds are made, and which seeds
+# =====================================================================
+#
+# What this file is
+#   Training a detector on one world teaches it that world. The sampler makes
+#   many worlds, each with its own seed and its own values for a few "key"
+#   parameters. It spreads those values evenly over the parameter's range
+#   (Latin hypercube: the range is cut into n equal strata and each stratum
+#   is used exactly once). This file says which parameters are spread, which
+#   seeds each split may use, and which range each split reads.
+#
+# Who reads it
+#   world/world_sampler.py. The sampler only plans worlds; it never runs one.
+#
+# How to read each block
+#   world_ranges_reference: X  -> the range is the entry called X in
+#                              config/world_ranges.yaml.
+#   integer: true              -> the sampled value is rounded to a whole
+#                              number and kept inside the range.
+#   label: policy              -> our own design choice.
+#
+# Where the full reasoning lives
+#   docs/research/amendments.md, A-015.
+# =====================================================================
+
+world_sampler:
+  label: policy
+  reason: "Configuration for the many-worlds sampler per amendment A-015."
+  issue_ids_v2: [12-14, 12-18]
+  derived_from: "amendment A-015"
+
+  # ---------------------------------------------------------------------
+  # key_parameters: the values that differ from world to world
+  #
+  # The idea
+  #   Only these parameters are pinned per world. Everything else is still
+  #   drawn inside the world from its own range, as before.
+  #
+  # Left out on purpose
+  #   share_of_accounts_sold_to_several_gangs is NOT listed. In
+  #   world/account_market.py, draw_resale_share reads world_ranges.yaml from
+  #   disk, so it would ignore a value pinned for one world.
+  # ---------------------------------------------------------------------
+  key_parameters:
+    number_of_regions:
+      world_ranges_reference: number_of_regions
+      integer: true
+      label: policy
+      reason: "How many regions the town has; a whole number, so it is rounded (issue 12-14)."
+    victim_complaint_share:
+      world_ranges_reference: victim_complaint_share
+      integer: false
+      label: policy
+      reason: "Share of scammed victims who complain; changes how many true labels a world has (issue 12-14)."
+    false_complaints_per_100000_genuine_payments:
+      world_ranges_reference: false_complaints_per_100000_genuine_payments
+      integer: false
+      label: policy
+      reason: "Rate of wrong complaints about ordinary payments; changes label noise (issue 12-14)."
+    false_complaint_merchant_weight:
+      world_ranges_reference: false_complaint_merchant_weight
+      integer: false
+      label: policy
+      reason: "How much likelier a shop payment draws a wrong complaint; changes label noise (issue 12-14)."
+    share_reported_to_shared_database:
+      world_ranges_reference: share_reported_to_shared_database
+      integer: false
+      label: policy
+      reason: "Share of confirmed mules that banks report to the shared registry (issue 12-14)."
+
+  # ---------------------------------------------------------------------
+  # seed_blocks: which seeds each split may use
+  #
+  # The idea
+  #   World k of a split uses seed first_seed + k. Blocks are far apart and
+  #   never overlap, so a validation world can never be a training world.
+  # ---------------------------------------------------------------------
+  seed_blocks:
+    training:
+      first_seed: 1000000
+      last_seed: 1999999
+      label: policy
+      reason: "Block for worlds the detector learns from."
+    validation:
+      first_seed: 2000000
+      last_seed: 2999999
+      label: policy
+      reason: "Block for worlds that tune the detector; separate seeds from training."
+    test:
+      first_seed: 3000000
+      last_seed: 3999999
+      label: policy
+      reason: "Block for worlds used once for the final score."
+    stress:
+      first_seed: 4000000
+      last_seed: 4999999
+      label: policy
+      reason: "Block for worlds with harsher values than test."
+
+  reserved_seeds:
+    seeds: [101]
+    label: policy
+    reason: "Level 11 golden world; no sampled world may use it."
+
+  # ---------------------------------------------------------------------
+  # range_name_for_split: which column of world_ranges.yaml a split reads
+  #
+  # The idea
+  #   Validation reads the TRAINING range, so tuning never sees values the
+  #   test split is meant to surprise it with (amendment A-015).
+  # ---------------------------------------------------------------------
+  range_name_for_split:
+    mapping:
+      training: training
+      validation: training
+      test: test
+      stress: stress
+    label: policy
+    reason: "Validation uses the training range so it differs from training by seed only (A-015)."
+
+  counts:
+    label: policy
+    reason: "not decided; committed by a later amendment from measured run time (12-18)"
