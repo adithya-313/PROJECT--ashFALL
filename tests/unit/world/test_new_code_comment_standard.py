@@ -250,6 +250,11 @@ NEW_CODE_FILES: list[str] = [
     # Level 12f per-world gang mix module and test suite.
     "world/gang_mix.py",
     "tests/unit/world/test_gang_mix.py",
+    # Level 12f one-block world measurement script.
+    "scripts/measure_world_block.py",
+    # Level 12f world invariant checks and test suite.
+    "world/world_invariants.py",
+    "tests/unit/world/test_world_invariants.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
