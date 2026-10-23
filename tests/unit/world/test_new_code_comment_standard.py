@@ -207,6 +207,8 @@ NEW_CODE_FILES: list[str] = [
     "showcase/level_12_support_d.py",
     "showcase/level_12_checks_d.py",
     "tests/unit/showcase/test_level_12_checks_d.py",
+    # Level 12d handoff facts generator.
+    "scripts/handoff_facts.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [

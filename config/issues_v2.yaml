@@ -316,7 +316,9 @@ issues:
       - {kind: config, file: config/tactic_families.yaml, name: tactic_families}
       - {kind: test, file: tests/unit/test_tactic_families.py, name: test_held_out_names_match_evaluation_yaml}
       - {kind: test, file: tests/unit/world/test_tactic_config.py, name: test_dividing_lines_resolve_to_world_ranges_bounds_dynamically}
-    later_work: ["Level 12d: validate the family boundaries"]
+      - {kind: test, file: tests/unit/world/test_tactic_family_guard.py, name: test_held_out_families_refused_in_training_worlds}
+      - {kind: test, file: tests/unit/world/test_tactic_family_guard.py, name: test_unknown_family_name_is_refused}
+    later_work: ["Level 12f: enforce the remaining held-out dividing lines in code (training_devices_retired_on_schedule is read but not enforced)"]
   12-9:
     title: "Tactic costs had no units"
     origin: revision_2

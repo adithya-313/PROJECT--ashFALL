@@ -225,3 +225,15 @@ No model code exists yet (models start in Level 18; `world/` is simulator code).
 | Why | Police reports document syndicates acquiring accounts from common suppliers who resell burned kits. Ground rule G5 and amendment A-017 pre-registered this mechanism. Strict non-overlapping ownership preserves truth invariant checks and temporal isolation. No model code exists yet for the new engine (models start in Level 18); `models/` and `scripts/fraud_*` hold only v1 PaySim work, excluded by `earlier_work_note`. |
 | Results exist? | No. |
 
+## A-019
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-10-23 |
+| Issue IDs | None |
+| Issue IDs v2 | 12-8 |
+| Files | `world/tactic_families.py` (new), `world/gang_config.py`, `world/interactive_runner.py`, `tests/unit/world/test_tactic_family_guard.py` (new), `docs/research/amendments.md` |
+| What changed | Tactic families on gangs in Level 12d (12-8): (a) A gang may carry an optional family (`GangConfig.family`). The family is written into the plain form, and so into the run id, only when it is set, so gangs without a family keep their run ids. (b) Before the first gang world, the held-out lists in `config/tactic_families.yaml` and `config/evaluation.yaml` are checked to agree and not to overlap the training families. (c) A gang naming a family that is in neither list is refused. (d) A gang naming a held-out family is refused in training worlds, which also covers validation worlds because they use the training ranges (A-015). Test and stress worlds accept held-out families. (e) Known gaps, recorded now: no family-to-block table exists yet, so families are checked by name only; and the dividing line `training_devices_retired_on_schedule` is read but not enforced in code. |
+| Why | The 12d brief requires the family mapping to be checked before the first gang world, and held-out families to appear only in test and stress worlds, so a model cannot be trained on a held-out tactic. No model code exists yet for the new engine (models start in Level 18); `models/` and `scripts/fraud_*` hold only v1 PaySim work, excluded by `earlier_work_note`. |
+| Results exist? | No. |
+
