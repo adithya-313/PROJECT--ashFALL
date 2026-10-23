@@ -1,7 +1,8 @@
 """
-WHAT: Implementation of Level 12 Showcase Part E checks (Checks 21 through 24).
+WHAT: Implementation of Level 12 Showcase Part E checks (Checks 21 through 25).
 Shows complaints arriving against the truth in a scam world, complaint delays by scam type, a simulated analyst whose
-accuracy falls as the queue grows, and one bulk-label crackdown that confirms mule accounts of one region late.
+accuracy falls as the queue grows, one bulk-label crackdown that confirms mule accounts of one region late, and the
+complaint share measured on a large synthetic batch.
 
 WHY: Verifies Level 12e: labels built after the run from the finished result, an analyst that is a pure function,
 and crackdown confirmations, each measured from real code on real or clearly labelled synthetic inputs
@@ -33,6 +34,7 @@ from world.label_builder import collect_victim_losses
 from world.label_records import (
     LabelWorldSettings,
     VictimLoss,
+    draw_label_world_settings,
     load_labels_config,
     resolve_delay_bounds_minutes,
 )
@@ -42,6 +44,7 @@ from world.truth_records import SCAM_STEP_PAYOUT_BACK, SCAM_STEP_VICTIM_PAYMENT
 
 SPLIT = "training"
 SYNTHETIC_LOSSES_PER_TYPE = 1000
+COMPLAINT_SHARE_SAMPLE = 5000
 ANALYST_CASES_PER_LOAD = 5000
 ANALYST_LOADS = [0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0]
 ANALYST_EVIDENCE_STRENGTH = 0.5
@@ -55,21 +58,19 @@ def _share_tolerance(share: float, sample_size: int, standard_errors: float) -> 
 async def run_complaints_against_truth_check(workspace: Any) -> CheckOutcome:
     """
     WHAT: Evaluates the complaints of a scam world judged against the in-memory truth. Every complaint that names a
-    gang payment must name only successful victim_payment events of the complainant to the reported account; no
-    payout_back id may appear on any complaint; and the share of victim losses that complained is compared with the
-    share the world drew, within the configured standard errors. When the number of losses is below the configured
-    minimum sample, that share comparison is reported as NOT RUN with the reason instead of being skipped silently.
-    WHY: Proves Check 21: complaints are about real losses only, and the complaint rate follows its drawn share.
+    gang payment must name only successful victim_payment events of the complainant to the reported account, and no
+    payout_back id may appear on any complaint. The complaint share is not judged here: a world of 17 victims is too
+    small for that, and check 25 proves it on a large batch.
+    WHY: Proves Check 21: complaints are about real losses only, and a payout back is never complained about.
     Args:
         workspace: Optional execution workspace supplied by the showcase framework.
     Returns:
-        CheckOutcome with the complained count, the loss count, the drawn share and a delay chart.
+        CheckOutcome with the complaint count, the victim count and a delay chart.
     Example:
         outcome = await run_complaints_against_truth_check(None)
-        assert "victims complained" in outcome.key_number
+        assert "all naming real victim payments" in outcome.key_number
     """
-    output, labels, drawn = get_complaints_run()
-    labels_config = load_labels_config()
+    output, labels, _drawn = get_complaints_run()
     stories = fraud_story_by_payment_id(output)
     events_by_id = {
         output.result.payment_ids[position]: event for position, event in enumerate(output.result.run_result.events)
@@ -94,15 +95,6 @@ async def run_complaints_against_truth_check(workspace: Any) -> CheckOutcome:
             assert event.to_account == label.reported_account, f"{payment_id} did not pay the reported account"
 
     loss_count = len(losses)
-    min_sample = labels_config["rate_check_min_sample"]
-    share_check = f"NOT RUN: {loss_count} victims is under the minimum sample of {min_sample}"
-    if loss_count >= min_sample:
-        observed = len(true_labels) / loss_count
-        standard_errors = labels_config["rate_check_standard_errors"]
-        tolerance = _share_tolerance(drawn.victim_complaint_share, loss_count, standard_errors)
-        assert abs(observed - drawn.victim_complaint_share) <= tolerance, "Complaint share is off the drawn share"
-        share_check = f"PASS: observed {observed:.3f} within {tolerance:.3f} of the drawn share"
-
     points = [(0.0, 0.0)]
     delays_days = sorted(
         (label.arrival_minute - loss_by_payments[label.payment_ids].last_paid_minute) / MINUTES_PER_DAY
@@ -115,14 +107,8 @@ async def run_complaints_against_truth_check(workspace: Any) -> CheckOutcome:
         "x_label": "days after the victim's last payment", "y_label": "cumulative % of victims who complained",
         "points": points, "shaded": [],
     }
-    key_number = (
-        f"{len(true_labels)} of {loss_count} victims complained (drawn share {drawn.victim_complaint_share:.2f}); "
-        f"share check {share_check}"
-    )
-    evidence = {
-        "complained": len(true_labels), "victim_losses": loss_count,
-        "drawn_share": drawn.victim_complaint_share, "share_check": share_check, "labels_total": len(labels),
-    }
+    key_number = f"{len(true_labels)} complaints from {loss_count} victims, all naming real victim payments"
+    evidence = {"complained": len(true_labels), "victim_losses": loss_count, "labels_total": len(labels)}
     return CheckOutcome(key_number=key_number, evidence=evidence, chart=chart)
 
 
@@ -372,3 +358,55 @@ async def run_bulk_batch_check(workspace: Any) -> CheckOutcome:
         "mule_side_accounts_without_region": len(result.mule_side_accounts_without_region),
     }
     return CheckOutcome(key_number=key_number, evidence=evidence, chart=chart)
+
+
+async def run_complaint_share_large_batch_check(workspace: Any) -> CheckOutcome:
+    """
+    WHAT: Draws the world's complaint settings from the training ranges with draw_label_world_settings (seeded
+    generators from the world helper), passes 5,000 synthetic victim losses of the three scam types to the real
+    plan_true_complaints, and asserts the sample is at least the configured minimum and that the observed share of
+    complaining victims is within the configured number of standard errors of the drawn share. The inputs are
+    synthetic: made-up losses, not a simulated world.
+    WHY: Proves Check 25: the complaint share follows its drawn value. A 17-victim world is too small to show it
+    (check 21), so the comparison is made on a batch large enough for the tolerance to mean something.
+    Args:
+        workspace: Optional execution workspace supplied by the showcase framework.
+    Returns:
+        CheckOutcome with the observed share, the drawn share and the tolerance.
+    Example:
+        outcome = await run_complaint_share_large_batch_check(None)
+        assert "vs drawn share" in outcome.key_number
+    """
+    world_ranges = read_world_ranges()
+    labels_config = load_labels_config()
+    streams = build_component_streams(250, {"check_25_settings": 0, "check_25_complaints": 1})
+    drawn = draw_label_world_settings(world_ranges, SPLIT, streams["check_25_settings"], labels_config)
+
+    scam_types = [SCAM_INVESTMENT, SCAM_JOB, resolve_remainder_scam_type()]
+    losses = [
+        VictimLoss(f"acc_v{index}", 0, "acc_m", 1, scam_types[index % len(scam_types)], (f"p{index}",), 10_000)
+        for index in range(COMPLAINT_SHARE_SAMPLE)
+    ]
+    events = plan_true_complaints(losses, drawn, world_ranges, SPLIT, streams["check_25_complaints"], labels_config)
+
+    min_sample = labels_config["rate_check_min_sample"]
+    assert COMPLAINT_SHARE_SAMPLE >= min_sample, f"Sample {COMPLAINT_SHARE_SAMPLE} is under the minimum {min_sample}"
+    observed = len(events) / COMPLAINT_SHARE_SAMPLE
+    tolerance = _share_tolerance(
+        drawn.victim_complaint_share, COMPLAINT_SHARE_SAMPLE, labels_config["rate_check_standard_errors"]
+    )
+    assert abs(observed - drawn.victim_complaint_share) <= tolerance, (
+        f"Observed share {observed:.4f} is off the drawn share {drawn.victim_complaint_share:.4f} "
+        f"by more than {tolerance:.4f}"
+    )
+
+    key_number = (
+        f"observed share {observed:.3f} vs drawn share {drawn.victim_complaint_share:.3f} on "
+        f"{COMPLAINT_SHARE_SAMPLE:,} victims (tolerance {tolerance:.3f})"
+    )
+    evidence = {
+        "inputs": f"synthetic: {COMPLAINT_SHARE_SAMPLE} made-up victim losses across the three scam types",
+        "observed_share": observed, "drawn_share": drawn.victim_complaint_share, "tolerance": tolerance,
+        "sample_size": COMPLAINT_SHARE_SAMPLE, "min_sample": min_sample, "complaints": len(events),
+    }
+    return CheckOutcome(key_number=key_number, evidence=evidence)

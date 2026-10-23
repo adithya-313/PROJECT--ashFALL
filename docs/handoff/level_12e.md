@@ -5,7 +5,7 @@ Sections "Register Changes" to "Random Stream Children and Tie-Break Order" are 
 ## Round History
 - E-1: complaints as label events built after the run; scam type and step stored on payment stories; true complaints by scam-type delay and victim share; false complaints weighted to shops; stress layers reach label delays.
 - E-2: registry reports from confirmed accounts with an independent bank reporting share; wrong registry entries only from false complaints; the registry-report contract; bulk confirmations with a labelled short-lag fixture.
-- E-3: the analyst as a pure function with capacity and time per case; showcase part e (checks 21-24); register evidence; this handoff.
+- E-3: the analyst as a pure function with capacity and time per case; showcase part e (checks 21-25); register evidence; this handoff.
 
 ---
 
@@ -365,7 +365,7 @@ Extracted directly via `dataclasses.fields`:
 ## Known Gaps
 - The analyst is not called by any run yet; Level 22 connects it to the case queue (12-4 partial).
 - A bulk confirmation can confirm a mule still in warm-up, before any fraud money moved through it; the label is true but early. Check 24 shows a batch confirmed after fraud money moved.
-- Check 21's comparison of the complaint share with the drawn share is NOT RUN in the showcase (17 victims, below the 2000-case minimum); the share is tested with 5,000 synthetic losses in tests/unit/world/test_complaints.py.
+- Complaint share is proven by check 25 on 5,000 synthetic losses; check 21's small world (17 victims) proves only the "never happens" rules.
 - Confirmation by first complaint is a stand-in for bank decisions; Levels 13 and 22 replace it.
 - Accounts opened mid-run have no region, so bulk confirmations never sweep them; their number is reported.
 - The bulk-short-lag fixture cannot go through apply_layers (its values sit outside the test ranges on purpose); tests copy its values into a copied effective configuration.
@@ -385,7 +385,7 @@ py -3.12 -m pytest tests/unit -q -p no:cacheprovider -m "not needs_stack and not
 # 3. Targeted Level 12e unit tests
 py -3.12 -m pytest tests/unit/world/test_scam_story_fields.py tests/unit/world/test_complaints.py tests/unit/world/test_label_builder.py tests/unit/world/test_registry_reports.py tests/unit/world/test_bulk_confirmations.py tests/unit/world/test_analyst.py tests/unit/showcase/test_level_12_checks_e.py tests/unit/test_issue_register_v2.py tests/unit/world/test_new_code_comment_standard.py -q -p no:cacheprovider
 
-# 4. Showcase Part E execution (checks 21-24)
+# 4. Showcase Part E execution (checks 21-25)
 py -3.12 -m showcase --level 12 --part e
 
 # 5. Showcase Parts A to D execution
@@ -394,10 +394,10 @@ py -3.12 -m showcase --level 12 --part b
 py -3.12 -m showcase --level 12 --part c
 py -3.12 -m showcase --level 12 --part d
 
-# 6. Showcase Level 12 quick mode (all 24 checks)
+# 6. Showcase Level 12 quick mode (all 25 checks)
 py -3.12 -m showcase --level 12 --quick
 
-# 6b. Full Level 12 showcase (must be 24/24)
+# 6b. Full Level 12 showcase (must be 25/25)
 py -3.12 -m showcase --level 12
 
 # 7. Baseline Level 11 showcase invariance

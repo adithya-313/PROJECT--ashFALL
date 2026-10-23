@@ -1,11 +1,11 @@
 """
 WHAT: Unit tests verifying Level 12e showcase check runners, framework coverage compliance, and the domain
-assertions of Checks 21 through 24 (complaints against the truth, complaint delay by scam type, analyst accuracy
-against queue load, and one late bulk-label batch).
+assertions of Checks 21 through 25 (complaints against the truth, complaint delay by scam type, analyst accuracy
+against queue load, one late bulk-label batch, and the complaint share on a large batch).
 
-WHY: Guarantees each Level 12e check runner executes reliably in isolation, that part e is exactly four checks in the
-brief's order, that check 21's complaints appear without forcing any share, and that every chart uses only the
-timeline form the report page can draw.
+WHY: Guarantees each Level 12e check runner executes reliably in isolation, that part e is exactly five checks in the
+brief's order, that check 21's complaints appear without forcing any share, that check 25 compares the observed share
+with the drawn one, and that every chart uses only the timeline form the report page can draw.
 
 TERM: Level 12: World engine II supporting reactive outside events and interactive fraud simulation.
 TERM: check: An automated verification routine evaluating an individual simulation property against strict assertions.
@@ -14,6 +14,7 @@ TERM: timeline chart: the one chart form showcase/reporting.py draws, with point
 """
 
 import asyncio
+import math
 from typing import Any
 
 from showcase import level_12
@@ -22,10 +23,12 @@ from showcase.level_12_checks_e import (
     run_analyst_queue_check,
     run_bulk_batch_check,
     run_complaint_delay_by_type_check,
+    run_complaint_share_large_batch_check,
     run_complaints_against_truth_check,
 )
 from showcase.level_12_support_e import get_complaints_run
 from world.config_reader import read_world_ranges
+from world.label_records import load_labels_config
 
 VICTIM_SHARE_NAME = "victim_complaint_share"
 
@@ -44,8 +47,8 @@ def assert_timeline_chart(chart: dict[str, Any] | None) -> None:
 
 def test_level_12_part_e_checks_match_the_brief() -> None:
     """
-    WHAT: Verifies that Level 12 exports 4 checks with part 'e', named 21 to 24 in order with kinds normal, edge,
-    edge, edge, that validate_checks passes across all 24 checks, and that no precondition is missing.
+    WHAT: Verifies that Level 12 exports 5 checks with part 'e', named 21 to 25 in order with kinds normal, edge,
+    edge, edge, normal, that validate_checks passes across all 25 checks, and that no precondition is missing.
     WHY: Enforces the showcase framework contract and the order the brief gives for part e.
     Args:
         None.
@@ -55,15 +58,16 @@ def test_level_12_part_e_checks_match_the_brief() -> None:
         test_level_12_part_e_checks_match_the_brief()
     """
     all_checks = level_12.get_checks(quick=True)
-    assert len(all_checks) == 24
+    assert len(all_checks) == 25
     part_e_checks = [check for check in all_checks if check.part == "e"]
-    assert len(part_e_checks) == 4
-    assert [check.kind for check in part_e_checks] == ["normal", "edge", "edge", "edge"]
+    assert len(part_e_checks) == 5
+    assert [check.kind for check in part_e_checks] == ["normal", "edge", "edge", "edge", "normal"]
     assert [check.name for check in part_e_checks] == [
         "21. complaints arriving against the truth",
         "22. complaint delay by scam type",
         "23. analyst accuracy falls as the queue grows",
         "24. a bulk-label batch arrives late for one region",
+        "25. complaint share on a large batch",
     ]
     assert "12a-12e" in level_12.LEVEL_TITLE
 
@@ -75,8 +79,9 @@ def test_level_12_part_e_checks_match_the_brief() -> None:
 def test_check_21_complaints_against_truth_without_forcing_the_share() -> None:
     """
     WHAT: Executes the check 21 runner and asserts at least one complaint appears with the world's own drawn share,
-    which is the unforced range of the configuration, and that the small sample is reported as NOT RUN.
-    WHY: Proves Check 21 does not depend on a forced complaint share and never skips its share comparison silently.
+    which is the unforced range of the configuration, and that the key number states the complaints and the victims
+    without any share comparison.
+    WHY: Proves Check 21 does not depend on a forced complaint share and keeps only its two "never happens" rules.
     Args:
         None.
     Returns:
@@ -92,9 +97,10 @@ def test_check_21_complaints_against_truth_without_forcing_the_share() -> None:
     low, high = disk_range["training"]
     assert low <= drawn.victim_complaint_share <= high
     assert outcome.evidence["complained"] >= 1
-    assert "victims complained" in outcome.key_number
-    assert outcome.evidence["share_check"].startswith("NOT RUN: ")
-    assert "minimum sample" in outcome.evidence["share_check"]
+    complaints, victims = outcome.evidence["complained"], outcome.evidence["victim_losses"]
+    assert outcome.key_number == f"{complaints} complaints from {victims} victims, all naming real victim payments"
+    assert "share_check" not in outcome.evidence
+    assert "NOT RUN" not in outcome.key_number
     assert_timeline_chart(outcome.chart)
 
 
@@ -168,3 +174,30 @@ def test_check_24_bulk_batch_arrives_late_for_one_region() -> None:
     assert "days after the last fraud payment it covers" in outcome.key_number
     assert_timeline_chart(outcome.chart)
     assert [label for _start, _end, label in outcome.chart["shaded"]] == ["lag"]
+
+
+def test_check_25_complaint_share_on_a_large_batch() -> None:
+    """
+    WHAT: Executes the check 25 runner and asserts the sample is at least the configured minimum, the observed share is
+    within the tolerance of the drawn share, the tolerance matches the configured formula, and the evidence says the
+    inputs are synthetic.
+    WHY: Proves Check 25 compares the complaint share with its drawn value on a batch large enough to mean something.
+    Args:
+        None.
+    Returns:
+        None. Fails if the runner raises or the evidence disagrees with the configured formula.
+    Example:
+        test_check_25_complaint_share_on_a_large_batch()
+    """
+    outcome = asyncio.run(run_complaint_share_large_batch_check(None))
+    evidence = outcome.evidence
+    labels_config = load_labels_config()
+    assert evidence["sample_size"] == 5000
+    assert evidence["sample_size"] >= labels_config["rate_check_min_sample"]
+    drawn = evidence["drawn_share"]
+    expected_tolerance = labels_config["rate_check_standard_errors"] * math.sqrt(drawn * (1 - drawn) / 5000)
+    assert evidence["tolerance"] == expected_tolerance
+    assert abs(evidence["observed_share"] - drawn) <= evidence["tolerance"]
+    assert evidence["inputs"].startswith("synthetic")
+    assert "vs drawn share" in outcome.key_number
+    assert "on 5,000 victims" in outcome.key_number

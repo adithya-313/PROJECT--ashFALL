@@ -38,8 +38,8 @@ from world.outside_events import OutsideEvent
 
 def test_level_12_checks_match_the_brief() -> None:
     """
-    WHAT: Verifies that Level 12 exports 24 checks across parts 'a', 'b', 'c', 'd', and 'e' in quick and full modes.
-    Confirms the checks are tagged five each for parts a to d and four for part e in order, part-a check kinds
+    WHAT: Verifies that Level 12 exports 25 checks across parts 'a', 'b', 'c', 'd', and 'e' in quick and full modes.
+    Confirms the checks are tagged five each for parts a to e in order, part-a check kinds
     match the brief, validate_checks succeeds, and find_missing_preconditions passes.
 
     WHY: Enforces showcase framework contract requirements and guarantees that the level definition satisfies
@@ -57,9 +57,9 @@ def test_level_12_checks_match_the_brief() -> None:
     # 1. Retrieve checks in quick and full modes and verify length and part sequences.
     quick_checks = level_12.get_checks(quick=True)
     full_checks = level_12.get_checks(quick=False)
-    assert len(quick_checks) == 24
-    assert len(full_checks) == 24
-    assert [check.part for check in quick_checks] == ["a"] * 5 + ["b"] * 5 + ["c"] * 5 + ["d"] * 5 + ["e"] * 4
+    assert len(quick_checks) == 25
+    assert len(full_checks) == 25
+    assert [check.part for check in quick_checks] == ["a"] * 5 + ["b"] * 5 + ["c"] * 5 + ["d"] * 5 + ["e"] * 5
 
     # 2. Assert check kinds follow the exact brief sequence for Part A.
     part_a_checks = quick_checks[:5]

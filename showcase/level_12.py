@@ -48,6 +48,7 @@ from showcase.level_12_checks_e import (
     run_analyst_queue_check,
     run_bulk_batch_check,
     run_complaint_delay_by_type_check,
+    run_complaint_share_large_batch_check,
     run_complaints_against_truth_check,
 )
 
@@ -371,27 +372,28 @@ def _get_checks_16_to_20() -> list[CheckDefinition]:
     return [check_16, check_17, check_18, check_19, check_20]
 
 
-def _get_checks_21_to_24() -> list[CheckDefinition]:
+def _get_checks_21_to_25() -> list[CheckDefinition]:
     """
-    WHAT: Constructs check definition descriptors for Level 12e checks 21 through 24.
+    WHAT: Constructs check definition descriptors for Level 12e checks 21 through 25.
     It builds CheckDefinition objects for complaints judged against the truth, complaint delays by scam type, the
-    analyst's accuracy against queue load, and one late bulk-label batch for a region.
+    analyst's accuracy against queue load, one late bulk-label batch for a region, and the complaint share on a
+    large synthetic batch.
 
     WHY: Decomposing check construction into modular subroutines keeps all functions under 30 code lines.
     Separates the label and analyst checks of part e into a focused builder.
 
     Returns:
-        List of CheckDefinition containers representing checks 21 through 24.
+        List of CheckDefinition containers representing checks 21 through 25.
 
     Example:
-        checks = _get_checks_21_to_24(); assert len(checks) == 4
+        checks = _get_checks_21_to_25(); assert len(checks) == 5
     """
     check_21 = CheckDefinition(
         "21. complaints arriving against the truth", "normal",
-        "Complaints in a scam world name only successful victim payments of the complainant, never a payout back, "
-        "and the share of victims who complain follows the share the world drew.",
+        "Complaints in a scam world name only successful victim payments of the complainant, and a payout back is "
+        "never complained about. The complaint share is proven by check 25, not here.",
         run_complaints_against_truth_check,
-        "Label building named a failed payment, a payout back or another account, or the complaint share drifted.",
+        "Label building named a failed payment, a payout back or another account.",
         "world/label_builder.py, world/complaints.py, showcase/fixtures/level_12/gang_complaints.yaml", part="e",
     )
     check_22 = CheckDefinition(
@@ -419,12 +421,20 @@ def _get_checks_21_to_24() -> list[CheckDefinition]:
         "Bulk planning ignored the region or cut-off, or the lag or arrival drifted from the fixture bounds.",
         "world/bulk_confirmations.py, showcase/fixtures/level_12/bulk_short_lag.yaml", part="e",
     )
-    return [check_21, check_22, check_23, check_24]
+    check_25 = CheckDefinition(
+        "25. complaint share on a large batch", "normal",
+        "The share of victims who complain follows the share the world drew, measured on 5,000 victims. The inputs "
+        "are synthetic: made-up victim losses run through the real planner.",
+        run_complaint_share_large_batch_check,
+        "The complaint draw was compared with the wrong value or the share drifted from its drawn value.",
+        "world/complaints.py, world/label_records.py, config/labels.yaml", part="e",
+    )
+    return [check_21, check_22, check_23, check_24, check_25]
 
 
 def get_checks(quick: bool = False) -> list[CheckDefinition]:
     """
-    WHAT: Constructs the ordered sequence of 24 Level 12 showcase verification checks (Parts 12a to 12e).
+    WHAT: Constructs the ordered sequence of 25 Level 12 showcase verification checks (Parts 12a to 12e).
     All checks span consistency, normal, edge, and negative check kinds across parts 'a' to 'e'.
 
     WHY: Supplies the showcase execution engine with the authoritative test suite for Level 12.
@@ -438,7 +448,7 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
         List of CheckDefinition instances configuring Level 12 showcase evaluations.
 
     Example:
-        checks = get_checks(quick=True); assert len(checks) == 24
+        checks = get_checks(quick=True); assert len(checks) == 25
     """
     # Concatenate checks from helper builders to construct complete Level 12 suite.
     checks: list[CheckDefinition] = []
@@ -449,7 +459,7 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
     checks.extend(_get_checks_11_to_13())
     checks.extend(_get_checks_14_to_15())
     checks.extend(_get_checks_16_to_20())
-    checks.extend(_get_checks_21_to_24())
+    checks.extend(_get_checks_21_to_25())
     return checks
 
 

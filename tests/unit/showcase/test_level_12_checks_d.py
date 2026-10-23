@@ -27,7 +27,7 @@ from showcase.level_12_checks_d import (
 def test_level_12_part_d_checks_match_the_brief() -> None:
     """
     WHAT: Verifies that Level 12 exports 5 checks with part 'd' in exact brief order:
-    edge, edge, normal, edge, negative. Asserts that validate_checks passes across all 24 checks
+    edge, edge, normal, edge, negative. Asserts that validate_checks passes across all 25 checks
     of the complete level, and that find_missing_preconditions finds no errors.
 
     WHY: Enforces showcase framework contract requirements and ensures the complete Level 12
@@ -43,7 +43,7 @@ def test_level_12_part_d_checks_match_the_brief() -> None:
         test_level_12_part_d_checks_match_the_brief()
     """
     all_checks = level_12.get_checks(quick=True)
-    assert len(all_checks) == 24
+    assert len(all_checks) == 25
     part_d_checks = [check for check in all_checks if check.part == "d"]
     assert len(part_d_checks) == 5
     assert [check.kind for check in part_d_checks] == ["edge", "edge", "normal", "edge", "negative"]
