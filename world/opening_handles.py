@@ -1,7 +1,7 @@
 """
 WHAT: Assigns real account ids to the handles a gang plan uses for accounts it will open mid-run, and rewrites every
-place a plan stores an account id (payments, truth roles, device control spans, gang device events, illicit seeds
-and outside events) with the real ids.
+place a plan stores an account id (payments, truth roles, device control spans, gang device events, illicit seeds,
+outside events, gang holdings, cash withdrawals and account resales) with the real ids.
 
 WHY: A gang is planned before the run, but the id of an account opened mid-run depends on how many accounts were
 opened before it, genuine ones included. Replaying the openings in the exact order the queue will apply them gives
@@ -16,6 +16,7 @@ TERM: queue order: outside events are applied by minute, then by their position 
 import dataclasses
 
 from world.calendar_runner import PlannedPayment
+from world.cash_withdrawals import CashWithdrawal
 from world.interactive_records import FraudInputs
 from world.interactive_state import person_account_id, shop_account_id
 from world.mule_origins import is_opening_handle
@@ -124,12 +125,36 @@ def _check_payment_after_opening(
             )
 
 
+def _check_withdrawal_after_opening(withdrawal: CashWithdrawal, opening_minutes: dict[str, int]) -> None:
+    """
+    WHAT: Asserts that a cash withdrawal from a handle's account is not dated before that account opens.
+
+    WHY: Money cannot leave an account that does not exist yet, and the lookup error would not say why.
+
+    Args:
+        withdrawal: The planned withdrawal, with its handle still in place.
+        opening_minutes: Handle -> opening minute.
+
+    Returns:
+        None. Raises ValueError naming the handle and both minutes when the withdrawal is too early.
+
+    Example:
+        A withdrawal from "new:g1:0" at minute 100 with that account opened at minute 200 raises ValueError.
+    """
+    account_id = withdrawal.account_id
+    if account_id in opening_minutes and withdrawal.minute < opening_minutes[account_id]:
+        raise ValueError(
+            f"A withdrawal at minute {withdrawal.minute} uses account '{account_id}' "
+            f"before it is opened at minute {opening_minutes[account_id]}."
+        )
+
+
 def resolve_opening_handles(
     fraud_inputs: FraudInputs, next_person_index: int, next_shop_index: int
 ) -> tuple[FraudInputs, dict[str, str]]:
     """
     WHAT: Gives every handle its real id and returns the inputs with all handles replaced. First checks that no
-    payment uses a handle before its opening minute. Inputs without handles are returned unchanged.
+    payment or cash withdrawal uses a handle before its opening minute. Inputs without handles are returned unchanged.
 
     WHY: Everything downstream, from the queue to the truth files, works with real ids only.
 
@@ -155,6 +180,8 @@ def resolve_opening_handles(
     assigned_ids, opening_minutes = replay_openings(fraud_inputs.outside_events, next_person_index, next_shop_index)
     for payment in fraud_inputs.payments:
         _check_payment_after_opening(payment, opening_minutes)
+    for withdrawal in fraud_inputs.withdrawals:
+        _check_withdrawal_after_opening(withdrawal, opening_minutes)
 
     payments = tuple(
         dataclasses.replace(
@@ -189,9 +216,23 @@ def resolve_opening_handles(
         dataclasses.replace(h, account_id=str(_real_id(h.account_id, assigned_ids)))
         for h in fraud_inputs.gang_holdings
     )
+    # Withdrawals and resales were missed until Level 12f; fixtures used all_rented, so no withdrawal ever came from
+    # a gang-opened account and the unresolved handle was never reached.
+    withdrawals = tuple(
+        dataclasses.replace(w, account_id=str(_real_id(w.account_id, assigned_ids)))
+        for w in fraud_inputs.withdrawals
+    )
+    resales = tuple(
+        dataclasses.replace(
+            r, new_account=str(_real_id(r.new_account, assigned_ids)),
+            sold_account=str(_real_id(r.sold_account, assigned_ids)),
+        )
+        for r in fraud_inputs.account_resales
+    )
     resolved = dataclasses.replace(
         fraud_inputs, payments=payments, truth=truth, gang_device_events=device_events,
         illicit_seeds=seeds, outside_events=outside_events, gang_holdings=holdings,
+        withdrawals=withdrawals, account_resales=resales,
     )
     return resolved, assigned_ids
 

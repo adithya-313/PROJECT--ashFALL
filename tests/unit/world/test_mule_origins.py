@@ -330,6 +330,46 @@ def test_payment_before_the_opening_is_refused_and_unknown_handle_is_refused() -
         resolve_opening_handles(orphan, 60, 12)
 
 
+def test_resolve_rewrites_the_handle_of_a_cash_withdrawal_and_of_a_resale() -> None:
+    """Regression: a withdrawal from a gang-opened account, and a resale naming one, get the real id."""
+    from world.cash_withdrawals import CashWithdrawal
+    from world.interactive_records import Resale
+
+    handle = "new:g:0"
+    inputs = FraudInputs(
+        outside_events=(person_open(100, handle),),
+        withdrawals=(CashWithdrawal(300, handle, 5_000, "atm", 100_000),),
+        account_resales=(Resale("g2", handle, "acc_person_000001", "g", 400),),
+    )
+
+    resolved, assigned = resolve_opening_handles(inputs, 60, 12)
+
+    # The first person opening with next_person_index 60 receives person number 60, written with six digits.
+    expected_id = "acc_person_000060"
+    assert assigned == {handle: expected_id}
+    assert resolved.withdrawals[0].account_id == expected_id
+    assert resolved.withdrawals[0].amount_paise == 5_000
+    assert resolved.account_resales[0].new_account == expected_id
+    assert resolved.account_resales[0].sold_account == "acc_person_000001"
+
+
+def test_withdrawal_before_the_opening_is_refused_and_withdrawals_without_handles_pass_through() -> None:
+    """A withdrawal dated before its handle's opening is refused; inputs with no handle come back as the same object."""
+    from world.cash_withdrawals import CashWithdrawal
+
+    early = FraudInputs(
+        outside_events=(person_open(100, "new:g:0"),),
+        withdrawals=(CashWithdrawal(99, "new:g:0", 5_000, "branch"),),
+    )
+    with pytest.raises(ValueError, match="withdrawal at minute 99 uses account 'new:g:0' before it is opened"):
+        resolve_opening_handles(early, 60, 12)
+
+    plain = FraudInputs(withdrawals=(CashWithdrawal(99, "acc_person_000001", 5_000, "branch"),))
+    resolved, assigned = resolve_opening_handles(plain, 60, 12)
+    assert resolved is plain
+    assert assigned == {}
+
+
 def test_runner_refuses_an_early_payment_before_anything_runs() -> None:
     """Runs the whole runner with a payment before its handle's opening and checks the same refusal comes out."""
     settings, code_version = get_showcase_b_settings()
