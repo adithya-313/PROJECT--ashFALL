@@ -1,0 +1,18 @@
+# Configuration fixture layer for Level 12e bulk-confirmation checks.
+#
+# TERM: layer = a named file that replaces some ranges in world_ranges.yaml for one run.
+# TERM: crackdown = one police action that confirms many mule accounts of one region at once.
+# TERM: lag = days between a crackdown's cut-off and the moment its confirmation arrives.
+#
+# This file is read with world/layers.read_layer. It is not applied with apply_layers: the training values below
+# sit outside the real test ranges on purpose, which apply_layers rejects. Tests copy its values into the effective
+# configuration of a finished run instead; only label planning reads these two settings.
+
+name: bulk-short-lag
+reason: "Labelled fixture, not a real range: raises crackdown frequency and shortens the lag so a 61-day world shows a bulk confirmation (issue 12-12)."
+changes:
+  world_ranges:
+    bulk_confirmation_events_per_year:
+      training: [50, 50]
+    bulk_confirmation_delay_days:
+      training: [3, 5]

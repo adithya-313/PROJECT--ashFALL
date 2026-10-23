@@ -36,6 +36,7 @@ DELAY_UNIT_MINUTES: str = "minutes"
 DELAY_UNIT_DAYS: str = "days"
 DELAY_UNITS: tuple[str, ...] = (DELAY_UNIT_MINUTES, DELAY_UNIT_DAYS)
 REGISTRY_REPORT_KIND: str = "registry_report"
+BULK_CONFIRMATION_KIND: str = "bulk_confirmation"
 RANGE_SPLITS: tuple[str, ...] = ("training", "test", "stress")
 # Key inside complaint_delay_by_scam_type that documents the block; it is not a scam type.
 DELAY_BLOCK_DOCUMENTATION_KEY: str = "reason"
@@ -207,6 +208,80 @@ class RegistryReport:
                 f"RegistryReport reported_minute {self.reported_minute} is before confirmed_minute "
                 f"{self.confirmed_minute}"
             )
+
+
+@dataclass(frozen=True)
+class BulkConfirmation:
+    """
+    WHAT: One police crackdown that confirms many mule-side accounts of one region at once: when it arrives, its
+    cut-off minute, its region, the size it asked for and the accounts it actually confirmed with their banks.
+
+    WHY: Requested and confirmed counts are both kept (len(account_ids) is the confirmed count), so a crackdown
+    that found fewer mules than it wanted is visible and never silently capped. Like other label events it carries
+    no truth field.
+
+    Args:
+        batch_id: Run-scoped id such as "<run_id>-B000001".
+        kind: Always BULK_CONFIRMATION_KIND.
+        arrival_minute: When the confirmation arrives (cut-off plus the drawn delay); may lie after the world ends.
+        cutoff_minute: Mule-side roles that began at or before this minute can be swept.
+        region: Region index the crackdown works in.
+        requested_size: How many accounts the crackdown tried to confirm (>= 0).
+        account_ids: The accounts confirmed; may be empty when no candidate fitted.
+        account_bank_indexes: Bank index of each confirmed account, aligned with account_ids.
+
+    Raises:
+        ValueError: If kind is wrong, the two tuples differ in length, more accounts than requested are listed,
+            or arrival_minute is before cutoff_minute.
+
+    Example:
+        BulkConfirmation("r-B000001", "bulk_confirmation", 9000, 5000, 2, 10, ("acc_a",), (1,))
+    """
+
+    batch_id: str
+    kind: str
+    arrival_minute: int
+    cutoff_minute: int
+    region: int
+    requested_size: int
+    account_ids: tuple[str, ...]
+    account_bank_indexes: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        """Rejects a wrong kind, misaligned or oversized account lists, or an arrival before the cut-off."""
+        if self.kind != BULK_CONFIRMATION_KIND:
+            raise ValueError(f"BulkConfirmation kind '{self.kind}' must be '{BULK_CONFIRMATION_KIND}'")
+        if len(self.account_ids) != len(self.account_bank_indexes):
+            raise ValueError("BulkConfirmation account_ids and account_bank_indexes must have the same length")
+        if self.requested_size < 0 or len(self.account_ids) > self.requested_size:
+            raise ValueError(
+                f"BulkConfirmation lists {len(self.account_ids)} accounts for requested_size {self.requested_size}"
+            )
+        if self.arrival_minute < self.cutoff_minute:
+            raise ValueError(
+                f"BulkConfirmation arrival_minute {self.arrival_minute} is before cutoff_minute {self.cutoff_minute}"
+            )
+
+
+@dataclass(frozen=True)
+class BulkConfirmationResult:
+    """
+    WHAT: What planning bulk confirmations gives back: the crackdowns and the mule-side accounts that could not be
+    swept because they have no region.
+
+    WHY: Accounts opened mid-run have no region, so no crackdown can sweep them. Their ids are returned, not dropped
+    silently, so the gap is visible.
+
+    Args:
+        confirmations: The crackdowns in batch order.
+        mule_side_accounts_without_region: Distinct mule-side account ids with no known region, first-seen order.
+
+    Example:
+        BulkConfirmationResult((), ("acc_opened_1",))
+    """
+
+    confirmations: tuple[BulkConfirmation, ...]
+    mule_side_accounts_without_region: tuple[str, ...]
 
 
 @dataclass(frozen=True)

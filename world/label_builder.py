@@ -19,10 +19,12 @@ import json
 from pathlib import Path
 from typing import Any
 
+from world.bulk_confirmations import BulkCandidate, plan_bulk_confirmations
 from world.complaints import assign_label_ids, plan_false_complaints, plan_true_complaints
 from world.interactive_loop import build_component_streams
 from world.interactive_records import InteractiveWorldOutput
 from world.label_records import (
+    BulkConfirmationResult,
     GenuinePayment,
     LabelEvent,
     RegistryReport,
@@ -40,6 +42,7 @@ EVENT_STATUS_SUCCESS: str = "success"
 OWNER_KIND_SHOP: str = "shop"
 LABEL_STREAM_NAMES: tuple[str, str, str] = ("label_world_settings", "true_complaints", "false_complaints")
 REGISTRY_STREAM_NAME: str = "registry_reports"
+BULK_STREAM_NAME: str = "bulk_confirmations"
 
 
 def _story_of_fraud_event(output: InteractiveWorldOutput, position: int) -> PaymentStory:
@@ -284,3 +287,96 @@ def build_registry_reports(
         effective["settings"]["range_name"], labels, streams[REGISTRY_STREAM_NAME],
         output.result.run_id, runner["position_digits"],
     )
+
+
+def collect_bulk_candidates(
+    output: InteractiveWorldOutput, labels_config: dict[str, Any]
+) -> tuple[list[BulkCandidate], list[str]]:
+    """
+    WHAT: Lists the mule-side accounts a crackdown could sweep and the mule-side accounts it could not. A role span
+    counts when its role is in mule_side_roles. An account with a region (a person or a shop of the world) becomes a
+    candidate (account_id, bank_index, region, earliest role start); an account with no region, which means one
+    opened during the run, is returned in a separate list.
+
+    WHY: Opened accounts have no region record, so they can never be swept, and the gap must be visible instead of
+    silent. An account that held several mule-side spans (for example a resold mule) appears once, at its earliest
+    start.
+
+    Args:
+        output: The finished InteractiveWorldOutput; it is only read.
+        labels_config: The validated labels block, for mule_side_roles.
+
+    Returns:
+        (candidates, accounts_without_region), both in first-seen order of the truth roles.
+
+    Example:
+        A mule that opened its account mid-run is in accounts_without_region and in no candidate.
+    """
+    regions: dict[str, tuple[int, int]] = {}
+    for person in output.world.people:
+        regions[person.account_id] = (person.region, person.bank_index)
+    for shop in output.world.shops:
+        regions[shop.account_id] = (shop.region, shop.bank_index)
+
+    mule_side_roles = labels_config["mule_side_roles"]
+    earliest_start: dict[str, int] = {}
+    for span in output.result.truth.roles:
+        if span.role not in mule_side_roles:
+            continue
+        if span.account_id not in earliest_start or span.valid_from < earliest_start[span.account_id]:
+            earliest_start[span.account_id] = span.valid_from
+
+    candidates: list[BulkCandidate] = []
+    without_region: list[str] = []
+    for account_id, role_start in earliest_start.items():
+        if account_id in regions:
+            region, bank_index = regions[account_id]
+            candidates.append((account_id, bank_index, region, role_start))
+        else:
+            without_region.append(account_id)
+    return candidates, without_region
+
+
+def build_bulk_confirmations(
+    output: InteractiveWorldOutput,
+    runner_config: dict[str, Any] | None = None,
+    labels_config: dict[str, Any] | None = None,
+) -> BulkConfirmationResult:
+    """
+    WHAT: Builds the numbered bulk confirmations of a finished run from child bulk_confirmations. Candidates come
+    from the truth roles and the world's people and shops; the number of regions is one more than the highest
+    region of any person or shop; the world length comes from the run settings.
+
+    WHY: A separate child leaves every other stream untouched. Mule-side accounts without a region are returned with
+    the crackdowns instead of being dropped silently.
+
+    Args:
+        output: The finished InteractiveWorldOutput; it is only read.
+        runner_config: Optional interactive_runner block; defaults to config/interactive_runner.yaml.
+        labels_config: Optional validated labels block; defaults to config/labels.yaml.
+
+    Returns:
+        A BulkConfirmationResult with the crackdowns and the accounts that had no region.
+
+    Raises:
+        ValueError: If the bulk stream is missing from the runner config or the planner refuses its input.
+
+    Example:
+        build_bulk_confirmations(output).confirmations may be empty in a short world.
+    """
+    runner = runner_config if runner_config is not None else load_runner_config()
+    labels = labels_config if labels_config is not None else load_labels_config()
+    effective = output.effective_config
+    children = runner["random_stream_children"]
+    if BULK_STREAM_NAME not in children:
+        raise ValueError(f"random_stream_children is missing the stream '{BULK_STREAM_NAME}'")
+    streams = build_component_streams(effective["settings"]["seed"], {BULK_STREAM_NAME: children[BULK_STREAM_NAME]})
+
+    candidates, without_region = collect_bulk_candidates(output, labels)
+    region_numbers = [person.region for person in output.world.people] + [shop.region for shop in output.world.shops]
+    batches = plan_bulk_confirmations(
+        candidates, effective["settings"]["n_days"], max(region_numbers) + 1,
+        effective["world_configs"]["world_ranges"], effective["settings"]["range_name"], labels,
+        streams[BULK_STREAM_NAME], output.result.run_id, runner["position_digits"],
+    )
+    return BulkConfirmationResult(tuple(batches), tuple(without_region))
