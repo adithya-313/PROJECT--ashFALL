@@ -209,6 +209,8 @@ NEW_CODE_FILES: list[str] = [
     "tests/unit/showcase/test_level_12_checks_d.py",
     # Level 12d handoff facts generator.
     "scripts/handoff_facts.py",
+    # Level 12e structured scam type on payment stories test suite.
+    "tests/unit/world/test_scam_story_fields.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
