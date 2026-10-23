@@ -25,10 +25,12 @@ from world.interactive_records import InteractiveWorldOutput
 from world.label_records import (
     GenuinePayment,
     LabelEvent,
+    RegistryReport,
     VictimLoss,
     draw_label_world_settings,
     load_labels_config,
 )
+from world.registry_reports import confirm_accounts, plan_registry_reports
 from world.run_identity import load_runner_config
 from world.truth_records import SCAM_STEP_VICTIM_PAYMENT, PaymentStory
 
@@ -37,6 +39,7 @@ EVENT_SOURCE_PLANNED: str = "planned"
 EVENT_STATUS_SUCCESS: str = "success"
 OWNER_KIND_SHOP: str = "shop"
 LABEL_STREAM_NAMES: tuple[str, str, str] = ("label_world_settings", "true_complaints", "false_complaints")
+REGISTRY_STREAM_NAME: str = "registry_reports"
 
 
 def _story_of_fraud_event(output: InteractiveWorldOutput, position: int) -> PaymentStory:
@@ -235,3 +238,49 @@ def write_label_events_file(events: list[LabelEvent], path: Path) -> str:
             row["payment_ids"] = list(event.payment_ids)
             label_file.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def build_registry_reports(
+    output: InteractiveWorldOutput,
+    complaints: list[LabelEvent],
+    runner_config: dict[str, Any] | None = None,
+    labels_config: dict[str, Any] | None = None,
+) -> list[RegistryReport]:
+    """
+    WHAT: Builds the numbered registry reports of a finished run from its label events. Accounts are confirmed by
+    their first complaint, the reporting share and the reports are drawn from the registry_reports stream, and the
+    holder fingerprint is looked up for person accounts only.
+
+    WHY: Using its own child leaves the victim complaint draws and children 0-19 untouched, so the two shares of
+    issue L2 stay independent. Shops and accounts opened mid-run have no device record and get None.
+
+    Args:
+        output: The finished InteractiveWorldOutput; it is only read.
+        complaints: The numbered label events from build_label_events.
+        runner_config: Optional interactive_runner block; defaults to config/interactive_runner.yaml.
+        labels_config: Optional validated labels block; defaults to config/labels.yaml.
+
+    Returns:
+        The registry reports sorted by report minute, with ids "<run_id>-R<position>".
+
+    Raises:
+        ValueError: If the registry stream is missing from the runner config or a planner refuses its input.
+
+    Example:
+        build_registry_reports(output, build_label_events(output))[0].report_id ends with "-R000001"
+    """
+    runner = runner_config if runner_config is not None else load_runner_config()
+    labels = labels_config if labels_config is not None else load_labels_config()
+    effective = output.effective_config
+    children = runner["random_stream_children"]
+    if REGISTRY_STREAM_NAME not in children:
+        raise ValueError(f"random_stream_children is missing the stream '{REGISTRY_STREAM_NAME}'")
+    streams = build_component_streams(
+        effective["settings"]["seed"], {REGISTRY_STREAM_NAME: children[REGISTRY_STREAM_NAME]}
+    )
+    holder_fingerprints = {person.account_id: person.device.fingerprint for person in output.world.people}
+    return plan_registry_reports(
+        confirm_accounts(complaints), holder_fingerprints, effective["world_configs"]["world_ranges"],
+        effective["settings"]["range_name"], labels, streams[REGISTRY_STREAM_NAME],
+        output.result.run_id, runner["position_digits"],
+    )

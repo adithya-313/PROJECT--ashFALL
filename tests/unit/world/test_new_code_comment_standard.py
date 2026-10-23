@@ -218,6 +218,9 @@ NEW_CODE_FILES: list[str] = [
     # Level 12e label builder and test suite.
     "world/label_builder.py",
     "tests/unit/world/test_label_builder.py",
+    # Level 12e registry reports and test suite.
+    "world/registry_reports.py",
+    "tests/unit/world/test_registry_reports.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [

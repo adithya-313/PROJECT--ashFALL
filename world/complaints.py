@@ -31,7 +31,7 @@ from world.scam_config import resolve_remainder_scam_type
 PAYMENTS_PER_RATE_UNIT: int = 100_000
 
 
-def _delay_from_uniform(unit_draw: float, low_minutes: int, high_minutes: int) -> int:
+def delay_from_uniform(unit_draw: float, low_minutes: int, high_minutes: int) -> int:
     """
     Maps one uniform draw in [0, 1) to a whole-minute delay in [low_minutes, high_minutes]. Raises ValueError if
     rounding ever pushes the result past the high bound (it cannot for a draw below 1 except by float error).
@@ -95,7 +95,7 @@ def plan_true_complaints(
         if complain_draws[position] >= settings.victim_complaint_share:
             continue
         low_minutes, high_minutes = bounds_by_type[loss.scam_type]
-        delay_minutes = _delay_from_uniform(float(delay_draws[position]), low_minutes, high_minutes)
+        delay_minutes = delay_from_uniform(float(delay_draws[position]), low_minutes, high_minutes)
         events.append(
             LabelEvent(
                 label_id="",
@@ -176,7 +176,7 @@ def plan_false_complaints(
         chance = shop_chance if payment.payee_is_shop else person_chance
         if complain_draws[position] >= chance:
             continue
-        delay_minutes = _delay_from_uniform(float(delay_draws[position]), low_minutes, high_minutes)
+        delay_minutes = delay_from_uniform(float(delay_draws[position]), low_minutes, high_minutes)
         events.append(
             LabelEvent(
                 label_id="",

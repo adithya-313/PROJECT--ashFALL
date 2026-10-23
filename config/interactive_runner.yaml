@@ -99,6 +99,8 @@ interactive_runner:
     label_world_settings: 17
     true_complaints: 18
     false_complaints: 19
+    # Child 20 draws the bank reporting share and registry reports after the run (amendment A-021).
+    registry_reports: 20
   # The reason for the numbers above, as the project wrote it (kept as is).
   random_stream_children_reason: Children 0-3 belong to Level 11 and must never be touched. Children 4-5 handle failure decisions. Child 6 is reserved for gang devices (Level 12b B-2b) and child 7 provides planning randomness for gangs (D6). Children 8 and 9 handle mid-run account openings for genuine agents and criminal gangs respectively, isolating draw sequences across operational domains. Child 10 decides whether a new genuine person has a routine and plans it, child 11 takes the failure draws of those routine payments, child 12 decides which outgoing payments of a rented mule's owner are paused, child 13 evaluates failure draws for cash withdrawals, child 14 evaluates gang observation feed delivery delays and miss draws, child 15 evaluates gang reaction decision rules, and child 16 evaluates account market resale decisions between criminal syndicates. Each component gets its own stream so its draws never shift another stream's draws.
   # ---------------------------------------------------------------------

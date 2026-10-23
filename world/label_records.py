@@ -25,6 +25,7 @@ from world.config_reader import draw_in_range, get_parameter_entry
 from world.device_schedule import MINUTES_PER_DAY
 from world.scam_config import resolve_remainder_scam_type
 from world.scam_planner import SCAM_INVESTMENT, SCAM_JOB
+from world.truth_records import load_truth_config
 
 REPO_ROOT: Path = Path(__file__).resolve().parent.parent
 LABELS_CONFIG_PATH: Path = REPO_ROOT / "config" / "labels.yaml"
@@ -34,6 +35,8 @@ LABEL_KINDS: tuple[str, ...] = (LABEL_KIND_COMPLAINT,)
 DELAY_UNIT_MINUTES: str = "minutes"
 DELAY_UNIT_DAYS: str = "days"
 DELAY_UNITS: tuple[str, ...] = (DELAY_UNIT_MINUTES, DELAY_UNIT_DAYS)
+REGISTRY_REPORT_KIND: str = "registry_report"
+RANGE_SPLITS: tuple[str, ...] = ("training", "test", "stress")
 # Key inside complaint_delay_by_scam_type that documents the block; it is not a scam type.
 DELAY_BLOCK_DOCUMENTATION_KEY: str = "reason"
 
@@ -155,6 +158,55 @@ class GenuinePayment:
     payee_account: str
     payee_bank_index: int
     payee_is_shop: bool
+
+
+@dataclass(frozen=True)
+class RegistryReport:
+    """
+    WHAT: One report a bank makes to the national registry about an account, as written in the Level 12e contract
+    in docs/interfaces/national_systems.md. The field names and their order are the contract.
+
+    WHY: Level 13 reads these events. Like a label event, a report never says whether the account really is a mule,
+    so every wrong registry entry traces back to a false complaint and to nothing else.
+
+    Args:
+        report_id: Run-scoped id such as "<run_id>-R000001".
+        kind: Always REGISTRY_REPORT_KIND.
+        reported_minute: When the report reaches the registry (confirmed_minute plus the drawn delay).
+        reporting_bank_index: Bank index of the reported account.
+        account_id: The reported account.
+        device_fingerprint: The holder's device fingerprint for a Level 11 person; None for shops and accounts
+            opened mid-run.
+        confirmed_minute: Arrival minute of the first complaint naming the account.
+        complaint_ids: Ids of every complaint naming the account that arrived at or before confirmed_minute.
+
+    Raises:
+        ValueError: If kind is wrong, complaint_ids is empty, or reported_minute is before confirmed_minute.
+
+    Example:
+        RegistryReport("r-R000001", "registry_report", 4321, 1, "acc_a", None, 3900, ("r-L000003",))
+    """
+
+    report_id: str
+    kind: str
+    reported_minute: int
+    reporting_bank_index: int
+    account_id: str
+    device_fingerprint: str | None
+    confirmed_minute: int
+    complaint_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        """Rejects a wrong kind, an empty complaint list, or a report that arrives before its confirmation."""
+        if self.kind != REGISTRY_REPORT_KIND:
+            raise ValueError(f"RegistryReport kind '{self.kind}' must be '{REGISTRY_REPORT_KIND}'")
+        if len(self.complaint_ids) == 0:
+            raise ValueError("RegistryReport complaint_ids must not be empty")
+        if self.reported_minute < self.confirmed_minute:
+            raise ValueError(
+                f"RegistryReport reported_minute {self.reported_minute} is before confirmed_minute "
+                f"{self.confirmed_minute}"
+            )
 
 
 @dataclass(frozen=True)
@@ -305,6 +357,81 @@ def validate_labels_config(config: dict[str, Any]) -> None:
     standard_errors = config["rate_check_standard_errors"]
     if isinstance(standard_errors, bool) or not isinstance(standard_errors, (int, float)) or standard_errors <= 0:
         raise ValueError(f"rate_check_standard_errors must be a positive number, got {standard_errors!r}")
+    _validate_registry_and_bulk_keys(config)
+
+
+def _validate_registry_and_bulk_keys(config: dict[str, Any]) -> None:
+    """
+    Checks the round E-2 keys of the labels block: the bank reporting share and bulk references name a world_ranges
+    entry, registry_report_delay_minutes has a minutes pair with 0 <= low <= high for every split, and
+    mule_side_roles is a non-empty list of roles that exist in config/truth_store.yaml. Raises ValueError otherwise.
+    """
+    required_keys = (
+        "bank_registry_report_share", "registry_report_delay_minutes", "bulk_confirmation_events_per_year",
+        "bulk_confirmation_size_accounts", "bulk_confirmation_delay_days", "mule_side_roles",
+    )
+    for key in required_keys:
+        if key not in config:
+            raise ValueError(f"labels config is missing required key '{key}'")
+    for key in ("bank_registry_report_share", "bulk_confirmation_events_per_year",
+                "bulk_confirmation_size_accounts", "bulk_confirmation_delay_days"):
+        _require_reference(config[key], key)
+
+    delay_block = config["registry_report_delay_minutes"]
+    if not isinstance(delay_block, dict) or delay_block.get("unit") != DELAY_UNIT_MINUTES:
+        raise ValueError(f"registry_report_delay_minutes must be a mapping with unit '{DELAY_UNIT_MINUTES}'")
+    for split in RANGE_SPLITS:
+        if split not in delay_block:
+            raise ValueError(f"registry_report_delay_minutes has no '{split}' pair")
+        pair = delay_block[split]
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            raise ValueError(f"registry_report_delay_minutes '{split}' must be a pair, got {pair!r}")
+        if pair[0] < 0 or pair[0] > pair[1]:
+            raise ValueError(f"registry_report_delay_minutes '{split}' must satisfy 0 <= low <= high, got {pair!r}")
+
+    mule_side_roles = config["mule_side_roles"]
+    if not isinstance(mule_side_roles, list) or len(mule_side_roles) == 0:
+        raise ValueError("mule_side_roles must be a non-empty list of role names")
+    truth_roles = load_truth_config()["truth_store"]["roles"]
+    for role in mule_side_roles:
+        if role not in truth_roles:
+            raise ValueError(
+                f"mule_side_roles name '{role}' is not a role in config/truth_store.yaml: {list(truth_roles)}"
+            )
+
+
+def resolve_registry_delay_bounds_minutes(split: str, config: dict[str, Any]) -> tuple[int, int]:
+    """
+    WHAT: Returns the (low, high) registry report delay in whole minutes for a split, read from the labels config
+    itself, because this range lives in config/labels.yaml and not in world_ranges.
+
+    WHY: No published figure exists, so the project owns this range (amendment A-021); reading it here keeps the
+    split handling in one place.
+
+    Args:
+        split: Range split name, one of training, test or stress.
+        config: The validated `labels` block.
+
+    Returns:
+        (low_minutes, high_minutes), 0 <= low <= high.
+
+    Raises:
+        ValueError: If the split has no pair or the pair is malformed.
+
+    Example:
+        resolve_registry_delay_bounds_minutes("training", config) == (60, 1440)
+    """
+    delay_block = config["registry_report_delay_minutes"]
+    if split not in delay_block:
+        raise ValueError(f"registry_report_delay_minutes has no split '{split}'")
+    pair = delay_block[split]
+    if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+        raise ValueError(f"registry_report_delay_minutes '{split}' must be a pair, got {pair!r}")
+    low_minutes = int(round(float(pair[0])))
+    high_minutes = int(round(float(pair[1])))
+    if low_minutes < 0 or low_minutes > high_minutes:
+        raise ValueError(f"registry_report_delay_minutes '{split}' must satisfy 0 <= low <= high, got {pair!r}")
+    return low_minutes, high_minutes
 
 
 def resolve_delay_bounds_minutes(
