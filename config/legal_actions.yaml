@@ -1,19 +1,57 @@
-# Actions the engine may take, with the legal basis, the maximum duration and whether a human must approve.
+# =====================================================================
+# LEGAL ACTIONS: what a bank may do when it suspects fraud, and on what basis
+# =====================================================================
 #
-# Each action has:
-#   scope     = amount_only, whole_account or channel_only
-#   in_force  = true if the rule is in force today, false if it is only a draft
-# and four labelled blocks: precondition, legal_basis, max_duration_days, requires_human_approval.
-# Where no maximum was found the value is null, not_found is true and the label is assumption.
-# Labels: sourced (link, date and quote), reported (link and date), assumption, policy.
+# What this file is
+#   When a bank thinks an account is being used for fraud, it can respond in
+#   several ways, from a warning to freezing the whole account. This file
+#   lists seven such actions and, for each one, what it affects, when it
+#   may be used, what law or rule allows it, how long it may last, and
+#   whether a person must approve it. Where no source was found, the file
+#   says so instead of guessing. It makes no legal claim beyond what each
+#   entry's source says. Later levels' mock bank feed uses these names.
+#
+# Who reads it
+#   core/level10_check.py and showcase/level_10.py check its shape and count
+#   its labels; core/config_validator.py checks every labelled block;
+#   tests/unit/test_research_configs.py pins its shape. The action names are
+#   also the allowed values of "action" in the mock hold request described
+#   in docs/interfaces/national_systems.md. No simulation code reads the
+#   individual values yet.
+#
+# How to read an entry
+#   scope       what the action touches:
+#                 amount_only    only one disputed amount of money
+#                 whole_account  the whole account
+#                 channel_only   one way of using the account (for example
+#                                digital banking, or one payment)
+#   in_force    true if the rule applies today, false if it is only a draft.
+#   precondition, legal_basis, max_duration_days, requires_human_approval
+#               four labelled blocks. Each has a label:
+#                 sourced     a web link, a date and a short quote are given.
+#                 reported    a link and a date; seen in a second-hand source.
+#                 assumption  our reading or design choice, with no source.
+#                 policy      our own rule.
+#               "value" is the answer; "reason" says why. Where no maximum or
+#               basis was found, value is null, not_found is true and the
+#               label is assumption.
+#
+# Where the full reasoning lives
+#   The reason line of each block, and config/research_status.yaml.
+#
 # Checked by: python -m core.config_validator config/legal_actions.yaml
+# =====================================================================
 
+# Three notes the author wrote down about what the sources do NOT say.
 notes:
   - No official source was found for a rule that a blanket freeze must be narrowed to the disputed amount.
   - A lien on the disputed amount is an action the SOP allows.
   - '"30-60 seconds" was only a conference comment, not a rule.'
 
 actions:
+  # pre_payment_warning: warn the customer before a payment goes out.
+  # It touches one payment path only. No source applies, so every block is an
+  # assumption; no sign-off is needed in our design.
   pre_payment_warning:
     scope: channel_only
     in_force: true
@@ -37,6 +75,9 @@ actions:
       value: false
       reason: A bank-side warning needs no sign-off in our design.
 
+  # short_payment_delay: pause one payment for a short time before sending it.
+  # A design choice of the project; no source applies and no sign-off is
+  # needed.
   short_payment_delay:
     scope: channel_only
     in_force: true
@@ -60,6 +101,11 @@ actions:
       value: false
       reason: Design choice of the project; a short delay needs no sign-off.
 
+  # hold_reported_amount: the bank holds the amount the victim reported, and
+  # no more. Allowed once the bank receives a police-screened notice, under
+  # a Home Ministry procedure (the SOP). Police review the report first, so
+  # a human approval is part of the process. No maximum duration was found.
+  # Example: for a report of Rs 1,000, the hold is Rs 1,000.
   hold_reported_amount:
     scope: amount_only
     in_force: true
@@ -93,6 +139,11 @@ actions:
         quote: "put on hold an amount to the extent of the amount reported"
       reason: Police review the report before the notice is sent; no separate bank-level approval was found.
 
+  # lien_on_disputed_amount: block only the disputed amount (a "lien"), so
+  # the customer can still use the rest. The author found no rule telling
+  # banks to do this, so it is the project's own design option, built on the
+  # sourced rule to hold the reported amount. A bank officer's sign-off is
+  # also our design choice.
   lien_on_disputed_amount:
     scope: amount_only
     in_force: true
@@ -118,6 +169,10 @@ actions:
       value: true
       reason: Bank nodal officer sign-off is our design choice, not found in the SOP.
 
+  # suspend_digital_services: suspend the account's digital banking services.
+  # The procedure names it as a step. The trigger,
+  # "reported multiple times", is our reading of it. No maximum duration was
+  # found.
   suspend_digital_services:
     scope: channel_only
     in_force: true
@@ -143,6 +198,11 @@ actions:
       value: true
       reason: The SOP describes enhanced due diligence and lawful directions; no explicit sign-off found.
 
+  # temporary_debit_hold_rbi_draft: a draft RBI rule (11 Sep 2026, NOT in
+  # force: in_force is false) that would let a bank hold debits for up to 60
+  # days on its own monitoring, without a person approving. Known only from
+  # second-hand coverage because the page could not be opened.
+  # Example: max_duration_days 60 means at most 60 days.
   temporary_debit_hold_rbi_draft:
     scope: amount_only
     in_force: false
@@ -172,6 +232,12 @@ actions:
         date: "2026-09-11"
       reason: The draft is described as allowing the bank to act on its own; not confirmed.
 
+  # full_account_freeze: block everything on the account. Our design says a
+  # last resort only, because it harms the customer most. The basis reported
+  # is a seizure on a law-enforcement agency's directions (BNSS section 106),
+  # or a Magistrate's order for attachment (section 107). The Bombay High Court cancelled freezes issued
+  # without that process, so a legal process (a person) is required. No
+  # maximum duration was found.
   full_account_freeze:
     scope: whole_account
     in_force: true

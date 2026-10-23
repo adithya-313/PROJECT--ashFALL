@@ -1,23 +1,57 @@
-# Issue register v2: the findings of Revision 2 of the project report (Section 27, 16 October 2026), plus the
-# Level 11 issues that later levels carry on. Level 11's own register, config/issues.yaml, is frozen and never edited.
+# =====================================================================
+# ISSUE REGISTER V2: the problems found in Revision 2, and where each stands
+# =====================================================================
 #
-# TERM: issue register = a list of every known problem with a status, so none is forgotten silently,
-#       e.g. "12-6" is "built" because the trivial-world check is written down in the evaluation config.
-# TERM: revision_2 = an ID first used in Revision 2, e.g. K1 or 12-7.
-# TERM: level_11 = an ID that already exists in config/issues.yaml, e.g. G1; its v1_status is copied from there.
-# TERM: evidence = a real thing that can be looked up to show the status is true: a config block, a test function,
-#       an amendment or a document text. The checker opens each one.
-# TERM: later_work = what a later level still has to do, written "Level N: what".
+# What this file is
+#   A list of every known problem, so none is forgotten silently. It holds
+#   the findings of Revision 2 of the project report (Section 27, 16 October
+#   2026) and also the Level 11 problems that later levels carry on. Level
+#   11's own list, config/issues.yaml, is frozen and never edited, which is
+#   why new problems live here. 93 IDs: 77 from Revision 2 and 16 from
+#   Level 11.
 #
-# status words
-#   built    = done and checked now (see evidence).
-#   partial  = part of it exists now (see evidence); later_work lists the rest.
-#   planned  = nothing exists yet; a later level owns it.
-#   deferred = deliberately not built; reason says why.
+# Who reads it
+#   core/issue_register_v2.py (python -m core.issue_register_v2) checks it,
+#   and tests/unit/test_issue_register_v2.py runs that check in CI. Config
+#   blocks elsewhere name register IDs in an issue_ids_v2 field, and the
+#   checker follows those tags. The Level 12 showcase also runs a check on it.
 #
-# Section 27 groups some findings on one row (for example 14-9, 14-11 and 14-12). Each ID has its own entry here
-# and shares the finding text.
+# What the checker proves
+#   For every entry marked built or partial, each evidence item is looked up
+#   for real: the config block, test function, amendment or document text
+#   must exist. A level_11 entry's v1_status must equal that ID's live
+#   status in config/issues.yaml. An entry without proof, or with an unknown
+#   status, origin or level, is an error.
+#
+# How to read an entry (the key is the ID, for example K1 or 12-8)
+#   title       one line saying what the problem is.
+#   origin      where the ID first appeared: revision_2 (new in Revision 2,
+#               for example K1 or 12-7) or level_11 (already in
+#               config/issues.yaml, for example G1).
+#   status      one of four words:
+#                 built     done and checked now (see evidence)
+#                 partial   part of it exists now (see evidence); later_work
+#                           lists the rest
+#                 planned   nothing exists yet; a later level owns it
+#                 deferred  deliberately not built; reason says why
+#   levels      the levels that own the work, as numbers: [12, 13] means
+#               Levels 12 and 13.
+#   parts       the sub-parts of a level, written like 12c, that own the
+#               work. Optional.
+#   v1_status   level_11 entries only: a copy of the status in
+#               config/issues.yaml.
+#   evidence    a list of proofs. Kinds: config (a block in a config file),
+#               test (a test function in a file), amendment (an entry in
+#               docs/research/amendments.md) and doc (a document that
+#               contains given text).
+#   later_work  what a later level still has to do, written "Level N: what".
+#   reason      deferred entries only: why it is not built.
+#
+# Section 27 groups some findings on one row (for example 14-9, 14-11 and
+# 14-12). Each ID has its own entry here and shares the finding text.
+#
 # Checked by: python -m core.issue_register_v2 and tests/unit/test_issue_register_v2.py
+# =====================================================================
 
 meta:
   label: policy
