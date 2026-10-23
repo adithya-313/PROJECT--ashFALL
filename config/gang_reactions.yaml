@@ -1,41 +1,185 @@
-# Gang observation feed and reactive decision rules configuration (Level 12d, amendment A-017).
+# =====================================================================
+# HOW GANGS REACT: what they can see, and the rules they follow
+# =====================================================================
 #
-# TERM: observation feed = delayed, lossy external event telemetry visible to criminal syndicates.
-# TERM: stop rule = fixed gang reaction rule cancelling activity on accounts encumbered by liens.
+# What this file is
+#   In the simulated world, a gang cannot read bank records. When a bank puts
+#   a lien (a block on an account's money) on one of the gang's accounts,
+#   the gang only hears about it later, and sometimes never. Once it hears,
+#   it may react by following simple fixed rules. This file says where the
+#   numbers for that come from. It holds no numbers of its own.
+#
+# Who reads it
+#   world/gang_feed.py (delay and missed news) and world/gang_reactions.py
+#   (the three rules). world/interactive_loop.py applies them while the world
+#   runs. It only matters when gang reactions are switched on.
+#
+# How to read each block
+#   world_ranges_reference: X  -> the allowed range is the entry called X in
+#                              config/world_ranges.yaml. Each range has one
+#                              pair of numbers for training, test and stress
+#                              worlds; the training values are shown below.
+#   label: policy              -> our own design choice; no real-world figure exists.
+#   issue_ids_v2, derived_from -> the problem number (G4) and the change record
+#                              (amendment A-017) that added the block.
+#
+# Where the full reasoning lives
+#   docs/research/amendments.md, A-017. Each gang makes its draws once, at the
+#   start of the run, so a gang's behaviour is fixed for that run.
 #
 # Checked by: python -m core.config_validator config/gang_reactions.yaml
+# =====================================================================
 
+# ---------------------------------------------------------------------
+# gang_reactions: the one block in this file
+# The reason below says it all: this is the configuration for what gangs
+# see and how they respond (amendment A-017).
+# ---------------------------------------------------------------------
 gang_reactions:
   label: policy
   reason: "Configuration for gang observation feeds and reactive decision rules per amendment A-017."
   issue_ids_v2: [G4]
   derived_from: "amendment A-017"
 
+  # ---------------------------------------------------------------------
+  # gang_feed_delay_minutes: how late a gang hears the news
+  #
+  # The idea
+  #   News about a gang's account (a lien, a hold, a refused payment) reaches
+  #   the gang after a delay. Each gang draws one delay at the start of the
+  #   run: a whole number of minutes, anywhere in the range. Each news item
+  #   then arrives at (minute it happened) + (that delay).
+  #
+  # The numbers (training worlds)   [10, 240] minutes
+  #   Test worlds use [5, 720] and stress worlds [1, 2880]. A bigger delay
+  #   means the gang keeps using a blocked account for longer.
+  #
+  # Example
+  #   A gang that drew 60 minutes hears about a lien placed at minute 3000
+  #   at minute 3060. Until then it moves money through that account.
+  #
+  # Source: world_ranges.yaml (label: assumption; no figure is published);
+  #   amendment A-017.
+  # ---------------------------------------------------------------------
   gang_feed_delay_minutes:
     label: policy
     world_ranges_reference: gang_feed_delay_minutes
     reason: "Observation feed delivery delay in whole minutes; referenced from config/world_ranges.yaml."
 
+  # ---------------------------------------------------------------------
+  # gang_feed_miss_share: how much of the news never arrives
+  #
+  # The idea
+  #   The gang's information is not perfect. Each gang draws one "miss share"
+  #   at the start of the run. Each news item is then dropped with that chance
+  #   and the gang never learns of it.
+  #
+  # The numbers (training worlds)   [0.1, 0.4] = 10% to 40% of news is lost
+  #   Test worlds use [0.05, 0.6] and stress worlds [0.0, 0.9].
+  #
+  # Example
+  #   A gang that drew 0.25 misses about 1 news item in 4. If it misses the
+  #   lien, it never stops using that account.
+  #
+  # Source: world_ranges.yaml (label: assumption); amendment A-017.
+  # ---------------------------------------------------------------------
   gang_feed_miss_share:
     label: policy
     world_ranges_reference: gang_feed_miss_share
     reason: "Fraction of feed items dropped and never observed by a gang; referenced from config/world_ranges.yaml."
 
+  # ---------------------------------------------------------------------
+  # gang_stops_using_liened_account_share: the "stop" rule
+  #
+  # The idea
+  #   Rule 1: once a gang hears that an account has a lien, it stops using
+  #   it. Every later payment into or out of that account, and every cash
+  #   withdrawal from it, is cancelled before it happens (unless rule 2 below
+  #   redirects an incoming payment). Not every gang
+  #   follows the rule. The range is the chance that a gang follows it;
+  #   each gang draws a chance from the range, then a second draw decides.
+  #
+  # The numbers (training worlds)   [0.6, 0.95] = 60% to 95%
+  #   Test worlds use [0.4, 1.0] and stress worlds [0.0, 1.0].
+  #
+  # Example
+  #   A gang whose drawn chance is 0.8 follows the rule 8 times out of 10.
+  #
+  # Source: world_ranges.yaml (label: assumption; a design choice, no rate is
+  #   published); amendment A-017.
+  # ---------------------------------------------------------------------
   gang_stops_using_liened_account_share:
     label: policy
     world_ranges_reference: gang_stops_using_liened_account_share
     reason: "Fraction of gangs that adopt the stop-account rule on liened accounts; referenced from config/world_ranges.yaml."
 
+  # ---------------------------------------------------------------------
+  # gang_rotates_to_spare_account_share: the "spare account" rule
+  #
+  # The idea
+  #   Rule 2: when money is due to arrive at a stopped account, a gang that
+  #   follows this rule sends it to a spare mule account of the same depth
+  #   (the same number of steps from the victims) instead. A gang that does
+  #   not follow it just cancels the payment. If no spare exists, the payment
+  #   is cancelled too. Chance of following: drawn like the stop rule.
+  #
+  # The numbers (training worlds)   [0.4, 0.9] = 40% to 90%
+  #   Test worlds use [0.2, 1.0] and stress worlds [0.0, 1.0].
+  #
+  # Example
+  #   A Jaipur report (July 2026) says a gang spread money over many accounts
+  #   to stay ahead of freezes. No rate is given, so the range is a guess.
+  #
+  # Source: world_ranges.yaml (label: assumption); amendment A-017.
+  # ---------------------------------------------------------------------
   gang_rotates_to_spare_account_share:
     label: policy
     world_ranges_reference: gang_rotates_to_spare_account_share
     reason: "Fraction of gangs that rotate to a spare account when an account is stopped; referenced from config/world_ranges.yaml."
 
+  # ---------------------------------------------------------------------
+  # gang_splits_amounts_share: the "split the amount" rule
+  #
+  # The idea
+  #   Rule 3: after a gang has heard of any trouble at all, a gang that
+  #   follows this rule cuts every payment above a size limit (the next
+  #   setting) into equal smaller pieces, so each piece is under the limit.
+  #   Chance of following: drawn like the stop rule.
+  #
+  # The numbers (training worlds)   [0.2, 0.7] = 20% to 70%
+  #   Test worlds use [0.1, 0.9] and stress worlds [0.0, 1.0].
+  #
+  # Example
+  #   With a limit of Rs 20,000, a Rs 50,000 payment becomes smaller equal
+  #   pieces, none above Rs 20,000.
+  #
+  # Source: world_ranges.yaml (label: assumption; no rate is published);
+  #   amendment A-017.
+  # ---------------------------------------------------------------------
   gang_splits_amounts_share:
     label: policy
     world_ranges_reference: gang_splits_amounts_share
     reason: "Fraction of gangs that adopt the amount-splitting rule after observing trouble; referenced from config/world_ranges.yaml."
 
+  # ---------------------------------------------------------------------
+  # gang_split_threshold_inr: the size limit for the "split" rule
+  #
+  # The idea
+  #   Each gang draws one limit, in whole rupees (INR), from a range that
+  #   lives with the building blocks (config/tactic_blocks.yaml, block
+  #   split_below_threshold, setting threshold_inr). Payments above the
+  #   limit are split. In training worlds, a piece may not fall below the
+  #   project's "slow drip" line (the lowest allowed mule transfer),
+  #   or the run stops with an error.
+  #
+  # The numbers (training worlds)   [10000, 50000] rupees
+  #
+  # Example
+  #   A gang that drew Rs 25,000 splits any payment over Rs 25,000.
+  #
+  # Source: tactic_blocks.yaml (label: assumption); amendment A-016; the
+  #   check in world/interactive_loop.py for the slow-drip line.
+  # ---------------------------------------------------------------------
   gang_split_threshold_inr:
     label: policy
     tactic_blocks_reference: split_below_threshold.threshold_inr

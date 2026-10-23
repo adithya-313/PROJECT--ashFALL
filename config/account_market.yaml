@@ -1,16 +1,65 @@
-# Account market resale configuration (Level 12d, amendment A-017).
+# =====================================================================
+# THE ACCOUNT MARKET: gangs buying accounts that earlier gangs have burned
+# =====================================================================
 #
-# TERM: account market = secondary resale of rented mule accounts between criminal syndicates.
-# TERM: resale share = fraction of rented mule accounts resold to subsequent gangs.
+# What this file is
+#   Police cases describe suppliers who sell the same account kits to several
+#   gangs, so gang networks overlap. This file says how often that happens
+#   in the simulated world.
+#
+# Who reads it
+#   world/account_market.py. world/interactive_runner.py uses it only when the
+#   account market is switched on and there are at least two gangs.
+#
+# Words used below
+#   mule        an ordinary-looking account that passes stolen money along.
+#   rented      a mule that is a real person's account, rented out by its owner.
+#   burned      a mule the gang has finished with (its use is over).
+#   resale      a later gang takes over a burned rented account of an earlier gang.
+#
+# Where the full reasoning lives
+#   docs/research/amendments.md, A-017 (G5, planned) and A-018 (how resale works).
 #
 # Checked by: python -m core.config_validator config/account_market.yaml
+# =====================================================================
 
+# ---------------------------------------------------------------------
+# account_market: the one block in this file
+# label: policy -> our own design choice. issue_ids_v2: [G5] -> the problem
+# number this answers. derived_from -> the change record that added it.
+# ---------------------------------------------------------------------
 account_market:
   label: policy
   reason: "Configuration for account market resale between criminal syndicates per amendment A-017."
   issue_ids_v2: [G5]
   derived_from: "amendment A-017"
 
+  # ---------------------------------------------------------------------
+  # share_of_accounts_sold_to_several_gangs: how many accounts are resold
+  #
+  # The idea
+  #   The run draws one share from the range, once. Then, for each rented
+  #   mule of a later gang, in order, it draws a number between 0 and 1. If
+  #   the number is below the share, the account is replaced by a burned
+  #   rented account of an earlier gang, if one is free. From the resale
+  #   minute on, the account belongs to the buyer; the seller's claim ends
+  #   at that same minute, so an account never has two owners at once.
+  #   Only burned rented accounts are sold; borrowed-ID and business
+  #   accounts are not. An account bought this way may still hold leftover
+  #   stolen money, which the buyer can pass on.
+  #
+  # The numbers   (a fraction: 0.05 = 5%)
+  #   training worlds [0.05, 0.3]; test [0.02, 0.5]; stress [0.0, 0.8].
+  #   A higher share means more accounts are shared between gangs.
+  #
+  # Example
+  #   A later gang with 4 rented mules and a drawn share of 0.3 buys about
+  #   1 account (4 x 0.3 = 1.2) from the earlier gang's burned ones.
+  #
+  # Source: world_ranges.yaml (label: assumption; police cases describe
+  #   suppliers selling to several buyers, but no share is published);
+  #   amendment A-018.
+  # ---------------------------------------------------------------------
   share_of_accounts_sold_to_several_gangs:
     label: policy
     world_ranges_reference: share_of_accounts_sold_to_several_gangs

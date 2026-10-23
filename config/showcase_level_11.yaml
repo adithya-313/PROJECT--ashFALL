@@ -1,6 +1,47 @@
-# Configuration and parameters for Level 11 showcase ("A simulated India of everyday UPI payments").
-# Stores seed parameters, chart geometries, thresholds, and expected invariants with epistemic labels and reasons.
+# =====================================================================
+# LEVEL 11 SHOWCASE: the fixed settings of the demonstration
+# =====================================================================
+#
+# What this file is
+#   Level 11 builds a simulated India of everyday UPI payments (UPI is India's
+#   instant payment system). The showcase is a command that builds that world
+#   and runs 16 checks on it (python -m showcase --level 11). This file holds
+#   the demonstration's chosen worlds and tolerances.
+#
+# Who reads it
+#   showcase/level_11_checks.py reads festival_world, comparison_world,
+#   tiny_world.n_people and expected_invariants.k_sigma.
+#   tests/unit/world/test_frozen_anchors.py reads expected_invariants.events_sha256.
+#   A search of the code found no other reader. Blocks nobody reads are marked
+#   "NOT EXPLAINED IN SOURCE" below.
+#
+# Words used below
+#   seed        a starting number; the same seed always gives the same world.
+#   label       "policy" means: our own choice, not a fact about the world.
+#   standard error (se)  the usual size of the random wobble in a count.
+#               Counts like payments per day rise and fall by chance; an effect
+#               only counts as real if it is several wobbles large.
+#
+# Where the full reasoning lives
+#   docs/decisions/level-11d2-showcase-decisions.md
+#
+# Checked by: tests/unit/showcase/test_level_11_checks.py
+# =====================================================================
 
+# ---------------------------------------------------------------------
+# tiny_world: the small standard world
+#
+# The idea
+#   A world small enough to run in under a second: seed 101, 60 people,
+#   12 shops, 61 days, training ranges. It is the world behind the frozen
+#   fingerprint (see frozen_anchors.yaml).
+#
+# What the code reads
+#   Only n_people (60): the festival check uses it to scale up to a bigger
+#   world. The check builds its own tiny world with the same numbers
+#   written in the code. The keys seed, n_shops, n_days and range_name are
+#   NOT EXPLAINED IN SOURCE: nothing reads them.
+# ---------------------------------------------------------------------
 tiny_world:
   label: policy
   seed: 101
@@ -10,6 +51,31 @@ tiny_world:
   range_name: training
   reason: Canonical small world footprint used across golden benchmarks G2 and G3 to run deterministically in under 1 second.
 
+# ---------------------------------------------------------------------
+# festival_world: the bigger world used to see festivals
+#
+# The idea
+#   Festivals raise the number of payments, but chance also moves the
+#   counts. In the tiny world the rise is hard to tell from the wobble, so
+#   the check uses a bigger world. The size rule was fixed BEFORE looking
+#   at results: take the smallest size in candidate_people where
+#     (extra payments the festival plan promises) / sqrt(payments expected
+#     without festivals)
+#   is at least min_planned_ratio. Shops = people / people_per_shop.
+#     seed 101, n_days 61, range_name training  the world's recipe
+#     candidate_people  sizes tried, smallest first
+#     people_per_shop 5 -> one shop for every 5 people
+#     min_planned_ratio 8.0 -> the planned rise must be 8 times the wobble
+#
+# Example
+#   The predicted ratios are 1000 -> 5.11, 2000 -> 7.23, 4000 -> 10.23,
+#   8000 -> 14.47. 4000 is the first at or above 8.0, so the world has
+#   4000 people and 800 shops. A larger min_planned_ratio, such as 12,
+#   would pick 8000 people and run slower.
+#
+# Source: docs/decisions/level-11d2-showcase-decisions.md (size rule);
+#   showcase/level_11_checks.py (_run_festival_world).
+# ---------------------------------------------------------------------
 festival_world:
   label: policy
   seed: 101
@@ -24,11 +90,32 @@ festival_world:
     the plan's multipliers and the tiny world's base rate, is at least 8. On seed 101 the predicted ratios are
     1000 -> 5.11, 2000 -> 7.23, 4000 -> 10.23, 8000 -> 14.47, so the rule picks 4000 people and 800 shops.
 
+# ---------------------------------------------------------------------
+# comparison_world: the second world used to show seeds really differ
+#
+# The idea
+#   The check runs seed 101 and this seed (102) side by side and compares
+#   when festival peaks, outages and OS update days fall. At least 8 of the
+#   10 compared timings must differ; if they were equal, the random
+#   supplies would have collapsed into one.
+#
+# Example
+#   Today the check reports "10 of 10 timings differ".
+#
+# Source: showcase/level_11_checks.py (run_seed_divergence_check).
+# ---------------------------------------------------------------------
 comparison_world:
   label: policy
   seed: 102
   reason: Adjacent seed used to demonstrate divergence in timing and event distribution across independent world runs.
 
+# ---------------------------------------------------------------------
+# chart_geometry: sizes and colours for the showcase charts
+#
+# NOT EXPLAINED IN SOURCE: ask the architect. A search found no code that
+#   reads these keys. The reason line below says they match the design
+#   guidelines for the showcase page (index.html).
+# ---------------------------------------------------------------------
 chart_geometry:
   label: policy
   viewbox_width: 1000
@@ -47,6 +134,26 @@ chart_geometry:
   window_label_font_size: 13
   reason: Visual geometry and color palette matching the design guidelines for the Level 11 showcase index.html.
 
+# ---------------------------------------------------------------------
+# expected_invariants: numbers the showcase expects to see
+#
+# The idea
+#   k_sigma 4.0  how many wobbles (standard errors) count as proof. The
+#   festival check passes only if the extra payments are more than 4
+#   wobbles above zero AND within 4 wobbles of the amount the plan
+#   promised. A larger k_sigma makes the check more forgiving.
+#   events_sha256  the fingerprint of the tiny world's payment events. A
+#   test checks that it equals the frozen anchor in frozen_anchors.yaml.
+#
+# NOT EXPLAINED IN SOURCE: ask the architect, for amendments_count,
+#   issues_built, issues_planned, issues_deferred, grounding_total,
+#   grounding_assumptions and grounding_reported. A search found no code
+#   that reads them. (The 28/2/1 and 33/30/3 counts they repeat are
+#   checked from frozen_anchors.yaml instead.)
+#
+# Source: showcase/level_11_checks.py (k_sigma);
+#   tests/unit/world/test_frozen_anchors.py (events_sha256).
+# ---------------------------------------------------------------------
 expected_invariants:
   label: policy
   events_sha256: "24fc0e25009d79462d508f040a109620dd4308486cc78aee589393fe921f92fd"
