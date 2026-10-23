@@ -350,6 +350,9 @@ py -3.12 -m showcase --level 12 --part c
 # 6. Showcase Level 12 quick mode (all 20 checks)
 py -3.12 -m showcase --level 12 --quick
 
+# 6b. Full Level 12 showcase (must be 20/20)
+py -3.12 -m showcase --level 12
+
 # 7. Baseline Level 11 showcase invariance
 py -3.12 -m showcase --level 11 --quick
 
@@ -364,7 +367,7 @@ py -3.12 -m core.truth_import_check
 py -3.12 scripts/handoff_facts.py
 
 # 11. Code quality and type safety
-py -3.12 -m ruff check showcase/ world/ tests/unit/ evaluation/ scripts/handoff_facts.py
+py -3.12 -m ruff check showcase api core evaluation scripts/handoff_facts.py
 py -3.12 -m mypy showcase api core evaluation scripts/handoff_facts.py --ignore-missing-imports --no-strict-optional
 
 # 12. Git status and commit history
