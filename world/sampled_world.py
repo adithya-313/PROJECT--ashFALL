@@ -16,6 +16,7 @@ TERM: stale manifest: a plan whose recorded config hashes differ from the config
 
 import copy
 import dataclasses
+import math
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,7 @@ from world.world_sampler import (
     DEFAULT_SAMPLER_PATH,
     WorldSpec,
     file_sha256,
+    load_sampler_config,
     read_manifest_provenance,
     read_world_manifest,
 )
@@ -128,17 +130,75 @@ def _check_nesting(reference: str, entry: dict[str, Any]) -> None:
         raise ValueError(f"pinned '{reference}': test range is not inside the stress range")
 
 
-def fast_settings_for(spec: WorldSpec, preset_name: str) -> FastRunSettings:
+def validate_horizon_limits(sampler_cfg: dict[str, Any], configs: WorldConfigs) -> None:
     """
-    WHAT: Builds the run settings for a spec: the preset's people, shops and days, but always the spec's own seed
-    and range name.
+    WHAT: Refuses a horizon_limits entry whose parameter is not in the config it names, or whose config name is not one
+    of the four world configs.
+
+    WHY: A misspelt entry would silently drop a limit, and a stress world could again be built too short.
+
+    Args:
+        sampler_cfg: The world_sampler dictionary.
+        configs: The world configs the parameters are read from.
+
+    Raises:
+        ValueError: Naming the unknown config or parameter.
+    """
+    for entry in sampler_cfg["horizon_limits"]["entries"]:
+        config_name = entry["config"]
+        if config_name not in ("world_ranges", "background_realism", "failure_realism", "device_realism"):
+            raise ValueError(f"horizon_limits entry '{entry['parameter']}' names unknown config '{config_name}'")
+        if entry["parameter"] not in getattr(configs, config_name)["parameters"]:
+            raise ValueError(f"horizon_limits parameter '{entry['parameter']}' is not in {config_name}")
+
+
+def required_days(range_name: str, configs: WorldConfigs, sampler_cfg: dict[str, Any]) -> int:
+    """
+    WHAT: Returns the fewest days a world reading the given range column may have: the largest upper bound over the
+    horizon_limits entries, converted to days and rounded up, plus one for a limit the world must strictly exceed.
+
+    WHY: The world code refuses a world shorter than the longest thing a range lets happen in it. Reading the bounds
+    from the configs, not a fixed number, keeps this right when a range changes.
+
+    Args:
+        range_name: "training" or "stress", the spec's range column.
+        configs: The world configs the limits are read from.
+        sampler_cfg: The world_sampler dictionary.
+
+    Returns:
+        The required number of days.
+
+    Raises:
+        ValueError: If a horizon_limits entry is unknown (see validate_horizon_limits).
+    """
+    validate_horizon_limits(sampler_cfg, configs)
+    needed = 0
+    for entry in sampler_cfg["horizon_limits"]["entries"]:
+        upper = getattr(configs, entry["config"])["parameters"][entry["parameter"]][range_name][1]
+        days = math.ceil(upper * entry["days_per_unit"])
+        if entry["strictly_greater"]:
+            days += 1
+        needed = max(needed, days)
+    return needed
+
+
+def fast_settings_for(
+    spec: WorldSpec, preset_name: str, sampler_cfg: dict[str, Any] | None = None, configs: WorldConfigs | None = None
+) -> FastRunSettings:
+    """
+    WHAT: Builds the run settings for a spec: the preset's people and shops, always the spec's own seed and range name,
+    and n_days = the larger of the preset's days and the days the range column requires (required_days).
 
     WHY: The preset's range name would send a validation world to training by habit and hide a wrong mapping; taking
-    it from the spec keeps the split rule in one place.
+    it from the spec keeps the split rule in one place. A stress world reads wider ranges (episodes up to 120 days),
+    so it must be longer than the 61-day preset; training, validation and test read the training column and keep
+    the preset's days exactly.
 
     Args:
         spec: The planned world.
         preset_name: A preset of config/world_sizing.yaml, such as "tiny".
+        sampler_cfg: The world_sampler dictionary; read from the file when None.
+        configs: World configs the horizon limits are read from; read from the files when None.
 
     Returns:
         FastRunSettings for run_interactive_world.
@@ -146,7 +206,11 @@ def fast_settings_for(spec: WorldSpec, preset_name: str) -> FastRunSettings:
     Raises:
         ValueError: If the preset is unknown.
     """
-    return resolve_settings(seed=spec.seed, preset=preset_name, range_name=spec.range_name)
+    settings = resolve_settings(seed=spec.seed, preset=preset_name, range_name=spec.range_name)
+    cfg = load_sampler_config() if sampler_cfg is None else sampler_cfg
+    world_configs = read_world_configs() if configs is None else configs
+    days = max(settings.n_days, required_days(spec.range_name, world_configs, cfg))
+    return dataclasses.replace(settings, n_days=days)
 
 
 def run_sampled_world(
@@ -178,8 +242,8 @@ def run_sampled_world(
     """
     if gang_configs is not None and not gang_configs:
         raise ValueError("a sampled world is a fraud-on world and needs at least one gang")
-    settings = fast_settings_for(spec, preset_name)
     configs = pinned_configs(spec, sampler_cfg)
+    settings = fast_settings_for(spec, preset_name, sampler_cfg, configs)
     gangs = gang_configs
     if gangs is None:
         # Eligible people are counted in the same world the run will build, so the capacity check is exact.

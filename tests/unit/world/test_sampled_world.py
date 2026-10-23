@@ -24,6 +24,7 @@ from world.gang_config import GangConfig, gang_config_from_plain
 from world.interactive_loop import build_component_streams
 from world.interactive_records import InteractiveWorldOutput, RunnerSettings
 from world.interactive_runner import effective_config_for, interactive_fast_output
+from world.label_builder import build_label_events
 from world.label_records import draw_label_world_settings, load_labels_config
 from world.registry_reports import draw_bank_registry_report_share
 from world.run_identity import load_runner_config
@@ -31,12 +32,16 @@ from world.sampled_world import (
     fast_settings_for,
     load_manifest_checked,
     pinned_configs,
+    required_days,
     run_sampled_world,
+    validate_horizon_limits,
 )
 from world.world_configs import WorldConfigs, read_world_configs
+from world.world_invariants import check_world
 from world.world_sampler import (
     WorldSpec,
     load_sampler_config,
+    sample_block,
     sample_worlds,
     write_world_manifest,
 )
@@ -84,6 +89,65 @@ def timed_run(cfg: dict[str, Any], spec: WorldSpec) -> tuple[InteractiveWorldOut
     started = time.perf_counter()
     output = run_sampled_world(spec, PRESET, (_gang(),), cfg, CODE_VERSION)
     return output, time.perf_counter() - started
+
+
+@pytest.fixture(scope="module")
+def stress_world(cfg: dict[str, Any], base: WorldConfigs) -> tuple[InteractiveWorldOutput, float]:
+    """Runs one small stress world with a generated mix, the only world run added for the horizon; returns seconds."""
+    stress_spec = sample_block("stress", 0, 1, cfg, base.world_ranges)[0]
+    started = time.perf_counter()
+    output = run_sampled_world(stress_spec, "small", None, cfg, CODE_VERSION)
+    return output, time.perf_counter() - started
+
+
+def test_stress_specs_get_the_stress_episode_horizon(cfg: dict[str, Any], base: WorldConfigs) -> None:
+    """A stress spec's n_days equals the stress upper bound of episode_length_days, read here from world_ranges."""
+    stress_spec = sample_block("stress", 0, 1, cfg, base.world_ranges)[0]
+    episode_upper = _yaml_ranges()["parameters"]["episode_length_days"]["stress"][1]
+    preset_days = _yaml_sizing()["presets"]["small"]["n_days"]
+    assert episode_upper > preset_days
+    assert fast_settings_for(stress_spec, "small").n_days == episode_upper
+
+
+def test_other_splits_keep_the_preset_days_exactly(cfg: dict[str, Any], base: WorldConfigs) -> None:
+    """Training, validation and test specs read the training column and keep the preset's n_days."""
+    preset_days = _yaml_sizing()["presets"]["small"]["n_days"]
+    for split in ("training", "validation", "test"):
+        block_spec = sample_block(split, 0, 1, cfg, base.world_ranges)[0]
+        assert fast_settings_for(block_spec, "small").n_days == preset_days
+        assert fast_settings_for(block_spec, "tiny").n_days == _yaml_sizing()["presets"]["tiny"]["n_days"]
+
+
+def test_an_unknown_horizon_limit_parameter_is_refused(cfg: dict[str, Any], base: WorldConfigs) -> None:
+    """A horizon_limits entry naming a parameter that is not in its config, or an unknown config, is refused."""
+    broken = copy.deepcopy(cfg)
+    broken["horizon_limits"]["entries"][0]["parameter"] = "no_such_parameter"
+    with pytest.raises(ValueError, match="'no_such_parameter' is not in world_ranges"):
+        required_days("stress", base, broken)
+    other = copy.deepcopy(cfg)
+    other["horizon_limits"]["entries"][0]["config"] = "no_such_config"
+    with pytest.raises(ValueError, match="unknown config 'no_such_config'"):
+        validate_horizon_limits(other, base)
+
+
+def test_a_stress_world_runs_end_to_end_without_invariant_problems(
+    stress_world: tuple[InteractiveWorldOutput, float],
+) -> None:
+    """The stress world completes with its longer horizon and passes every world invariant."""
+    output, seconds = stress_world
+    print(f"stress world (small preset, generated mix): {seconds:.2f}s")
+    assert output.plan.n_days == _yaml_ranges()["parameters"]["episode_length_days"]["stress"][1]
+    assert check_world(output, build_label_events(output)) == []
+
+
+def _yaml_ranges() -> dict[str, Any]:
+    """Reads world_ranges.yaml straight with yaml, so expected horizons do not come from the code under test."""
+    return load_yaml(RANGES_PATH)
+
+
+def _yaml_sizing() -> dict[str, Any]:
+    """Reads world_sizing.yaml straight with yaml, for the preset days."""
+    return load_yaml(REPO_ROOT / "config" / "world_sizing.yaml")
 
 
 def test_pinned_entries_are_flat_and_the_rest_is_untouched(

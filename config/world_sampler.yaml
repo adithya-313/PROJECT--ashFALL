@@ -180,6 +180,42 @@ world_sampler:
     label: policy
     reason: "Every block is its own complete Latin hypercube, so a later level can use 1, 2, 4 ... blocks; reviewed design, Level 12f."
 
+  # ---------------------------------------------------------------------
+  # horizon_limits: how long a sampled world must be
+  #
+  # The idea
+  #   The world code refuses a world shorter than the longest thing a range
+  #   lets happen in it. A stress world reads wider ranges, so it needs more
+  #   days than the preset gives. For each listed parameter the required
+  #   days are its upper bound in the world's range column (times
+  #   days_per_unit, rounded up, plus one when the world must be strictly
+  #   longer). A world gets the largest of these, or the preset's days if
+  #   that is more. Training, validation and test read the training column
+  #   and keep the preset's days.
+  #
+  # Where each rule is enforced
+  #   episode_length_days        world/episodes.py:115 (n_days >= upper)
+  #   os_wave_length_days        world/device_schedule.py:77 (n_days >= upper)
+  #   festival_peak_day_in_world world/festivals.py:52 and
+  #                              world/world_sizing.py:401 (n_days > upper)
+  # ---------------------------------------------------------------------
+  horizon_limits:
+    entries:
+      - parameter: episode_length_days
+        config: world_ranges
+        days_per_unit: 1
+        strictly_greater: false
+      - parameter: os_wave_length_days
+        config: device_realism
+        days_per_unit: 1
+        strictly_greater: false
+      - parameter: festival_peak_day_in_world
+        config: background_realism
+        days_per_unit: 1
+        strictly_greater: true
+    label: policy
+    reason: "a world must be at least as long as the longest thing a range lets happen in it; derived from config, never a fixed number"
+
   counts:
     label: policy
     reason: "not decided; committed by a later amendment from measured run time (12-18)"
