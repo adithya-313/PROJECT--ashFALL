@@ -1,15 +1,62 @@
-# How scam victims pay a gang's receiving mules: scam types, how many payments, how far apart, how big.
+# =====================================================================
+# SCAM SCHEDULES: how scam victims pay a gang's receiving mules
+# =====================================================================
 #
-# TERM: scam type = the story that makes a victim pay: investment, job or unauthorised_debit.
-# TERM: victim payment = money a victim sends to a receiving mule because of the scam.
-# TERM: payout back = a small payment from the receiving mule back to the victim, to build trust for later payments.
-# TERM: escalation multiple = how many times larger a victim's next payment is than the one before it.
-# TERM: world_ranges_reference = the value is read from config/world_ranges.yaml; its label, source and reason
-#       live there and are not copied here.
-# TERM: split = the evaluation range of the world: training, test or stress.
+# What this file is
+#   When a gang's money comes from a scam, each victim is given a scam type
+#   and a plan: how many times they pay, how far apart, how much, and
+#   whether the mule pays something back. This file holds those rules.
 #
-# Read by world/scam_config.py. Checked by: python -m core.config_validator config/scam_schedules.yaml
+# Who reads it
+#   world/scam_config.py has one function per setting; world/scam_planner.py
+#   draws the plans from them (the draw order is described in that file).
+#
+# The three scam types
+#   investment          the victim is lured into paying for a "scheme"
+#   job                 the victim pays for a "job" that does not exist
+#   unauthorised_debit  money is taken from the victim's account without
+#                       their say (after a takeover). Every other scam type
+#                       is modelled this way for now.
+#   Investment and job victims pay several times, each payment bigger than
+#   the last, spread over days, and may get one small payment back to keep
+#   them paying. Unauthorised-debit victims lose a few amounts within minutes
+#   and get nothing back.
+#
+# How to read an entry
+#   world_ranges_reference  the range lives in config/world_ranges.yaml,
+#                           which also holds the label, source and reason;
+#                           they are not copied here.
+#   training / test / stress  for settings stored here: the range for each
+#                           kind of world (training: what the detector
+#                           learns from; test: the final exam; stress:
+#                           extreme cases). Each world picks one value inside
+#                           the range for its kind.
+#   label / reason          "policy": our own rule; "assumption": a guess
+#                           because nothing is published. Why is in reason.
+#
+# Where the full reasoning lives
+#   docs/research/amendments.md (A-016); config/world_ranges.yaml for the
+#   referenced ranges.
+#
+# Checked by: python -m core.config_validator config/scam_schedules.yaml
+# =====================================================================
 
+# ---------------------------------------------------------------------
+# scam_type_shares: which scam type a victim gets
+#
+# The idea
+#   Two draws per victim. First: investment-or-job, or the rest? The chance
+#   is investment_or_job_share (training [0.55, 0.80], from world_ranges).
+#   Second, for investment-or-job victims: investment, or job? The chance of
+#   investment is investment_share_of_investment_or_job (training [0.4, 0.6],
+#   close to even). Everyone else gets remainder_type, unauthorised_debit.
+#   Each step of a gang draws its two chances once and uses them for all of
+#   its victims.
+#
+# Example
+#   With chances 0.7 and 0.5, a gang with 100 victims has about 35 investment,
+#   35 job and 30 unauthorised-debit victims.
+# ---------------------------------------------------------------------
 scam_type_shares:
   label: policy
   reason: "Decides which scam type a victim gets: first investment-or-job against everything else, then investment against job. Everything else is modelled as an unauthorised debit for now."
@@ -31,6 +78,33 @@ scam_type_shares:
     value: unauthorised_debit
     reason: "Every scam type other than investment and job is modelled as an unauthorised debit for now."
 
+# ---------------------------------------------------------------------
+# investment_and_job_schedule: how an investment or job victim pays
+#
+# The idea
+#   The victim's first payment falls at a random minute inside the receiving
+#   mule's active window (mule_active_days_before_dropped in world_ranges.yaml);
+#   payments that would fall after the window are dropped. Later
+#   payments follow at random times inside the spread, each at least
+#   min_minutes_between_victim_payments apart; each is the previous amount
+#   times one escalation multiple. At most one payout comes back, at a time
+#   strictly between the first and last payment.
+#     payments_per_victim        how many payments (training [1, 6])
+#     payment_spread_days        days they are spread over (training [0, 10])
+#     first_payment_amount_inr   size of the first payment (training
+#                                [2000, 50000] rupees)
+#     payment_escalation_multiple  how many times larger the next payment is
+#                                (training [1.0, 2.0]; 1.0 means no rise)
+#     payout_back_share          share of what the victim has paid so far
+#                                that comes back once (training [0.05, 0.3])
+#     min_minutes_between_victim_payments 2: payments are never closer than
+#                                2 minutes, so a payout always has a minute
+#                                strictly between the first and last payment
+#
+# Example
+#   A victim with 3 payments, a first payment of Rs 3,000 and a multiple of
+#   1.5 pays Rs 3,000, Rs 4,500 and Rs 6,750.
+# ---------------------------------------------------------------------
 investment_and_job_schedule:
   label: policy
   reason: "Investment and job scams escalate: a victim pays several times, each payment larger than the last, spread over days."
@@ -65,6 +139,23 @@ investment_and_job_schedule:
     unit: minutes
     reason: "Two payments of one victim are never closer than this, so the payout back always has a whole minute strictly after the first payment and strictly before the last."
 
+# ---------------------------------------------------------------------
+# unauthorised_debit_schedule: how an unauthorised-debit victim loses money
+#
+# The idea
+#   After a takeover, a few debits follow within minutes of each other.
+#     debit_payments     how many debits (training [1, 3])
+#     debit_spread_minutes  minutes the debits are spread over (training
+#                        [0, 60]); the first debit is at the victim's start
+#                        minute, inside the mule's active window
+#     debit_amount_inr   the size of each debit, drawn separately (training
+#                        [2000, 50000] rupees)
+#     payout_back false  nothing is paid back to these victims
+#
+# Example
+#   A victim with 2 debits and a spread of 30 minutes loses one amount at
+#   the start and another within the next 30 minutes.
+# ---------------------------------------------------------------------
 unauthorised_debit_schedule:
   label: policy
   reason: "After an account takeover the debits happen within minutes and there is no payout back, because there is no trust to build."
@@ -93,6 +184,18 @@ unauthorised_debit_schedule:
     value: false
     reason: "Nothing to build trust for after a takeover, so the mule pays nothing back."
 
+# ---------------------------------------------------------------------
+# victims_per_mule_tail_exponent: how uneven the victim counts are
+#
+# The idea
+#   Most receiving mules get few victims and a few get very many (a "heavy
+#   tail"). A gang draws a ceiling from victims_per_mule_largest (training
+#   [10, 50]) and this exponent, and each mule's victim count follows a
+#   power law up to the ceiling. A larger exponent means fewer very busy mules.
+#   Training [1.8, 2.6].
+#
+# Source: world/scam_planner.py (the victim counts), world/scam_config.py.
+# ---------------------------------------------------------------------
 victims_per_mule_tail_exponent:
   label: assumption
   unit: power law exponent

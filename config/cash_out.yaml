@@ -1,19 +1,57 @@
-# Cash-out channel configuration and downstream distribution (Level 12c C-4, D3).
+# =====================================================================
+# CASH-OUT: how stolen money finally leaves the mule accounts
+# =====================================================================
 #
-# TERM: cash-out = terminal extraction of illicit funds leaving the mule network.
-# TERM: crypto collector = gang-opened borrowed-KYC collector account receiving crypto payouts.
-# TERM: ATM cash-out = physical cash withdrawals subject to card daily limits.
-# TERM: branch cash-out = over-the-counter physical cash withdrawals after branch delay.
-# TERM: genuine shop = ordinary retail shop receiving illicit customer payments for goods.
+# What this file is
+#   At the end of a gang's route the money must leave the banking system, or
+#   be spent. Four ways are modelled, and this file says how much goes each
+#   way and how the slower ways behave:
+#     crypto        paid to a "collector" account the gang opened on borrowed
+#                   identity papers, which receives crypto payouts
+#     atm           cash taken out of ATMs, up to a daily limit per card
+#     branch        cash taken over the counter at a bank branch, after a delay
+#     genuine_shop  the mule buys goods from an ordinary shop, so an innocent
+#                   shop receives stolen money
+#
+# Who reads it
+#   world/cash_out.py loads it and plans the cash-out step of a gang;
+#   world/cash_withdrawals.py runs the ATM and branch withdrawals.
+#
+# How to read an entry
+#   world_ranges_reference  the range lives in config/world_ranges.yaml,
+#                           which also holds the label, source and reason.
+#   training / test / stress  the range for each kind of world (training:
+#                           what the detector learns from; test: the final
+#                           exam; stress: extreme cases).
+#   label / reason          "policy": our own rule; "assumption": a guess.
+#
+# Where the full reasoning lives
+#   Decision D3 (Level 12c C-4) and the reason lines below.
 #
 # Checked by: python -m core.config_validator config/cash_out.yaml
+# =====================================================================
 
+# ---------------------------------------------------------------------
+# cash_out: the one block in this file
+# ---------------------------------------------------------------------
 cash_out:
   label: policy
   reason: "Downstream cash-out distribution channels for terminal layer mules per Decision D3."
   issue_ids_v2: [G2, A2]
   derived_from: "Decision D3; config/world_ranges.yaml"
 
+  # channel_shares: how much of the money goes each way
+  #
+  # The idea
+  #   The genuine-shop share is drawn first. The rest is split between
+  #   crypto, ATM and branch in proportion to their drawn shares (the three
+  #   ranges are independent, so they are divided by their sum).
+  #   Training ranges from world_ranges.yaml: crypto [0.15, 0.45], atm
+  #   [0.1, 0.35], branch [0.02, 0.2], genuine shop [0.05, 0.25].
+  #
+  # Example
+  #   A genuine-shop share of 0.15 leaves 85% for the other three; if their
+  #   raw draws are 0.3, 0.2 and 0.1, crypto gets 0.85 x 0.3 / 0.6 = about 42%.
   channel_shares:
     label: policy
     reason: "Relative shares for cash-out channels. The ranges in config/world_ranges.yaml are independent, so draws are normalized to sum to 1."
@@ -34,11 +72,18 @@ cash_out:
       world_ranges_reference: share_of_mule_outflows_to_genuine_shops
       reason: "Fraction of mule outflows spent at genuine goods-selling merchant shops; read from config/world_ranges.yaml."
 
+  # genuine_shop_kinds: which ordinary shops the mule may buy from
+  #   Only grocery and restaurant shops. Employers, utilities and landlords
+  #   are left out, since nobody buys goods from them.
   genuine_shop_kinds:
     label: policy
     kinds: [grocery, restaurant]
     reason: "Genuine goods-selling shops downstream of mules that receive stolen money for real consumer goods (Decision D3, review issue A2). Excludes employers, utilities, and landlords."
 
+  # branch_withdrawal_delay_hours: how long a branch withdrawal waits
+  #   Hours between the money being ready and the over-the-counter
+  #   withdrawal, because branches are slower than ATMs. Example: training
+  #   [2, 48] means 2 hours to 2 days; stress goes up to 168 hours (a week).
   branch_withdrawal_delay_hours:
     label: assumption
     unit: hours
@@ -47,6 +92,9 @@ cash_out:
     stress: [0, 168]
     reason: "branch visits are slower than ATMs; no figure published"
 
+  # atm_daily_limit_inr: the most cash one ATM card gives in a day
+  #   Read from world_ranges.yaml: training [20000, 100000] means Rs 20,000
+  #   to Rs 1 lakh. A bigger sum is taken out over several days.
   atm_daily_limit_inr:
     label: policy
     world_ranges_reference: atm_daily_limit_inr

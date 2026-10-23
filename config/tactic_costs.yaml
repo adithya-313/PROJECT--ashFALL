@@ -1,19 +1,57 @@
-# Units for what a mule tactic costs, and the two money anchors for it (amendment A-016).
+# =====================================================================
+# TACTIC COSTS: what a gang's steps cost, in money, time and risk
+# =====================================================================
 #
-# TERM: paise = one hundredth of a rupee; code stores money as whole paise so there are no rounding errors,
-#       e.g. Rs 4,000 is 400000 paise (the same as the ledger).
-# TERM: simulated minute = one tick of the world clock, not a real minute, e.g. a 10-minute payout window is 10 ticks.
-# TERM: probability per use = the chance, between 0 and 1, that using a tactic once gets it noticed,
-#       e.g. 0.1 means noticed in 1 use out of 10.
-# TERM: account-supplier fee = what a gang pays the person who supplies a mule account, as a share of the money
-#       moved through it.
-# TERM: operator share = the part of the stolen money the gang's operator keeps.
+# What this file is
+#   Every step a gang takes (see config/tactic_blocks.yaml) has three costs:
+#   money, time and the risk of being noticed. A gang also has a budget in
+#   the same three units, and a plan that goes over budget is refused.
+#   Writing the costs in one set of units lets two tactics be compared. The
+#   risk numbers exist only for that comparison; nobody has published them.
 #
-# The figures behind the two parameters come from the finding bengaluru_rented_mule_suppliers in
-# docs/research/mule_typologies.md. They are REPORTED, NOT CONFIRMED, so they are assumptions with ranges.
-# These two parameters live here and NOT in config/world_ranges.yaml, whose 79-parameter count is pinned.
+# Who reads it
+#   world/tactic_config.py loads it: get_supplier_fee_range for the fee and
+#   get_block_risk_range for each block's risk. world/gang_planner.py adds up
+#   the costs against the gang's budget. tests/unit/test_tactic_families.py
+#   checks the file's shape. operator_share is checked by that test but no
+#   code reads it yet.
+#
+# Words used below
+#   paise      one hundredth of a rupee. Money is stored as whole paise, so
+#              there are no rounding errors: Rs 4,000 is 400,000 paise.
+#   simulated minute  one tick of the world clock, not a real minute.
+#   probability per use  the chance (0 to 1) that using a step once gets the
+#              gang noticed: 0.1 means noticed 1 time in 10.
+#   label / reason / issue_ids_v2 / derived_from
+#              "assumption": our registered guess; why; the problem number;
+#              the change record (amendment A-016).
+#
+# Where the full reasoning lives
+#   docs/research/amendments.md (A-016), and the finding
+#   bengaluru_rented_mule_suppliers in docs/research/mule_typologies.md.
+#   Those figures are REPORTED, NOT CONFIRMED, so they are assumptions with
+#   ranges. They live here and not in config/world_ranges.yaml, whose
+#   79-parameter count is pinned.
+#
 # Checked by: tests/unit/test_tactic_families.py and python -m core.config_validator config/tactic_costs.yaml
+# =====================================================================
 
+# ---------------------------------------------------------------------
+# tactic_cost_units: the units, and two money anchors
+#
+# The idea
+#   Fixes the units every cost is written in: money in rupees (INR, stored
+#   as paise), time in simulated minutes, risk as a probability per use.
+#
+#   account_supplier_fee_share [0.03, 0.06]  what a gang pays whoever
+#     supplies a mule account, as a share of the money moved through it.
+#     Example: 0.04 means Rs 4,000 on every Rs 1 lakh (1 lakh = 100,000).
+#     Reported by Deccan Herald (Jul 2025) as about 4%; the planner uses it
+#     as the gang's money cost of a route.
+#   operator_share [0.20, 0.30]  the part of the stolen money the gang's
+#     operator keeps, reported as 20 to 30% and not confirmed. Not read by
+#     any code yet.
+# ---------------------------------------------------------------------
 tactic_cost_units:
   label: policy
   reason: Tactic costs had no units, so two tactics could not be compared on cost. Fixing the units now means every later cost is written in the same ones, and the ledger and the tactic costs agree.
@@ -43,6 +81,22 @@ tactic_cost_units:
       derived_from: "amendment A-016"
       reason: The reported 20 to 30% share is NOT confirmed by the source finding, which is why it is an assumption with a range and not a fact.
 
+# ---------------------------------------------------------------------
+# tactic_risk_per_use: how likely each step is to get the gang noticed
+#
+# The idea
+#   When the planner plans a step it draws a risk from that block's range.
+#   The risks of all steps are combined (the chance that none is noticed is
+#   the product of the chances that each is not), and the total must stay
+#   under the gang's maximum allowed risk. The ranges are not measured; they
+#   let two tactics be compared.
+#
+# Example
+#   route [0.001, 0.02]: one route step has between a 0.1% and a 2% chance of
+#   being noticed. Scam and cash_out use the same range as route.
+#
+# Source: world/tactic_config.py (get_block_risk_range), world/gang_planner.py.
+# ---------------------------------------------------------------------
 tactic_risk_per_use:
   label: assumption
   reason: "No published figure; it exists only to compare tactics, as amendment A-016 says."
