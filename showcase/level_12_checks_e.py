@@ -17,8 +17,6 @@ import math
 from statistics import median
 from typing import Any
 
-import numpy as np
-
 from showcase.framework import CheckOutcome
 from showcase.level_12_support_e import fraud_story_by_payment_id, get_bulk_run, get_complaints_run
 from world.analyst import (
@@ -30,6 +28,7 @@ from world.analyst import (
 from world.complaints import plan_true_complaints
 from world.config_reader import read_world_ranges
 from world.device_schedule import MINUTES_PER_DAY
+from world.interactive_loop import build_component_streams
 from world.label_builder import collect_victim_losses
 from world.label_records import (
     LabelWorldSettings,
@@ -154,7 +153,7 @@ async def run_complaint_delay_by_type_check(workspace: Any) -> CheckOutcome:
             VictimLoss(f"acc_v{index}", 0, "acc_m", 1, scam_type, (f"p{index}",), last_paid_minute)
             for index in range(SYNTHETIC_LOSSES_PER_TYPE)
         ]
-        rng = np.random.default_rng(220 + type_number)
+        rng = build_component_streams(220 + type_number, {"check_22": 0})["check_22"]
         events = plan_true_complaints(losses, settings, world_ranges, SPLIT, rng, labels_config)
         assert len(events) == SYNTHETIC_LOSSES_PER_TYPE, "Share 1.0 must make every loss complain"
         delays_by_type[scam_type] = sorted(event.arrival_minute - last_paid_minute for event in events)
@@ -233,7 +232,7 @@ async def run_analyst_queue_check(workspace: Any) -> CheckOutcome:
         score_threshold=float(analyst_config["score_threshold"]["value"]),
     )
 
-    rng = np.random.default_rng(23)
+    rng = build_component_streams(23, {"check_23": 0})["check_23"]
     expected_by_load: list[float] = []
     measured_by_load: list[float] = []
     for load in ANALYST_LOADS:
