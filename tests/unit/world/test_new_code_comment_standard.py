@@ -266,6 +266,8 @@ NEW_CODE_FILES: list[str] = [
     "tests/unit/world/test_device_rotation.py",
     "tests/unit/world/test_gang_device_ids.py",
     "tests/unit/world/test_gang_truth.py",
+    # Level 12g Round 3a YAML content cache test suite.
+    "tests/unit/test_config_yaml_cache.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
