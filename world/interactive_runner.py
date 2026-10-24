@@ -440,6 +440,7 @@ def _apply_gang_configs(
     *,
     account_market_enabled: bool = False,
     account_market_config: dict[str, Any] | None = None,
+    held_out_split: str | None = None,
 ) -> tuple[Any, FraudInputs]:
     """
     WHAT: Registers fixture source accounts in runner state, plans each gang campaign using the gang_planning
@@ -505,7 +506,10 @@ def _apply_gang_configs(
         resale_share = draw_resale_share(prepared.plan.range_name, market_rng, config=account_market_config)
 
     for k, g in enumerate(gang_configs):
-        plan = plan_gang(g, prepared.world, plan_rng, reserved_accounts=reserved, gang_devices_rng=dev_rng)
+        plan = plan_gang(
+            g, prepared.world, plan_rng, reserved_accounts=reserved, gang_devices_rng=dev_rng,
+            world_split=held_out_split,
+        )
 
         if k >= 1 and account_market_enabled and resale_share is not None and market_rng is not None:
             offers = find_resale_offers(roles)
@@ -648,6 +652,7 @@ def run_interactive_world(
             prepared, gang_configs, state, fraud_inputs, fast_settings.seed, runner_config,
             account_market_enabled=runner_settings.account_market_enabled,
             account_market_config=account_market_config,
+            held_out_split=family_guard_split(world_split, fast_settings.range_name),
         )
     result = run_interactive(
         prepared.world, prepared.plan, prepared.run_rng, prepared.device_events, prepared.episode_payments,

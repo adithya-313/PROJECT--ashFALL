@@ -20,7 +20,12 @@ from typing import Any
 
 from world.tactic_config import (
     get_block_definition,
+    get_drip_hold_minutes_range,
+    get_drip_piece_max_inr_range,
+    get_drip_spread_days_range,
     get_origin_mix_options,
+    get_rotate_every_days_range,
+    get_rotations_range,
     get_scam_receiving_mules_range,
     get_scam_victims_per_mule_range,
     get_take_control_devices_range,
@@ -470,6 +475,177 @@ def _validate_take_control_parameters(gang_id: str, steps: tuple[BlockStep, ...]
                 )
 
 
+def _validate_slow_drip_route(gang_id: str, steps: tuple[BlockStep, ...]) -> None:
+    """
+    WHAT: Validates structural integrity and numerical bounds for slow drip routing parameters.
+
+    WHY: Level 12g slow_drip moves money in small pieces over days with multi-hour dwell times.
+    All three drip parameters must appear together, cannot combine with legacy dwell or amount,
+    require at least two hops, and exclude disguise or split_below_threshold steps.
+
+    Args:
+        gang_id: Identifier of the syndicate for descriptive diagnostic reporting.
+        steps: Sequence of BlockStep specifications comprising the campaign.
+
+    Returns:
+        None. Raises ValueError if slow drip parameters violate structural or boundary rules.
+
+    Raises:
+        ValueError: If slow drip parameters are incomplete, mixed with incompatible settings,
+            outside valid ranges, or configured alongside incompatible tactics.
+
+    Example:
+        # Route specifying only drip_piece_max_inr raises ValueError.
+        # _validate_slow_drip_route("gang_a", (BlockStep("route", (("drip_piece_max_inr", 1000),)),))
+    """
+    drip_keys = ("drip_piece_max_inr", "drip_spread_days", "drip_hold_minutes")
+    has_slow_drip = False
+
+    min_piece, max_piece = get_drip_piece_max_inr_range()
+    min_spread, max_spread = get_drip_spread_days_range()
+    min_hold, max_hold = get_drip_hold_minutes_range()
+
+    for step in steps:
+        if step.block != "route":
+            continue
+        params = step.params_dict
+        present_drip = [k for k in drip_keys if k in params]
+        if not present_drip:
+            continue
+
+        has_slow_drip = True
+        if len(present_drip) != len(drip_keys):
+            missing = sorted(set(drip_keys) - set(present_drip))
+            raise ValueError(
+                f"Gang '{gang_id}' route slow-drip requires all three drip parameters "
+                f"({', '.join(drip_keys)}), but missing {missing}."
+            )
+
+        if "dwell_minutes" in params or "amount_inr" in params:
+            raise ValueError(
+                f"Gang '{gang_id}' route slow-drip cannot set dwell_minutes or amount_inr."
+            )
+
+        if "layers" not in params:
+            raise ValueError(
+                f"Gang '{gang_id}' route slow-drip requires layers parameter with value >= 2, got none."
+            )
+        layers_val = params["layers"]
+        if not isinstance(layers_val, int) or isinstance(layers_val, bool) or layers_val < 2:
+            raise ValueError(
+                f"Gang '{gang_id}' route slow-drip requires layers >= 2, got {layers_val}."
+            )
+
+        piece_val = params["drip_piece_max_inr"]
+        if (
+            not isinstance(piece_val, int)
+            or isinstance(piece_val, bool)
+            or not (min_piece <= piece_val <= max_piece)
+        ):
+            raise ValueError(
+                f"Gang '{gang_id}' route drip_piece_max_inr must be an integer in [{min_piece}, {max_piece}], "
+                f"got {piece_val}."
+            )
+
+        spread_val = params["drip_spread_days"]
+        if (
+            not isinstance(spread_val, int)
+            or isinstance(spread_val, bool)
+            or not (min_spread <= spread_val <= max_spread)
+        ):
+            raise ValueError(
+                f"Gang '{gang_id}' route drip_spread_days must be an integer in [{min_spread}, {max_spread}], "
+                f"got {spread_val}."
+            )
+
+        hold_val = params["drip_hold_minutes"]
+        if (
+            not isinstance(hold_val, int)
+            or isinstance(hold_val, bool)
+            or not (min_hold <= hold_val <= max_hold)
+        ):
+            raise ValueError(
+                f"Gang '{gang_id}' route drip_hold_minutes must be an integer in [{min_hold}, {max_hold}], "
+                f"got {hold_val}."
+            )
+
+    if has_slow_drip:
+        has_disguise = any(s.block == "disguise" for s in steps)
+        has_split = any(s.block == "split_below_threshold" for s in steps)
+        if has_disguise or has_split:
+            raise ValueError(
+                f"Gang '{gang_id}' with slow-drip route cannot contain disguise or split_below_threshold steps."
+            )
+
+
+def _validate_device_rotation_take_control(gang_id: str, steps: tuple[BlockStep, ...]) -> None:
+    """
+    WHAT: Validates structural integrity and numerical bounds for take_control device rotation parameters.
+
+    WHY: Level 12g device_rotation equips each mule account with its own hardware phone, replaced periodically.
+    Rotation parameters must be declared jointly, within calibrated bounds, and never paired with shared devices.
+
+    Args:
+        gang_id: Identifier of the syndicate for descriptive diagnostic reporting.
+        steps: Sequence of BlockStep specifications comprising the campaign.
+
+    Returns:
+        None. Raises ValueError if device rotation options breach structural rules or bounds.
+
+    Raises:
+        ValueError: If rotation parameters are partially declared, configured alongside shared devices,
+            or assigned values outside calibrated ranges.
+
+    Example:
+        # Declaring rotate_every_days without rotations raises ValueError.
+        # _validate_device_rotation_take_control("gang_a", (BlockStep("take_control", (("rotate_every_days", 7),)),))
+    """
+    rotation_keys = ("rotate_every_days", "rotations")
+    min_days, max_days = get_rotate_every_days_range()
+    min_rot, max_rot = get_rotations_range()
+
+    for step in steps:
+        if step.block != "take_control":
+            continue
+        params = step.params_dict
+        present_rot = [k for k in rotation_keys if k in params]
+        if not present_rot:
+            continue
+
+        if len(present_rot) != len(rotation_keys):
+            raise ValueError(
+                f"Gang '{gang_id}' take_control rotation requires rotate_every_days and rotations to be set together."
+            )
+
+        if "devices" in params:
+            raise ValueError(
+                f"Gang '{gang_id}' take_control cannot specify devices together with rotation options "
+                "(each mule receives its own phone)."
+            )
+
+        days_val = params["rotate_every_days"]
+        if (
+            not isinstance(days_val, int)
+            or isinstance(days_val, bool)
+            or not (min_days <= days_val <= max_days)
+        ):
+            raise ValueError(
+                f"Gang '{gang_id}' take_control rotate_every_days must be an integer in [{min_days}, {max_days}], "
+                f"got {days_val}."
+            )
+
+        rot_val = params["rotations"]
+        if (
+            not isinstance(rot_val, int)
+            or isinstance(rot_val, bool)
+            or not (min_rot <= rot_val <= max_rot)
+        ):
+            raise ValueError(
+                f"Gang '{gang_id}' take_control rotations must be an integer in [{min_rot}, {max_rot}], "
+                f"got {rot_val}."
+            )
+
+
 def _validate_money_source(config: GangConfig) -> None:
     """
     WHAT: Asserts that the gang has exactly one money source: a fixture source or one scam step, never both and
@@ -667,3 +843,7 @@ def validate_gang_config(config: GangConfig) -> None:
     _validate_scam_parameters(config.gang_id, config.steps)
     _validate_acquire_parameters(config.gang_id, config.steps)
     _validate_scam_route_agreement(config.gang_id, config.steps)
+
+    # 7. Validate held-out slow drip route and device rotation take control structural rules.
+    _validate_slow_drip_route(config.gang_id, config.steps)
+    _validate_device_rotation_take_control(config.gang_id, config.steps)

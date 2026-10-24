@@ -676,3 +676,109 @@ def get_rented_owner_kept_share_range(
     if not isinstance(bounds, list) or len(bounds) != 2 or bounds[0] > bounds[1]:
         raise ValueError(f"World ranges parameter '{reference}' split '{split}' must be two ordered numbers.")
     return float(bounds[0]), float(bounds[1])
+
+
+def get_drip_piece_max_inr_range(config_path: Path | None = None) -> tuple[int, int]:
+    """
+    WHAT: Retrieves the [min, max] maximum rupee piece size range for slow drip routing from config/tactic_blocks.yaml.
+
+    WHY: Project rules prohibit hardcoding numerical bounds; reading the schema directly ensures valid piece sizes.
+
+    Args:
+        config_path: Optional path override for tactic_blocks.yaml.
+
+    Returns:
+        Two-element integer tuple (min_inr, max_inr).
+
+    Example:
+        # min_inr, max_inr = get_drip_piece_max_inr_range()
+        # assert min_inr == 500 and max_inr == 1999
+    """
+    definition = get_block_definition("route", config_path)
+    bounds = definition["parameters"]["drip_piece_max_inr"]["range"]
+    return int(bounds[0]), int(bounds[1])
+
+
+def get_drip_spread_days_range(config_path: Path | None = None) -> tuple[int, int]:
+    """
+    WHAT: Resolves the [min, max] calendar day spread range over which slow drip pieces disperse from origin.
+
+    WHY: Used by gang configuration validation to constrain first-hop disbursement span to configured assumptions.
+
+    Args:
+        config_path: Optional path override for tactic_blocks.yaml.
+
+    Returns:
+        Two-element integer tuple (min_days, max_days).
+
+    Example:
+        # min_days, max_days = get_drip_spread_days_range()
+        # assert min_days == 3 and max_days == 14
+    """
+    definition = get_block_definition("route", config_path)
+    bounds = definition["parameters"]["drip_spread_days"]["range"]
+    return int(bounds[0]), int(bounds[1])
+
+
+def get_drip_hold_minutes_range(config_path: Path | None = None) -> tuple[int, int]:
+    """
+    WHAT: Resolves the [min, max] resting duration range in minutes for money held at each intermediate mule.
+
+    WHY: Enforces that slow drip dwell windows remain within calibrated held-out bounds above training dwell limits.
+
+    Args:
+        config_path: Optional path override for tactic_blocks.yaml.
+
+    Returns:
+        Two-element integer tuple (min_minutes, max_minutes).
+
+    Example:
+        # min_minutes, max_minutes = get_drip_hold_minutes_range()
+        # assert min_minutes == 240 and max_minutes == 2880
+    """
+    definition = get_block_definition("route", config_path)
+    bounds = definition["parameters"]["drip_hold_minutes"]["range"]
+    return int(bounds[0]), int(bounds[1])
+
+
+def get_rotate_every_days_range(config_path: Path | None = None) -> tuple[int, int]:
+    """
+    WHAT: Retrieves the [min, max] replacement interval range in calendar days for mule device rotation.
+
+    WHY: Validates take_control device rotation timetables against tactic configuration assumptions.
+
+    Args:
+        config_path: Optional path override for tactic_blocks.yaml.
+
+    Returns:
+        Two-element integer tuple (min_days, max_days).
+
+    Example:
+        # min_days, max_days = get_rotate_every_days_range()
+        # assert min_days == 3 and max_days == 14
+    """
+    definition = get_block_definition("take_control", config_path)
+    bounds = definition["parameters"]["rotate_every_days"]["range"]
+    return int(bounds[0]), int(bounds[1])
+
+
+def get_rotations_range(config_path: Path | None = None) -> tuple[int, int]:
+    """
+    WHAT: Retrieves the [min, max] total replacement count range for mule device rotation cycles.
+
+    WHY: Validates take_control device turnover counts against tactic configuration assumptions.
+
+    Args:
+        config_path: Optional path override for tactic_blocks.yaml.
+
+    Returns:
+        Two-element integer tuple (min_rotations, max_rotations).
+
+    Example:
+        # min_rot, max_rot = get_rotations_range()
+        # assert min_rot == 1 and max_rot == 6
+    """
+    definition = get_block_definition("take_control", config_path)
+    bounds = definition["parameters"]["rotations"]["range"]
+    return int(bounds[0]), int(bounds[1])
+

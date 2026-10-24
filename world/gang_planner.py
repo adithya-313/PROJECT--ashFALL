@@ -29,6 +29,7 @@ from world.gang_devices import (
     build_gang_device_events,
     make_gang_devices,
 )
+from world.held_out_options import check_held_out_options_allowed, find_held_out_options
 from world.interactive_records import IllicitMoneyRule
 from world.mule_origins import build_opening_event, draw_mule_origins, make_opening_handle
 from world.outside_events import OutsideEvent
@@ -989,6 +990,8 @@ def plan_gang(
     config: GangConfig, world: World, rng: np.random.Generator,
     reserved_accounts: set[str] | None = None,
     gang_devices_rng: np.random.Generator | None = None,
+    *,
+    world_split: str | None = None,
 ) -> GangPlan:
     """
     WHAT: Synthesizes a complete tactical campaign plan from a GangConfig specification and simulated World state.
@@ -1004,6 +1007,7 @@ def plan_gang(
         rng: Master random number generator stream assigned to this gang's planning process.
         reserved_accounts: Optional set of account identifiers reserved by prior gangs or system fixtures.
         gang_devices_rng: Optional dedicated random number generator stream for device creation (child 6).
+        world_split: Optional string evaluation split identifier ('training', 'test', 'stress').
 
     Returns:
         An initialized GangPlan containing planned transfers, truth assertions, step costs, and total expenditures.
@@ -1013,6 +1017,11 @@ def plan_gang(
         # assert len(plan.payments) > 0 and plan.totals.money_paise <= gang_config.budget.money_paise
     """
     validate_gang_config(config)
+    check_held_out_options_allowed(config, world_split)
+    held_out = find_held_out_options(config)
+    if held_out:
+        raise ValueError(f"Gang '{config.gang_id}' held-out option planning is not built yet (Level 12g C2/C3)")
+
     dev_rng = gang_devices_rng if gang_devices_rng is not None else rng
     pmts, roles, spans, stories, costs, money, time, safe, events, rules, openings, withdrawals = _plan_campaign_steps(
         config, world, rng, reserved_accounts, dev_rng

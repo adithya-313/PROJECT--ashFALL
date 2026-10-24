@@ -259,6 +259,9 @@ NEW_CODE_FILES: list[str] = [
     "showcase/level_12_support_f.py",
     "showcase/level_12_checks_f.py",
     "tests/unit/showcase/test_level_12_checks_f.py",
+    # Level 12g held-out options module and test suite.
+    "world/held_out_options.py",
+    "tests/unit/world/test_held_out_options.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
