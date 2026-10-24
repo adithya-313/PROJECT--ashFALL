@@ -231,6 +231,34 @@ NEW_CODE_FILES: list[str] = [
     "showcase/level_12_support_e.py",
     "showcase/level_12_checks_e.py",
     "tests/unit/showcase/test_level_12_checks_e.py",
+    # Level 12f many-worlds sampler and test suite.
+    "world/world_sampler.py",
+    "tests/unit/world/test_world_sampler.py",
+    # Level 12f sampled world runner, its test suite and runtime measurement script.
+    "world/sampled_world.py",
+    "tests/unit/world/test_sampled_world.py",
+    "scripts/measure_sampled_world_runtime.py",
+    # Level 12f pattern files module and test suite.
+    "world/pattern_files.py",
+    "tests/unit/world/test_pattern_files.py",
+    # Level 12f tactic plugins module, example plugin and test suite.
+    "world/tactic_plugins.py",
+    "patterns/plugins/cool_off.py",
+    "tests/unit/world/test_tactic_plugins.py",
+    # Level 12f world split versus range column guard test suite.
+    "tests/unit/world/test_world_split_guard.py",
+    # Level 12f per-world gang mix module and test suite.
+    "world/gang_mix.py",
+    "tests/unit/world/test_gang_mix.py",
+    # Level 12f one-block world measurement script.
+    "scripts/measure_world_block.py",
+    # Level 12f world invariant checks and test suite.
+    "world/world_invariants.py",
+    "tests/unit/world/test_world_invariants.py",
+    # Level 12f showcase part f support, checks and test suite.
+    "showcase/level_12_support_f.py",
+    "showcase/level_12_checks_f.py",
+    "tests/unit/showcase/test_level_12_checks_f.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [

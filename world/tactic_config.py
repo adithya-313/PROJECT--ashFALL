@@ -20,6 +20,7 @@ from typing import Any
 
 from core.config_validator import load_yaml
 from world.run_identity import REPO_ROOT
+from world.tactic_plugins import get_registered_plugin, plugin_block_definition
 
 TACTIC_BLOCKS_PATH: Path = REPO_ROOT / "config" / "tactic_blocks.yaml"
 TACTIC_COSTS_PATH: Path = REPO_ROOT / "config" / "tactic_costs.yaml"
@@ -161,7 +162,11 @@ def get_block_definition(block_name: str, config_path: Path | None = None) -> di
     # 1. Fetch blocks dictionary and verify presence of block_name.
     blocks = load_tactic_blocks(config_path)["tactic_blocks"]["blocks"]
     if block_name not in blocks:
-        raise KeyError(f"Unknown tactic building block '{block_name}'.")
+        # A locally loaded plugin (world/tactic_plugins.py) may supply the block; otherwise the block is unknown.
+        plugin = get_registered_plugin(block_name)
+        if plugin is None:
+            raise KeyError(f"Unknown tactic building block '{block_name}'.")
+        return plugin_block_definition(plugin)
     return blocks[block_name]
 
 

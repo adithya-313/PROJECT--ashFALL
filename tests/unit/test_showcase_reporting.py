@@ -7,7 +7,7 @@ from pathlib import Path
 import orjson
 
 from showcase.framework import CheckResult, LevelResult
-from showcase.reporting import make_timeline_chart_svg, write_level_report
+from showcase.reporting import make_timeline_chart_svg, render_chart, write_level_report
 
 EVIL_NAME = "<script>alert(1)</script>"
 
@@ -76,3 +76,36 @@ def test_chart_contains_shaded_label_and_handles_empty_points():
     assert "<polyline" in svg
     empty = make_timeline_chart_svg([], [], "Events", "seconds", "count")
     assert "no data" in empty
+
+
+def test_scatter_chart_has_one_circle_per_point_a_marker_style_per_series_and_a_legend():
+    """A scatter dict renders an svg with one circle per point of the first series, other shapes, and all names."""
+    chart = {
+        "type": "scatter", "title": "Spread", "x_label": "share", "y_label": "minutes",
+        "series": [
+            {"name": "training", "points": [[0.1, 5], [0.5, 30], [0.9, 60]]},
+            {"name": "validation <b>", "points": [[0.2, 10], [0.8, 50]]},
+        ],
+    }
+    svg = render_chart(chart)
+    assert svg.startswith("<svg") and svg.endswith("</svg>")
+    assert svg.count("<circle") == 3
+    assert svg.count("<rect") == 2
+    assert "training" in svg and "validation &lt;b&gt;" in svg
+    assert "<b>" not in svg
+    one_series = render_chart({"type": "scatter", "title": "t", "series": [{"name": "only", "points": [[1, 2]] * 4}]})
+    assert one_series.count("<circle") == 4
+    assert "no data" in render_chart({"type": "scatter", "title": "t", "series": []})
+
+
+def test_timeline_chart_renders_exactly_as_before():
+    """A timeline dict gives the same text as make_timeline_chart_svg called directly; other types give the old note."""
+    chart = {
+        "type": "timeline", "title": "Events", "x_label": "seconds", "y_label": "count",
+        "points": [[0, 0], [5, 10]], "shaded": [[2, 4, "broker down"]],
+    }
+    expected = make_timeline_chart_svg(
+        [(0.0, 0.0), (5.0, 10.0)], [(2.0, 4.0, "broker down")], "Events", "seconds", "count"
+    )
+    assert render_chart(chart) == expected
+    assert render_chart({"type": "pie"}) == "<p>Unknown chart type: pie</p>"

@@ -1,0 +1,78 @@
+# =====================================================================
+# TACTIC PLUGINS: rules for a local timing-only tactic block
+# =====================================================================
+#
+# What this file is
+#   A plugin is a small Python file in patterns/plugins/ that adds one tactic
+#   block to the gang language. Because it is code, it is checked before it is
+#   imported: the linter in world/tactic_plugins.py reads the lists below and
+#   refuses a file that uses another random source, the clock, files, or the
+#   hidden truth. A plugin can only report how many minutes it advances the
+#   gang's clock and how much money it costs; it cannot make payments, roles or
+#   device events, so it cannot touch the device-retirement dividing line (12-8).
+#
+# Who reads it
+#   world/tactic_plugins.py. Plugins stay on this machine.
+#
+# How to read each block
+#   label: policy  -> our own design choice.
+#
+# Where the full reasoning lives
+#   Level 12f task 8.
+# =====================================================================
+
+tactic_plugins:
+  label: policy
+  reason: "Configuration for local tactic plugins (Level 12f task 8)."
+  issue_ids_v2: [12-10, 12-8]
+  derived_from: "Level 12f task 8"
+
+  plugin_folder:
+    path: patterns/plugins
+    label: policy
+    reason: "Plugins load only from this folder, so a path typed by mistake cannot run code from elsewhere."
+
+  bundle_policy:
+    value: never
+    label: policy
+    reason: "Plugins are arbitrary local code; contribution bundles (Level 30) must exclude this folder. No bundle code exists yet."
+
+  # ---------------------------------------------------------------------
+  # linter lists: what a plugin file may not import or call
+  #
+  # Why each group
+  #   random sources   determinism: only the gang's own random stream, passed in
+  #                    as context.rng, may be used.
+  #   truth            truth isolation (ground rule 15): a plugin never reads
+  #                    the hidden truth or other world modules.
+  #   input and code   no file access and no running of text as code.
+  # ---------------------------------------------------------------------
+  forbidden_imports:
+    modules: [random, secrets, evaluation]
+    label: policy
+    reason: "Other random sources break determinism; evaluation holds the hidden truth."
+
+  allowed_world_imports:
+    modules: [world.tactic_plugins]
+    label: policy
+    reason: "A plugin may import only the plugin types; any other world module could reach the truth."
+
+  forbidden_calls:
+    names:
+      - os.urandom
+      - time.time
+      - time.time_ns
+      - datetime.datetime.now
+      - datetime.datetime.utcnow
+      - datetime.datetime.today
+      - open
+      - exec
+      - eval
+      - __import__
+    label: policy
+    reason: "The clock and operating-system randomness break determinism; open, exec, eval and __import__ read files or run text as code."
+
+  numpy_random_allowed:
+    names: [numpy.random.Generator]
+    label: policy
+    reason: "A plugin may name the Generator type for annotations; every other numpy.random name is a second random source."

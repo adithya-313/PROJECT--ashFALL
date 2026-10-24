@@ -201,6 +201,48 @@ def test_cash_withdrawal_money_conservation_and_record() -> None:
     assert check_money_conserved(ledgers, expected) == []
 
 
+def test_withdrawal_from_an_account_opened_during_the_run_completes() -> None:
+    """A gang-opened account gets money after its opening and is withdrawn from at an ATM; no registration error."""
+    from world.calendar_runner import PlannedPayment
+    from world.interactive_records import IllicitMoneyRule
+
+    handle = "new:g:0"
+    opening = OutsideEvent(
+        100, "open_account", owner_kind="person", opening_stream="gang_account_openings", opening_handle=handle
+    )
+    inputs = FraudInputs(
+        payments=(PlannedPayment(300, "acc_person_000001", handle, 20_000, 0, "everyday"),),
+        money_rules=(IllicitMoneyRule(0, False, True),),
+        outside_events=(opening,),
+        withdrawals=(CashWithdrawal(5_000, handle, 10_000, CHANNEL_ATM, 500_000),),
+    )
+
+    output = run_interactive_world(TINY, RunnerSettings(fraud_enabled=True), fraud_inputs=inputs)
+
+    # With 60 people the first opening is person number 60, written with six digits.
+    assert len(output.result.cash_withdrawals) == 1
+    record = output.result.cash_withdrawals[0]
+    assert record.account == "acc_person_000060"
+    assert record.status == "success"
+    assert record.withdrawn == 10_000
+
+
+def test_withdrawal_on_an_account_that_is_never_opened_is_refused_at_queue_time() -> None:
+    """An account that is neither registered nor opened later is refused before the run, with the old message."""
+    inputs = FraudInputs(withdrawals=(CashWithdrawal(100, "acc_person_999999", 10_000, CHANNEL_BRANCH),))
+    with pytest.raises(ValueError, match="Account 'acc_person_999999' is not registered with the runner"):
+        run_interactive_world(TINY, RunnerSettings(fraud_enabled=True), fraud_inputs=inputs)
+
+
+def test_processing_a_withdrawal_on_an_unregistered_account_raises_a_plain_error() -> None:
+    """If a withdrawal runs before its account is registered, it stops with a message naming account and minute."""
+    from types import SimpleNamespace
+
+    context = SimpleNamespace(state=SimpleNamespace(bank_map={}), gang_reactions_enabled=False)
+    with pytest.raises(ValueError, match="cash withdrawal at minute 42 uses account acc_new, which is not registered"):
+        process_cash_withdrawal(context, CashWithdrawal(42, "acc_new", 10_000, CHANNEL_BRANCH))
+
+
 def test_atm_daily_limit_exceeded_fails_and_balance_untouched() -> None:
     """
     Tests that ATM withdrawal exceeding card daily limit fails with reason 'atm_daily_limit'

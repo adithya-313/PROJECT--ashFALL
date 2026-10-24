@@ -1,0 +1,68 @@
+# =====================================================================
+# PATTERN FILES: how a written-down scam pattern is checked and previewed
+# =====================================================================
+#
+# What this file is
+#   A pattern file is a small YAML file that describes one gang in the tactic
+#   language (the same shape the gang fixtures use). Before a pattern is used,
+#   world/pattern_files.py checks its keys and version, builds the gang config
+#   from it, and plans the gang once in a small world to see whether it stays
+#   inside its budget and roughly how much money it moves.
+#
+# Who reads it
+#   world/pattern_files.py. Nothing runs patterns automatically yet.
+#
+# How to read each block
+#   label: policy  -> our own design choice.
+#
+# Where the full reasoning lives
+#   Level 12f task 7.
+# =====================================================================
+
+pattern_files:
+  label: policy
+  reason: "Configuration for loading, checking and previewing pattern files (Level 12f task 7)."
+  issue_ids_v2: []
+  derived_from: "Level 12f task 7"
+
+  supported_pattern_version:
+    value: 1
+    label: policy
+    reason: "Version 1 is the first format; a file with another number is refused rather than guessed at."
+
+  # ---------------------------------------------------------------------
+  # preview_world: the one small world every preview is planned in
+  #
+  # The idea
+  #   The preview plans the gang once; it does not run the world. The seed is
+  #   the first training seed of the sampler (config/world_sampler.yaml), so a
+  #   preview never touches a test or stress world (ground rule 17).
+  # ---------------------------------------------------------------------
+  preview_world:
+    preset: tiny
+    seed: 1000000
+    label: policy
+    reason: "Previews use a training world, never test or stress, so no held-out world is learned from."
+
+  preview_horizon_note:
+    text: "The preview is an ESTIMATE from one small world plan, not a run."
+    label: policy
+    reason: "Says in plain words how far the preview numbers can be trusted."
+
+  # ---------------------------------------------------------------------
+  # allowed keys: anything else is refused so a typo cannot be ignored
+  # ---------------------------------------------------------------------
+  allowed_top_level_keys:
+    keys: [pattern]
+    label: policy
+    reason: "A closed key set means a misspelt key is an error, not a silently ignored setting."
+
+  allowed_pattern_keys:
+    keys: [pattern_version, name, description, gang]
+    label: policy
+    reason: "The pattern block holds metadata plus the gang; nothing else is read."
+
+  allowed_gang_keys:
+    keys: [gang_id, strength, budget, start_minute, family, source, steps]
+    label: policy
+    reason: "The keys gang_config_from_plain reads; a misspelt gang key would otherwise be ignored."

@@ -100,7 +100,8 @@ def validate_cash_withdrawal(withdrawal: CashWithdrawal, state: Any = None) -> N
 
     Args:
         withdrawal: The CashWithdrawal to validate.
-        state: Optional RunnerState to verify account registration.
+        state: Optional RunnerState to verify account registration. The runner passes None for a withdrawal from an
+            account opened during the run, which is not registered yet; process_cash_withdrawal checks it again.
 
     Raises:
         ValueError: If any attribute fails validation constraints.
@@ -210,7 +211,17 @@ def process_cash_withdrawal(context: Any, withdrawal: CashWithdrawal) -> None:
         5. Balance check: Compare real ledger balance with effective amount; fail with domain 'customer',
            reason 'insufficient_balance' if short, posting no legs.
         6. Ledger post_debit: Split amount into legal legs at bank's upi_limit_paise under single transfer id.
+
+    Raises:
+        ValueError: If the account is not registered with the runner when the withdrawal runs.
     """
+    # An account opened during the run is registered by its opening event; a withdrawal that finds it missing here
+    # must stop with a plain message and never be skipped or fail later in a bare lookup.
+    if withdrawal.account_id not in context.state.bank_map:
+        raise ValueError(
+            f"cash withdrawal at minute {withdrawal.minute} uses account {withdrawal.account_id}, "
+            "which is not registered with the runner"
+        )
     if context.gang_reactions_enabled:
         from world.gang_feed import find_holding_gang
         from world.gang_reactions import may_move_money

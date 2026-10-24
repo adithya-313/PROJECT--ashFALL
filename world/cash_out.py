@@ -214,6 +214,8 @@ def plan_cash_out_step(
 
     # One crypto collector account per gang
     crypto_handle: str | None = None
+    crypto_opening_seq = 0
+    crypto_first_use_arrival = 0
     crypto_arrival_minutes: list[int] = []
     crypto_send_minutes: list[int] = []
 
@@ -247,10 +249,12 @@ def plan_cash_out_step(
         # Channel 1: Crypto collector
         if amt_crypto > 0:
             if crypto_handle is None:
+                # The handle and its number are fixed on first use, as before. The opening event itself is added
+                # after the loop, once every terminal mule's crypto send is known (see below).
                 crypto_handle = make_opening_handle(gang_id, opening_seq)
-                crypto_opening_event = build_opening_event(gang_id, opening_seq, "borrowed_kyc", arrival_minute)
+                crypto_opening_seq = opening_seq
+                crypto_first_use_arrival = arrival_minute
                 opening_seq += 1
-                outside_events.append(crypto_opening_event)
 
             crypto_arrival_minutes.append(arrival_minute)
             crypto_send_minutes.append(send_min)
@@ -339,7 +343,17 @@ def plan_cash_out_step(
             )
             max_delay = max(max_delay, send_min - arrival_minute)
 
-    # Finalize crypto collector RoleSpan if any crypto payments were planned
+    # Terminal mules are not in time order, so the first mule to use the collector is not always the first to pay it.
+    # The collector therefore opens at the earlier of its first-use arrival and its earliest crypto send. A plan that
+    # worked before is unchanged: its earliest send was already at or after that first-use arrival. This is the only
+    # event cash-out adds to outside_events, so adding it here keeps the list's content and order, and opening_seq
+    # was advanced on first use, so the numbering is the same.
+    if crypto_handle is not None:
+        opening_minute = min(crypto_first_use_arrival, min(crypto_send_minutes))
+        outside_events.append(build_opening_event(gang_id, crypto_opening_seq, "borrowed_kyc", opening_minute))
+
+    # Finalize crypto collector RoleSpan if any crypto payments were planned. Its valid_from is the earliest crypto
+    # arrival, which is at or before every send, so the role is unchanged by the opening-minute fix.
     if crypto_handle is not None and crypto_send_minutes:
         roles.append(
             RoleSpan(

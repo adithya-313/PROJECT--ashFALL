@@ -51,6 +51,7 @@ from world.tactic_config import (
     get_take_control_devices_range,
     get_warmup_days_range,
 )
+from world.tactic_plugins import get_registered_plugin, run_plugin_step
 from world.truth_records import DeviceControlSpan, PaymentStory, RoleSpan, TruthFacts
 
 MINUTES_PER_DAY: int = 1440
@@ -930,7 +931,15 @@ def _plan_campaign_steps(
         elif step.block == "disguise":
             cost = _plan_disguise_step(step, rng)
         else:
-            raise ValueError(f"Unrecognized block '{step.block}'.")
+            loaded_plugin = get_registered_plugin(step.block)
+            if loaded_plugin is None:
+                raise ValueError(f"Unrecognized block '{step.block}'.")
+            # A plugin only advances the clock and costs money; its risk is drawn here from its own range.
+            plugin_result = run_plugin_step(loaded_plugin, step.params_dict, clock_min, config.strength, rng)
+            plugin_low, plugin_high = loaded_plugin.plugin.risk_per_use
+            plugin_risk = float(rng.uniform(plugin_low, plugin_high))
+            cost = BlockCost(plugin_result.money_paise, plugin_result.minutes_advanced, plugin_risk)
+            clock_min += plugin_result.minutes_advanced
 
         costs.append(cost)
         money += cost.money_paise; time += cost.time_minutes; prob_safe *= (1.0 - cost.risk)

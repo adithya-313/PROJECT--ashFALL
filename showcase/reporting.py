@@ -137,8 +137,75 @@ def make_timeline_chart_svg(
     return "".join(parts)
 
 
+SCATTER_COLORS = ("#1f5fa8", "#c8501e", "#2a8a4a", "#8a3fa0")
+SCATTER_MARKERS = ("circle", "square", "diamond", "triangle")
+SCATTER_GLYPHS = ("&#9679;", "&#9632;", "&#9670;", "&#9650;")
+
+
+def make_scatter_chart_svg(
+    series: list[tuple[str, list[tuple[float, float]]]], title: str, x_label: str, y_label: str
+) -> str:
+    """
+    Build a scatter plot as an inline SVG string, standard library only: one marker shape and colour per series
+    (circle, square, diamond, triangle, then repeating), axes with their lowest and highest values, and a legend.
+    """
+    all_points = [point for _, points in series for point in points]
+    if not all_points:
+        return make_empty_chart_svg(title)
+    x_low, x_high = min(x for x, _ in all_points), max(x for x, _ in all_points)
+    y_low, y_high = min(y for _, y in all_points), max(y for _, y in all_points)
+    left, right = MARGIN_LEFT, CHART_WIDTH - MARGIN_RIGHT
+    top, bottom = MARGIN_TOP, CHART_HEIGHT - MARGIN_BOTTOM
+    parts = [f'<svg viewBox="0 0 {CHART_WIDTH} {CHART_HEIGHT}" role="img" aria-label="{escape(title)}">']
+    parts.append(f'<text x="{MARGIN_LEFT}" y="18" font-size="14" font-weight="bold">{escape(title)}</text>')
+    for number, (name, points) in enumerate(series):
+        color = SCATTER_COLORS[number % len(SCATTER_COLORS)]
+        shape = SCATTER_MARKERS[number % len(SCATTER_MARKERS)]
+        for x, y in points:
+            pixel_x = scale_value(x, x_low, x_high, left, right)
+            pixel_y = scale_value(y, y_low, y_high, bottom, top)
+            parts.append(_scatter_marker(shape, pixel_x, pixel_y, color))
+        legend_x = left + 8 + 150 * number
+        # The legend uses a text glyph of the same shape, so a series' circles in the plot are only its data points.
+        glyph = SCATTER_GLYPHS[number % len(SCATTER_GLYPHS)]
+        parts.append(f'<text x="{legend_x}" y="{top + 2}" font-size="12" fill="{color}">{glyph}</text>')
+        parts.append(f'<text x="{legend_x + 14}" y="{top + 2}" font-size="11">{escape(name)}</text>')
+    parts.append(f'<line x1="{left}" y1="{bottom}" x2="{right}" y2="{bottom}" stroke="#333"/>')
+    parts.append(f'<line x1="{left}" y1="{top}" x2="{left}" y2="{bottom}" stroke="#333"/>')
+    parts.append(f'<text x="{left - 6}" y="{top + 4}" font-size="11" text-anchor="end">{y_high:g}</text>')
+    parts.append(f'<text x="{left - 6}" y="{bottom}" font-size="11" text-anchor="end">{y_low:g}</text>')
+    parts.append(f'<text x="{CHART_WIDTH // 2}" y="{CHART_HEIGHT - 8}" font-size="12" text-anchor="middle">'
+                 f'{escape(x_label)} ({x_low:g} to {x_high:g})</text>')
+    parts.append(f'<text x="14" y="{CHART_HEIGHT // 2}" font-size="12" text-anchor="middle" '
+                 f'transform="rotate(-90 14 {CHART_HEIGHT // 2})">{escape(y_label)}</text>')
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _scatter_marker(shape: str, x: float, y: float, color: str) -> str:
+    """One marker of a scatter plot: a circle, a square, a diamond or a triangle, in the series' colour."""
+    if shape == "circle":
+        return f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3.5" fill="{color}" opacity="0.8"/>'
+    if shape == "square":
+        return f'<rect x="{x - 3.5:.1f}" y="{y - 3.5:.1f}" width="7" height="7" fill="{color}" opacity="0.8"/>'
+    if shape == "diamond":
+        points = f"{x:.1f},{y - 4.5:.1f} {x + 4.5:.1f},{y:.1f} {x:.1f},{y + 4.5:.1f} {x - 4.5:.1f},{y:.1f}"
+    else:
+        points = f"{x:.1f},{y - 4.5:.1f} {x + 4.5:.1f},{y + 3.5:.1f} {x - 4.5:.1f},{y + 3.5:.1f}"
+    return f'<polygon points="{points}" fill="{color}" opacity="0.8"/>'
+
+
 def render_chart(chart: dict[str, Any]) -> str:
-    """Turn the chart dict a check attached ({"type": "timeline", ...}) into SVG text."""
+    """
+    Turn the chart dict a check attached into SVG text: {"type": "timeline", ...} as before, or
+    {"type": "scatter", "title", "x_label", "y_label", "series": [{"name", "points": [[x, y], ...]}, ...]}.
+    """
+    if chart.get("type") == "scatter":
+        series = [
+            (str(item["name"]), [(float(x), float(y)) for x, y in item["points"]]) for item in chart.get("series", [])
+        ]
+        return make_scatter_chart_svg(series, str(chart.get("title", "")), str(chart.get("x_label", "")),
+                                      str(chart.get("y_label", "")))
     if chart.get("type") != "timeline":
         return f"<p>Unknown chart type: {escape(str(chart.get('type')))}</p>"
     points = [(float(x), float(y)) for x, y in chart.get("points", [])]

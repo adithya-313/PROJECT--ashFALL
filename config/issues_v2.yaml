@@ -329,7 +329,8 @@ issues:
       - {kind: test, file: tests/unit/world/test_tactic_config.py, name: test_dividing_lines_resolve_to_world_ranges_bounds_dynamically}
       - {kind: test, file: tests/unit/world/test_tactic_family_guard.py, name: test_held_out_families_refused_in_training_worlds}
       - {kind: test, file: tests/unit/world/test_tactic_family_guard.py, name: test_unknown_family_name_is_refused}
-    later_work: ["Level 12f: enforce the remaining held-out dividing lines in code (training_devices_retired_on_schedule is read but not enforced)"]
+      - {kind: test, file: tests/unit/world/test_tactic_plugins.py, name: test_plugin_result_cannot_carry_device_events}
+    later_work: ["Level 12h: real held-out families (slow_drip, device_rotation, fake_routine_life; pseudo_merchant_camouflage deferred) must exist before Levels 13, 15 and 17; the name-only family check (A-017) becomes a mechanism check"]
   12-9:
     title: "Tactic costs had no units"
     origin: revision_2
@@ -343,10 +344,15 @@ issues:
   12-10:
     title: "Plugins could break determinism and are arbitrary code"
     origin: revision_2
-    status: planned
+    status: partial
     levels: [12, 30]
     parts: [12f]
-    later_work: ["Level 12f: World random stream only; never in bundles"]
+    evidence:
+      - {kind: amendment, id: A-023}
+      - {kind: config, file: config/tactic_plugins.yaml, name: tactic_plugins}
+      - {kind: test, file: tests/unit/world/test_tactic_plugins.py, name: test_global_random_is_refused_and_never_imported}
+      - {kind: test, file: tests/unit/world/test_tactic_plugins.py, name: test_numpy_global_calls_are_refused_through_an_alias}
+    later_work: ["Level 30: contribution bundles exclude patterns/plugins/"]
   12-11:
     title: "Gang activity could shift genuine random draws, including failure draws"
     origin: revision_2
@@ -376,10 +382,15 @@ issues:
   12-14:
     title: "Latin hypercube sampling is thin across 30-plus parameters"
     origin: revision_2
-    status: planned
+    status: built
     levels: [12]
     parts: [12f]
-    later_work: ["Level 12f: Stratified on key parameters"]
+    evidence:
+      - {kind: amendment, id: A-023}
+      - {kind: config, file: config/world_sampler.yaml, name: world_sampler}
+      - {kind: test, file: tests/unit/world/test_world_sampler.py, name: test_each_dimension_has_one_point_per_stratum}
+      - {kind: test, file: tests/unit/world/test_world_sampler.py, name: test_integer_values_are_uniform}
+      - {kind: test, file: tests/unit/world/test_world_sampler.py, name: test_one_block_is_a_full_latin_hypercube}
   12-15:
     title: "Rate checks on small worlds would be flaky"
     origin: revision_2
@@ -413,7 +424,10 @@ issues:
     evidence:
       - {kind: amendment, id: A-015}
       - {kind: config, file: config/evaluation.yaml, name: validation_worlds}
-    later_work: ["Level 12f: the sampler enforces seed disjointness and commits the counts", "Level 16: validation split in labels", "Level 18: validation split in model tuning"]
+      - {kind: amendment, id: A-023}
+      - {kind: test, file: tests/unit/world/test_world_sampler.py, name: test_seeds_are_disjoint_and_never_reserved}
+      - {kind: test, file: tests/unit/world/test_world_sampler.py, name: test_validation_key_values_differ_from_training_for_one_master_seed}
+    later_work: ["Level 16: validation split in labels", "Level 18: validation split in model tuning"]
   12-19:
     title: "New mule accounts with new ID formats would reveal their role"
     origin: revision_2
@@ -757,7 +771,7 @@ issues:
       - {kind: test, file: tests/unit/world/test_gang_rotation_split.py, name: test_d1_reactions_equality_with_no_friction}
       - {kind: test, file: tests/unit/world/test_gang_rotation_split.py, name: test_edge_case_lien_on_spare_itself_later}
       - {kind: test, file: tests/unit/world/test_gang_rotation_split.py, name: test_edge_case_redirect_at_exact_minute_lien_is_seen}
-    later_work: ["Level 13: real liens from holds reach gangs through the same feed"]
+    later_work: ["Level 13: real liens from holds reach gangs through the same feed", "Level 12g: record gang observations in the runner output so a sweep can check no new money after an observed lien (A-023 (i))"]
   G5:
     title: "Account market shared by gangs"
     origin: level_11

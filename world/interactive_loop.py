@@ -349,8 +349,15 @@ def queue_initial_items(context: LoopContext, planned: Sequence[PlannedPayment],
     context.money_rules_by_index = {rule.input_index: rule for rule in fraud_inputs.money_rules}
     context.original_fraud_amounts = [p.amount_paise for p in fraud_inputs.payments]
     # Cash withdrawals, validated and queued under the cash_withdrawals tie-break rank.
+    opened_later = set(context.opening_ids.values())
     for order, withdrawal in enumerate(fraud_inputs.withdrawals):
-        validate_cash_withdrawal(withdrawal, context.state)
+        if withdrawal.account_id in opened_later:
+            # The account is opened by an event during the run, so it is not in the state yet. Only the shape is
+            # checked here: resolve_opening_handles already proved the opening comes first, and registration is
+            # checked again when the withdrawal runs (process_cash_withdrawal).
+            validate_cash_withdrawal(withdrawal, None)
+        else:
+            validate_cash_withdrawal(withdrawal, context.state)
         push(context, withdrawal.minute, "cash_withdrawals", order, withdrawal)
     context.account_resales = list(fraud_inputs.account_resales)
 
