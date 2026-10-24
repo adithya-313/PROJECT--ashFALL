@@ -97,4 +97,4 @@ gang_mix:
     slow_drip_victims_per_receiving_mule:
       range: [1, 3]
       label: assumption
-      reason: "Few victims keep a slow-drip stream under the max_pieces_per_stream refusal; checked by the C10 sweep."
+      reason: "Few victims keep a slow-drip stream small; the piece cap is set from the measured maximum (Level 12g C11)."

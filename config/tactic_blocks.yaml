@@ -486,9 +486,9 @@ slow_drip_limits:
   reason: "Limits on slow-drip payment volume to ensure bounded world execution size."
   max_pieces_per_stream:
     label: assumption
-    value: 400
+    value: 5000
     issue_ids_v2: [12-8]
-    derived_from: "Level 12g brief"
-    reason: "Keeps one slow-drip stream to a bounded number of payments so a world's size stays measurable; a stream that needs more is refused, never merged."
+    derived_from: "Level 12g C11: maximum pieces per slow-drip stream over all 240 planned test and stress worlds was 2411 (world test-b02-0007); cap = next hundred above it, doubled for headroom"
+    reason: "Keeps one slow-drip stream to a bounded number of payments; a stream above the cap is refused, never merged. Set from the measured maximum, so no planned test or stress world is refused."
 
 

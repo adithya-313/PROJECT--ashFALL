@@ -195,21 +195,23 @@ def test_planned_fixture_funded_drip_gang_in_test_world() -> None:
 def test_too_many_pieces_refused_with_piece_count_and_limit() -> None:
     """Verifies that _plan_drip_chain raises ValueError naming the gang, piece count n, and max_pieces limit."""
     max_pieces = get_slow_drip_max_pieces()
-    # 5,000,000 paise with piece_max_inr 50 -> piece_max_paise 5000 -> 1000 pieces > 400.
+    piece_max_inr = 50
+    # Total is derived from the cap so the test still exceeds it if the cap changes (Level 12g C11).
+    total_paise = (max_pieces + 1) * piece_max_inr * 100
     with pytest.raises(ValueError) as excinfo:
         _plan_drip_chain(
             gang_id="gang_overflow",
             chain_accounts=["src", "m1", "m2"],
-            total_paise=5_000_000,
+            total_paise=total_paise,
             first_send_minute=100,
-            piece_max_inr=50,
+            piece_max_inr=piece_max_inr,
             spread_days=5,
             hold_minutes=300,
             max_pieces=max_pieces,
         )
     message = str(excinfo.value)
     assert "gang_overflow" in message
-    assert "1000" in message
+    assert str(max_pieces + 1) in message
     assert str(max_pieces) in message
 
 
