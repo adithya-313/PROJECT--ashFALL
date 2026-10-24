@@ -12,6 +12,8 @@ TERM: spread: the share of a parameter's range width a gang may stray from the c
 """
 
 import copy
+import hashlib
+import json
 import math
 import time
 from pathlib import Path
@@ -21,7 +23,7 @@ import numpy as np
 import pytest
 import yaml
 
-from world.gang_config import GangConfig
+from world.gang_config import GangConfig, gang_config_to_plain
 from world.gang_mix import gang_mix_rng, generate_gang_mix, load_gang_mix_config
 from world.sampled_world import run_sampled_world
 from world.world_sampler import WorldSpec, load_sampler_config, sample_worlds
@@ -129,27 +131,111 @@ def test_gang_count_matches_the_spec_and_every_gang_is_typed() -> None:
         assert [gang.gang_id for gang in gangs] == [f"gang_mix_{k}" for k in range(len(gangs))]
 
 
-def test_families_are_training_only_follow_the_rules_and_never_held_out() -> None:
-    """Every family is training, matches the layers rule recomputed here, in training, test and stress specs."""
+def test_families_follow_the_rules_training_never_held_out_test_and_stress_get_one_held_out() -> None:
+    """Every family is training in training and validation specs; test and stress specs get one held-out gang."""
     families = _yaml("tactic_families.yaml")["tactic_families"]
+    eval_cfg = _yaml("evaluation.yaml")
+    active_held_out = set(eval_cfg["held_out_tactics"]["tactics"])
     training = set(families["training"])
     held_out = set(families["held_out"])
-    for split in ("training", "validation", "test", "stress"):
+
+    for split in ("training", "validation"):
         for gang in generate_gang_mix(_spec(split), SAMPLER, MIX, SMALL_PEOPLE, RANGES):
             layers = _params(gang, "route")["layers"]
             expected = "layered_chain" if layers >= 2 else "fast_pass_through"
             assert gang.family == expected
             assert gang.family in training
             assert gang.family not in held_out
-    # A rule that names a held-out family, or turning held-out generation on, must be refused.
+
+    for split in ("test", "stress"):
+        gangs = generate_gang_mix(_spec(split), SAMPLER, MIX, SMALL_PEOPLE, RANGES)
+        for gang in gangs[:-1]:
+            layers = _params(gang, "route")["layers"]
+            expected = "layered_chain" if layers >= 2 else "fast_pass_through"
+            assert gang.family == expected
+            assert gang.family in training
+            assert gang.family not in held_out
+
+        last_gang = gangs[-1]
+        assert last_gang.family in active_held_out
+        if last_gang.family == "slow_drip":
+            route_p = _params(last_gang, "route")
+            assert "drip_piece_max_inr" in route_p
+            assert "drip_spread_days" in route_p
+            assert "drip_hold_minutes" in route_p
+            assert "dwell_minutes" not in route_p
+        elif last_gang.family == "device_rotation":
+            tc_p = _params(last_gang, "take_control")
+            assert "rotate_every_days" in tc_p
+            assert "rotations" in tc_p
+            assert "devices" not in tc_p
+
+    # A rule that names a held-out family must be refused.
     bad_rules = _mix_cfg()
     bad_rules["family_rules"]["rules"][0]["family"] = sorted(held_out)[0]
     with pytest.raises(ValueError, match="not a training family"):
         generate_gang_mix(_spec(), SAMPLER, bad_rules, SMALL_PEOPLE, RANGES)
-    held_out_on = _mix_cfg()
-    held_out_on["held_out_generation"]["value"] = True
-    with pytest.raises(ValueError, match="held_out_generation must be false"):
-        generate_gang_mix(_spec(), SAMPLER, held_out_on, SMALL_PEOPLE, RANGES)
+
+    # held_out_gang.splits containing training is refused.
+    training_in_splits = _mix_cfg()
+    training_in_splits["held_out_gang"]["splits"] = ["training", "test", "stress"]
+    with pytest.raises(ValueError, match="must be a subset of exempt splits"):
+        generate_gang_mix(_spec(), SAMPLER, training_in_splits, SMALL_PEOPLE, RANGES)
+
+
+def test_training_and_validation_mixes_are_byte_identical_to_commit_2d66bf3() -> None:
+    """Training and validation gang mixes (plain form) match the SHA-256 computed at 2d66bf3."""
+    training_spec = _spec("training")
+    training_gangs = generate_gang_mix(training_spec, SAMPLER, MIX, SMALL_PEOPLE, RANGES)
+    training_dumped = json.dumps([gang_config_to_plain(g) for g in training_gangs], sort_keys=True)
+    assert hashlib.sha256(training_dumped.encode()).hexdigest() == (
+        "7fd819d38b7113f1f3ef2338f0799c4a26ed3b23b3ebc61bc42015aa1c58691a"
+    )
+
+    val_spec = _spec("validation")
+    val_gangs = generate_gang_mix(val_spec, SAMPLER, MIX, SMALL_PEOPLE, RANGES)
+    val_dumped = json.dumps([gang_config_to_plain(g) for g in val_gangs], sort_keys=True)
+    assert hashlib.sha256(val_dumped.encode()).hexdigest() == (
+        "0f9ab9849af7aec85c47d2cc6e2907d2a2e376116e794c5ef7d64d6c4fdc0ed9"
+    )
+
+
+def test_test_and_stress_prefix_gangs_equal_commit_2d66bf3_and_last_is_held_out() -> None:
+    """Test and stress specs keep gangs 0..n-2 identical to 2d66bf3 and place a held-out gang at index n-1."""
+    eval_cfg = _yaml("evaluation.yaml")
+    active_held_out = set(eval_cfg["held_out_tactics"]["tactics"])
+
+    test_spec = _spec("test")
+    test_gangs = generate_gang_mix(test_spec, SAMPLER, MIX, SMALL_PEOPLE, RANGES)
+    test_prefix_dumped = json.dumps([gang_config_to_plain(g) for g in test_gangs[:-1]], sort_keys=True)
+    assert hashlib.sha256(test_prefix_dumped.encode()).hexdigest() == (
+        "8c4fb9ea9a69f59891b7432e7a41c9d55723e8391f3451152736498572cfe4fe"
+    )
+    assert test_gangs[-1].family in active_held_out
+
+    stress_spec = _spec("stress")
+    stress_gangs = generate_gang_mix(stress_spec, SAMPLER, MIX, SMALL_PEOPLE, RANGES)
+    stress_prefix_dumped = json.dumps([gang_config_to_plain(g) for g in stress_gangs[:-1]], sort_keys=True)
+    assert hashlib.sha256(stress_prefix_dumped.encode()).hexdigest() == (
+        "1426a0110afe75395155258244a8c2e290aa75f2283e28f417053170881f4206"
+    )
+    assert stress_gangs[-1].family in active_held_out
+
+
+def test_spec_with_gang_count_one_in_test_split_raises() -> None:
+    """A test-split spec whose settings specify gang_count 1 raises ValueError because a seen gang must remain."""
+    base_spec = _spec("test")
+    new_key_values = tuple((k, 1 if k == "gang_count" else v) for k, v in base_spec.key_values)
+
+    modified_spec = WorldSpec(
+        world_id=base_spec.world_id,
+        split="test",
+        seed=base_spec.seed,
+        range_name=base_spec.range_name,
+        key_values=new_key_values,
+    )
+    with pytest.raises(ValueError, match="requires at least 2 gangs to include a held-out gang"):
+        generate_gang_mix(modified_spec, SAMPLER, MIX, SMALL_PEOPLE, RANGES)
 
 
 def test_too_few_people_is_refused_with_both_numbers() -> None:
