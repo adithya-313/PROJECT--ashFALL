@@ -12,6 +12,7 @@ TERM: gang budget: maximum permitted campaign expenditure across money, time, an
 TERM: supplier fee: percentage fee paid to account suppliers based on money moved through acquired mule accounts.
 """
 
+import math
 from dataclasses import dataclass
 from typing import Any, Sequence
 
@@ -48,6 +49,7 @@ from world.tactic_config import (
     get_block_time_range,
     get_disguise_jitter_range,
     get_gang_payment_purpose,
+    get_slow_drip_max_pieces,
     get_supplier_fee_range,
     get_take_control_devices_range,
     get_warmup_days_range,
@@ -560,6 +562,255 @@ def _calculate_route_costs(total_paise: int, max_dwell: int, rng: np.random.Gene
     return BlockCost(money_cost, max_dwell, route_risk)
 
 
+def split_into_pieces(total_paise: int, piece_max_paise: int) -> list[int]:
+    """
+    WHAT: Partitions an aggregate monetary sum into evenly sized pieces below a maximum unit boundary.
+
+    WHY: Level 12g slow_drip moves money in small discrete amounts to stay below detection dividing lines.
+    Pieces must be as equal as possible with exact integer conservation down to the single paisa.
+
+    Args:
+        total_paise: Total money in paise to divide into pieces.
+        piece_max_paise: Maximum permitted value in paise for any individual piece.
+
+    Returns:
+        List of integer paise amounts summing exactly to total_paise.
+
+    Raises:
+        ValueError: If total_paise <= 0 or piece_max_paise <= 0.
+
+    Example:
+        # split_into_pieces(500000, 199900) == [166667, 166667, 166666]
+    """
+    if total_paise <= 0:
+        raise ValueError(f"total_paise must be positive, got {total_paise}.")
+    if piece_max_paise <= 0:
+        raise ValueError(f"piece_max_paise must be positive, got {piece_max_paise}.")
+
+    n = math.ceil(total_paise / piece_max_paise)
+    base_piece = total_paise // n
+    remainder = total_paise % n
+
+    pieces: list[int] = []
+    for idx in range(n):
+        extra = 1 if idx < remainder else 0
+        piece = base_piece + extra
+        pieces.append(piece)
+
+    return pieces
+
+
+def _plan_drip_chain(
+    gang_id: str,
+    chain_accounts: list[str],
+    total_paise: int,
+    first_send_minute: int,
+    piece_max_inr: int,
+    spread_days: int,
+    hold_minutes: int,
+    max_pieces: int,
+    start_layer: int = 1,
+) -> tuple[list[PlannedPayment], list[PaymentStory], int]:
+    """
+    WHAT: Schedules slow drip transfer dispatches and forensic narratives across a multi-hop account chain.
+
+    WHY: Level 12g slow_drip moves money in small increments dispersed over days with multi-hour dwell times,
+    preserving exact aggregate funds without money creation or loss.
+
+    Args:
+        gang_id: Identifier of the syndicate orchestrating the transfers.
+        chain_accounts: List of account identifiers in transmission order, where index 0 already holds the money.
+        total_paise: Total money in paise to be routed along the chain.
+        first_send_minute: Simulation minute timestamp when the first hop begins transmitting.
+        piece_max_inr: Maximum size of any individual transfer piece in rupees.
+        spread_days: Calendar days across which the first hop's pieces are evenly dispersed.
+        hold_minutes: Resting duration in minutes that each piece dwells at every intermediary mule.
+        max_pieces: Maximum permitted number of pieces before stream volume limits are exceeded.
+        start_layer: Integer layer hop depth of the receiving account in the first transfer (default 1).
+
+    Returns:
+        Tuple of (planned payments list, payment stories list, total span in minutes).
+
+    Raises:
+        ValueError: If piece count exceeds max_pieces or calculated dispatch gap is 0 minutes.
+
+    Example:
+        # pmts, stories, span = _plan_drip_chain("gang_a", ["src", "m1", "m2"], 500000, 100, 1500, 5, 300, 400)
+    """
+    piece_max_paise = piece_max_inr * 100
+    pieces = split_into_pieces(total_paise, piece_max_paise)
+    n = len(pieces)
+
+    if n > max_pieces:
+        raise ValueError(
+            f"Gang '{gang_id}' slow-drip requires {n} pieces, which exceeds max_pieces ({max_pieces})."
+        )
+
+    gap = (spread_days * MINUTES_PER_DAY) // n
+    if gap == 0:
+        raise ValueError(
+            f"Gang '{gang_id}' slow-drip gap is 0 minutes for {n} pieces over {spread_days} days."
+        )
+
+    num_hops = len(chain_accounts) - 1
+    if num_hops < 1:
+        raise ValueError(f"Gang '{gang_id}' slow-drip chain requires at least 2 accounts, got {len(chain_accounts)}.")
+
+    payments: list[PlannedPayment] = []
+    stories: list[PaymentStory] = []
+
+    for piece_idx, piece_amount in enumerate(pieces):
+        piece_first_send = first_send_minute + piece_idx * gap
+
+        for hop_idx in range(num_hops):
+            sender = chain_accounts[hop_idx]
+            receiver = chain_accounts[hop_idx + 1]
+            layer = start_layer + hop_idx
+
+            send_minute = piece_first_send + hop_idx * hold_minutes
+            pmt, story = _plan_single_hop(gang_id, sender, receiver, piece_amount, send_minute, layer)
+            payments.append(pmt)
+            stories.append(story)
+
+    # Sort payments and aligned stories chronologically by send minute.
+    paired = sorted(zip(payments, stories), key=lambda pair: pair[0].minute)
+    sorted_payments = [p for p, _ in paired]
+    sorted_stories = [s for _, s in paired]
+
+    span_minutes = (n - 1) * gap + (num_hops - 1) * hold_minutes
+    return sorted_payments, sorted_stories, span_minutes
+
+
+def _execute_slow_drip_route_step(
+    config: GangConfig,
+    step: BlockStep,
+    acquired_accounts: list[str],
+    acquisition_minute: int,
+    current_minute: int,
+    rng: np.random.Generator,
+    mule_inflows: dict[str, MuleInflow] | None = None,
+    mule_origin_map: dict[str, str] | None = None,
+) -> tuple[list[PlannedPayment], list[RoleSpan], list[PaymentStory], BlockCost]:
+    """
+    WHAT: Orchestrates slow drip laundering route planning across layered mule accounts for both money sources.
+
+    WHY: Level 12g slow_drip moves money along layered chains in sub-₹2000 pieces spread over calendar days.
+    Money conservation is strictly enforced: terminal inflow matches initial funding exactly.
+
+    Args:
+        config: Full GangConfig specification providing gang identity, strength, budget, and source.
+        step: BlockStep record for the route tactical block containing slow drip parameters.
+        acquired_accounts: Sequence of citizen account identifiers previously acquired by the gang.
+        acquisition_minute: Simulation minute timestamp when mule accounts were acquired.
+        current_minute: Current simulation minute timestamp of the gang campaign.
+        rng: Gang-specific random number generator stream.
+        mule_inflows: Receiving mule inflows from a scam step; required for scam-funded routes.
+        mule_origin_map: Optional mapping of mule account IDs to origin taxonomy types.
+
+    Returns:
+        Tuple of (planned payments list, role spans list, payment stories list, and route BlockCost).
+
+    Raises:
+        ValueError: If acquired accounts are insufficient, source balance is exceeded,
+            or pieces exceed slow drip limits.
+
+    Example:
+        # pmts, roles, stories, cost = _execute_slow_drip_route_step(config, step, mules, 100, 100, rng)
+    """
+    params = step.params_dict
+    layers = params["layers"]
+    accounts_per_layer = params.get("accounts_per_layer", 1)
+    needed = layers * accounts_per_layer
+    if len(acquired_accounts) < needed:
+        raise ValueError(
+            f"Gang '{config.gang_id}' needs {needed} accounts for routing but has {len(acquired_accounts)}."
+        )
+
+    routed = acquired_accounts[:needed]
+    roles = _build_route_roles(config, routed, layers, accounts_per_layer, acquisition_minute, mule_origin_map)
+
+    piece_max_inr = params["drip_piece_max_inr"]
+    spread_days = params["drip_spread_days"]
+    hold_minutes = params["drip_hold_minutes"]
+    max_pieces = get_slow_drip_max_pieces()
+
+    payments: list[PlannedPayment] = []
+    stories: list[PaymentStory] = []
+    total_paise = 0
+    longest_span_minutes = 0
+
+    if config.source is None:
+        # Scam-funded route
+        if mule_inflows is None:
+            raise ValueError(f"Gang '{config.gang_id}' has no fixture source and no scam step to route money from.")
+
+        for stream_index in range(accounts_per_layer):
+            stream_accounts = [routed[layer_idx * accounts_per_layer + stream_index] for layer_idx in range(layers)]
+            first_mule = stream_accounts[0]
+            if first_mule not in mule_inflows:
+                raise ValueError(
+                    f"Gang '{config.gang_id}' layer 1 mule '{first_mule}' receives no victim money to route."
+                )
+            inflow = mule_inflows[first_mule]
+            stream_total = inflow.net_paise
+            total_paise += stream_total
+            first_send = inflow.last_victim_payment_minute + hold_minutes
+
+            s_pmts, s_stories, s_span = _plan_drip_chain(
+                config.gang_id,
+                stream_accounts,
+                stream_total,
+                first_send,
+                piece_max_inr,
+                spread_days,
+                hold_minutes,
+                max_pieces,
+                start_layer=2,
+            )
+            payments.extend(s_pmts)
+            stories.extend(s_stories)
+            longest_span_minutes = max(longest_span_minutes, s_span)
+    else:
+        # Fixture-funded route
+        fix_amt = (
+            draw_route_stream_amount(config.strength, params.get("amount_inr"), rng)
+            if config.strength == 1
+            else None
+        )
+
+        for stream_index in range(accounts_per_layer):
+            stream_accounts = [routed[layer_idx * accounts_per_layer + stream_index] for layer_idx in range(layers)]
+            amt = fix_amt if fix_amt is not None else draw_route_stream_amount(
+                config.strength, params.get("amount_inr"), rng
+            )
+            total_paise += amt
+            chain = [config.source.account_id] + stream_accounts
+            first_send = current_minute
+
+            s_pmts, s_stories, s_span = _plan_drip_chain(
+                config.gang_id,
+                chain,
+                amt,
+                first_send,
+                piece_max_inr,
+                spread_days,
+                hold_minutes,
+                max_pieces,
+                start_layer=1,
+            )
+            payments.extend(s_pmts)
+            stories.extend(s_stories)
+            longest_span_minutes = max(longest_span_minutes, s_span)
+
+        if total_paise > config.source.opening_balance_paise:
+            raise ValueError(
+                f"Gang '{config.gang_id}' routes {total_paise} paise exceeding source balance."
+            )
+
+    cost = _calculate_route_costs(total_paise, longest_span_minutes, rng)
+    return payments, roles, stories, cost
+
+
 def _plan_acquire_step(
     world: World, config: GangConfig, step: BlockStep, clock_minute: int,
     reserved_accounts: set[str] | None, rng: np.random.Generator
@@ -844,9 +1095,15 @@ def _plan_campaign_steps(
             jitter = disguise_step.params_dict.get("jitter_minutes") if disguise_step else None
             fixed_dwell = draw_hop_dwell_minutes(params.get("dwell_minutes"), rng) if config.strength == 1 else None
 
-            r_pmts, r_roles, r_stories, cost = _execute_route_step(
-                config, step, mules, acq_min, clock_min, rng, mule_inflows, mule_origin_map
-            )
+            is_drip = "drip_piece_max_inr" in params
+            if is_drip:
+                r_pmts, r_roles, r_stories, cost = _execute_slow_drip_route_step(
+                    config, step, mules, acq_min, clock_min, rng, mule_inflows, mule_origin_map
+                )
+            else:
+                r_pmts, r_roles, r_stories, cost = _execute_route_step(
+                    config, step, mules, acq_min, clock_min, rng, mule_inflows, mule_origin_map
+                )
             r_rules = [
                 IllicitMoneyRule(input_index=i, spends_illicit=True, credits_illicit=True)
                 for i in range(len(r_pmts))
@@ -1019,7 +1276,8 @@ def plan_gang(
     validate_gang_config(config)
     check_held_out_options_allowed(config, world_split)
     held_out = find_held_out_options(config)
-    if held_out:
+    unbuilt = [opt for opt in held_out if opt[2] != "slow_drip"]
+    if unbuilt:
         raise ValueError(f"Gang '{config.gang_id}' held-out option planning is not built yet (Level 12g C2/C3)")
 
     dev_rng = gang_devices_rng if gang_devices_rng is not None else rng

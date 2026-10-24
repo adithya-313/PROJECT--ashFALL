@@ -782,3 +782,24 @@ def get_rotations_range(config_path: Path | None = None) -> tuple[int, int]:
     bounds = definition["parameters"]["rotations"]["range"]
     return int(bounds[0]), int(bounds[1])
 
+
+def get_slow_drip_max_pieces(config_path: Path | None = None) -> int:
+    """
+    WHAT: Retrieves the maximum number of payment pieces permitted per slow drip stream from tactic_blocks.yaml.
+
+    WHY: Enforces simulation size safety boundaries per Level 12g brief without hardcoding limits in planner code.
+
+    Args:
+        config_path: Optional path override for tactic_blocks.yaml.
+
+    Returns:
+        Integer maximum pieces limit (configured as 400).
+
+    Example:
+        # max_pieces = get_slow_drip_max_pieces()
+        # assert max_pieces == 400
+    """
+    limits = load_tactic_blocks(config_path).get("slow_drip_limits", {})
+    return int(limits["max_pieces_per_stream"]["value"])
+
+
