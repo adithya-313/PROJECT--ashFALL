@@ -1,0 +1,40 @@
+name: every_complaint_false
+title: Every complaint false
+expected_behaviour: "At least one complaint is raised, and every complaint is false: none names a payment the truth marks as fraud."
+reason: Tests system resilience when victim complaint share is zero and mistaken complaints are elevated, ensuring complaints are evaluated against ground truth.
+status: runnable
+split: training
+seed: 101
+days: 61
+preset: tiny
+layer_changes:
+  world_ranges:
+    victim_complaint_share:
+      training: [0.0, 0.0]
+      test: [0.0, 0.8]
+      stress: [0.0, 0.9]
+    false_complaints_per_100000_genuine_payments:
+      training: [50.0, 50.0]
+      test: [0.01, 50.0]
+      stress: [0.0, 50.0]
+gangs:
+  - gang_id: gang_complaints_false
+    strength: 1
+    budget:
+      money_paise: 50000000
+      time_minutes: 500000
+      max_risk: 0.99
+    start_minute: 1440
+    steps:
+      - block: acquire
+        params:
+          count: 6
+      - block: scam
+        params:
+          receiving_mules: 2
+          victims_per_receiving_mule: 12
+      - block: route
+        params:
+          layers: 1
+          accounts_per_layer: 2
+          dwell_minutes: 30

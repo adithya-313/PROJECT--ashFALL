@@ -1,0 +1,16 @@
+name: medical_fundraiser
+title: Medical fundraiser
+expected_behaviour: "An episode collector receives many genuine payers' money and never holds a gang role; none of its payers holds one."
+reason: Tests that rapid community pooling for urgent medical treatments is correctly recognized as authentic citizen economic life.
+status: runnable
+split: training
+seed: 104
+days: 61
+preset: tiny
+layer_changes:
+  world_ranges:
+    episode_share_of_ordinary_people_per_year:
+      training: [0.1, 0.1]
+      test: [0.01, 0.2]
+      stress: [0.0, 0.4]
+note: "the world has one episode kind for weddings and medical collections"

@@ -276,6 +276,9 @@ NEW_CODE_FILES: list[str] = [
     "showcase/level_12_support_g.py",
     "showcase/level_12_checks_g.py",
     "tests/unit/showcase/test_level_12_checks_g.py",
+    # Level 12h edge-case library module and test suite.
+    "world/edge_cases.py",
+    "tests/unit/world/test_edge_cases.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [

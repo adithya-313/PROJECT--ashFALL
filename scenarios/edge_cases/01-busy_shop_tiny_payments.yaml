@@ -1,0 +1,7 @@
+name: busy_shop_tiny_payments
+title: Busy shop with tiny payments
+expected_behaviour: "The shop's many tiny payments are genuine; the shop never holds a gang role."
+reason: Tests whether an innocent merchant shop with very high transaction volume of small ticket payments is falsely identified as a money-laundering aggregation account.
+status: later_level
+active_from_level: 15
+note: "needs a shop-volume mechanism; no knob exists (Level 12h Step 0)"

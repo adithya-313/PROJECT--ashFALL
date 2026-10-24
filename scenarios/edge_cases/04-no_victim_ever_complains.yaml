@@ -1,0 +1,36 @@
+name: no_victim_ever_complains
+title: No victim ever complains
+expected_behaviour: "Mules exist in the truth, and no true complaint is ever raised."
+reason: Tests system behaviour when victim complaint share is zero, meaning victims never file fraud complaints despite real scam activity.
+status: runnable
+split: training
+seed: 101
+days: 61
+preset: tiny
+layer_changes:
+  world_ranges:
+    victim_complaint_share:
+      training: [0.0, 0.0]
+      test: [0.0, 0.8]
+      stress: [0.0, 0.9]
+gangs:
+  - gang_id: gang_complaints_no_victim
+    strength: 1
+    budget:
+      money_paise: 50000000
+      time_minutes: 500000
+      max_risk: 0.99
+    start_minute: 1440
+    steps:
+      - block: acquire
+        params:
+          count: 6
+      - block: scam
+        params:
+          receiving_mules: 2
+          victims_per_receiving_mule: 12
+      - block: route
+        params:
+          layers: 1
+          accounts_per_layer: 2
+          dwell_minutes: 30

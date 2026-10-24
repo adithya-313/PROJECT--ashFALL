@@ -1,0 +1,37 @@
+name: one_huge_transfer
+title: One huge transfer
+expected_behaviour: "The gang moves its money in single transfers of Rs 1,00,000 per hop, not split into pieces."
+reason: Tests handling of large lump-sum transfers that utilize the maximum permitted UPI per-transaction limit in a single hop.
+status: runnable
+split: test
+seed: 101
+days: 61
+preset: tiny
+layer_changes:
+  world_ranges:
+    upi_per_transaction_limit_inr:
+      training: [100000, 100000]
+      test: [100000, 100000]
+      stress: [10000, 500000]
+gangs:
+  - gang_id: gang_huge_07
+    strength: 1
+    budget:
+      money_paise: 50000000
+      time_minutes: 500000
+      max_risk: 0.99
+    source:
+      account_id: acc_gang_src_01
+      bank_index: 0
+      opening_balance_paise: 20000000
+      start_minute: 1440
+    steps:
+      - block: acquire
+        params:
+          count: 1
+      - block: route
+        params:
+          layers: 1
+          accounts_per_layer: 1
+          amount_inr: 100000
+          dwell_minutes: 60

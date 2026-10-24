@@ -1,0 +1,16 @@
+name: wedding_collection
+title: Wedding collection
+expected_behaviour: "An episode collector receives many genuine payers' money and never holds a gang role; none of its payers holds one."
+reason: Tests that rapid inflow pooling for a life event like a wedding collection is correctly identified as genuine citizen activity.
+status: runnable
+split: training
+seed: 104
+days: 61
+preset: tiny
+layer_changes:
+  world_ranges:
+    episode_share_of_ordinary_people_per_year:
+      training: [0.1, 0.1]
+      test: [0.01, 0.2]
+      stress: [0.0, 0.4]
+note: "the world has one episode kind for weddings and medical collections"
