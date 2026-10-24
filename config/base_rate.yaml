@@ -1,0 +1,15 @@
+# config/world_ranges.yaml holds the range record; this file holds the value the code uses.
+base_rate:
+  label: assumption
+  reason: "Real-world complaint rate baseline and policy configuration for measuring world fraud inflation factor (A-012)."
+  issue_ids: [E1]
+  issue_ids_v2: [12-7]
+  derived_from: "config/world_ranges.yaml real_world_complaints_per_100000_upi_payments (its reason text); amendment A-012"
+  real_world_complaints_per_100000_upi_payments:
+    value: 1.05
+    label: assumption
+    reason: "Derived. 2,402,579 NCRP complaints in 2025 (PIB, confirmed) divided by about 228,281.85 million UPI payments (monthly figures from secondary copies, not NPCI's own table) is about 1.05 per 100,000. Complaints cover all financial fraud, so this is an upper-bound proxy for UPI, and the measured factor is a lower bound on the true inflation."
+  counts_all_complaints:
+    value: true
+    label: policy
+    reason: "The real-world figure counts every NCRP complaint, true or false, so the world's ratio counts every complaint too; true complaints are recorded beside it."
