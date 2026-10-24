@@ -1,7 +1,7 @@
 """
-WHAT: Prints, in markdown, the facts a Level 12e handoff note needs, read from the code and the config files
+WHAT: Prints, in markdown, the facts a Level 12g handoff note needs, read from the code and the config files
 themselves: public function and dataclass signatures, dataclass fields, configuration keys, random stream
-children with the tie-break order, and the register status of the issues Level 12e touches.
+children with the tie-break order, and the register status of the issues Level 12g touches.
 
 WHY: A handoff note typed by hand drifts from the code. Pasting this script's output into the note keeps every
 signature, field and key exactly as the code has it, and a reader can run the same command to check the note.
@@ -26,23 +26,24 @@ sys.path.insert(0, str(REPO_ROOT))
 from core.config_validator import load_yaml  # noqa: E402
 
 INTERFACE_MODULES: tuple[str, ...] = (
-    "world.world_sampler",
-    "world.sampled_world",
+    "world.held_out_options",
+    "world.tactic_families",
     "world.gang_mix",
-    "world.pattern_files",
-    "world.tactic_plugins",
-    "world.world_invariants",
+    "world.gang_planner",
+    "world.gang_devices",
+    "world.truth_writer",
+    "evaluation.truth",
 )
-RECORDS_MODULE: str = "world.world_sampler"
-RECORD_NAMES: tuple[str, ...] = ("WorldSpec",)
+RECORDS_MODULE: str = "world.truth_records"
+RECORD_NAMES: tuple[str, ...] = ("GangTruth", "TruthFacts")
 CONFIG_FILES: tuple[str, ...] = (
-    "config/world_sampler.yaml",
+    "config/tactic_blocks.yaml",
+    "config/evaluation.yaml",
+    "config/tactic_families.yaml",
     "config/gang_mix.yaml",
-    "config/tactic_plugins.yaml",
-    "config/pattern_files.yaml",
-    "config/interactive_runner.yaml",
+    "config/truth_store.yaml",
 )
-REGISTER_IDS: tuple[str, ...] = ("12-8", "12-10", "12-14", "12-18", "G4")
+REGISTER_IDS: tuple[str, ...] = ("12-8",)
 RUNNER_CONFIG_PATH: str = "config/interactive_runner.yaml"
 REGISTER_PATH: str = "config/issues_v2.yaml"
 
