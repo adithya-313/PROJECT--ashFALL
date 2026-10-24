@@ -12,7 +12,6 @@ ISSUE IDs: 12-8
 import numpy as np
 import pytest
 
-from tests.unit.world.test_gang_devices import test_spans_carry_configured_flags
 from world.build_world import build_world
 from world.fast_mode import FastRunSettings
 from world.gang_config import BlockStep, FixtureSource, GangBudget, GangConfig, validate_gang_config
@@ -126,10 +125,33 @@ def test_take_control_refuses_devices_with_rotation() -> None:
         validate_gang_config(gang)
 
 
-def test_non_rotation_gang_spans_and_events_remain_unchanged() -> None:
-    """Verifies that non-rotation gangs continue to produce standard round-robin devices without rotation."""
-    # Re-executes the pinned test verifying standard non-rotation take_control behavior.
-    test_spans_carry_configured_flags()
+def test_sim_swap_events_generated_for_each_account_generation() -> None:
+    """Verifies that with sim_swap True, every generation's device produces a sim_swap event for its account."""
+    world = build_world(TEST_SETTINGS.seed, TEST_SETTINGS.n_people, TEST_SETTINGS.n_shops)
+    rng = np.random.default_rng(123)
+
+    mules_count = 3
+    rotate_days = 7
+    rotations = 2
+    generations = rotations + 1  # 3 generations
+    period_minutes = rotate_days * 1440
+    t0 = 1440
+
+    gang = _make_rotation_gang(rotate_every_days=rotate_days, rotations=rotations, sim_swap=True, emulator=False)
+    plan = plan_gang(gang, world, rng, world_split="test")
+
+    sim_swaps = [e for e in plan.gang_device_events if e.kind == "sim_swap"]
+    # 3 accounts * 3 generations = 9 sim_swap events
+    assert len(sim_swaps) == mules_count * generations
+
+    acquired_mules = [r.account_id for r in plan.truth.roles if r.role == "mule"]
+    assert len(acquired_mules) == mules_count
+
+    for g_idx in range(generations):
+        gen_minute = t0 + g_idx * period_minutes
+        gen_events = [e for e in sim_swaps if e.minute == gen_minute]
+        assert len(gen_events) == mules_count
+        assert {e.account_id for e in gen_events} == set(acquired_mules)
 
 
 def test_planning_rotation_gang_in_validation_split_refused() -> None:

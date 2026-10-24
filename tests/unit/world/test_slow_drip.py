@@ -11,9 +11,6 @@ ISSUE IDs: 12-8
 import numpy as np
 import pytest
 
-from tests.unit.world.test_scam_gangs import (
-    test_fixture_gang_plain_form_run_id_and_plan_are_unchanged,
-)
 from world.build_world import build_world
 from world.fast_mode import FastRunSettings
 from world.gang_config import BlockStep, FixtureSource, GangBudget, GangConfig
@@ -216,7 +213,62 @@ def test_too_many_pieces_refused_with_piece_count_and_limit() -> None:
     assert str(max_pieces) in message
 
 
-def test_non_drip_gang_plan_remains_byte_identical() -> None:
-    """Verifies that non-drip gangs remain byte-identical by verifying against pinned plan hash test."""
-    # Naming the existing pinned plan hash test: test_fixture_gang_plain_form_run_id_and_plan_are_unchanged.
-    test_fixture_gang_plain_form_run_id_and_plan_are_unchanged()
+def test_scam_funded_drip_layer_1_outgoing_leaves_after_last_victim_payment() -> None:
+    """Verifies that each layer-1 mule's first outgoing piece leaves >= its last victim payment + drip_hold_minutes."""
+    steps = (
+        BlockStep("acquire", (("count", 4),)),
+        BlockStep("scam", (("receiving_mules", 2), ("victims_per_receiving_mule", 2))),
+        BlockStep(
+            "route",
+            (
+                ("layers", 2),
+                ("accounts_per_layer", 2),
+                ("drip_piece_max_inr", 1500),
+                ("drip_spread_days", 3),
+                ("drip_hold_minutes", 300),
+            ),
+        ),
+    )
+    gang = GangConfig("g_scam_drip", 1, TEST_BUDGET, None, steps, 1440)
+    world = build_world(seed=101, n_people=60, n_shops=12)
+    rng = np.random.default_rng(42)
+    plan = plan_gang(gang, world, rng, world_split="test")
+
+    scam_payments = [p for p, s in zip(plan.payments, plan.truth.payment_stories) if s.block == "scam"]
+    layer_1_mules = [r.account_id for r in plan.truth.roles if r.role == "mule" and r.depth == 1]
+    assert len(layer_1_mules) == 2
+
+    for mule in layer_1_mules:
+        m_victim_pmts = [p for p in scam_payments if p.to_account == mule]
+        assert m_victim_pmts, f"Layer-1 mule {mule} received no victim payments"
+        last_victim_minute = max(p.minute for p in m_victim_pmts)
+
+        outgoing_pieces = [
+            p for p, s in zip(plan.payments, plan.truth.payment_stories)
+            if s.block == "route" and p.from_account == mule
+        ]
+        assert outgoing_pieces, f"Layer-1 mule {mule} has no outgoing route pieces"
+        first_outgoing_minute = min(p.minute for p in outgoing_pieces)
+
+        assert first_outgoing_minute >= last_victim_minute + 300
+
+
+def test_total_smaller_than_one_piece_gives_exactly_one_piece_at_first_send_minute() -> None:
+    """Verifies that when total money is smaller than piece_max_inr, exactly 1 piece is planned at first_send_minute."""
+    # total_paise = 50,000 (Rs 500) with piece_max_inr = 1500 (Rs 1500)
+    chain = ["acc_mule_0", "acc_mule_1"]
+    pmts, stories, span = _plan_drip_chain(
+        gang_id="g_small",
+        chain_accounts=chain,
+        total_paise=50_000,
+        first_send_minute=1000,
+        piece_max_inr=1500,
+        spread_days=3,
+        hold_minutes=300,
+        max_pieces=400,
+    )
+    assert len(pmts) == 1
+    assert pmts[0].amount_paise == 50_000
+    assert pmts[0].minute == 1000
+    assert len(stories) == 1
+    assert span == 0

@@ -617,7 +617,9 @@ def _plan_drip_chain(
     WHAT: Schedules slow drip transfer dispatches and forensic narratives across a multi-hop account chain.
 
     WHY: Level 12g slow_drip moves money in small increments dispersed over days with multi-hour dwell times,
-    preserving exact aggregate funds without money creation or loss.
+    preserving exact aggregate funds without money creation or loss. If the total money is smaller than one
+    piece limit, exactly 1 piece is planned at first_send_minute (DECISION: allowed because it remains a small
+    amount held for hours, though multi-day spreading is not applicable for a single piece).
 
     Args:
         gang_id: Identifier of the syndicate orchestrating the transfers.

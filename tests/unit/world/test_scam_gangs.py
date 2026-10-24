@@ -58,6 +58,11 @@ FIXTURE_PLAIN_SHA256 = "28615d91d9a0b0f0ab09d79c55d5241d051638fc8df4bf03cc5e59ee
 FIXTURE_RUN_ID = "f3dc93d7013b2eba"
 FIXTURE_PLAN_SHA256 = "ade10fcfd89f329ba9b8fa67712da4e6253e05c09ff884ac4caa68338b27fc07"
 
+# Pinned values for a scam-funded gang computed at commit 0574555 (before Level 12g).
+SCAM_GANG_PLAIN_SHA256 = "c89206e5da1c5348559d5aaf22c3fcfd151ebc1c81fddc7e4777063e4a182a65"
+SCAM_GANG_RUN_ID = "5a32b6f51d52d76d"
+SCAM_GANG_PLAN_SHA256 = "918882eb0ece3714720132011e0dd989d9728d1247aa4bf599e28a7f7186a856"
+
 
 @dataclass(frozen=True)
 class OriginalStoryFields:
@@ -624,6 +629,58 @@ def test_fixture_gang_plain_form_run_id_and_plan_are_unchanged() -> None:
         )
     )
     assert hashlib.sha256(plan_text.encode("utf-8")).hexdigest() == FIXTURE_PLAN_SHA256
+
+
+def test_scam_gang_plain_form_run_id_and_plan_are_unchanged() -> None:
+    """Compares the scam-funded gang's plain dict, run id and plan with the values computed on commit 0574555."""
+    steps = (
+        BlockStep("acquire", (("count", 4),)),
+        BlockStep("take_control", (("devices", 2),)),
+        BlockStep("scam", (("receiving_mules", 2),)),
+        BlockStep("route", (("layers", 2), ("accounts_per_layer", 2))),
+        BlockStep("cash_out", ()),
+    )
+    gang = GangConfig("g_scam_pinned", 1, GENEROUS_BUDGET, None, steps, START_MINUTE)
+    settings, code_version = get_showcase_b_settings()
+
+    plain_text = json.dumps(gang_config_to_plain(gang), sort_keys=True)
+    assert hashlib.sha256(plain_text.encode("utf-8")).hexdigest() == SCAM_GANG_PLAIN_SHA256
+
+    output = run_interactive_world(
+        fast_settings=settings,
+        runner_settings=RunnerSettings(fraud_enabled=True),
+        gang_configs=(gang,),
+        code_version=code_version,
+    )
+    assert output.result.run_id == SCAM_GANG_RUN_ID
+
+    children = np.random.SeedSequence(settings.seed).spawn(10)
+    dev_rng, plan_rng = np.random.default_rng(children[6]), np.random.default_rng(children[7])
+    world = prepare_world(settings, None).world
+    plan = plan_gang(gang, world, plan_rng, reserved_accounts=set(), gang_devices_rng=dev_rng)
+    original_role_fields = tuple(
+        (role.account_id, role.role, role.gang_id, role.depth, role.valid_from, role.valid_to)
+        for role in plan.truth.roles
+    )
+    original_money_rules = tuple(
+        (rule.input_index, rule.spends_illicit, rule.credits_illicit)
+        for rule in plan.money_rules
+    )
+    original_story_fields = tuple(
+        OriginalStoryFields(story.gang_id, story.block, story.layer, story.description)
+        for story in plan.truth.payment_stories
+    )
+    plan_text = repr(
+        (
+            plan.payments,
+            original_role_fields,
+            original_story_fields,
+            plan.costs,
+            plan.totals,
+            original_money_rules,
+        )
+    )
+    assert hashlib.sha256(plan_text.encode("utf-8")).hexdigest() == SCAM_GANG_PLAN_SHA256
 
 
 def test_scam_gang_runs_through_the_interactive_runner() -> None:
