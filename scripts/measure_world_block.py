@@ -126,7 +126,7 @@ def _time_planning(
         started = time.perf_counter()
         plan = plan_gang(
             gang, world, plan_rng, reserved_accounts=reserved, gang_devices_rng=dev_rng,
-            device_start_index=next_device_index,
+            device_start_index=next_device_index, world_split=spec.split,
         )
         seconds.append(time.perf_counter() - started)
         dev_acquired_count = sum(1 for e in plan.gang_device_events if e.kind == "device_acquired")

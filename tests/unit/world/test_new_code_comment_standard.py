@@ -270,6 +270,8 @@ NEW_CODE_FILES: list[str] = [
     "tests/unit/test_config_yaml_cache.py",
     # Level 12g Round 3b held-out mechanisms test suite.
     "tests/unit/test_held_out_mechanisms.py",
+    # Level 12g Round 3b held-out property test suite.
+    "tests/unit/world/test_held_out_property.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
