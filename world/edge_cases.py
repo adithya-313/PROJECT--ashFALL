@@ -31,6 +31,8 @@ from world.fast_mode import FastRunSettings
 from world.gang_config import GangConfig, gang_config_from_plain
 from world.interactive_records import InteractiveWorldOutput, RunnerSettings
 from world.interactive_runner import run_interactive_world
+from world.label_builder import build_label_events, build_registry_reports
+from world.label_records import RegistryReport
 from world.sampled_world import _check_nesting
 from world.world_configs import CONFIG_NAMES, WorldConfigs, read_world_configs
 
@@ -86,10 +88,222 @@ class EdgeCase:
     file_name: str = ""
 
 
+def check_mules_forward_after_days(output: InteractiveWorldOutput, case: EdgeCase) -> tuple[bool, str, str]:
+    """
+    WHAT: Asserts that slow_drip gang route forwarding waits at least 1,440 minutes and truth marks it held_out.
+    WHY: Verifies edge-case 03: slow-drip evasion routing preserves multi-day holding intervals between hops.
+    """
+    slow_drip_gangs = [g for g in output.result.truth.gangs if g.family == "slow_drip"]
+    if not slow_drip_gangs:
+        return False, "", "no gang with family 'slow_drip' in truth"
+    gang = slow_drip_gangs[0]
+    if gang.kind != "held_out":
+        return False, "", f"gang kind '{gang.kind}' != 'held_out'"
+
+    route_events = [
+        (ev, output.result.truth.payment_stories[idx])
+        for ev, idx in zip(output.result.run_result.events, output.result.event_fraud_input_index)
+        if idx is not None and output.result.truth.payment_stories[idx].block == "route"
+    ]
+    scam_victim_events = [
+        (ev, output.result.truth.payment_stories[idx])
+        for ev, idx in zip(output.result.run_result.events, output.result.event_fraud_input_index)
+        if idx is not None
+        and output.result.truth.payment_stories[idx].block == "scam"
+        and output.result.truth.payment_stories[idx].scam_step == "victim_payment"
+    ]
+    if not route_events:
+        return False, "", "no route payments executed"
+    if not scam_victim_events:
+        return False, "", "no scam victim payments executed"
+
+    last_scam_min = max(ev.minute for ev, s in scam_victim_events)
+    first_route_min = min(ev.minute for ev, s in route_events)
+    wait_min = first_route_min - last_scam_min
+    if wait_min < 1440:
+        return False, f"wait_min={wait_min}", f"route wait {wait_min} < 1440 min"
+    return True, f"wait_min={wait_min}", ""
+
+
+def check_no_victim_ever_complains(output: InteractiveWorldOutput, case: EdgeCase) -> tuple[bool, str, str]:
+    """
+    WHAT: Asserts that at least one mule role exists in truth but exactly zero true complaints are filed.
+    WHY: Verifies edge-case 04: when victim complaint share is zero, fraudulent activity generates no true complaints.
+    """
+    mule_roles = [r for r in output.result.truth.roles if r.role == "mule"]
+    if not mule_roles:
+        return False, "", "truth contains zero mule roles"
+
+    complaints = build_label_events(output)
+    fraud_payment_ids = {
+        pid for pid, src in zip(output.result.payment_ids, output.result.event_sources) if src == "fraud"
+    }
+    true_complaints = [
+        c for c in complaints if any(pid in fraud_payment_ids for pid in c.payment_ids)
+    ]
+    if len(true_complaints) > 0:
+        return False, f"complaints={len(true_complaints)}", f"found {len(true_complaints)} true complaints"
+    return True, "complaints=0", ""
+
+
+def check_every_complaint_false(output: InteractiveWorldOutput, case: EdgeCase) -> tuple[bool, str, str]:
+    """
+    WHAT: Asserts that at least one complaint is filed and 100% of complaints name genuine non-fraud payments.
+    WHY: Verifies edge-case 05: elevated false complaint rates produce genuine complaints without any true scam reports.
+    """
+    complaints = build_label_events(output)
+    if not complaints:
+        return False, "", "zero complaints generated"
+
+    fraud_payment_ids = {
+        pid for pid, src in zip(output.result.payment_ids, output.result.event_sources) if src == "fraud"
+    }
+    for c in complaints:
+        if any(pid in fraud_payment_ids for pid in c.payment_ids):
+            return False, "", f"complaint {c.label_id} names a fraud payment"
+
+    return True, "false_ratio=1.0", ""
+
+
+def check_registry_wrong_listing(output: InteractiveWorldOutput, case: EdgeCase) -> tuple[bool, str, str]:
+    """
+    WHAT: Asserts that at least one national registry report is filed for an account holding no active gang role.
+    WHY: Verifies edge-case 06: false complaints propagate through reporting pipelines to list innocent citizens.
+    """
+    complaints = build_label_events(output)
+    reports = build_registry_reports(output, complaints)
+    if not reports:
+        return False, "", "zero registry reports generated"
+
+    wrong_listings: list[RegistryReport] = []
+    for report in reports:
+        roles_at_minute = [
+            r for r in output.result.truth.roles
+            if r.account_id == report.account_id
+            and r.valid_from <= report.reported_minute
+            and (r.valid_to is None or r.valid_to > report.reported_minute)
+        ]
+        if not roles_at_minute:
+            wrong_listings.append(report)
+
+    if not wrong_listings:
+        return False, "", "no registry report for an account without a gang role"
+    return True, f"wrong_listing_count={len(wrong_listings)}", ""
+
+
+def check_one_huge_transfer(output: InteractiveWorldOutput, case: EdgeCase) -> tuple[bool, str, str]:
+    """
+    WHAT: Asserts that each route hop moves exactly Rs 1,00,000 without split pieces, matching layer count.
+    WHY: Verifies edge-case 07: large lump-sum transfers maximize per-transaction limits in single atomic hops.
+    """
+    route_events = [
+        (ev, output.result.truth.payment_stories[idx])
+        for ev, idx in zip(output.result.run_result.events, output.result.event_fraud_input_index)
+        if idx is not None and output.result.truth.payment_stories[idx].block == "route"
+    ]
+    if not route_events:
+        return False, "", "zero route payments executed"
+
+    gang_steps = [s for g in case.gangs for s in g.get("steps", []) if s.get("block") == "route"]
+    expected_layers = gang_steps[0]["params"]["layers"] if gang_steps else 1
+    if len(route_events) != expected_layers:
+        return False, "", f"route payment count {len(route_events)} != layers {expected_layers}"
+
+    for ev, s in route_events:
+        if ev.amount_paise != 10000000:
+            return False, "", f"route payment amount {ev.amount_paise} paise != 10,000,000 paise (Rs 1,00,000)"
+
+    return True, "amount_inr=100000", ""
+
+
+def _check_community_episode(
+    output: InteractiveWorldOutput, target_kind: str
+) -> tuple[bool, str, str]:
+    """
+    WHAT: Validates that an authentic pooling episode occurred whose collector and payers hold no gang roles.
+    WHY: Avoids duplicating citizen episode validation logic across wedding, medical, and chit fund cases.
+    """
+    target_episodes = [ep for ep in output.episodes if ep.kind == target_kind]
+    if not target_episodes:
+        return False, "", f"no {target_kind} episode found"
+
+    ep = target_episodes[0]
+    collector_person = next(p for p in output.world.people if p.person_id == ep.person_id)
+    collector_roles = [r for r in output.result.truth.roles if r.account_id == collector_person.account_id]
+    if collector_roles:
+        return False, "", f"collector {collector_person.account_id} holds gang role {collector_roles[0].role}"
+
+    payer_accs = {
+        ev.from_account
+        for ev in output.result.run_result.events
+        if ev.to_account == collector_person.account_id and ep.start_minute <= ev.minute <= ep.end_minute
+    }
+    payer_roles = [r for r in output.result.truth.roles if r.account_id in payer_accs]
+    if payer_roles:
+        return False, "", f"payer holds gang role {payer_roles[0].role}"
+
+    return True, f"payer_count={ep.payer_count}", ""
+
+
+def check_wedding_collection(output: InteractiveWorldOutput, case: EdgeCase) -> tuple[bool, str, str]:
+    """
+    WHAT: Asserts that a wedding/medical collection episode occurred with innocent collector and payers.
+    WHY: Verifies edge-case 09: life event community collections are distinguished from illicit aggregation.
+    """
+    return _check_community_episode(output, "wedding_or_medical_collection")
+
+
+def check_medical_fundraiser(output: InteractiveWorldOutput, case: EdgeCase) -> tuple[bool, str, str]:
+    """
+    WHAT: Asserts that an urgent medical collection episode occurred with innocent collector and payers.
+    WHY: Verifies edge-case 10: rapid healthcare fundraising is distinguished from fraudulent mule accumulation.
+    """
+    return _check_community_episode(output, "wedding_or_medical_collection")
+
+
+def check_chit_fund(output: InteractiveWorldOutput, case: EdgeCase) -> tuple[bool, str, str]:
+    """
+    WHAT: Asserts that a chit fund / kitty pooling episode occurred with innocent organizer and contributors.
+    WHY: Verifies edge-case 11: informal rotating savings networks are recognized as genuine citizen finance.
+    """
+    return _check_community_episode(output, "chit_fund_or_kitty")
+
+
+def check_genuine_shop_downstream_of_mule(output: InteractiveWorldOutput, case: EdgeCase) -> tuple[bool, str, str]:
+    """
+    WHAT: Asserts that at least one cash-out payment reached a legitimate shop holding no gang role in truth.
+    WHY: Verifies edge-case 12: retail merchants downstream of mule spending are not wrongly attributed gang roles.
+    """
+    cashout_events = [
+        (ev, output.result.truth.payment_stories[idx])
+        for ev, idx in zip(output.result.run_result.events, output.result.event_fraud_input_index)
+        if idx is not None and output.result.truth.payment_stories[idx].block == "cash_out"
+    ]
+    shop_accs = {s.account_id for s in output.world.shops}
+    shop_cashouts = [ev for ev, s in cashout_events if ev.to_account in shop_accs]
+    if not shop_cashouts:
+        return False, "", "no cash-out payment to a shop"
+
+    for ev in shop_cashouts:
+        roles = [r for r in output.result.truth.roles if r.account_id == ev.to_account]
+        if roles:
+            return False, "", f"shop account {ev.to_account} holds gang role {roles[0].role}"
+
+    return True, f"cashout_shops={len(shop_cashouts)}", ""
+
+
 # EXPECTATIONS: dict mapping each runnable case name to its check function.
-# C2 fills these in; in C1, a runnable case with no function makes the validator fail
-# with "runnable case 'x' has no expectation check".
-EXPECTATIONS: dict[str, Callable[[InteractiveWorldOutput, EdgeCase], tuple[bool, str, str]]] = {}
+EXPECTATIONS: dict[str, Callable[[InteractiveWorldOutput, EdgeCase], tuple[bool, str, str]]] = {
+    "mules_forward_after_days": check_mules_forward_after_days,
+    "no_victim_ever_complains": check_no_victim_ever_complains,
+    "every_complaint_false": check_every_complaint_false,
+    "registry_wrong_listing": check_registry_wrong_listing,
+    "one_huge_transfer": check_one_huge_transfer,
+    "wedding_collection": check_wedding_collection,
+    "medical_fundraiser": check_medical_fundraiser,
+    "chit_fund": check_chit_fund,
+    "genuine_shop_downstream_of_mule": check_genuine_shop_downstream_of_mule,
+}
 
 
 def load_sizing_presets() -> dict[str, Any]:

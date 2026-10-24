@@ -21,24 +21,3 @@ layer_changes:
       training: [0.9, 0.9]
       test: [0.10, 0.9]
       stress: [0.05, 0.9]
-gangs:
-  - gang_id: gang_complaints_registry
-    strength: 1
-    budget:
-      money_paise: 50000000
-      time_minutes: 500000
-      max_risk: 0.99
-    start_minute: 1440
-    steps:
-      - block: acquire
-        params:
-          count: 6
-      - block: scam
-        params:
-          receiving_mules: 2
-          victims_per_receiving_mule: 12
-      - block: route
-        params:
-          layers: 1
-          accounts_per_layer: 2
-          dwell_minutes: 30
