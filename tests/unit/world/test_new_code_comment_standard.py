@@ -272,6 +272,10 @@ NEW_CODE_FILES: list[str] = [
     "tests/unit/test_held_out_mechanisms.py",
     # Level 12g Round 3b held-out property test suite.
     "tests/unit/world/test_held_out_property.py",
+    # Level 12g showcase part g support, checks and test suite.
+    "showcase/level_12_support_g.py",
+    "showcase/level_12_checks_g.py",
+    "tests/unit/showcase/test_level_12_checks_g.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
