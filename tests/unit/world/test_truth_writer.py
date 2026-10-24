@@ -280,8 +280,9 @@ def test_identical_runs_produce_byte_identical_truth_files(tmp_path: Path) -> No
     dir_1 = write_truth_files(out_1, tmp_path / "run_alpha")
     dir_2 = write_truth_files(out_2, tmp_path / "run_beta")
 
-    # 3. Assert bit-for-bit identical SHA-256 digests across all four truth files.
-    file_names = ["roles.jsonl", "device_control.jsonl", "payment_stories.jsonl", "manifest.json"]
+    # 3. Assert bit-for-bit identical SHA-256 digests across all five truth files.
+    # Level 12g: gangs.jsonl records gang syndicate classifications (seen/held-out) in truth-v2.
+    file_names = ["roles.jsonl", "device_control.jsonl", "payment_stories.jsonl", "gangs.jsonl", "manifest.json"]
     for name in file_names:
         hash_1 = hashlib.sha256((dir_1 / name).read_bytes()).hexdigest()
         hash_2 = hashlib.sha256((dir_2 / name).read_bytes()).hexdigest()

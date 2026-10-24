@@ -12,9 +12,11 @@ TERM: exempt split: an evaluation split (test or stress) permitted to run held-o
 """
 
 from pathlib import Path
+from typing import Any
 
 from world.gang_config import GangConfig
 from world.tactic_config import get_block_definition, load_tactic_blocks, resolve_dividing_line
+from world.truth_records import GangTruth
 
 
 def find_held_out_options(config: GangConfig) -> list[tuple[str, str, str]]:
@@ -169,3 +171,71 @@ def check_held_out_option_ranges(config_path: Path | None = None) -> None:
             f"Held-out drip_hold_minutes lower bound ({hold_min_lower}) must be strictly above "
             f"training_max_dwell_minutes dividing line ({dwell_limit})."
         )
+
+
+def gang_truth_for(config: GangConfig, families: dict[str, Any]) -> GangTruth:
+    """
+    WHAT: Derives the ground truth GangTruth classification record for a gang configuration based
+    on its executed options.
+
+    WHY: Ground truth evaluations in Level 12g require verifying that a gang's taxonomy label reflects its
+    actual mechanism parameters rather than unverified user-declared tags.
+
+    Args:
+        config: GangConfig instance declaring gang steps, parameters, and optional family tag.
+        families: Dictionary parsed from tactic_families.yaml containing training and held_out family specifications.
+
+    Returns:
+        GangTruth: Validated truth record indicating whether the gang is seen or held-out.
+
+    Raises:
+        ValueError: If a gang configures options from multiple held-out families, if a declared family tag
+            contradicts detected held-out options, or if a held-out family tag is used without its mechanism.
+
+    Example:
+        # gt = gang_truth_for(drip_gang_config, families)
+        # assert gt.kind == "held_out"
+    """
+    # Discover all parameters across gang steps mapped to held-out tactic families.
+    options = find_held_out_options(config)
+    distinct_families = sorted(set(family for _, _, family in options))
+    held_out_options = tuple(sorted(f"{b}.{p}" for b, p, _ in options))
+
+    # Reject mixing multiple held-out families to keep evaluation results attributable per family.
+    if len(distinct_families) > 1:
+        raise ValueError(
+            f"Gang '{config.gang_id}' uses options from multiple held-out families "
+            f"{distinct_families}; one held-out family per gang, so results stay per family."
+        )
+
+    # If exactly one held-out family is configured, the gang is held-out and its tag must agree.
+    if len(distinct_families) == 1:
+        family_name = distinct_families[0]
+        if config.family is not None and config.family != family_name:
+            raise ValueError(
+                f"Gang '{config.gang_id}' is tagged with family '{config.family}' but uses options from "
+                f"held-out family '{family_name}'; tag disagrees with behaviour."
+            )
+        return GangTruth(
+            gang_id=config.gang_id,
+            family=family_name,
+            kind="held_out",
+            held_out_options=held_out_options,
+        )
+
+    # When no held-out options are present, disallow claiming a held-out family name without its mechanism.
+    held_out_names = set(families.get("held_out", {}).keys())
+    if config.family in held_out_names:
+        raise ValueError(
+            f"Gang '{config.gang_id}' is tagged held-out family '{config.family}' but uses none of its options; "
+            "a held-out name needs its mechanism."
+        )
+
+    # Ordinary seen gang with no held-out options configured.
+    return GangTruth(
+        gang_id=config.gang_id,
+        family=config.family,
+        kind="seen",
+        held_out_options=(),
+    )
+

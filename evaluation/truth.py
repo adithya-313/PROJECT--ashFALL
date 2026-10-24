@@ -51,27 +51,30 @@ class TruthStore:
         roles: list[dict[str, Any]],
         device_control: list[dict[str, Any]],
         payment_stories: dict[str, dict[str, Any]],
+        gangs: list[dict[str, Any]] | None = None,
     ) -> None:
         """
-        WHAT: Stores parsed truth records and payment story lookup maps.
+        WHAT: Stores parsed truth records, payment story lookup maps, and gang classification records.
 
-        WHY: Enables constant-time transaction story retrieval and linear temporal span scans.
+        WHY: Enables constant-time transaction story retrieval, linear temporal span scans, and gang taxonomic queries.
 
         Args:
             roles: List of parsed role span dictionaries.
             device_control: List of parsed device control dictionaries.
             payment_stories: Mapping from payment_id to forensic story record dictionary.
+            gangs: Optional list of parsed gang classification dictionaries.
 
         Returns:
             None.
 
         Example:
-            # store = TruthStore(roles=[], device_control=[], payment_stories={})
+            # store = TruthStore(roles=[], device_control=[], payment_stories={}, gangs=[])
         """
         # Store verified truth collections.
         self._roles = roles
         self._device_control = device_control
         self._payment_stories = payment_stories
+        self._gangs = gangs if gangs is not None else []
 
     def role_at(self, account_id: str, minute: int) -> str:
         """
@@ -275,6 +278,31 @@ class TruthStore:
         # 2. Return ordered list of active controlling device IDs.
         return active_devices
 
+    def gang_kind(self, gang_id: str) -> str:
+        """
+        WHAT: Returns the taxonomic classification ('seen' or 'held_out') for the specified gang.
+        Raises KeyError if the gang identifier does not exist in the truth store.
+
+        WHY: Enables evaluation metrics to stratify detection results across seen training syndicates
+        and held-out test syndicates to measure generalization.
+
+        Args:
+            gang_id: String gang identifier to query.
+
+        Returns:
+            String taxonomy category ('seen' or 'held_out').
+
+        Raises:
+            KeyError: If gang_id is not recorded in the gang truth records.
+
+        Example:
+            # store.gang_kind('gang_alpha') -> 'seen'
+        """
+        for g in self._gangs:
+            if g.get("gang_id") == gang_id:
+                return str(g["kind"])
+        raise KeyError(f"Unknown gang '{gang_id}'")
+
 
 def _verify_direct_caller() -> None:
     """
@@ -414,7 +442,14 @@ def load_truth(truth_root: Path, run_id: str) -> TruthStore:
     device_rows = _verify_file_integrity(run_dir / device_name, device_name, files_meta[device_name])
     story_name = file_names["payment_stories"]
     story_rows = _verify_file_integrity(run_dir / story_name, story_name, files_meta[story_name])
+    gangs_name = file_names["gangs"]
+    gangs_rows = _verify_file_integrity(run_dir / gangs_name, gangs_name, files_meta[gangs_name])
 
     # 4. Index stories by payment_id and construct TruthStore.
     stories_map = {story["payment_id"]: story for story in story_rows}
-    return TruthStore(roles=roles_rows, device_control=device_rows, payment_stories=stories_map)
+    return TruthStore(
+        roles=roles_rows,
+        device_control=device_rows,
+        payment_stories=stories_map,
+        gangs=gangs_rows,
+    )
