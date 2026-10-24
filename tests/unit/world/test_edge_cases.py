@@ -201,14 +201,14 @@ def test_run_edge_case_05_every_complaint_false() -> None:
 
 def test_run_edge_case_06_registry_wrong_listing() -> None:
     """
-    WHAT: Runs runnable edge case 06 and asserts check_registry_wrong_listing passes with wrong_listing_count=1.
+    WHAT: Runs runnable edge case 06 and asserts check_registry_wrong_listing passes with wrong_listing_count=2.
     WHY: Proves that false complaints propagate to the national registry, listing innocent accounts.
     """
     case = load_edge_case(DEFAULT_CASES_DIR / "06-registry_wrong_listing.yaml")
     output = run_edge_case(case)
     passed, key_num, detail = EXPECTATIONS[case.name](output, case)
     assert passed, f"Case 06 failed: {detail}"
-    assert key_num == "wrong_listing_count=1"
+    assert key_num == "wrong_listing_count=2"
 
 
 def test_run_edge_case_07_one_huge_transfer() -> None:
@@ -354,21 +354,38 @@ def test_negative_06_registry_report_on_mule_account_fails() -> None:
     """
     case = load_edge_case(DEFAULT_CASES_DIR / "06-registry_wrong_listing.yaml")
     output = run_edge_case(case)
-    mule_role = RoleSpan(
-        account_id="acc_person_000013",
-        role="mule",
-        gang_id="gang_test",
-        depth=1,
-        valid_from=0,
-        valid_to=None,
+    tampered_roles = tuple(
+        RoleSpan(
+            account_id=acc,
+            role="mule",
+            gang_id="gang_test",
+            depth=1,
+            valid_from=0,
+            valid_to=None,
+        )
+        for acc in ("acc_shop_0000", "acc_shop_0003")
     )
-    tampered_truth = dataclasses.replace(output.result.truth, roles=(mule_role,))
+    tampered_truth = dataclasses.replace(output.result.truth, roles=tampered_roles)
     tampered_result = dataclasses.replace(output.result, truth=tampered_truth)
     tampered_output = dataclasses.replace(output, result=tampered_result)
 
     passed, key_num, detail = check_registry_wrong_listing(tampered_output, case)
     assert not passed
     assert "no registry report for an account without a gang role" in detail
+
+
+def test_negative_06_case_without_gang_fails_no_mule_in_the_truth() -> None:
+    """
+    WHAT: Asserts that check_registry_wrong_listing fails if case 06 is executed with no gang present.
+    WHY: Verifies that wrong-listing checks require active mule operations in truth to avoid trivial empty passes.
+    """
+    case = load_edge_case(DEFAULT_CASES_DIR / "06-registry_wrong_listing.yaml")
+    case_no_gang = dataclasses.replace(case, gangs=[])
+    output = run_edge_case(case_no_gang)
+
+    passed, key_num, detail = check_registry_wrong_listing(output, case_no_gang)
+    assert not passed
+    assert detail == "no mule in the truth"
 
 
 def test_negative_07_split_or_non_100k_payment_fails() -> None:

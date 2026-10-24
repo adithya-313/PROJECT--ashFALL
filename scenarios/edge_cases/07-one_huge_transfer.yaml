@@ -35,3 +35,4 @@ gangs:
           accounts_per_layer: 1
           amount_inr: 100000
           dwell_minutes: 60
+note: "The world's per-transaction limit is pinned at Rs 1,00,000 so the transfer is a single legal payment at the NPCI person-to-person limit (config/world_ranges.yaml upi_per_transaction_limit_inr reason)."

@@ -167,9 +167,15 @@ def check_every_complaint_false(output: InteractiveWorldOutput, case: EdgeCase) 
 
 def check_registry_wrong_listing(output: InteractiveWorldOutput, case: EdgeCase) -> tuple[bool, str, str]:
     """
-    WHAT: Asserts that at least one national registry report is filed for an account holding no active gang role.
-    WHY: Verifies edge-case 06: false complaints propagate through reporting pipelines to list innocent citizens.
+    WHAT: Asserts that at least one national registry report is filed for an account holding no active gang role,
+    in a world containing at least one mule role in truth.
+    WHY: Verifies edge-case 06: false complaints propagate through reporting pipelines to list innocent citizens
+    even when actual syndicate mules operate in the background.
     """
+    mule_roles = [r for r in output.result.truth.roles if r.role == "mule"]
+    if not mule_roles:
+        return False, "", "no mule in the truth"
+
     complaints = build_label_events(output)
     reports = build_registry_reports(output, complaints)
     if not reports:
