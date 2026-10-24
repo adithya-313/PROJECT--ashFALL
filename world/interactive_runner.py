@@ -505,11 +505,16 @@ def _apply_gang_configs(
         market_rng = np.random.default_rng(children_17[16])
         resale_share = draw_resale_share(prepared.plan.range_name, market_rng, config=account_market_config)
 
+    next_device_index = 1
     for k, g in enumerate(gang_configs):
         plan = plan_gang(
             g, prepared.world, plan_rng, reserved_accounts=reserved, gang_devices_rng=dev_rng,
             world_split=held_out_split,
+            device_start_index=next_device_index,
         )
+        # Advance device index by number of devices this gang made: unique device labels per world
+        dev_acquired_count = sum(1 for e in plan.gang_device_events if e.kind == "device_acquired")
+        next_device_index += dev_acquired_count
 
         if k >= 1 and account_market_enabled and resale_share is not None and market_rng is not None:
             offers = find_resale_offers(roles)

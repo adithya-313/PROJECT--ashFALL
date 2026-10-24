@@ -948,7 +948,9 @@ def _plan_disguise_step(
 
 def _plan_take_control_step(
     config: GangConfig, step: BlockStep, acquired_accounts: list[str], clock_minute: int,
-    gang_devices_rng: np.random.Generator, rng: np.random.Generator
+    gang_devices_rng: np.random.Generator, rng: np.random.Generator,
+    *,
+    device_start_index: int = 1,
 ) -> tuple[list[DeviceControlSpan], list[GangDeviceEvent], BlockCost]:
     """
     WHAT: Synthesizes external gang devices, round-robin account assignments, truth spans, and telemetry events.
@@ -965,6 +967,7 @@ def _plan_take_control_step(
         clock_minute: Current simulation minute timestamp of the gang campaign.
         gang_devices_rng: Dedicated random number generator stream for device creation (child 6).
         rng: Gang-specific random number generator stream for time and risk expenditures.
+        device_start_index: Starting integer offset for formatting zero-padded device identifiers.
 
     Returns:
         Tuple of (list of DeviceControlSpan records, list of GangDeviceEvent records, and take_control BlockCost).
@@ -985,7 +988,7 @@ def _plan_take_control_step(
         generations = rotations + 1
         period_minutes = int(rotate_every_days) * 1440
         devices_count = len(acquired_accounts) * generations
-        devices = make_gang_devices(devices_count, gang_devices_rng)
+        devices = make_gang_devices(devices_count, gang_devices_rng, start_index=device_start_index)
         spans = build_rotation_spans(
             config.gang_id,
             acquired_accounts,
@@ -1018,7 +1021,7 @@ def _plan_take_control_step(
             devices_count = int(rng.integers(min_devices, max_devices + 1))
 
         # 2. Provision devices on child stream 6 and allocate across mules in round-robin order.
-        devices = make_gang_devices(devices_count, gang_devices_rng)
+        devices = make_gang_devices(devices_count, gang_devices_rng, start_index=device_start_index)
         account_to_device = assign_devices_round_robin(acquired_accounts, devices)
 
         # 3. Build forensic ground truth spans and synthetic client telemetry events.
@@ -1041,7 +1044,9 @@ def _plan_take_control_step(
 
 def _plan_campaign_steps(
     config: GangConfig, world: World, rng: np.random.Generator,
-    reserved_accounts: set[str] | None, dev_rng: np.random.Generator
+    reserved_accounts: set[str] | None, dev_rng: np.random.Generator,
+    *,
+    device_start_index: int = 1,
 ) -> tuple[Any, ...]:
     """
     WHAT: Iterates through configured block steps, dispatching procedural handlers and accumulating expenditures.
@@ -1092,7 +1097,9 @@ def _plan_campaign_steps(
             )
             opening_events.extend(new_openings)
         elif step.block == "take_control":
-            d_spans, d_events, cost = _plan_take_control_step(config, step, mules, clock_min, dev_rng, rng)
+            d_spans, d_events, cost = _plan_take_control_step(
+                config, step, mules, clock_min, dev_rng, rng, device_start_index=device_start_index
+            )
             device_spans.extend(d_spans); device_events.extend(d_events)
         elif step.block == "warm_up":
             split = str(world.parameters_drawn.get("range_name", "training"))
@@ -1284,6 +1291,7 @@ def plan_gang(
     gang_devices_rng: np.random.Generator | None = None,
     *,
     world_split: str | None = None,
+    device_start_index: int = 1,
 ) -> GangPlan:
     """
     WHAT: Synthesizes a complete tactical campaign plan from a GangConfig specification and simulated World state.
@@ -1300,6 +1308,7 @@ def plan_gang(
         reserved_accounts: Optional set of account identifiers reserved by prior gangs or system fixtures.
         gang_devices_rng: Optional dedicated random number generator stream for device creation (child 6).
         world_split: Optional string evaluation split identifier ('training', 'test', 'stress').
+        device_start_index: Integer starting offset for hardware device identifier formatting.
 
     Returns:
         An initialized GangPlan containing planned transfers, truth assertions, step costs, and total expenditures.
@@ -1313,7 +1322,7 @@ def plan_gang(
 
     dev_rng = gang_devices_rng if gang_devices_rng is not None else rng
     pmts, roles, spans, stories, costs, money, time, safe, events, rules, openings, withdrawals = _plan_campaign_steps(
-        config, world, rng, reserved_accounts, dev_rng
+        config, world, rng, reserved_accounts, dev_rng, device_start_index=device_start_index
     )
     return _build_gang_plan(
         pmts, roles, spans, stories, costs, money, time, safe, events, rules, openings, withdrawals

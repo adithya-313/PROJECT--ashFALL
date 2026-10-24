@@ -264,6 +264,7 @@ NEW_CODE_FILES: list[str] = [
     "tests/unit/world/test_held_out_options.py",
     "tests/unit/world/test_slow_drip.py",
     "tests/unit/world/test_device_rotation.py",
+    "tests/unit/world/test_gang_device_ids.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
