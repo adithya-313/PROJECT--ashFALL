@@ -107,6 +107,8 @@ tactic_blocks:
     #                           computer instead of a real phone
     #   remote_access           true if remote-control software lets the gang
     #                           operate the session
+    #   rotate_every_days  how often each mule's phone is replaced.
+    #   rotations          how many replacements each mule's phone receives.
     #   The four true/false settings are written into the hidden truth and
     #   into the gang's device events. time_minutes_per_use [10, 120].
     # ------------------------------------------------------------------
@@ -137,6 +139,20 @@ tactic_blocks:
           label: policy
           type: boolean
           reason: "Whether remote access software was installed to operate the session remotely"
+        rotate_every_days:
+          label: assumption
+          range: [3, 14]
+          held_out_family: device_rotation
+          issue_ids_v2: [12-8]
+          derived_from: "Level 12g brief"
+          reason: "how often each mule's phone is replaced."
+        rotations:
+          label: assumption
+          range: [1, 6]
+          held_out_family: device_rotation
+          issue_ids_v2: [12-8]
+          derived_from: "Level 12g brief"
+          reason: "how many replacements each mule's phone receives."
     # ------------------------------------------------------------------
     # warm_up: let the accounts sit before using them
     #   days   how many days the gang waits. If left out, 1. The world range
@@ -196,6 +212,9 @@ tactic_blocks:
     #                      from a scam, because the amount is then what the
     #                      victims paid. A training gang may not go below
     #                      Rs 2,000 (see slow_drip_max_amount_inr below).
+    #   drip_piece_max_inr largest rupee piece for slow-drip transfer.
+    #   drip_spread_days   days over which the first hop's pieces leave.
+    #   drip_hold_minutes  minutes each piece rests at every mule before moving.
     # Example: layers 2, accounts_per_layer 2 means 4 mules in two layers.
     # ------------------------------------------------------------------
     route:
@@ -223,6 +242,27 @@ tactic_blocks:
           world_ranges_reference: mule_transfer_amount_inr
           split: training
           reason: "Transfer amount per hop, referenced from config/world_ranges.yaml"
+        drip_piece_max_inr:
+          label: assumption
+          range: [500, 1999]
+          held_out_family: slow_drip
+          issue_ids_v2: [12-8]
+          derived_from: "Level 12g brief"
+          reason: "largest piece of a slow-drip transfer, in rupees; stays below the slow-drip dividing line."
+        drip_spread_days:
+          label: assumption
+          range: [3, 14]
+          held_out_family: slow_drip
+          issue_ids_v2: [12-8]
+          derived_from: "Level 12g brief"
+          reason: "days over which the first hop's pieces leave, evenly spaced."
+        drip_hold_minutes:
+          label: assumption
+          range: [240, 2880]
+          held_out_family: slow_drip
+          issue_ids_v2: [12-8]
+          derived_from: "Level 12g brief"
+          reason: "minutes each piece rests at every mule before it moves on; above the training maximum dwell."
     # ------------------------------------------------------------------
     # disguise: shift forwarding times to hide the pattern (strength 2 only)
     #   jitter_minutes  the most minutes a forward may be moved earlier inside
@@ -386,7 +426,13 @@ held_out_dividing_lines:
   training_devices_retired_on_schedule:
     label: policy
     value: false
-    reason: "A rule; training tactics do not retire devices strictly on schedule; used in B-2b."
+    reason: "A rule; training tactics do not retire devices strictly on schedule; enforced by world/held_out_options.py (Level 12g)."
+  exempt_splits:
+    label: policy
+    value: [test, stress]
+    issue_ids_v2: [12-8]
+    derived_from: "Level 12g brief"
+    reason: "Held-out options are allowed only in test and stress worlds; the check keys on the world's split, never on its range column (Level 12g brief)."
 
 # ---------------------------------------------------------------------
 # gang_payment_purpose: what every gang payment is labelled
@@ -429,4 +475,20 @@ gang_devices:
     - linked_number_switch
     - emulator_enabled
     - remote_access_enabled
+
+# ---------------------------------------------------------------------
+# slow_drip_limits: volume bounds on slow-drip payment streams
+# ---------------------------------------------------------------------
+slow_drip_limits:
+  label: assumption
+  issue_ids_v2: [12-8]
+  derived_from: "Level 12g brief"
+  reason: "Limits on slow-drip payment volume to ensure bounded world execution size."
+  max_pieces_per_stream:
+    label: assumption
+    value: 5000
+    issue_ids_v2: [12-8]
+    derived_from: "Level 12g C11: maximum pieces per slow-drip stream over all 240 planned test and stress worlds was 2411 (world test-b02-0007); cap = next hundred above it, doubled for headroom"
+    reason: "Keeps one slow-drip stream to a bounded number of payments; a stream above the cap is refused, never merged. Set from the measured maximum, so no planned test or stress world is refused."
+
 

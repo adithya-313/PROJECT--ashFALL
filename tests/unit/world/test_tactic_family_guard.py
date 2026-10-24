@@ -20,6 +20,7 @@ import pytest
 from world.fast_mode import FastRunSettings
 from world.gang_config import (
     BlockStep,
+    FixtureSource,
     GangBudget,
     GangConfig,
     gang_config_from_plain,
@@ -66,7 +67,11 @@ def test_held_out_families_refused_in_training_worlds() -> None:
     families = load_tactic_families()
     eval_cfg = load_evaluation_config()
     held_out_names = sorted(families["held_out"].keys())
-    eval_held_out = sorted(eval_cfg["held_out_tactics"]["tactics"])
+    # Under amendment A-025, catalogue held-out matches active tactics union deferred names.
+    eval_held_out = sorted(
+        set(eval_cfg["held_out_tactics"]["tactics"])
+        | {d["name"] for d in eval_cfg["held_out_tactics"].get("deferred", [])}
+    )
     # The two lists must agree before we trust either for testing.
     assert held_out_names == eval_held_out, (
         f"tactic_families held_out {held_out_names} != evaluation.yaml {eval_held_out}"
@@ -88,28 +93,66 @@ def test_held_out_families_refused_in_training_worlds() -> None:
 
 def test_held_out_families_permitted_in_test_and_stress_worlds() -> None:
     """
-    WHAT: Asserts that a gang configured with a held-out tactic family executes successfully without
-    raising errors when run inside test and stress world partitions.
-    WHY: Held-out tactics exist specifically to benchmark adversarial robustness under unseen test
-    and stress conditions.
+    WHAT: Asserts that a plain gang tagged with a held-out family without its mechanism is refused,
+    while a gang configured with real held-out rotation options executes successfully in test and stress
+    worlds and records truth kind 'held_out'.
+    WHY: Level 12g requires held-out family tags to be backed by actual mechanism options (preventing false labels).
     """
-    families = load_tactic_families()
-    first_held_out = sorted(families["held_out"].keys())[0]
-    gang = _build_test_gang(gang_id="gang_held_out_ok", family=first_held_out)
+    # 1. Plain gang claiming held-out family 'device_rotation' without mechanisms is refused in test world.
+    plain_gang = _build_test_gang(gang_id="plain_rotation_gang", family="device_rotation")
+    with pytest.raises(ValueError, match="a held-out name needs its mechanism"):
+        run_interactive_world(
+            TINY_TEST,
+            RunnerSettings(fraud_enabled=True),
+            gang_configs=(plain_gang,),
+        )
+
+    # 2. Gang with real rotation options tagged 'device_rotation' runs in test and stress worlds with kind 'held_out'.
+    source = FixtureSource("acc_gang_src_01", 0, 10_000_000, 1440)
+    rotation_steps = (
+        BlockStep("acquire", (("count", 3),)),
+        BlockStep(
+            "take_control",
+            (
+                ("rotate_every_days", 7),
+                ("rotations", 2),
+                ("sim_swap", True),
+                ("emulator", False),
+            ),
+        ),
+        BlockStep(
+            "route",
+            (
+                ("layers", 3),
+                ("accounts_per_layer", 1),
+                ("amount_inr", 5000),
+                ("dwell_minutes", 60),
+            ),
+        ),
+    )
+    rotation_gang = GangConfig(
+        "gang_rotation_real", 1, GENEROUS_BUDGET, source, rotation_steps, None, family="device_rotation"
+    )
 
     out_test = run_interactive_world(
         TINY_TEST,
         RunnerSettings(fraud_enabled=True),
-        gang_configs=(gang,),
+        gang_configs=(rotation_gang,),
     )
     assert len(out_test.result.run_result.events) > 0
+    assert len(out_test.result.truth.gangs) == 1
+    assert out_test.result.truth.gangs[0].kind == "held_out"
+    assert out_test.result.truth.gangs[0].family == "device_rotation"
 
     out_stress = run_interactive_world(
         TINY_STRESS,
         RunnerSettings(fraud_enabled=True),
-        gang_configs=(gang,),
+        gang_configs=(rotation_gang,),
     )
     assert len(out_stress.result.run_result.events) > 0
+    assert len(out_stress.result.truth.gangs) == 1
+    assert out_stress.result.truth.gangs[0].kind == "held_out"
+    assert out_stress.result.truth.gangs[0].family == "device_rotation"
 
 
 def test_unknown_family_name_is_refused() -> None:

@@ -121,10 +121,16 @@ def _time_planning(
     reserved = {gang.source.account_id for gang in gangs if gang.source is not None}
     seconds: list[float] = []
     plans: list[Any] = []
+    next_device_index = 1
     for gang in gangs:
         started = time.perf_counter()
-        plan = plan_gang(gang, world, plan_rng, reserved_accounts=reserved, gang_devices_rng=dev_rng)
+        plan = plan_gang(
+            gang, world, plan_rng, reserved_accounts=reserved, gang_devices_rng=dev_rng,
+            device_start_index=next_device_index, world_split=spec.split,
+        )
         seconds.append(time.perf_counter() - started)
+        dev_acquired_count = sum(1 for e in plan.gang_device_events if e.kind == "device_acquired")
+        next_device_index += dev_acquired_count
         reserved.update(role.account_id for role in plan.truth.roles)
         plans.append(plan)
     return seconds, gangs, plans

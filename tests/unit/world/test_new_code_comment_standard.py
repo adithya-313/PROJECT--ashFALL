@@ -259,10 +259,28 @@ NEW_CODE_FILES: list[str] = [
     "showcase/level_12_support_f.py",
     "showcase/level_12_checks_f.py",
     "tests/unit/showcase/test_level_12_checks_f.py",
+    # Level 12g held-out options module and test suite.
+    "world/held_out_options.py",
+    "tests/unit/world/test_held_out_options.py",
+    "tests/unit/world/test_slow_drip.py",
+    "tests/unit/world/test_device_rotation.py",
+    "tests/unit/world/test_gang_device_ids.py",
+    "tests/unit/world/test_gang_truth.py",
+    # Level 12g Round 3a YAML content cache test suite.
+    "tests/unit/test_config_yaml_cache.py",
+    # Level 12g Round 3b held-out mechanisms test suite.
+    "tests/unit/test_held_out_mechanisms.py",
+    # Level 12g Round 3b held-out property test suite.
+    "tests/unit/world/test_held_out_property.py",
+    # Level 12g showcase part g support, checks and test suite.
+    "showcase/level_12_support_g.py",
+    "showcase/level_12_checks_g.py",
+    "tests/unit/showcase/test_level_12_checks_g.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
     ("world/amounts.py", "lookalike_small_amount_paise"),
+    ("world/tactic_families.py", "check_held_out_mechanisms"),
     # Level 12a showcase --part option helpers added to older showcase files.
     ("showcase/framework.py", "select_part_checks"),
     ("showcase/__main__.py", "check_part_argument"),

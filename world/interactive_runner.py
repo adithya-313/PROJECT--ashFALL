@@ -59,6 +59,7 @@ from world.fast_mode import FastRunSettings
 from world.gang_config import GangConfig, gang_config_to_plain
 from world.gang_feed import build_gang_holdings_from_roles
 from world.gang_planner import plan_gang
+from world.held_out_options import gang_truth_for
 from world.interactive_loop import run_fraud_on
 from world.interactive_records import (
     FraudInputs,
@@ -75,13 +76,15 @@ from world.interactive_records import (
 from world.interactive_state import start_runner_state
 from world.payments import find_ledger_for_account
 from world.run_identity import REPO_ROOT, find_code_version, load_runner_config, make_payment_id, make_run_id
+from world.tactic_config import load_tactic_blocks
 from world.tactic_families import (
     check_family_lists_agree,
+    check_held_out_mechanisms,
     load_evaluation_config,
     load_tactic_families,
     validate_gang_families,
 )
-from world.truth_records import TruthFacts
+from world.truth_records import GangTruth, TruthFacts
 from world.world_configs import WorldConfigs, read_world_configs
 from world.world_plan import WorldPlan, draw_world_plan, spawn_life_streams, spawn_world_streams
 
@@ -440,6 +443,8 @@ def _apply_gang_configs(
     *,
     account_market_enabled: bool = False,
     account_market_config: dict[str, Any] | None = None,
+    held_out_split: str | None = None,
+    gang_truths: tuple[GangTruth, ...] = (),
 ) -> tuple[Any, FraudInputs]:
     """
     WHAT: Registers fixture source accounts in runner state, plans each gang campaign using the gang_planning
@@ -457,6 +462,8 @@ def _apply_gang_configs(
         runner_config: Interactive runner configuration dictionary.
         account_market_enabled: Boolean flag indicating if secondary account market resales are active.
         account_market_config: Optional account market configuration dictionary.
+        held_out_split: Optional world split string for held-out tactic option validation.
+        gang_truths: Optional sequence of GangTruth records classifying each gang as seen or held-out.
 
     Returns:
         Tuple of (updated runner state, combined FraudInputs).
@@ -464,6 +471,9 @@ def _apply_gang_configs(
     Example:
         # state, inputs = _apply_gang_configs(prepared, gang_configs, state, inputs, 101, config)
     """
+    active_gang_truths = (
+        gang_truths if gang_truths else tuple(gang_truth_for(g, load_tactic_families()) for g in gang_configs)
+    )
     active_state = state if state is not None else start_runner_state(prepared.world)
     seeds = list(fraud_inputs.illicit_seeds)
     for g in gang_configs:
@@ -504,8 +514,16 @@ def _apply_gang_configs(
         market_rng = np.random.default_rng(children_17[16])
         resale_share = draw_resale_share(prepared.plan.range_name, market_rng, config=account_market_config)
 
+    next_device_index = 1
     for k, g in enumerate(gang_configs):
-        plan = plan_gang(g, prepared.world, plan_rng, reserved_accounts=reserved, gang_devices_rng=dev_rng)
+        plan = plan_gang(
+            g, prepared.world, plan_rng, reserved_accounts=reserved, gang_devices_rng=dev_rng,
+            world_split=held_out_split,
+            device_start_index=next_device_index,
+        )
+        # Advance device index by number of devices this gang made: unique device labels per world
+        dev_acquired_count = sum(1 for e in plan.gang_device_events if e.kind == "device_acquired")
+        next_device_index += dev_acquired_count
 
         if k >= 1 and account_market_enabled and resale_share is not None and market_rng is not None:
             offers = find_resale_offers(roles)
@@ -555,7 +573,12 @@ def _apply_gang_configs(
     gang_plan_roles = roles[len(fraud_inputs.truth.roles):]
     holdings = list(fraud_inputs.gang_holdings) + list(build_gang_holdings_from_roles(gang_plan_roles))
 
-    new_truth = TruthFacts(roles=tuple(roles), device_control=tuple(dev_ctrl), payment_stories=tuple(stories))
+    new_truth = TruthFacts(
+        roles=tuple(roles),
+        device_control=tuple(dev_ctrl),
+        payment_stories=tuple(stories),
+        gangs=active_gang_truths,
+    )
     return active_state, FraudInputs(
         payments=tuple(pmts), outside_events=tuple(opening_events), truth=new_truth,
         gang_device_events=tuple(g_dev_events),
@@ -622,13 +645,17 @@ def run_interactive_world(
         raise ValueError("gang reactions need at least one gang")
     if not runner_settings.fraud_enabled and gang_configs:
         raise ValueError(SWITCH_OFF_MESSAGE)
-    if any(g.family is not None for g in gang_configs):
+    gang_truths: tuple[GangTruth, ...] = ()
+    if gang_configs:
         families = load_tactic_families()
-        eval_cfg = load_evaluation_config()
-        check_family_lists_agree(families, eval_cfg)
-        validate_gang_families(
-            gang_configs, family_guard_split(world_split, fast_settings.range_name), families=families
-        )
+        if any(g.family is not None for g in gang_configs):
+            eval_cfg = load_evaluation_config()
+            check_family_lists_agree(families, eval_cfg)
+            check_held_out_mechanisms(families, eval_cfg, load_tactic_blocks())
+            validate_gang_families(
+                gang_configs, family_guard_split(world_split, fast_settings.range_name), families=families
+            )
+        gang_truths = tuple(gang_truth_for(g, families) for g in gang_configs)
     runner_config = load_runner_config()
     effective_config = effective_config_for(
         fast_settings, configs, gang_configs,
@@ -648,6 +675,8 @@ def run_interactive_world(
             prepared, gang_configs, state, fraud_inputs, fast_settings.seed, runner_config,
             account_market_enabled=runner_settings.account_market_enabled,
             account_market_config=account_market_config,
+            held_out_split=family_guard_split(world_split, fast_settings.range_name),
+            gang_truths=gang_truths,
         )
     result = run_interactive(
         prepared.world, prepared.plan, prepared.run_rng, prepared.device_events, prepared.episode_payments,

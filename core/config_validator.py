@@ -11,7 +11,11 @@ Use from the command line:
     python -m core.config_validator config/world_ranges.yaml config/legal_actions.yaml
 """
 
+import copy
+import hashlib
+import os
 import sys
+from typing import Any
 
 import yaml
 
@@ -20,11 +24,57 @@ ALLOWED_LABELS = ["sourced", "reported", "assumption", "policy"]
 # A quote from a source must stay short (copyright and readability).
 MAX_QUOTE_WORDS = 25
 
+# Content-addressed cache mapping SHA-256 digests of raw file bytes to parsed YAML objects.
+# Capped at 256 entries to prevent unbounded memory usage over long processes.
+# DECISION: A clear is simple and correct, and a few hundred distinct config contents is far more than one process uses.
+_YAML_CACHE_CAPACITY: int = 256
+_PARSED_BY_CONTENT: dict[str, Any] = {}
 
-def load_yaml(path):
-    """Read a YAML file into a plain dictionary."""
-    with open(path, encoding="utf-8") as yaml_file:
-        return yaml.safe_load(yaml_file)
+
+def load_yaml(path: str | os.PathLike[str]) -> Any:
+    """
+    WHAT: Reads a YAML file from disk, parses its contents into Python data structures, and returns a deep copy.
+
+    WHY: Repeatedly parsing YAML files across high-volume transaction evaluation is CPU-intensive. Caching parsed
+    structures keyed by the SHA-256 digest of raw file bytes (rather than path or modification time) ensures automatic,
+    exact cache invalidation across swapped paths or temporary test configs. Returning a deep copy guarantees every
+    caller receives an isolated, private mutable structure that cannot leak state mutations to other callers.
+    The cache is capped at 256 entries and cleared when full.
+
+    Args:
+        path: Path string or path-like object pointing to the YAML file on disk.
+
+    Returns:
+        A private deep copy of the parsed YAML structure (dictionary or list).
+
+    Raises:
+        FileNotFoundError: If the file does not exist at the given path.
+        yaml.YAMLError: If the file content contains invalid YAML syntax.
+
+    Example:
+        # data = load_yaml("config/world_ranges.yaml")
+    """
+    with open(path, "rb") as raw_file:
+        raw_bytes = raw_file.read()
+
+    digest = hashlib.sha256(raw_bytes).hexdigest()
+    if digest not in _PARSED_BY_CONTENT:
+        if len(_PARSED_BY_CONTENT) >= _YAML_CACHE_CAPACITY:
+            # DECISION: Clearing when full is simple and correct; a few hundred config variants exceeds normal usage.
+            _PARSED_BY_CONTENT.clear()
+        parsed = yaml.safe_load(raw_bytes.decode("utf-8"))
+        _PARSED_BY_CONTENT[digest] = parsed
+
+    return copy.deepcopy(_PARSED_BY_CONTENT[digest])
+
+
+def clear_yaml_cache() -> None:
+    """
+    WHAT: Clears all cached parsed YAML structures from the in-memory content cache.
+
+    WHY: Helper routine designed strictly for test harnesses to reset cache state between test isolation runs.
+    """
+    _PARSED_BY_CONTENT.clear()
 
 
 def find_labelled_blocks(data, path=""):

@@ -27,7 +27,7 @@ from world.fast_mode import FastRunSettings
 from world.interactive_records import FraudInputs, RunnerSettings
 from world.interactive_runner import run_interactive_world
 from world.run_identity import REPO_ROOT
-from world.truth_records import DeviceControlSpan, PaymentStory, RoleSpan, TruthFacts
+from world.truth_records import DeviceControlSpan, GangTruth, PaymentStory, RoleSpan, TruthFacts
 from world.truth_writer import write_truth_files
 
 # Tiny world configuration from frozen anchors.
@@ -58,7 +58,12 @@ def test_temporal_span_transitions_and_device_controllers(tmp_path: Path) -> Non
     account_id = "acc_person_000001"
     role_span = RoleSpan(account_id, "mule", "gang_alpha", 1, 1440, 2880)
     dev_span = DeviceControlSpan("dev_takeover_01", account_id, "gang_alpha", 1440, 2880, False, False, False, False)
-    truth = TruthFacts(roles=(role_span,), device_control=(dev_span,))
+    # Since truth-v2 every gang in roles needs a gang truth row (Level 12g C5).
+    truth = TruthFacts(
+        roles=(role_span,),
+        device_control=(dev_span,),
+        gangs=(GangTruth("gang_alpha", None, "seen", ()),),
+    )
 
     # 2. Run simulation, write truth files, and initialize TruthStore via load_truth.
     output = run_interactive_world(
@@ -220,10 +225,14 @@ def test_origin_round_trips_through_writer_and_loader(tmp_path: Path) -> None:
     Writes mule spans with and without an origin, loads them back, and checks origin_at returns the origin only
     inside the active span, None for a mule without one, and None for a non-mule account.
     """
-    truth = TruthFacts(roles=(
-        RoleSpan("acc_person_000001", "mule", "gang_alpha", 1, 1440, 2880, "borrowed_kyc"),
-        RoleSpan("acc_person_000002", "mule", "gang_alpha", 2, 1440, None),
-    ))
+    # Since truth-v2 every gang in roles needs a gang truth row (Level 12g C5).
+    truth = TruthFacts(
+        roles=(
+            RoleSpan("acc_person_000001", "mule", "gang_alpha", 1, 1440, 2880, "borrowed_kyc"),
+            RoleSpan("acc_person_000002", "mule", "gang_alpha", 2, 1440, None),
+        ),
+        gangs=(GangTruth("gang_alpha", None, "seen", ()),),
+    )
     output = run_interactive_world(
         TINY, RunnerSettings(fraud_enabled=True), FraudInputs(truth=truth), code_version=TEST_CODE_VERSION
     )

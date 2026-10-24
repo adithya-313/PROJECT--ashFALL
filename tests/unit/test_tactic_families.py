@@ -113,8 +113,9 @@ def test_held_out_names_match_evaluation_yaml() -> None:
     """
     families = load_families()
     evaluation = load_yaml(EVALUATION_PATH)["held_out_tactics"]
-    # The two files must agree about which tactics are held out.
-    assert set(families["held_out"]) == set(evaluation["tactics"])
+    # Under amendment A-025, catalogue held-out matches active tactics union deferred names.
+    expected_held_out = set(evaluation["tactics"]) | {d["name"] for d in evaluation.get("deferred", [])}
+    assert set(families["held_out"]) == expected_held_out
     # The training tactic named in evaluation.yaml must be a real training family.
     for name in evaluation["kept_in_training"]:
         assert name in families["training"], name

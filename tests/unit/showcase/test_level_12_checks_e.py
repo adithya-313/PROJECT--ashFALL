@@ -48,7 +48,7 @@ def assert_timeline_chart(chart: dict[str, Any] | None) -> None:
 def test_level_12_part_e_checks_match_the_brief() -> None:
     """
     WHAT: Verifies that Level 12 exports 5 checks with part 'e', named 21 to 25 in order with kinds normal, edge,
-    edge, edge, normal, that validate_checks passes across all 30 checks, and that no precondition is missing.
+    edge, edge, normal, that validate_checks passes across all 37 checks, and that no precondition is missing.
     WHY: Enforces the showcase framework contract and the order the brief gives for part e.
     Args:
         None.
@@ -58,7 +58,7 @@ def test_level_12_part_e_checks_match_the_brief() -> None:
         test_level_12_part_e_checks_match_the_brief()
     """
     all_checks = level_12.get_checks(quick=True)
-    assert len(all_checks) == 30
+    assert len(all_checks) == 37
     part_e_checks = [check for check in all_checks if check.part == "e"]
     assert len(part_e_checks) == 5
     assert [check.kind for check in part_e_checks] == ["normal", "edge", "edge", "edge", "normal"]

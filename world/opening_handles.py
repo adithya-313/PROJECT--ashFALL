@@ -199,7 +199,14 @@ def resolve_opening_handles(
         dataclasses.replace(span, account_id=str(_real_id(span.account_id, assigned_ids)))
         for span in fraud_inputs.truth.device_control
     )
-    truth = TruthFacts(roles=roles, device_control=device_control, payment_stories=fraud_inputs.truth.payment_stories)
+    # gangs=fraud_inputs.truth.gangs passes gang truth records through so tags do not vanish
+    # for gangs that open accounts
+    truth = TruthFacts(
+        roles=roles,
+        device_control=device_control,
+        payment_stories=fraud_inputs.truth.payment_stories,
+        gangs=fraud_inputs.truth.gangs,
+    )
     device_events = tuple(
         dataclasses.replace(event, account_id=_real_id(event.account_id, assigned_ids))
         for event in fraud_inputs.gang_device_events

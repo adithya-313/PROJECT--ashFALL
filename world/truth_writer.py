@@ -20,6 +20,7 @@ TERM: JSON line: a single record written as compact JSON text with sorted keys, 
 import hashlib
 import json
 from collections.abc import Mapping
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -127,7 +128,7 @@ def _build_payment_story_rows(result: Any, truth: TruthFacts) -> list[dict[str, 
 def build_truth_rows(output: InteractiveWorldOutput) -> dict[str, list[dict[str, Any]]]:
     """
     WHAT: Assembles dictionaries representing records to write into roles.jsonl, device_control.jsonl,
-    and payment_stories.jsonl from an interactive simulation run using output.result.truth. Validates that
+    payment_stories.jsonl, and gangs.jsonl from an interactive simulation run using output.result.truth. Validates that
     all truth account IDs exist in the world's ledgers and that fraud events have payment stories.
 
     WHY: Decouples record structuring and semantic integrity validation from disk serialization.
@@ -138,7 +139,7 @@ def build_truth_rows(output: InteractiveWorldOutput) -> dict[str, list[dict[str,
         output: InteractiveWorldOutput containing simulation ledgers, events, and identifiers.
 
     Returns:
-        Dictionary mapping artifact keys ('roles', 'device_control', 'payment_stories') to row lists.
+        Dictionary mapping artifact keys ('roles', 'device_control', 'payment_stories', 'gangs') to row lists.
 
     Raises:
         ValueError: If a truth account ID is not in ledgers or fraud events lack payment stories.
@@ -160,7 +161,7 @@ def build_truth_rows(output: InteractiveWorldOutput) -> dict[str, list[dict[str,
             "fraud cannot be written without stories."
         )
 
-    # 3. Format roles, device control, and sequential transaction story rows.
+    # 3. Format roles, device control, gangs, and sequential transaction story rows.
     roles_rows = [
         {"account_id": role_span.account_id, "active_from": role_span.active_from,
          "burned_from": role_span.burned_from, "depth": role_span.depth, "gang_id": role_span.gang_id,
@@ -175,9 +176,15 @@ def build_truth_rows(output: InteractiveWorldOutput) -> dict[str, list[dict[str,
          "valid_from": device_span.valid_from, "valid_to": device_span.valid_to}
         for device_span in active_truth.device_control
     ]
+    gangs_rows = [asdict(g) for g in active_truth.gangs]
     story_rows = _build_payment_story_rows(result, active_truth)
 
-    return {"device_control": device_control_rows, "payment_stories": story_rows, "roles": roles_rows}
+    return {
+        "device_control": device_control_rows,
+        "gangs": gangs_rows,
+        "payment_stories": story_rows,
+        "roles": roles_rows,
+    }
 
 
 def _write_single_truth_file(run_dir: Path, filename: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -215,8 +222,9 @@ def _write_single_truth_file(run_dir: Path, filename: str, rows: list[dict[str, 
 
 def write_truth_files(output: InteractiveWorldOutput, truth_root: Path) -> Path:
     """
-    WHAT: Writes roles.jsonl, device_control.jsonl, payment_stories.jsonl, and manifest.json into a run-specific
-    directory under truth_root using output.result.truth. Refuses to overwrite non-empty existing run directories.
+    WHAT: Writes roles.jsonl, device_control.jsonl, payment_stories.jsonl, gangs.jsonl, and manifest.json into
+    a run-specific directory under truth_root using output.result.truth. Refuses to overwrite non-empty
+    existing run directories.
 
     WHY: Ground rule 15 requires truth to be stored as discrete, append-only file artifacts with cryptographic
     digests. Refusing non-empty folders prevents accidental corruption of previous evaluation records.
@@ -230,6 +238,7 @@ def write_truth_files(output: InteractiveWorldOutput, truth_root: Path) -> Path:
 
     Raises:
         FileExistsError: If truth_root / run_id already exists and contains any files or directories.
+        ValueError: If roles and gang truth records disagree.
 
     Example:
         # run_dir = write_truth_files(output, Path("runs/truth"))
@@ -248,10 +257,20 @@ def write_truth_files(output: InteractiveWorldOutput, truth_root: Path) -> Path:
     truth_config = load_yaml(REPO_ROOT / "config" / "truth_store.yaml")["truth_store"]
     file_names = truth_config["file_names"]
 
+    # Validate that every gang_id in roles has a gangs row, and every gangs row has at least one role.
+    roles_gang_ids = {role["gang_id"] for role in rows_by_file["roles"]}
+    gangs_gang_ids = {gang["gang_id"] for gang in rows_by_file["gangs"]}
+    for gang_id in sorted(roles_gang_ids):
+        if gang_id not in gangs_gang_ids:
+            raise ValueError(f"Gang '{gang_id}' appears in roles but has no gang truth record.")
+    for gang_id in sorted(gangs_gang_ids):
+        if gang_id not in roles_gang_ids:
+            raise ValueError(f"Gang '{gang_id}' has a gang truth record but no roles in the truth store.")
+
     # 3. Write each JSON Lines artifact and gather manifest entries.
     file_manifests = {
         file_names[key]: _write_single_truth_file(run_dir, file_names[key], rows_by_file[key])
-        for key in ("roles", "device_control", "payment_stories")
+        for key in ("roles", "device_control", "payment_stories", "gangs")
     }
 
     # 4. Write manifest.json recording simulation metadata, code version, and file checksums.

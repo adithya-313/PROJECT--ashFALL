@@ -48,18 +48,19 @@ truth_store:
   #   or different layout are never read as if they matched.
   #
   # Example
-  #   The folder for run 66db9aa439b092ee must say "truth-v1" in its manifest.
+  #   The folder for run 66db9aa439b092ee must say "truth-v2" in its manifest.
   #
   # Source: evaluation/truth.py (load_truth).
   # ---------------------------------------------------------------------
-  format: "truth-v1"
+  format: "truth-v2"
   # ---------------------------------------------------------------------
-  # file_names: what the four files in each run's truth folder are called
+  # file_names: what the five files in each run's truth folder are called
   #
   # The idea
   #   roles.jsonl            who is a mule, victim, collector or cash-out, and when
   #   device_control.jsonl   which gang device controlled which account, and when
   #   payment_stories.jsonl  for each gang payment: which gang, which step, why
+  #   gangs.jsonl            which gang syndicate is seen or held-out, its family and options
   #   manifest.json          a fingerprint (SHA-256) and row count for each file,
   #                          so any edit to a file is noticed when it is loaded
   #   Each folder is named after the run id; one line per record (JSON lines).
@@ -70,8 +71,9 @@ truth_store:
     roles: "roles.jsonl"
     device_control: "device_control.jsonl"
     payment_stories: "payment_stories.jsonl"
+    gangs: "gangs.jsonl"
     manifest: "manifest.json"
-  file_names_reason: "Four separate truth-v1 artifacts capturing account roles, device control spans, transaction stories, and a cryptographic integrity manifest."
+  file_names_reason: "Five separate truth-v2 artifacts capturing account roles, device control spans, transaction stories, gang syndicate classifications, and a cryptographic integrity manifest."
   # ---------------------------------------------------------------------
   # roles: the labels an account can carry inside a span
   #

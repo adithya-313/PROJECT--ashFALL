@@ -22,8 +22,10 @@ import numpy as np
 
 from core.config_validator import load_yaml
 from world.gang_config import GangConfig, gang_config_from_plain
+from world.held_out_options import load_exempt_splits
 from world.run_identity import REPO_ROOT, load_runner_config
-from world.tactic_families import load_tactic_families
+from world.tactic_config import load_tactic_blocks
+from world.tactic_families import load_evaluation_config, load_tactic_families
 from world.world_configs import read_world_configs
 from world.world_sampler import WorldSpec, key_parameter_range
 
@@ -51,10 +53,12 @@ def load_gang_mix_config(path: Path | None = None) -> dict[str, Any]:
 
 def validate_gang_mix_config(mix_cfg: dict[str, Any], training_families: set[str]) -> None:
     """
-    WHAT: Refuses a gang mix config whose held-out generation is not false, whose spread is outside (0, 1], whose
-    ranges are not ordered whole numbers, or whose family rules name a family that is not a training family.
+    WHAT: Validates gang mix configuration: spread in (0, 1], ranges are ordered integers >= 1,
+    family rules cite valid training families, and if held_out_gang is configured, held_out_gang.splits
+    is a subset of exempt splits and slow_drip_victims_per_receiving_mule is ordered integers >= 1.
 
-    WHY: A held-out tag on training behaviour would be a false label, so the guard fails loudly instead of tagging.
+    WHY: A held-out tag on training behaviour would be a false label, so the guard fails loudly.
+    Held-out gangs must be restricted to exempt evaluation splits per amendment A-025.
 
     Args:
         mix_cfg: The gang_mix dictionary.
@@ -63,8 +67,22 @@ def validate_gang_mix_config(mix_cfg: dict[str, Any], training_families: set[str
     Raises:
         ValueError: With a message naming the problem.
     """
-    if mix_cfg["held_out_generation"]["value"] is not False:
-        raise ValueError("held_out_generation must be false: held-out families have no building blocks yet")
+    if "held_out_gang" in mix_cfg and "splits" in mix_cfg["held_out_gang"]:
+        exempt_splits = set(load_exempt_splits())
+        configured_splits = set(mix_cfg["held_out_gang"]["splits"])
+        if not configured_splits.issubset(exempt_splits):
+            raise ValueError(
+                f"held_out_gang.splits {sorted(configured_splits)} must be a subset of "
+                f"exempt splits {sorted(exempt_splits)}"
+            )
+        if "slow_drip_victims_per_receiving_mule" in mix_cfg["held_out_gang"]:
+            low_v, high_v = mix_cfg["held_out_gang"]["slow_drip_victims_per_receiving_mule"]["range"]
+            if not (isinstance(low_v, int) and isinstance(high_v, int) and 1 <= low_v <= high_v):
+                raise ValueError(
+                    f"slow_drip_victims_per_receiving_mule range must be ordered whole numbers of at least 1, "
+                    f"got [{low_v}, {high_v}]"
+                )
+
     spread = mix_cfg["spread_share_of_range"]["value"]
     if not 0.0 < spread <= 1.0:
         raise ValueError(f"spread_share_of_range must be above 0 and at most 1, got {spread}")
@@ -181,10 +199,11 @@ def generate_gang_mix(
     """
     WHAT: Builds the world's gangs: spec's gang_count gangs, each drawing layers, dwell, devices, victims per receiving
     mule, receiving mules and start day around the spec's centres, with a family from the committed rules. Refuses the
-    mix when its mules and victims exceed the people the world has.
+    mix when its mules and victims exceed the people the world has. Test and stress worlds replace their last gang with
+    a held-out family variant (Level 12g, A-025).
 
     WHY: Gangs differ within a world but stay near its centre, and a world that cannot supply the people is refused
-    loudly, never shrunk silently. Building through gang_config_from_plain applies every existing validator.
+    loudly, never shrunk silently. Test and stress worlds evaluate generalisation on active held-out evasions.
 
     Args:
         spec: The planned world.
@@ -197,7 +216,8 @@ def generate_gang_mix(
         The GangConfig of each gang, in order.
 
     Raises:
-        ValueError: If a family is not a training family, held-out generation is on, or the world lacks the people.
+        ValueError: If a family is not a training family, if gang_count < 2 in a test/stress split,
+            or if the world lacks the people needed for its gangs.
     """
     families = load_tactic_families()
     validate_gang_mix_config(mix_cfg, set(families["training"]))
@@ -227,6 +247,75 @@ def generate_gang_mix(
         start_days.append(int(rng.integers(low_day, high_day, endpoint=True)))
         drawn_gangs.append(drawn)
 
+    gang_count = len(drawn_gangs)
+    held_out_splits = mix_cfg.get("held_out_gang", {}).get("splits", [])
+    is_held_out_split = bool(mix_cfg.get("held_out_generation", {}).get("value")) and (spec.split in held_out_splits)
+
+    held_out_plain: dict[str, Any] | None = None
+    if is_held_out_split:
+        if gang_count < 2:
+            raise ValueError(
+                f"spec split '{spec.split}' requires at least 2 gangs to include a held-out gang, got {gang_count}"
+            )
+        eval_cfg = load_evaluation_config()
+        active_families = sorted(eval_cfg["held_out_tactics"]["tactics"])
+        fam_idx = int(rng.integers(0, len(active_families)))
+        chosen_family = active_families[fam_idx]
+
+        tactic_blocks = load_tactic_blocks()
+        blocks_dict = tactic_blocks["tactic_blocks"]["blocks"]
+        last_drawn = drawn_gangs[-1]
+        last_index = gang_count - 1
+
+        base_plain = _gang_plain(
+            last_index, last_drawn, start_days[last_index] * MINUTES_PER_DAY, None, mix_cfg["budget"]
+        )
+
+        if chosen_family == "slow_drip":
+            route_params = blocks_dict["route"]["parameters"]
+            p_low, p_high = route_params["drip_piece_max_inr"]["range"]
+            s_low, s_high = route_params["drip_spread_days"]["range"]
+            h_low, h_high = route_params["drip_hold_minutes"]["range"]
+            v_low, v_high = mix_cfg["held_out_gang"]["slow_drip_victims_per_receiving_mule"]["range"]
+
+            drip_piece_max_inr = int(rng.integers(p_low, p_high, endpoint=True))
+            drip_spread_days = int(rng.integers(s_low, s_high, endpoint=True))
+            drip_hold_minutes = int(rng.integers(h_low, h_high, endpoint=True))
+            drip_victims = int(rng.integers(v_low, v_high, endpoint=True))
+
+            last_drawn["victims"] = drip_victims
+
+            for step in base_plain["steps"]:
+                if step["block"] == "scam":
+                    step["params"]["victims_per_receiving_mule"] = drip_victims
+                elif step["block"] == "route":
+                    step["params"].pop("dwell_minutes", None)
+                    step["params"]["drip_piece_max_inr"] = drip_piece_max_inr
+                    step["params"]["drip_spread_days"] = drip_spread_days
+                    step["params"]["drip_hold_minutes"] = drip_hold_minutes
+
+            base_plain["family"] = "slow_drip"
+            held_out_plain = base_plain
+
+        elif chosen_family == "device_rotation":
+            tc_params = blocks_dict["take_control"]["parameters"]
+            r_low, r_high = tc_params["rotate_every_days"]["range"]
+            rot_low, rot_high = tc_params["rotations"]["range"]
+
+            rotate_every_days = int(rng.integers(r_low, r_high, endpoint=True))
+            rotations = int(rng.integers(rot_low, rot_high, endpoint=True))
+
+            for step in base_plain["steps"]:
+                if step["block"] == "take_control":
+                    step["params"].pop("devices", None)
+                    step["params"]["rotate_every_days"] = rotate_every_days
+                    step["params"]["rotations"] = rotations
+
+            base_plain["family"] = "device_rotation"
+            held_out_plain = base_plain
+        else:
+            raise ValueError(f"Unknown active held-out family: '{chosen_family}'")
+
     needed = 0
     for drawn in drawn_gangs:
         needed += drawn["layers"] * drawn["receiving_mules"] + drawn["receiving_mules"] * drawn["victims"]
@@ -237,9 +326,12 @@ def generate_gang_mix(
         )
 
     gangs: list[GangConfig] = []
-    for index in range(len(drawn_gangs)):
-        drawn = drawn_gangs[index]
-        family = family_for_gang(mix_cfg["family_rules"]["rules"], drawn["layers"])
-        plain = _gang_plain(index, drawn, start_days[index] * MINUTES_PER_DAY, family, mix_cfg["budget"])
-        gangs.append(gang_config_from_plain(plain))
+    for index in range(gang_count):
+        if is_held_out_split and index == gang_count - 1 and held_out_plain is not None:
+            gangs.append(gang_config_from_plain(held_out_plain))
+        else:
+            drawn = drawn_gangs[index]
+            family = family_for_gang(mix_cfg["family_rules"]["rules"], drawn["layers"])
+            plain = _gang_plain(index, drawn, start_days[index] * MINUTES_PER_DAY, family, mix_cfg["budget"])
+            gangs.append(gang_config_from_plain(plain))
     return tuple(gangs)

@@ -84,6 +84,17 @@ gang_mix:
     reason: "A route of several layers is the layered_chain definition; a single layer is the fast pass-through. No other family describes what a generated gang does."
 
   held_out_generation:
-    value: false
+    value: true
     label: policy
-    reason: "Held-out families have no building blocks yet (A-017: checked by name only; route dividing lines apply in every split), so a held-out tag would sit on training behaviour; owner level for real held-out mechanisms is undecided."
+    reason: "Test and stress worlds get one held-out gang, so held-out results exist per family; training and validation worlds never do (Level 12g, A-025)."
+
+  held_out_gang:
+    label: policy
+    reason: "Governs held-out gang generation for test and stress worlds per Level 12g brief and amendment A-025."
+    issue_ids_v2: [12-8]
+    derived_from: "Level 12g brief; amendment A-025"
+    splits: [test, stress]
+    slow_drip_victims_per_receiving_mule:
+      range: [1, 3]
+      label: assumption
+      reason: "Few victims keep a slow-drip stream small; the piece cap is set from the measured maximum (Level 12g C11)."

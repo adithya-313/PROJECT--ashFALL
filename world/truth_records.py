@@ -153,11 +153,68 @@ class PaymentStory:
             raise ValueError(f"PaymentStory scam_step '{self.scam_step}' must be one of {SCAM_STEPS}")
 
 
+GANG_KINDS: tuple[str, str] = ("seen", "held_out")
+
+
+@dataclass(frozen=True)
+class GangTruth:
+    """
+    WHAT: Categorical ground truth classification record tagging an illicit syndicate as seen or held-out.
+    It encapsulates the syndicate identifier, tactical family name, taxonomic kind, and configured held-out options.
+
+    WHY: Level 12g requires evaluation benchmarks to evaluate detection generalization against unseen tactics
+    by verifying syndicate classifications directly against executed tactical options rather than arbitrary labels.
+
+    Args:
+        gang_id: Identifier of the gang syndicate.
+        family: Tactical family classification string, or None for untagged syndicates.
+        kind: Taxonomic category string, must be 'seen' or 'held_out'.
+        held_out_options: Sorted tuple of 'block.parameter' strings for all active held-out options.
+
+    Returns:
+        A frozen GangTruth record.
+
+    Raises:
+        ValueError: If kind is unknown, if kind is 'held_out' without held_out_options,
+            or if kind is 'seen' with held_out_options.
+
+    Example:
+        # gt = GangTruth("g1", "slow_drip", "held_out", ("route.drip_piece_max_inr",))
+    """
+
+    gang_id: str
+    family: str | None
+    kind: str
+    held_out_options: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        """
+        WHAT: Validates non-empty identifiers, taxonomic category membership, and held-out options consistency.
+        WHY: Prevents malformed or contradictory syndicate truth specifications from entering ground truth records.
+        """
+        if not self.gang_id:
+            raise ValueError("GangTruth gang_id must be a non-empty string.")
+        if self.family is not None and not self.family:
+            raise ValueError(f"Gang '{self.gang_id}' family must be None or a non-empty string.")
+        if self.kind not in GANG_KINDS:
+            raise ValueError(f"Gang '{self.gang_id}' kind '{self.kind}' must be one of {GANG_KINDS}.")
+        if tuple(sorted(set(self.held_out_options))) != self.held_out_options:
+            raise ValueError(
+                f"Gang '{self.gang_id}' held_out_options must be sorted with no duplicates: {self.held_out_options}."
+            )
+        if self.kind == "held_out" and not self.held_out_options:
+            raise ValueError(f"Gang '{self.gang_id}' kind 'held_out' requires held-out options, got none.")
+        if self.kind == "seen" and self.held_out_options:
+            raise ValueError(
+                f"Gang '{self.gang_id}' kind 'seen' cannot possess held-out options: {self.held_out_options}."
+            )
+
+
 @dataclass(frozen=True)
 class TruthFacts:
     """
     WHAT: Container holding all hidden truth assertions provided to a simulation run.
-    Groups account role spans, device control spans, and transaction forensic payment stories.
+    Groups account role spans, device control spans, transaction stories, and syndicate classifications.
 
     WHY: Packages pre-configured or tactic-generated truth facts into a single immutable payload
     embedded inside FraudInputs for runner consumption and truth store generation.
@@ -166,17 +223,19 @@ class TruthFacts:
         roles: Sequence of account role validity spans across simulation time.
         device_control: Sequence of device takeover and hardware control spans.
         payment_stories: Sequence of transaction narratives corresponding to injected fraud payments.
+        gangs: Sequence of GangTruth syndicate records classifying each gang as seen or held-out.
 
     Returns:
         A frozen TruthFacts collection.
 
     Example:
-        TruthFacts(roles=(role_span,), device_control=(dev_span,), payment_stories=(story,))
+        TruthFacts(roles=(role_span,), device_control=(dev_span,), payment_stories=(story,), gangs=())
     """
 
     roles: tuple[RoleSpan, ...] = ()
     device_control: tuple[DeviceControlSpan, ...] = ()
     payment_stories: tuple[PaymentStory, ...] = ()
+    gangs: tuple[GangTruth, ...] = ()
 
 
 def load_truth_config(path: Path = TRUTH_CONFIG_PATH) -> dict[str, Any]:
