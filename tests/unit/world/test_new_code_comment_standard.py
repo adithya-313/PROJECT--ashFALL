@@ -268,10 +268,13 @@ NEW_CODE_FILES: list[str] = [
     "tests/unit/world/test_gang_truth.py",
     # Level 12g Round 3a YAML content cache test suite.
     "tests/unit/test_config_yaml_cache.py",
+    # Level 12g Round 3b held-out mechanisms test suite.
+    "tests/unit/test_held_out_mechanisms.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
     ("world/amounts.py", "lookalike_small_amount_paise"),
+    ("world/tactic_families.py", "check_held_out_mechanisms"),
     # Level 12a showcase --part option helpers added to older showcase files.
     ("showcase/framework.py", "select_part_checks"),
     ("showcase/__main__.py", "check_part_argument"),

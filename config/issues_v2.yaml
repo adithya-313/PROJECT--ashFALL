@@ -321,9 +321,10 @@ issues:
     origin: revision_2
     status: partial
     levels: [12]
-    parts: [12a, 12d]
+    parts: [12a, 12d, 12g]
     evidence:
       - {kind: amendment, id: A-014}
+      - {kind: amendment, id: A-025}
       - {kind: config, file: config/tactic_families.yaml, name: tactic_families}
       - {kind: test, file: tests/unit/test_tactic_families.py, name: test_held_out_names_match_evaluation_yaml}
       - {kind: test, file: tests/unit/world/test_tactic_config.py, name: test_dividing_lines_resolve_to_world_ranges_bounds_dynamically}

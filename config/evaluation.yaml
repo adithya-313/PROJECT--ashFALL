@@ -354,11 +354,22 @@ genuine_harm:
 #   Full definitions: config/tactic_families.yaml.
 #
 # Source: decisions doc D5 and amendment A-014.
-# ---------------------------------------------------------------------
+# Active held-out tactics are evaluated in test and stress worlds.
+# Deferred tactics are recorded with explicit reasons, return conditions,
+# and amendment citations until their infrastructure is implemented.
 held_out_tactics:
   label: policy
   used_only_in: [test_worlds, stress_worlds]
-  tactics: [slow_drip, device_rotation, pseudo_merchant_camouflage, fake_routine_life]
+  tactics: [slow_drip, device_rotation]
+  deferred:
+    - name: fake_routine_life
+      reason: "Needs a gang payer funding path, a gang-opened-only target origin and new truth fields; building it changes how money enters every world, training worlds included."
+      returns_when: "A gang payer funding path exists that keeps gang money separate from fixture money; picked up in Level 29 (failure finder) or Tier 2, whichever comes first."
+      amendment: A-025
+    - name: pseudo_merchant_camouflage
+      reason: "Needs convincing merchant traffic and costs the most to build (Level 12g brief)."
+      returns_when: "Convincing merchant traffic exists; picked up in Level 29 (failure finder) or Tier 2, whichever comes first."
+      amendment: A-025
   kept_in_training: [basic_merchant_mule]
   reason: Each held-out tactic attacks one signal family, so a failure shows which signal is fragile.
 

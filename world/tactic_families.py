@@ -12,12 +12,14 @@ TERM: held-out family: an evasion tactic reserved exclusively for test and stres
 TERM: training family: a tactic typology permitted in training and validation simulation worlds.
 """
 
+import sys
 from pathlib import Path
 from typing import Any, Sequence
 
 from core.config_validator import load_yaml
 from world.gang_config import GangConfig
 from world.run_identity import REPO_ROOT
+from world.tactic_config import load_tactic_blocks
 
 FAMILIES_PATH: Path = REPO_ROOT / "config" / "tactic_families.yaml"
 EVALUATION_PATH: Path = REPO_ROOT / "config" / "evaluation.yaml"
@@ -70,11 +72,12 @@ def check_family_lists_agree(
 ) -> None:
     """
     WHAT: Cross-validates tactic family catalogues against the pre-registered evaluation policy.
-    Asserts that held-out names in config/tactic_families.yaml match held_out_tactics.tactics in
-    config/evaluation.yaml, and enforces that no family name appears in both training and held-out lists.
+    Asserts that catalogue held-out names equal active tactics union deferred names, that active
+    and deferred lists are disjoint, that catalogue statuses match, and that training and held-out
+    lists do not overlap.
 
-    WHY: Ground rule 17 and amendment A-014 require held-out evasions to be pre-registered and strictly
-    disjoint from training typologies so models cannot be evaluated on training tactics disguised as held-out.
+    WHY: Ground rule 17 and amendments A-014 / A-025 require held-out evasions and deferrals to be
+    explicitly pre-registered, catalogued, and disjoint from training typologies.
 
     Args:
         families: Dictionary loaded from config/tactic_families.yaml.
@@ -84,7 +87,7 @@ def check_family_lists_agree(
         None.
 
     Raises:
-        ValueError: If held-out tactic lists disagree or if any family name overlaps between training and held-out.
+        ValueError: If held-out tactic lists disagree, overlap, or status does not match.
 
     Example:
         check_family_lists_agree(load_tactic_families(), load_evaluation_config())
@@ -100,19 +103,168 @@ def check_family_lists_agree(
 
     held_out_names = set(families["held_out"].keys())
     training_names = set(families["training"].keys())
-    eval_held_out = set(evaluation["held_out_tactics"]["tactics"])
+    active_tactics = set(evaluation["held_out_tactics"]["tactics"])
+    deferred_items = evaluation["held_out_tactics"].get("deferred", [])
+    deferred_names = {item["name"] if isinstance(item, dict) else item for item in deferred_items}
 
-    if held_out_names != eval_held_out:
+    # 1. tactics and deferred are disjoint
+    disjoint_overlap = active_tactics & deferred_names
+    if disjoint_overlap:
         raise ValueError(
-            f"Held-out tactics lists disagree: tactic_families has {sorted(held_out_names)}, "
-            f"evaluation.yaml has {sorted(eval_held_out)}."
+            f"Active tactics and deferred lists are not disjoint: {sorted(disjoint_overlap)}."
         )
 
+    # 2. the catalogue's held-out names == tactics ∪ deferred names
+    expected_held_out = active_tactics | deferred_names
+    if held_out_names != expected_held_out:
+        raise ValueError(
+            f"Held-out tactics lists disagree: tactic_families has {sorted(held_out_names)}, "
+            f"evaluation.yaml has {sorted(expected_held_out)}."
+        )
+
+    # 3. each name's status in the catalogue matches the list it is in
+    for name in active_tactics:
+        cat_item = families["held_out"].get(name, {})
+        status = cat_item.get("status") if isinstance(cat_item, dict) else None
+        if status != "active":
+            raise ValueError(
+                f"Held-out family '{name}' is in active tactics list but has status '{status}' in catalogue."
+            )
+
+    for name in deferred_names:
+        cat_item = families["held_out"].get(name, {})
+        status = cat_item.get("status") if isinstance(cat_item, dict) else None
+        if status != "deferred":
+            raise ValueError(
+                f"Held-out family '{name}' is in deferred list but has status '{status}' in catalogue."
+            )
+
+    # 4. keep existing training/held-out overlap check
     overlap = held_out_names & training_names
     if overlap:
         raise ValueError(
             f"Family name cannot be both training and held-out: {sorted(overlap)}."
         )
+
+
+def check_held_out_mechanisms(
+    families: dict[str, Any],
+    evaluation: dict[str, Any],
+    blocks: dict[str, Any],
+) -> list[str]:
+    """
+    WHAT: Enforces that active held-out families have implementing block options, deferred families
+    have none and cite valid amendments, and returns formatted status lines for each family.
+
+    WHY: Level 12g (amendment A-025) requires mechanism-level checks ensuring that active held-out
+    tactics possess concrete implementations in tactic_blocks.yaml while deferred tactics remain unbuilt.
+
+    Args:
+        families: Dictionary parsed from config/tactic_families.yaml.
+        evaluation: Dictionary parsed from config/evaluation.yaml.
+        blocks: Dictionary parsed from config/tactic_blocks.yaml.
+
+    Returns:
+        List of formatted status strings for each held-out family.
+
+    Raises:
+        ValueError: If active family has no block option, if marker names inactive family,
+            if deferred family has block options, or if deferred metadata is invalid.
+
+    Example:
+        lines = check_held_out_mechanisms(fams, eval_cfg, blocks)
+    """
+    if "held_out" not in families:
+        raise ValueError("tactic_families block is missing 'held_out' key")
+    if "held_out_tactics" not in evaluation:
+        raise ValueError("evaluation config is missing 'held_out_tactics' key")
+    if "tactics" not in evaluation["held_out_tactics"]:
+        raise ValueError("evaluation config is missing 'held_out_tactics.tactics' key")
+
+    held_out_cat = families["held_out"]
+    active_names = set(evaluation["held_out_tactics"]["tactics"])
+    deferred_items = evaluation["held_out_tactics"].get("deferred", [])
+    deferred_map: dict[str, dict[str, Any]] = {}
+    for item in deferred_items:
+        if isinstance(item, dict) and "name" in item:
+            deferred_map[str(item["name"])] = item
+
+    # Gather block options with held_out_family marker
+    blocks_dict = blocks
+    if "tactic_blocks" in blocks_dict and isinstance(blocks_dict["tactic_blocks"], dict):
+        blocks_dict = blocks_dict["tactic_blocks"]
+    if "blocks" in blocks_dict and isinstance(blocks_dict["blocks"], dict):
+        blocks_dict = blocks_dict["blocks"]
+    family_options: dict[str, list[str]] = {name: [] for name in held_out_cat}
+
+    for block_name, block_def in sorted(blocks_dict.items()):
+        if not isinstance(block_def, dict):
+            continue
+        params = block_def.get("parameters", {})
+        if not isinstance(params, dict):
+            continue
+        for param_name, param_def in sorted(params.items()):
+            if isinstance(param_def, dict) and "held_out_family" in param_def:
+                target_family = str(param_def["held_out_family"])
+                if target_family not in active_names:
+                    raise ValueError(
+                        f"held_out_family marker on '{block_name}.{param_name}' names family "
+                        f"'{target_family}' which is not active"
+                    )
+                family_options.setdefault(target_family, []).append(f"{block_name}.{param_name}")
+
+    # 1. An active name with no option in tactic_blocks.yaml carrying held_out_family == that name -> ValueError
+    for name in sorted(active_names):
+        opts = family_options.get(name, [])
+        if not opts:
+            raise ValueError(
+                f"held-out family '{name}' is active but has no implementing block option; "
+                "a name without a mechanism fails"
+            )
+
+    # 2. A deferred name with any implementing option -> ValueError
+    for name in sorted(deferred_map.keys()):
+        opts = family_options.get(name, [])
+        if opts:
+            raise ValueError(
+                f"held-out family '{name}' is deferred but has implementing block option(s): {opts}; "
+                "it should be active"
+            )
+
+        # 3. Deferred item validation: reason, returns_when, amendment
+        item = deferred_map[name]
+        for field in ("reason", "returns_when", "amendment"):
+            val = item.get(field)
+            if not val or not str(val).strip():
+                raise ValueError(
+                    f"deferred held-out family '{name}' is missing required field '{field}'"
+                )
+
+        amendment_id = str(item["amendment"]).strip()
+        amendments_file = REPO_ROOT / "docs" / "research" / "amendments.md"
+        if not amendments_file.exists():
+            raise ValueError(f"amendments documentation not found at {amendments_file}")
+        content = amendments_file.read_text(encoding="utf-8")
+        headings = {line.strip() for line in content.splitlines() if line.startswith("## ")}
+        if f"## {amendment_id}" not in headings:
+            raise ValueError(
+                f"deferred held-out family '{name}' cites amendment '{amendment_id}' "
+                f"which does not appear as a '## {amendment_id}' heading in {amendments_file}"
+            )
+
+    # Build status lines
+    status_lines: list[str] = []
+    for name in sorted(held_out_cat.keys()):
+        if name in active_names:
+            opts_str = ", ".join(sorted(family_options[name]))
+            status_lines.append(f"{name}: ACTIVE — {opts_str}")
+        elif name in deferred_map:
+            item = deferred_map[name]
+            amend = item["amendment"]
+            reason = item["reason"]
+            status_lines.append(f"{name}: DEFERRED ({amend}) — {reason}")
+
+    return status_lines
 
 
 def validate_gang_families(
@@ -164,3 +316,18 @@ def validate_gang_families(
                 f"Gang '{gang.gang_id}' uses held-out family '{gang.family}', "
                 "which is allowed only in test and stress worlds."
             )
+
+
+if __name__ == "__main__":
+    try:
+        loaded_families = load_tactic_families()
+        loaded_evaluation = load_evaluation_config()
+        loaded_blocks = load_tactic_blocks()
+        check_family_lists_agree(loaded_families, loaded_evaluation)
+        lines = check_held_out_mechanisms(loaded_families, loaded_evaluation, loaded_blocks)
+        for output_line in lines:
+            print(output_line)
+        sys.exit(0)
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)

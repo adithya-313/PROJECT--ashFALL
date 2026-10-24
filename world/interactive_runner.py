@@ -76,8 +76,10 @@ from world.interactive_records import (
 from world.interactive_state import start_runner_state
 from world.payments import find_ledger_for_account
 from world.run_identity import REPO_ROOT, find_code_version, load_runner_config, make_payment_id, make_run_id
+from world.tactic_config import load_tactic_blocks
 from world.tactic_families import (
     check_family_lists_agree,
+    check_held_out_mechanisms,
     load_evaluation_config,
     load_tactic_families,
     validate_gang_families,
@@ -649,6 +651,7 @@ def run_interactive_world(
         if any(g.family is not None for g in gang_configs):
             eval_cfg = load_evaluation_config()
             check_family_lists_agree(families, eval_cfg)
+            check_held_out_mechanisms(families, eval_cfg, load_tactic_blocks())
             validate_gang_families(
                 gang_configs, family_guard_split(world_split, fast_settings.range_name), families=families
             )

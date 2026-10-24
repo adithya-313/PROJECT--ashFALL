@@ -52,9 +52,10 @@
 #                            what training worlds must never contain.
 #
 # Where the held-out LIST is owned
-#   config/evaluation.yaml (held_out_tactics). This file only describes each
-#   name, and a test fails if the two lists disagree. The held-out
-#   definitions are project design (typology row 8) and are NOT sourced.
+#   config/evaluation.yaml (held_out_tactics). The active and deferred lists
+#   live in evaluation.yaml. This file describes each name, and a test fails
+#   if the two lists disagree. The held-out definitions are project design
+#   (typology row 8) and are NOT sourced.
 #
 # Checked by: tests/unit/test_tactic_families.py and python -m core.config_validator config/tactic_families.yaml
 # =====================================================================
@@ -126,21 +127,27 @@ tactic_families:
   # from its nearest training family in one way only (see what_differs).
   held_out:
     slow_drip:
+      status: active
       definition: Money arrives and leaves in small amounts spread over days or weeks.
       nearest_training_family: fast_pass_through
       what_differs: Money arrives and leaves in small amounts spread over days or weeks, keeping dwell time and amounts inside the genuine range.
       forbidden_in_training: Any multi-day trickle routing.
     device_rotation:
+      status: active
       definition: Every mule account gets its own fresh device, retired and replaced on a schedule.
       nearest_training_family: shared_device_ring
       what_differs: Each account gets its own fresh device, retired and replaced on a schedule, so no device cluster forms.
       forbidden_in_training: Scheduled device replacement.
     pseudo_merchant_camouflage:
+      status: deferred
+      deferred_by: A-025
       definition: A business account mixes in made-up customer-like payments so it looks like a genuine shop.
       nearest_training_family: basic_merchant_mule
       what_differs: A business account mixes in fabricated customer-like payments that copy a genuine shop's amount and hour profile.
       forbidden_in_training: Business-account disguise blocks.
     fake_routine_life:
+      status: deferred
+      deferred_by: A-025
       definition: The gang makes up regular salary-like and bill-like payments on an account that has no real owner activity.
       nearest_training_family: rented_account_mule
       what_differs: The gang FABRICATES recurring salary-like and bill-like payments on an account with no real owner activity. A rented mule's routine is the real owner's.

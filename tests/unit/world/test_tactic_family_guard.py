@@ -67,7 +67,11 @@ def test_held_out_families_refused_in_training_worlds() -> None:
     families = load_tactic_families()
     eval_cfg = load_evaluation_config()
     held_out_names = sorted(families["held_out"].keys())
-    eval_held_out = sorted(eval_cfg["held_out_tactics"]["tactics"])
+    # Under amendment A-025, catalogue held-out matches active tactics union deferred names.
+    eval_held_out = sorted(
+        set(eval_cfg["held_out_tactics"]["tactics"])
+        | {d["name"] for d in eval_cfg["held_out_tactics"].get("deferred", [])}
+    )
     # The two lists must agree before we trust either for testing.
     assert held_out_names == eval_held_out, (
         f"tactic_families held_out {held_out_names} != evaluation.yaml {eval_held_out}"
