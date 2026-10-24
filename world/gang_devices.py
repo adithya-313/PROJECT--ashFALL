@@ -243,3 +243,177 @@ def build_gang_device_events(
                 events.append(GangDeviceEvent(take_control_minute, device.device_id, account_id, kind, device.platform, device.os_generation, device.fingerprint))
 
     return events
+
+
+def build_rotation_spans(
+    gang_id: str,
+    accounts: Sequence[str],
+    devices: Sequence[Device],
+    take_control_minute: int,
+    period_minutes: int,
+    rotations: int,
+    sim_swap: bool,
+    linked_number_switch: bool,
+    emulator: bool,
+    remote_access: bool,
+) -> list[DeviceControlSpan]:
+    """
+    WHAT: Synthesizes scheduled sequential device control intervals mapping each mule account to distinct handsets.
+    Each account receives an unbroken chain of control spans transitioning between replacement hardware generations,
+    closing each active span at the arrival minute of its successor device.
+
+    WHY: Level 12g device_rotation replaces shared device clusters with dedicated single-mule handsets that rotate
+    on a strict calendar interval, eliminating shared device signatures from forensic clustering.
+
+    Args:
+        gang_id: String identifier of the controlling gang syndicate.
+        accounts: Ordered sequence of citizen account identifiers acquired by the gang.
+        devices: Sequence of synthesized gang Device instances provisioned for all rotation generations.
+        take_control_minute: Simulation minute timestamp when the takeover block initiates.
+        period_minutes: Integer duration in simulation minutes between successive device replacements.
+        rotations: Integer count of scheduled hardware replacements per account.
+        sim_swap: Boolean indicating unauthorized SIM reissuance flag status.
+        linked_number_switch: Boolean indicating alteration of bank linked telephone number.
+        emulator: Boolean indicating transaction execution within a virtual emulated environment.
+        remote_access: Boolean indicating presence of remote screen control overlay software.
+
+    Returns:
+        List of DeviceControlSpan ground truth records ordered by generation and account.
+
+    Raises:
+        ValueError: If device count does not match the product of account count and total generations,
+            or if period_minutes is not positive.
+
+    Example:
+        # spans = build_rotation_spans("g1", ["acc_1"], devices, 1440, 10080, 2, True, False, False, False)
+        # assert len(spans) == 3 and spans[-1].valid_to is None
+    """
+    generations = rotations + 1
+    expected_devices = len(accounts) * generations
+    if len(devices) != expected_devices:
+        raise ValueError(
+            f"Gang '{gang_id}' requires {expected_devices} devices for {rotations} rotations across "
+            f"{len(accounts)} accounts, got {len(devices)}."
+        )
+    if period_minutes <= 0:
+        raise ValueError(f"Gang '{gang_id}' period_minutes must be positive, got {period_minutes}.")
+
+    spans: list[DeviceControlSpan] = []
+    num_accounts = len(accounts)
+    for g in range(generations):
+        valid_from = take_control_minute + g * period_minutes
+        valid_to = None if g == rotations else take_control_minute + (g + 1) * period_minutes
+        for j, account_id in enumerate(accounts):
+            device = devices[g * num_accounts + j]
+            span = DeviceControlSpan(
+                device_id=device.device_id,
+                account_id=account_id,
+                gang_id=gang_id,
+                valid_from=valid_from,
+                valid_to=valid_to,
+                sim_swap=sim_swap,
+                linked_number_switch=linked_number_switch,
+                emulator=emulator,
+                remote_access=remote_access,
+            )
+            spans.append(span)
+
+    return spans
+
+
+def build_rotation_events(
+    accounts: Sequence[str],
+    devices: Sequence[Device],
+    take_control_minute: int,
+    period_minutes: int,
+    rotations: int,
+    sim_swap: bool,
+    linked_number_switch: bool,
+    emulator: bool,
+    remote_access: bool,
+) -> list[GangDeviceEvent]:
+    """
+    WHAT: Generates client-side telemetry events for scheduled device replacements across rotation generations.
+    At each generation start, emits a device_acquired event for every provisioned handset alongside active compromise
+    flag signals for its assigned mule account.
+
+    WHY: Level 12g device_rotation generates staggered telemetry streams reflecting periodic hardware acquisition
+    and account binding events across simulation time, mirroring operational security rotation in syndicates.
+
+    Args:
+        accounts: Ordered sequence of citizen account identifiers controlled by the gang.
+        devices: Sequence of synthesized gang Device instances provisioned for all rotation generations.
+        take_control_minute: Simulation minute timestamp when the takeover block initiates.
+        period_minutes: Integer duration in simulation minutes between successive device replacements.
+        rotations: Integer count of scheduled hardware replacements per account.
+        sim_swap: Boolean indicating SIM swap status.
+        linked_number_switch: Boolean indicating registered telephone alteration.
+        emulator: Boolean indicating virtual emulator execution.
+        remote_access: Boolean indicating remote control session.
+
+    Returns:
+        List of GangDeviceEvent telemetry records ordered chronologically by generation minute.
+
+    Raises:
+        ValueError: If device count does not match the product of account count and total generations,
+            or if period_minutes is not positive.
+
+    Example:
+        # events = build_rotation_events(["acc_1"], devices, 1440, 10080, 2, True, False, False, False)
+        # assert len([e for e in events if e.kind == "device_acquired"]) == 3
+    """
+    generations = rotations + 1
+    num_accounts = len(accounts)
+    expected_devices = num_accounts * generations
+    if len(devices) != expected_devices:
+        raise ValueError(
+            f"Expected {expected_devices} devices for {rotations} rotations across "
+            f"{num_accounts} accounts, got {len(devices)}."
+        )
+    if period_minutes <= 0:
+        raise ValueError(f"period_minutes must be positive, got {period_minutes}.")
+
+    flags = [
+        (sim_swap, "sim_swap"),
+        (linked_number_switch, "linked_number_switch"),
+        (emulator, "emulator_enabled"),
+        (remote_access, "remote_access_enabled"),
+    ]
+
+    events: list[GangDeviceEvent] = []
+    for g in range(generations):
+        gen_start = take_control_minute + g * period_minutes
+        gen_devices = devices[g * num_accounts : (g + 1) * num_accounts]
+
+        # 1. Emit device_acquired for every device in this generation.
+        for device in gen_devices:
+            events.append(
+                GangDeviceEvent(
+                    minute=gen_start,
+                    device_id=device.device_id,
+                    account_id=None,
+                    kind="device_acquired",
+                    platform=device.platform,
+                    os_generation=device.os_generation,
+                    fingerprint=device.fingerprint,
+                )
+            )
+
+        # 2. Emit active compromise flag events for each account linked to its generation handset.
+        for j, account_id in enumerate(accounts):
+            device = gen_devices[j]
+            for is_active, kind in flags:
+                if is_active:
+                    events.append(
+                        GangDeviceEvent(
+                            minute=gen_start,
+                            device_id=device.device_id,
+                            account_id=account_id,
+                            kind=kind,
+                            platform=device.platform,
+                            os_generation=device.os_generation,
+                            fingerprint=device.fingerprint,
+                        )
+                    )
+
+    return events

@@ -408,15 +408,15 @@ def test_structural_rotation_range_checks() -> None:
         validate_gang_config(GangConfig("gang_bad_rotations", 1, TEST_BUDGET, TEST_SOURCE, steps_bad_rot))
 
 
-def test_plan_gang_refuses_rotation_held_out_option_before_c3() -> None:
-    """Verifies that plan_gang refuses planning for rotation options because planning arrives in C3."""
+def test_plan_gang_allows_rotation_held_out_option_in_test_world() -> None:
+    """Verifies that plan_gang successfully plans rotation options under test split once built in C3."""
     world = build_world(TINY_SETTINGS.seed, TINY_SETTINGS.n_people, TINY_SETTINGS.n_shops)
     import numpy as np
     rng = np.random.default_rng(42)
 
     gang = _make_rotation_gang()
-    with pytest.raises(ValueError, match=r"held-out option planning is not built yet \(Level 12g C2/C3\)"):
-        plan_gang(gang, world, rng, world_split="test")
+    plan = plan_gang(gang, world, rng, world_split="test")
+    assert len(plan.truth.device_control) > 0
 
 
 def test_runner_refuses_drip_gang_in_training_world() -> None:

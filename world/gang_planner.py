@@ -28,9 +28,11 @@ from world.gang_devices import (
     assign_devices_round_robin,
     build_device_control_spans,
     build_gang_device_events,
+    build_rotation_events,
+    build_rotation_spans,
     make_gang_devices,
 )
-from world.held_out_options import check_held_out_options_allowed, find_held_out_options
+from world.held_out_options import check_held_out_options_allowed
 from world.interactive_records import IllicitMoneyRule
 from world.mule_origins import build_opening_event, draw_mule_origins, make_opening_handle
 from world.outside_events import OutsideEvent
@@ -971,28 +973,61 @@ def _plan_take_control_step(
         # spans, events, cost = _plan_take_control_step(config, step, mules, 100, dev_rng, rng)
     """
     # 1. Extract device count and boolean compromise flags from parameters.
-    devices_param = step.params_dict.get("devices")
-    if devices_param is not None:
-        devices_count = int(devices_param)
+    params = step.params_dict
+    sim_swap = bool(params.get("sim_swap", False))
+    linked_number_switch = bool(params.get("linked_number_switch", False))
+    emulator = bool(params.get("emulator", False))
+    remote_access = bool(params.get("remote_access", False))
+
+    rotate_every_days = params.get("rotate_every_days")
+    if rotate_every_days is not None:
+        rotations = int(params["rotations"])
+        generations = rotations + 1
+        period_minutes = int(rotate_every_days) * 1440
+        devices_count = len(acquired_accounts) * generations
+        devices = make_gang_devices(devices_count, gang_devices_rng)
+        spans = build_rotation_spans(
+            config.gang_id,
+            acquired_accounts,
+            devices,
+            clock_minute,
+            period_minutes,
+            rotations,
+            sim_swap,
+            linked_number_switch,
+            emulator,
+            remote_access,
+        )
+        events = build_rotation_events(
+            acquired_accounts,
+            devices,
+            clock_minute,
+            period_minutes,
+            rotations,
+            sim_swap,
+            linked_number_switch,
+            emulator,
+            remote_access,
+        )
     else:
-        min_devices, max_devices = get_take_control_devices_range()
-        devices_count = int(rng.integers(min_devices, max_devices + 1))
-    sim_swap = bool(step.params_dict.get("sim_swap", False))
-    linked_number_switch = bool(step.params_dict.get("linked_number_switch", False))
-    emulator = bool(step.params_dict.get("emulator", False))
-    remote_access = bool(step.params_dict.get("remote_access", False))
+        devices_param = params.get("devices")
+        if devices_param is not None:
+            devices_count = int(devices_param)
+        else:
+            min_devices, max_devices = get_take_control_devices_range()
+            devices_count = int(rng.integers(min_devices, max_devices + 1))
 
-    # 2. Provision devices on child stream 6 and allocate across mules in round-robin order.
-    devices = make_gang_devices(devices_count, gang_devices_rng)
-    account_to_device = assign_devices_round_robin(acquired_accounts, devices)
+        # 2. Provision devices on child stream 6 and allocate across mules in round-robin order.
+        devices = make_gang_devices(devices_count, gang_devices_rng)
+        account_to_device = assign_devices_round_robin(acquired_accounts, devices)
 
-    # 3. Build forensic ground truth spans and synthetic client telemetry events.
-    spans = build_device_control_spans(
-        config.gang_id, account_to_device, clock_minute, sim_swap, linked_number_switch, emulator, remote_access
-    )
-    events = build_gang_device_events(
-        devices, account_to_device, clock_minute, sim_swap, linked_number_switch, emulator, remote_access
-    )
+        # 3. Build forensic ground truth spans and synthetic client telemetry events.
+        spans = build_device_control_spans(
+            config.gang_id, account_to_device, clock_minute, sim_swap, linked_number_switch, emulator, remote_access
+        )
+        events = build_gang_device_events(
+            devices, account_to_device, clock_minute, sim_swap, linked_number_switch, emulator, remote_access
+        )
 
     # 4. Sample execution duration and risk from calibrated take_control ranges.
     min_time, max_time = get_block_time_range("take_control")
@@ -1275,10 +1310,6 @@ def plan_gang(
     """
     validate_gang_config(config)
     check_held_out_options_allowed(config, world_split)
-    held_out = find_held_out_options(config)
-    unbuilt = [opt for opt in held_out if opt[2] != "slow_drip"]
-    if unbuilt:
-        raise ValueError(f"Gang '{config.gang_id}' held-out option planning is not built yet (Level 12g C2/C3)")
 
     dev_rng = gang_devices_rng if gang_devices_rng is not None else rng
     pmts, roles, spans, stories, costs, money, time, safe, events, rules, openings, withdrawals = _plan_campaign_steps(
