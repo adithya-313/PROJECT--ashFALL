@@ -1,0 +1,32 @@
+sanity_report:
+  label: policy
+  reason: "Configuration for external dataset sanity reporting comparing synthetic world distributions against PaySim genuine rows."
+  issue_ids_v2: [12-16]
+  derived_from: "reports/model/paysim_warning_source.json"
+  paysim_columns_used:
+    - step
+    - type
+    - amount
+    - nameOrig
+    - nameDest
+    - isFraud
+  paysim_columns_excluded:
+    - oldbalanceOrg
+    - newbalanceOrig
+    - oldbalanceDest
+    - newbalanceDest
+    - isFlaggedFraud
+  paysim_columns_excluded_reason: "Kaggle's PaySim page says the balance columns must not be used for fraud work (reports/model/paysim_warning_source.json); isFlaggedFraud is PaySim's own rule output."
+  world_sample:
+    split: training
+    block: 0
+    preset: small
+    count: 40
+    description: "training block 0, small preset (40 worlds)"
+  quantiles:
+    - 0.1
+    - 0.25
+    - 0.5
+    - 0.75
+    - 0.9
+    - 0.99

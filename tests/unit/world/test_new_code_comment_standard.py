@@ -285,6 +285,9 @@ NEW_CODE_FILES: list[str] = [
     # Level 12h trivial world check module and test suite.
     "evaluation/trivial_world.py",
     "tests/unit/evaluation/test_trivial_world.py",
+    # Level 12h world sanity report against PaySim genuine rows and test suite.
+    "evaluation/sanity_report.py",
+    "tests/unit/evaluation/test_sanity_report.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
