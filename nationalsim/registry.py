@@ -132,7 +132,7 @@ class RegistryCore:
         identifier_type: str,
         reason_code: str,
         reported_at: datetime,
-        run_id: str = "default",
+        run_id: str,
         linked_account_hash: str | None = None,
     ) -> RegistryEntry:
         """
@@ -199,7 +199,7 @@ class RegistryCore:
         requesting_bank_id: str,
         identifier_hash: str,
         identifier_type: str,
-        run_id: str = "default",
+        run_id: str,
     ) -> ScreenResult:
         """
         Screen an identifier hash against the registry.
@@ -266,7 +266,7 @@ class RegistryCore:
         self,
         bank_id: str,
         report_id: str,
-        run_id: str = "default",
+        run_id: str,
     ) -> list[RegistryEntry]:
         """
         Revoke an ingested fraud report. Only the original ingesting bank may revoke.
@@ -307,7 +307,7 @@ class RegistryCore:
         bank_id: str,
         identifier_hash: str,
         reason_code: str,
-        run_id: str = "default",
+        run_id: str,
     ) -> list[RegistryEntry]:
         """
         File a dispute against an identifier hash, marking all matching active entries as contested.
@@ -345,8 +345,8 @@ class RegistryCore:
         bank_id: str,
         identifier_hash: str,
         reason_code: str,
+        run_id: str,
         reported_at: datetime | None = None,
-        run_id: str = "default",
     ) -> None:
         """
         Record operational feedback on an identifier. Changes no matches or screening results.

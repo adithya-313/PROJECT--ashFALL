@@ -249,6 +249,7 @@ def test_non_participating_bank_refused_at_screen() -> None:
             requesting_bank_id="bank_outsider",
             identifier_hash=valid_hash,
             identifier_type="account",
+            run_id="run1",
         )
 
 
@@ -421,3 +422,52 @@ def test_1x_vs_100x_replay_clock_consistency() -> None:
     assert res_1x.match is True
     assert res_100x.match is True
     assert res_1x.status == res_100x.status == "listed"
+
+
+def test_simulation_runs_are_strictly_isolated() -> None:
+    """Proves that fraud entries from one simulation run never leak into another run.
+
+    In the simulator, different runs represent parallel worlds or evaluation experiments.
+    If run isolation failed, an account screened in a clean scenario could wrongly match a fraud
+    report that was ingested during a completely separate run.
+    """
+    clock = ManualClock(datetime(2026, 9, 1, 10, 0, tzinfo=IST))
+    registry = RegistryCore(clock=clock, listing_delay=timedelta(minutes=10))
+
+    shared_hash = "f" * 64
+    now = clock.now_ist()
+
+    # Ingest the identifier in run_A
+    registry.ingest(
+        bank_id="bank_0",
+        report_id="R-RUN-A",
+        identifier_hash=shared_hash,
+        identifier_type="account",
+        reason_code="fraud",
+        reported_at=now,
+        run_id="run_A",
+    )
+
+    # Advance clock past listing delay
+    clock.advance(timedelta(minutes=15))
+
+    # Screening in run_A matches
+    result_a = registry.screen(
+        requesting_bank_id="bank_0",
+        identifier_hash=shared_hash,
+        identifier_type="account",
+        run_id="run_A",
+    )
+    assert result_a.match is True
+    assert result_a.status == "listed"
+
+    # Screening the exact same hash in run_B returns no match
+    result_b = registry.screen(
+        requesting_bank_id="bank_0",
+        identifier_hash=shared_hash,
+        identifier_type="account",
+        run_id="run_B",
+    )
+    assert result_b.match is False
+    assert result_b.status == "none"
+
