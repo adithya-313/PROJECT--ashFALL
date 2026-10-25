@@ -12,10 +12,12 @@ TERM: payer repeat share: fraction of payments whose (payer, payee) directed pai
 """
 
 import argparse
+import csv
 import importlib
 import json
 import sys
 import tempfile
+from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -29,6 +31,7 @@ from world.world_sampler import load_sampler_config, sample_block
 
 DEFAULT_CONFIG_PATH: Path = REPO_ROOT / "config" / "sanity_report.yaml"
 DEFAULT_PAYSIM_PATH: Path = REPO_ROOT / "data" / "enriched" / "paysim_enriched.parquet"
+DEFAULT_IBM_PATH: Path = REPO_ROOT / "data" / "raw" / "ibm_aml" / "HI-Small_Trans.csv"
 DEFAULT_SUMMARY_PATH: Path = REPO_ROOT / "reports" / "sanity" / "summary.md"
 GANG_ROLES: frozenset[str] = frozenset({"mule", "collector", "cash_out"})
 CODE_VERSION: str = "sanity-report"
@@ -180,6 +183,131 @@ def paysim_genuine_stats(path: Path | str, cfg: dict[str, Any]) -> dict[str, Any
     }
 
 
+def ibm_genuine_stats(path: Path | str, cfg: dict[str, Any]) -> dict[str, Any]:
+    """
+    Computes statistical distribution metrics over genuine rows from an IBM AML-Data CSV dataset.
+    Streams the dataset row-by-row reading only designated transaction columns,
+    filters out laundering transactions (Is Laundering == 0), determines the predominant currency,
+    and calculates amount quantiles over the predominant currency alongside repeat shares and payer frequencies.
+
+    Args:
+        path: Filesystem path to the IBM AML-Data CSV file.
+        cfg: Configuration dictionary defining quantile evaluation points.
+
+    Returns:
+        Dictionary containing genuine count, dominant currency metrics, amount quantile ratios,
+        payer repeat share, and payments per payer distributions.
+
+    Raises:
+        ValueError: If the file does not exist, required columns are missing, or genuine rows are empty.
+    """
+    resolved_path = Path(path)
+    if not resolved_path.exists():
+        raise ValueError(f"IBM file not found at {resolved_path}")
+
+    quantiles = [float(q) for q in cfg["quantiles"]]
+
+    currency_counts: Counter[str] = Counter()
+    amounts_by_currency: dict[str, list[float]] = {}
+    seen_pairs: set[tuple[tuple[str, str], tuple[str, str]]] = set()
+    repeat_count = 0
+    payer_frequencies: Counter[tuple[str, str]] = Counter()
+
+    with open(resolved_path, "r", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        try:
+            header = next(reader)
+        except StopIteration:
+            raise ValueError(f"IBM file is empty: {resolved_path}")
+
+        for req_col in ("From Bank", "To Bank", "Amount Paid", "Payment Currency", "Is Laundering"):
+            if req_col not in header:
+                raise ValueError(f"IBM dataset missing required column: '{req_col}'")
+
+        from_bank_idx = header.index("From Bank")
+        to_bank_idx = header.index("To Bank")
+        amt_idx = header.index("Amount Paid")
+        curr_idx = header.index("Payment Currency")
+        laund_idx = header.index("Is Laundering")
+
+        acc_indices = [i for i, h in enumerate(header) if h in ("Account", "Account.1", "From Account", "To Account")]
+        if "From Account" in header:
+            from_acc_idx = header.index("From Account")
+        elif acc_indices:
+            from_acc_idx = acc_indices[0]
+        else:
+            raise ValueError("IBM dataset missing From Account column")
+
+        if "To Account" in header:
+            to_acc_idx = header.index("To Account")
+        elif "Account.1" in header:
+            to_acc_idx = header.index("Account.1")
+        elif len(acc_indices) > 1:
+            to_acc_idx = acc_indices[1]
+        else:
+            raise ValueError("IBM dataset missing To Account column")
+
+        total_genuine = 0
+        for row in reader:
+            if not row:
+                continue
+            is_laundering = row[laund_idx].strip()
+            if is_laundering != "0":
+                continue
+
+            total_genuine += 1
+            curr = row[curr_idx].strip()
+            currency_counts[curr] += 1
+
+            amt = float(row[amt_idx])
+            if curr not in amounts_by_currency:
+                amounts_by_currency[curr] = []
+            amounts_by_currency[curr].append(amt)
+
+            payer = (row[from_bank_idx].strip(), row[from_acc_idx].strip())
+            payee = (row[to_bank_idx].strip(), row[to_acc_idx].strip())
+            pair = (payer, payee)
+            if pair in seen_pairs:
+                repeat_count += 1
+            else:
+                seen_pairs.add(pair)
+            payer_frequencies[payer] += 1
+
+    if total_genuine == 0:
+        raise ValueError(f"IBM dataset contains zero genuine (Is Laundering == 0) records in {resolved_path}")
+
+    most_common_curr, most_common_count = currency_counts.most_common(1)[0]
+    most_common_share = float(most_common_count / total_genuine)
+
+    dominant_amounts = sorted(amounts_by_currency[most_common_curr])
+    median_amount = _compute_quantile(dominant_amounts, 0.5)
+    if median_amount <= 0.0:
+        raise ValueError(f"IBM genuine amount median must be positive, got {median_amount}")
+
+    quantile_values = {q: _compute_quantile(dominant_amounts, q) for q in quantiles}
+    quantile_ratios = {q: quantile_values[q] / median_amount for q in quantiles}
+
+    repeat_share = float(repeat_count / total_genuine)
+    sorted_payer_counts = sorted(float(c) for c in payer_frequencies.values())
+    payer_median = _compute_quantile(sorted_payer_counts, 0.5)
+    payer_p90 = _compute_quantile(sorted_payer_counts, 0.9)
+
+    return {
+        "genuine_count": total_genuine,
+        "most_common_currency": most_common_curr,
+        "most_common_currency_count": most_common_count,
+        "most_common_currency_share": most_common_share,
+        "amount_median": median_amount,
+        "amount_quantiles": quantile_values,
+        "amount_quantile_ratios": quantile_ratios,
+        "payer_repeat_share": repeat_share,
+        "payments_per_payer": {
+            "median": payer_median,
+            "p90": payer_p90,
+        },
+    }
+
+
 def _extract_gang_spans(output: Any) -> list[Any]:
     """
     Extracts active criminal role spans from world truth artifacts or test result fixtures.
@@ -328,16 +456,18 @@ def build_report(
     world_stats: dict[str, Any],
     paysim_stats: dict[str, Any],
     cfg: dict[str, Any],
+    ibm_stats: dict[str, Any] | None = None,
 ) -> str:
     """
     Formats markdown sanity comparison report containing side-by-side tables and plain-text differences.
     Precedes all content with the required disclaimer sentence, produces structured markdown tables,
-    and enumerates every comparison where the world-to-PaySim ratio falls outside the [0.5, 2.0] interval.
+    and enumerates every comparison where benchmark ratios fall outside the [0.5, 2.0] interval.
 
     Args:
         world_stats: Output dictionary from world_genuine_stats.
         paysim_stats: Output dictionary from paysim_genuine_stats.
         cfg: Configuration dictionary loaded from sanity_report.yaml.
+        ibm_stats: Optional output dictionary from ibm_genuine_stats.
 
     Returns:
         Structured markdown report string ready for publication in reports/sanity/summary.md.
@@ -348,67 +478,169 @@ def build_report(
         "",
         "## Amount Quantiles Divided by Median",
         "",
-        "| Quantile | World (shape) | PaySim (shape) | Ratio (World / PaySim) |",
-        "| --- | --- | --- | --- |",
     ]
 
     quantiles = [float(q) for q in cfg["quantiles"]]
     differences: list[str] = []
 
-    for q in quantiles:
-        w_shape = world_stats["amount_quantile_ratios"][q]
-        p_shape = paysim_stats["amount_quantile_ratios"][q]
-        ratio_str, ratio_val = _format_ratio(w_shape, p_shape)
-        lines.append(f"| {q} | {w_shape:.4f} | {p_shape:.4f} | {ratio_str} |")
-        if ratio_val < 0.5 or ratio_val > 2.0:
-            differences.append(
-                f"- Amount quantile {q} / median: World is {w_shape:.4f}, PaySim is {p_shape:.4f} "
-                f"(ratio {ratio_str}, outside [0.5, 2.0])."
-            )
+    if ibm_stats is not None:
+        curr = ibm_stats["most_common_currency"]
+        share = ibm_stats["most_common_currency_share"]
+        lines.append(
+            f"IBM amount shape evaluated on {curr} "
+            f"({share:.1%} of genuine rows; mixed currencies cannot share one scale)."
+        )
+        lines.append("")
+        lines.extend([
+            (
+                "| Quantile | World (shape) | PaySim (shape) | "
+                "Ratio (World / PaySim) | IBM (shape) | Ratio (World / IBM) |"
+            ),
+            "| --- | --- | --- | --- | --- | --- |",
+        ])
+        for q in quantiles:
+            w_shape = world_stats["amount_quantile_ratios"][q]
+            p_shape = paysim_stats["amount_quantile_ratios"][q]
+            p_ratio_str, p_ratio_val = _format_ratio(w_shape, p_shape)
+            i_shape = ibm_stats["amount_quantile_ratios"][q]
+            i_ratio_str, i_ratio_val = _format_ratio(w_shape, i_shape)
+            lines.append(f"| {q} | {w_shape:.4f} | {p_shape:.4f} | {p_ratio_str} | {i_shape:.4f} | {i_ratio_str} |")
+            if p_ratio_val < 0.5 or p_ratio_val > 2.0:
+                differences.append(
+                    f"- Amount quantile {q} / median: World is {w_shape:.4f}, PaySim is {p_shape:.4f} "
+                    f"(ratio {p_ratio_str}, outside [0.5, 2.0])."
+                )
+            if i_ratio_val < 0.5 or i_ratio_val > 2.0:
+                differences.append(
+                    f"- Amount quantile {q} / median: World is {w_shape:.4f}, IBM is {i_shape:.4f} "
+                    f"(ratio {i_ratio_str}, outside [0.5, 2.0])."
+                )
+    else:
+        lines.extend([
+            "| Quantile | World (shape) | PaySim (shape) | Ratio (World / PaySim) |",
+            "| --- | --- | --- | --- |",
+        ])
+        for q in quantiles:
+            w_shape = world_stats["amount_quantile_ratios"][q]
+            p_shape = paysim_stats["amount_quantile_ratios"][q]
+            p_ratio_str, p_ratio_val = _format_ratio(w_shape, p_shape)
+            lines.append(f"| {q} | {w_shape:.4f} | {p_shape:.4f} | {p_ratio_str} |")
+            if p_ratio_val < 0.5 or p_ratio_val > 2.0:
+                differences.append(
+                    f"- Amount quantile {q} / median: World is {w_shape:.4f}, PaySim is {p_shape:.4f} "
+                    f"(ratio {p_ratio_str}, outside [0.5, 2.0])."
+                )
 
     lines.extend([
         "",
         "## Payer Repeat Share",
         "",
-        "| Metric | World | PaySim | Ratio (World / PaySim) |",
-        "| --- | --- | --- | --- |",
     ])
     w_repeat = world_stats["payer_repeat_share"]
     p_repeat = paysim_stats["payer_repeat_share"]
-    repeat_ratio_str, repeat_ratio_val = _format_ratio(w_repeat, p_repeat)
-    lines.append(f"| Payer repeat share | {w_repeat:.4f} | {p_repeat:.4f} | {repeat_ratio_str} |")
-    if repeat_ratio_val < 0.5 or repeat_ratio_val > 2.0:
-        differences.append(
-            f"- Payer repeat share: World is {w_repeat:.4f}, PaySim is {p_repeat:.4f} "
-            f"(ratio {repeat_ratio_str}, outside [0.5, 2.0])."
-        )
+    p_repeat_ratio_str, p_repeat_ratio_val = _format_ratio(w_repeat, p_repeat)
+
+    if ibm_stats is not None:
+        i_repeat = ibm_stats["payer_repeat_share"]
+        i_repeat_ratio_str, i_repeat_ratio_val = _format_ratio(w_repeat, i_repeat)
+        lines.extend([
+            "| Metric | World | PaySim | Ratio (World / PaySim) | IBM | Ratio (World / IBM) |",
+            "| --- | --- | --- | --- | --- | --- |",
+            (
+                f"| Payer repeat share | {w_repeat:.4f} | {p_repeat:.4f} | "
+                f"{p_repeat_ratio_str} | {i_repeat:.4f} | {i_repeat_ratio_str} |"
+            ),
+        ])
+        if p_repeat_ratio_val < 0.5 or p_repeat_ratio_val > 2.0:
+            differences.append(
+                f"- Payer repeat share: World is {w_repeat:.4f}, PaySim is {p_repeat:.4f} "
+                f"(ratio {p_repeat_ratio_str}, outside [0.5, 2.0])."
+            )
+        if i_repeat_ratio_val < 0.5 or i_repeat_ratio_val > 2.0:
+            differences.append(
+                f"- Payer repeat share: World is {w_repeat:.4f}, IBM is {i_repeat:.4f} "
+                f"(ratio {i_repeat_ratio_str}, outside [0.5, 2.0])."
+            )
+    else:
+        lines.extend([
+            "| Metric | World | PaySim | Ratio (World / PaySim) |",
+            "| --- | --- | --- | --- |",
+            f"| Payer repeat share | {w_repeat:.4f} | {p_repeat:.4f} | {p_repeat_ratio_str} |",
+        ])
+        if p_repeat_ratio_val < 0.5 or p_repeat_ratio_val > 2.0:
+            differences.append(
+                f"- Payer repeat share: World is {w_repeat:.4f}, PaySim is {p_repeat:.4f} "
+                f"(ratio {p_repeat_ratio_str}, outside [0.5, 2.0])."
+            )
 
     lines.extend([
         "",
         "## Payments Per Payer",
         "",
-        "| Metric | World | PaySim | Ratio (World / PaySim) |",
-        "| --- | --- | --- | --- |",
     ])
     w_med_payer = world_stats["payments_per_payer"]["median"]
     p_med_payer = paysim_stats["payments_per_payer"]["median"]
-    med_ratio_str, med_ratio_val = _format_ratio(w_med_payer, p_med_payer)
-    lines.append(f"| Median payments per payer | {w_med_payer:.1f} | {p_med_payer:.1f} | {med_ratio_str} |")
-    if med_ratio_val < 0.5 or med_ratio_val > 2.0:
-        differences.append(
-            f"- Median payments per payer: World is {w_med_payer:.1f}, PaySim is {p_med_payer:.1f} "
-            f"(ratio {med_ratio_str}, outside [0.5, 2.0])."
-        )
+    p_med_ratio_str, p_med_ratio_val = _format_ratio(w_med_payer, p_med_payer)
 
     w_p90_payer = world_stats["payments_per_payer"]["p90"]
     p_p90_payer = paysim_stats["payments_per_payer"]["p90"]
-    p90_ratio_str, p90_ratio_val = _format_ratio(w_p90_payer, p_p90_payer)
-    lines.append(f"| P90 payments per payer | {w_p90_payer:.1f} | {p_p90_payer:.1f} | {p90_ratio_str} |")
-    if p90_ratio_val < 0.5 or p90_ratio_val > 2.0:
-        differences.append(
-            f"- P90 payments per payer: World is {w_p90_payer:.1f}, PaySim is {p_p90_payer:.1f} "
-            f"(ratio {p90_ratio_str}, outside [0.5, 2.0])."
-        )
+    p_p90_ratio_str, p_p90_ratio_val = _format_ratio(w_p90_payer, p_p90_payer)
+
+    if ibm_stats is not None:
+        i_med_payer = ibm_stats["payments_per_payer"]["median"]
+        i_med_ratio_str, i_med_ratio_val = _format_ratio(w_med_payer, i_med_payer)
+        i_p90_payer = ibm_stats["payments_per_payer"]["p90"]
+        i_p90_ratio_str, i_p90_ratio_val = _format_ratio(w_p90_payer, i_p90_payer)
+
+        lines.extend([
+            "| Metric | World | PaySim | Ratio (World / PaySim) | IBM | Ratio (World / IBM) |",
+            "| --- | --- | --- | --- | --- | --- |",
+            (
+                f"| Median payments per payer | {w_med_payer:.1f} | {p_med_payer:.1f} | "
+                f"{p_med_ratio_str} | {i_med_payer:.1f} | {i_med_ratio_str} |"
+            ),
+            (
+                f"| P90 payments per payer | {w_p90_payer:.1f} | {p_p90_payer:.1f} | "
+                f"{p_p90_ratio_str} | {i_p90_payer:.1f} | {i_p90_ratio_str} |"
+            ),
+        ])
+        if p_med_ratio_val < 0.5 or p_med_ratio_val > 2.0:
+            differences.append(
+                f"- Median payments per payer: World is {w_med_payer:.1f}, PaySim is {p_med_payer:.1f} "
+                f"(ratio {p_med_ratio_str}, outside [0.5, 2.0])."
+            )
+        if i_med_ratio_val < 0.5 or i_med_ratio_val > 2.0:
+            differences.append(
+                f"- Median payments per payer: World is {w_med_payer:.1f}, IBM is {i_med_payer:.1f} "
+                f"(ratio {i_med_ratio_str}, outside [0.5, 2.0])."
+            )
+        if p_p90_ratio_val < 0.5 or p_p90_ratio_val > 2.0:
+            differences.append(
+                f"- P90 payments per payer: World is {w_p90_payer:.1f}, PaySim is {p_p90_payer:.1f} "
+                f"(ratio {p_p90_ratio_str}, outside [0.5, 2.0])."
+            )
+        if i_p90_ratio_val < 0.5 or i_p90_ratio_val > 2.0:
+            differences.append(
+                f"- P90 payments per payer: World is {w_p90_payer:.1f}, IBM is {i_p90_payer:.1f} "
+                f"(ratio {i_p90_ratio_str}, outside [0.5, 2.0])."
+            )
+    else:
+        lines.extend([
+            "| Metric | World | PaySim | Ratio (World / PaySim) |",
+            "| --- | --- | --- | --- |",
+            f"| Median payments per payer | {w_med_payer:.1f} | {p_med_payer:.1f} | {p_med_ratio_str} |",
+            f"| P90 payments per payer | {w_p90_payer:.1f} | {p_p90_payer:.1f} | {p_p90_ratio_str} |",
+        ])
+        if p_med_ratio_val < 0.5 or p_med_ratio_val > 2.0:
+            differences.append(
+                f"- Median payments per payer: World is {w_med_payer:.1f}, PaySim is {p_med_payer:.1f} "
+                f"(ratio {p_med_ratio_str}, outside [0.5, 2.0])."
+            )
+        if p_p90_ratio_val < 0.5 or p_p90_ratio_val > 2.0:
+            differences.append(
+                f"- P90 payments per payer: World is {w_p90_payer:.1f}, PaySim is {p_p90_payer:.1f} "
+                f"(ratio {p_p90_ratio_str}, outside [0.5, 2.0])."
+            )
 
     lines.extend([
         "",
@@ -434,9 +666,19 @@ def build_report(
         "",
         "## External Datasets Status",
         "",
-        "IBM AML-Data: pending (not downloaded); register 12-16 records it.",
-        "",
     ])
+    if ibm_stats is not None:
+        ibm_src = cfg["ibm_source"]
+        ibm_url = ibm_src["url"]
+        ibm_file = ibm_src["file"]
+        ibm_md5 = ibm_src["md5"]
+        ibm_licence = ibm_src["licence"]
+        lines.append(
+            f"IBM AML-Data: source: {ibm_url}, file: {ibm_file}, md5: {ibm_md5}, licence: {ibm_licence}."
+        )
+    else:
+        lines.append("IBM AML-Data: pending (not downloaded); register 12-16 records it.")
+    lines.append("")
 
     return "\n".join(lines)
 
@@ -489,6 +731,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="World sanity report against PaySim genuine rows.")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="Path to config/sanity_report.yaml")
     parser.add_argument("--paysim-path", default=str(DEFAULT_PAYSIM_PATH), help="Path to PaySim parquet file")
+    parser.add_argument("--ibm-path", default=str(DEFAULT_IBM_PATH), help="Path to IBM AML-Data CSV file")
     parser.add_argument("--summary-out", default=str(DEFAULT_SUMMARY_PATH), help="Output path for summary.md")
     parser.add_argument(
         "--raw-json",
@@ -504,10 +747,11 @@ def main(argv: list[str] | None = None) -> int:
 
     cfg = load_sanity_report_config(Path(args.config))
     paysim_stats = paysim_genuine_stats(Path(args.paysim_path), cfg)
+    ibm_stats = ibm_genuine_stats(Path(args.ibm_path), cfg)
     outputs = run_world_sample(cfg, count_override=args.world_count)
     world_stats = world_genuine_stats(outputs, cfg)
 
-    report_md = build_report(world_stats, paysim_stats, cfg)
+    report_md = build_report(world_stats, paysim_stats, cfg, ibm_stats=ibm_stats)
 
     summary_out_path = Path(args.summary_out)
     summary_out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -516,6 +760,7 @@ def main(argv: list[str] | None = None) -> int:
 
     raw_data = {
         "paysim": paysim_stats,
+        "ibm": ibm_stats,
         "world": world_stats,
     }
     raw_json_path.parent.mkdir(parents=True, exist_ok=True)

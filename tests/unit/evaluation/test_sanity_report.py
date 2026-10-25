@@ -17,6 +17,7 @@ import pytest
 
 from evaluation.sanity_report import (
     build_report,
+    ibm_genuine_stats,
     load_sanity_report_config,
     paysim_genuine_stats,
     world_genuine_stats,
@@ -35,6 +36,18 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "isFlaggedFraud",
     ],
     "quantiles": [0.1, 0.25, 0.5, 0.75, 0.9, 0.99],
+    "ibm_source": {
+        "url": "https://www.kaggle.com/datasets/ealtman2019/ibm-transactions-for-anti-money-laundering-aml",
+        "file": "HI-Small_Trans.csv",
+        "md5": "9667f3a6323e6ad88e699acf42db9157",
+        "licence": "CDLA-Sharing-1.0",
+        "label": "sourced",
+        "reason": (
+            "IBM's synthetic AML transactions (small, higher-illicit variant), used only as an outside "
+            "reference for genuine transaction shape; never used to set or tune a world setting. "
+            "CDLA-Sharing-1.0 terms apply if the data is ever shared."
+        ),
+    },
 }
 
 
@@ -201,3 +214,112 @@ def test_real_paysim_file_if_available() -> None:
     assert stats["payer_repeat_share"] >= 0.0
     assert stats["payments_per_payer"]["median"] >= 1.0
     assert len(stats["type_shares"]) > 0
+
+
+def test_hand_computed_ibm_stats(tmp_path: Path) -> None:
+    """
+    Validates statistical distribution calculations for IBM AML-Data on a hand-crafted fixture.
+    Proves mathematical exactness of dominant currency filtering, exclusion of laundering rows,
+    payer repeat transaction share, and payments per payer.
+    """
+    fixture_csv = tmp_path / "mini_ibm.csv"
+    lines = [
+        (
+            "Timestamp,From Bank,Account,To Bank,Account,Amount Received,"
+            "Receiving Currency,Amount Paid,Payment Currency,Payment Format,Is Laundering\n"
+        ),
+        "2022/09/01 00:01,001,A1,001,A2,10.0,US Dollar,10.0,US Dollar,Cheque,0\n",
+        "2022/09/01 00:02,001,A1,001,A3,20.0,US Dollar,20.0,US Dollar,Cheque,0\n",
+        "2022/09/01 00:03,002,A1,001,A2,50.0,US Dollar,50.0,US Dollar,Cheque,0\n",
+        "2022/09/01 00:04,001,A1,001,A2,70.0,US Dollar,70.0,US Dollar,Cheque,0\n",
+        "2022/09/01 00:05,003,A1,001,A1,100.0,US Dollar,100.0,US Dollar,Cheque,0\n",
+        "2022/09/01 00:06,001,A1,002,A2,500.0,Euro,500.0,Euro,Cheque,0\n",
+        "2022/09/01 00:07,009,A9,009,A8,999.0,US Dollar,999.0,US Dollar,Cheque,1\n",
+    ]
+    fixture_csv.write_text("".join(lines), encoding="utf-8")
+
+    stats = ibm_genuine_stats(fixture_csv, DEFAULT_CONFIG)
+
+    assert stats["genuine_count"] == 6
+    assert stats["most_common_currency"] == "US Dollar"
+    assert stats["most_common_currency_count"] == 5
+    assert abs(stats["most_common_currency_share"] - (5.0 / 6.0)) < 1e-6
+
+    assert stats["amount_median"] == 50.0
+    assert abs(stats["amount_quantile_ratios"][0.5] - 1.0) < 1e-6
+    assert abs(stats["amount_quantile_ratios"][0.1] - (14.0 / 50.0)) < 1e-6
+
+    assert abs(stats["payer_repeat_share"] - (1.0 / 6.0)) < 1e-6
+
+    assert stats["payments_per_payer"]["median"] == 1.0
+    assert abs(stats["payments_per_payer"]["p90"] - 3.4) < 1e-6
+
+
+@pytest.mark.needs_dvc
+def test_real_ibm_file_if_available() -> None:
+    """
+    Executes distribution checks on the real IBM AML-Data CSV file when present locally.
+    Guards with the needs_dvc pytest marker to avoid breaking environments without large ML test fixtures.
+    """
+    real_path = REPO_ROOT / "data" / "raw" / "ibm_aml" / "HI-Small_Trans.csv"
+    if not real_path.exists():
+        pytest.skip("data/raw/ibm_aml/HI-Small_Trans.csv not present on disk")
+
+    cfg = load_sanity_report_config()
+    stats = ibm_genuine_stats(real_path, cfg)
+
+    assert stats["genuine_count"] > 1_000_000
+    assert stats["most_common_currency"] == "US Dollar"
+    assert abs(stats["amount_quantile_ratios"][0.5] - 1.0) < 1e-6
+    assert stats["payer_repeat_share"] > 0.0
+    assert stats["payments_per_payer"]["median"] >= 1.0
+
+
+def test_ibm_report_integration(tmp_path: Path) -> None:
+    """
+    Verifies side-by-side report formatting and external dataset status when IBM statistics are included.
+    Confirms presence of IBM columns, currency share note, divergence detection, and provenance metadata.
+    """
+    fixture_csv = tmp_path / "mini_ibm.csv"
+    lines = [
+        (
+            "Timestamp,From Bank,Account,To Bank,Account,Amount Received,"
+            "Receiving Currency,Amount Paid,Payment Currency,Payment Format,Is Laundering\n"
+        ),
+        "2022/09/01 00:01,001,A1,001,A2,10.0,US Dollar,10.0,US Dollar,Cheque,0\n",
+        "2022/09/01 00:02,001,A1,001,A3,20.0,US Dollar,20.0,US Dollar,Cheque,0\n",
+        "2022/09/01 00:03,002,A1,001,A2,50.0,US Dollar,50.0,US Dollar,Cheque,0\n",
+        "2022/09/01 00:04,001,A1,001,A2,70.0,US Dollar,70.0,US Dollar,Cheque,0\n",
+        "2022/09/01 00:05,003,A1,001,A1,100.0,US Dollar,100.0,US Dollar,Cheque,0\n",
+        "2022/09/01 00:06,001,A1,002,A2,500.0,Euro,500.0,Euro,Cheque,0\n",
+        "2022/09/01 00:07,009,A9,009,A8,999.0,US Dollar,999.0,US Dollar,Cheque,1\n",
+    ]
+    fixture_csv.write_text("".join(lines), encoding="utf-8")
+
+    cfg = load_sanity_report_config()
+    ibm_stats = ibm_genuine_stats(fixture_csv, cfg)
+
+    dummy_paysim = {
+        "genuine_count": 5,
+        "amount_median": 50.0,
+        "amount_quantiles": {0.1: 14.0, 0.25: 25.0, 0.5: 50.0, 0.75: 75.0, 0.9: 90.0, 0.99: 99.0},
+        "amount_quantile_ratios": {0.1: 0.28, 0.25: 0.5, 0.5: 1.0, 0.75: 1.5, 0.9: 1.8, 0.99: 1.98},
+        "payer_repeat_share": 0.2,
+        "payments_per_payer": {"median": 1.0, "p90": 2.6},
+        "type_shares": {"PAYMENT": 1.0},
+    }
+    dummy_world = {
+        "genuine_count": 5,
+        "amount_median": 5000.0,
+        "amount_quantiles": {0.1: 1400.0, 0.25: 2500.0, 0.5: 5000.0, 0.75: 7500.0, 0.9: 9000.0, 0.99: 9900.0},
+        "amount_quantile_ratios": {0.1: 0.28, 0.25: 0.5, 0.5: 1.0, 0.75: 1.5, 0.9: 1.8, 0.99: 1.98},
+        "payer_repeat_share": 0.2,
+        "payments_per_payer": {"median": 1.0, "p90": 2.6},
+        "type_shares": "not comparable",
+    }
+
+    report = build_report(dummy_world, dummy_paysim, cfg, ibm_stats=ibm_stats)
+    assert "| IBM (shape) | Ratio (World / IBM) |" in report
+    assert "US Dollar" in report
+    assert "IBM AML-Data: pending" not in report
+    assert "CDLA-Sharing-1.0" in report
