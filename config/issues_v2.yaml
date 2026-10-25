@@ -119,14 +119,13 @@ issues:
   K8:
     title: "New top-level folders fail CI unless classified"
     origin: revision_2
-    status: partial
+    status: built
     levels: [12, 13]
     parts: [12a, 13a]
     evidence:
       - {kind: test, file: tests/unit/test_folder_check.py, name: test_real_repo_is_fully_classified}
       - {kind: config, file: config/folder_classification.yaml, name: folder_classification}
       - {kind: config, file: config/new_engine_paths.yaml, name: new_engine_paths}
-    later_work: ["Level 13: classify new top-level folders in 13a before adding them"]
   K9:
     title: "A docstring standard is enforced on registered new world files"
     origin: revision_2
@@ -139,10 +138,15 @@ issues:
   X1:
     title: "ashFALL-side time is wall-clock where it must be event time"
     origin: revision_2
-    status: planned
+    status: partial
     levels: [13, 14, 15, 16]
     parts: [13a]
-    later_work: ["Level 13a: Clock moved to 13a; event-time columns in 0005"]
+    evidence:
+      - {kind: doc, file: docs/interfaces/time.md, text: "Ground Rule 30: Event Time vs Transport Time"}
+      - {kind: test, file: tests/unit/test_event_clock.py, name: test_world_minute_to_ist_at_zero}
+      - {kind: test, file: tests/unit/test_event_clock.py, name: test_round_trip_conversion_holds}
+      - {kind: test, file: tests/unit/test_event_clock.py, name: test_replay_clock_at_speed_1_and_speed_100}
+    later_work: ["Level 14: event-time columns in migration 0005 and bank APIs", "Level 15: event-time window expiry in feature store", "Level 16: label cutoff and observation windows in event time"]
   X2:
     title: "The complaint path was defined twice"
     origin: revision_2
@@ -494,31 +498,45 @@ issues:
   13-11:
     title: "Phase-2 scores and early Feedback calls unscoped"
     origin: revision_2
-    status: planned
+    status: built
     levels: [13]
     parts: [13a]
-    later_work: ["Level 13a: Out of scope; Feedback from Level 21"]
+    evidence:
+      - {kind: amendment, id: A-027}
+      - {kind: doc, file: docs/interfaces/national_systems.md, text: "DPIP Phase-2 transaction scores out of scope"}
+      - {kind: config, file: config/nationalsim.yaml, name: nationalsim}
+      - {kind: test, file: tests/unit/nationalsim/test_app.py, name: test_http_feedback_endpoint_records_call}
   13-12:
     title: "Phase-2 scores and early Feedback calls unscoped"
     origin: revision_2
-    status: planned
+    status: built
     levels: [13]
     parts: [13a]
-    later_work: ["Level 13a: Out of scope; Feedback from Level 21"]
+    evidence:
+      - {kind: amendment, id: A-027}
+      - {kind: doc, file: docs/interfaces/national_systems.md, text: "DPIP Phase-2 transaction scores out of scope"}
+      - {kind: config, file: config/nationalsim.yaml, name: nationalsim}
+      - {kind: test, file: tests/unit/nationalsim/test_app.py, name: test_http_feedback_endpoint_records_call}
   13-14:
     title: "Hold requests lacked complaint_id; mocks used rupees"
     origin: revision_2
-    status: planned
+    status: built
     levels: [13]
     parts: [13a]
-    later_work: ["Level 13a: Contract fixes"]
+    evidence:
+      - {kind: amendment, id: A-027}
+      - {kind: doc, file: docs/interfaces/national_systems.md, text: "Amounts in paise"}
+      - {kind: doc, file: docs/interfaces/national_systems.md, text: "complaint_id"}
   13-15:
     title: "Hold requests lacked complaint_id; mocks used rupees"
     origin: revision_2
-    status: planned
+    status: built
     levels: [13]
     parts: [13a]
-    later_work: ["Level 13a: Contract fixes"]
+    evidence:
+      - {kind: amendment, id: A-027}
+      - {kind: doc, file: docs/interfaces/national_systems.md, text: "Amounts in paise"}
+      - {kind: doc, file: docs/interfaces/national_systems.md, text: "complaint_id"}
   13-16:
     title: "Hold delay was about to be defined twice"
     origin: revision_2
