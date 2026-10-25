@@ -1,6 +1,7 @@
 # File: Dockerfile
 # Purpose: Defines the container environment for the Python service.
-# Connects: docker-compose.yml uses this file to build the 'api' image.
+# Connects: docker-compose.yml uses this file to build the 'api', 'outbox-relay',
+#           and 'nationalsim' services.
 #           The CMD here is what docker-compose runs when the container starts.
 
 FROM python:3.11-slim
@@ -19,6 +20,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY api/ api/
 COPY core/ core/
 COPY infra/ infra/
+
+# The nationalsim Compose service reuses this image and needs its code and its settings file.
+# Copy only that one config file, not the whole config/ folder.
+COPY nationalsim/ nationalsim/
+COPY config/nationalsim.yaml config/nationalsim.yaml
 
 # PYTHONPATH=/app ensures "from core.config import config" and "api.main:app" resolve.
 ENV PYTHONPATH=/app
