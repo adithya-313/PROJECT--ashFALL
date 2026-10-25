@@ -108,49 +108,117 @@ class FeedbackRequest(BaseModel):
     reported_at: datetime | None = None
 
 
-def load_nationalsim_config() -> tuple[timedelta, dict[str, Any]]:
-    """Read registry configuration and bank participation settings from YAML.
+def validate_nationalsim_settings(
+    settings: dict[str, Any],
+    file_name: str = "config/nationalsim.yaml",
+) -> tuple[int, dict[str, Any]]:
+    """Validate listing delay and bank participation dictionary settings.
 
     What it is for:
-        When the application starts up, it reads default parameters such as the listing delay
-        and bank participation flags from config/nationalsim.yaml.
+        Enforces that registry parameters are strictly validated without silent fallbacks.
+        Guarantees that listing delay is a non-negative integer and the bank registry is non-empty.
 
     Inputs:
-        None. The function reads the file at config/nationalsim.yaml.
+        settings: Dictionary containing listing_delay_minutes and banks mappings.
+            For example, {"listing_delay_minutes": 15, "banks": {"bank_0": {"dpip_participation": True}}}.
+        file_name: Name of the configuration file to include in error messages.
+            Defaults to 'config/nationalsim.yaml'.
 
     What it returns:
-        A tuple of (listing_delay, bank_settings).
-        listing_delay is a timedelta representing how long reports take to become visible.
-        bank_settings is a dictionary of bank participation flags.
+        A tuple of (delay_minutes, banks_dict) with validated types.
 
     How it works:
-        1. Locate config/nationalsim.yaml relative to the repository root.
-        2. If the file exists, parse the YAML structure.
-        3. Read listing_delay_minutes.value and turn it into a timedelta.
-        4. Read the bank participation dictionary under banks.
-        5. If the file is missing, return a default 15-minute delay and empty settings.
+        1. Check that 'listing_delay_minutes' key is present in settings.
+        2. Unpack integer value if structured as a dictionary.
+        3. Assert that the delay is an int, not a bool, and >= 0.
+        4. Check that 'banks' key is present and is a non-empty mapping.
+        5. Verify that each bank entry defines 'dpip_participation' as a real boolean.
 
     Errors and side effects:
-        Reads config/nationalsim.yaml from the filesystem. Does not modify any files.
+        Raises ValueError naming the missing or invalid key and the file name.
 
     Limits:
-        Does not watch the file for changes. Settings are loaded once when the app is created.
+        Validates in-memory dictionary representation.
     """
-    config_path = Path("config/nationalsim.yaml")
-    if not config_path.is_file():
-        # Keep a safe fallback so the service can still boot in isolated testing directories
-        return timedelta(minutes=15), {}
+    if "listing_delay_minutes" not in settings:
+        raise ValueError(f"Missing key 'listing_delay_minutes' in {file_name}.")
 
-    raw_text = config_path.read_text(encoding="utf-8")
+    raw_delay = settings["listing_delay_minutes"]
+    if isinstance(raw_delay, dict):
+        if "value" not in raw_delay:
+            raise ValueError(f"Missing key 'listing_delay_minutes.value' in {file_name}.")
+        raw_delay = raw_delay["value"]
+
+    # In Python, bool is a subclass of int (isinstance(True, int) is True), so reject bool explicitly
+    if isinstance(raw_delay, bool) or not isinstance(raw_delay, int) or raw_delay < 0:
+        raise ValueError(
+            f"Invalid 'listing_delay_minutes' in {file_name}: must be a non-negative integer, got {raw_delay!r}."
+        )
+
+    if "banks" not in settings:
+        raise ValueError(f"Missing key 'banks' in {file_name}.")
+
+    banks_dict = settings["banks"]
+    if not isinstance(banks_dict, dict) or not banks_dict:
+        raise ValueError(f"Missing or empty 'banks' section in {file_name}.")
+
+    for bank_id, bank_cfg in banks_dict.items():
+        if not isinstance(bank_cfg, dict) or "dpip_participation" not in bank_cfg:
+            raise ValueError(f"Missing key 'dpip_participation' for bank '{bank_id}' in {file_name}.")
+        flag = bank_cfg["dpip_participation"]
+        if isinstance(flag, bool) is False:
+            raise ValueError(
+                f"Invalid 'dpip_participation' for bank '{bank_id}' in {file_name}: must be a boolean, got {flag!r}."
+            )
+
+    return raw_delay, banks_dict
+
+
+def load_nationalsim_config(
+    config_path: Path | str = "config/nationalsim.yaml",
+) -> tuple[timedelta, dict[str, Any]]:
+    """Load and validate national simulation parameters from the YAML configuration file.
+
+    What it is for:
+        Reads the configuration file for the mock national systems from disk,
+        extracting the mandatory listing delay and bank enrollment settings without silent fallbacks.
+
+    Inputs:
+        config_path: Path or string pointing to the YAML configuration file.
+            Defaults to 'config/nationalsim.yaml'.
+
+    What it returns:
+        A tuple of (listing_delay, bank_settings) where listing_delay is a timedelta
+        and bank_settings is a dictionary mapping bank IDs to participation configs.
+
+    How it works:
+        1. Locate and read the YAML file from disk.
+        2. Ensure the top-level 'nationalsim' key exists.
+        3. Validate listing delay and bank participation mappings using validate_nationalsim_settings.
+        4. Return the delay as a timedelta and the bank settings dictionary.
+
+    Errors and side effects:
+        Raises ValueError if the file is missing or if listing_delay_minutes or banks
+        are missing or invalid, naming the missing key and file.
+
+    Limits:
+        Settings are loaded when called; does not poll or watch the file for live changes.
+    """
+    path = Path(config_path)
+    file_name = str(path)
+    if not path.is_file():
+        raise ValueError(f"Missing configuration file '{file_name}'.")
+
+    raw_text = path.read_text(encoding="utf-8")
     parsed_yaml = yaml.safe_load(raw_text)
-    if not isinstance(parsed_yaml, dict):
-        return timedelta(minutes=15), {}
+    if not isinstance(parsed_yaml, dict) or "nationalsim" not in parsed_yaml:
+        raise ValueError(f"Missing 'nationalsim' key in {file_name}.")
 
-    ns_section = parsed_yaml.get("nationalsim", {})
-    delay_dict = ns_section.get("listing_delay_minutes", {})
-    delay_minutes = int(delay_dict.get("value", 15))
-    banks_dict = ns_section.get("banks", {})
+    ns_section = parsed_yaml["nationalsim"]
+    if not isinstance(ns_section, dict):
+        raise ValueError(f"Section 'nationalsim' in {file_name} must be a mapping.")
 
+    delay_minutes, banks_dict = validate_nationalsim_settings(ns_section, file_name=file_name)
     return timedelta(minutes=delay_minutes), banks_dict
 
 
@@ -178,14 +246,14 @@ def create_app(
         A fully configured FastAPI application ready to serve HTTP traffic.
 
     How it works:
-        1. Read listing delay and bank participation settings from the provided dictionary.
-        2. Evaluate key_provider to verify that the secret key is present and non-empty.
+        1. Evaluate key_provider to verify that the secret key is present and non-empty.
+        2. Validate listing delay and bank participation settings from the provided dictionary.
         3. Instantiate the core RegistryCore state container with the clock and settings.
         4. Register HTTP routes for /health, /ingest, /screen, /dispute, /revoke, and /feedback.
         5. Attach error handlers so NotParticipantError returns 403 and ValueError returns 400.
 
     Errors and side effects:
-        Raises ValueError if key_provider returns an empty key.
+        Raises ValueError if key_provider returns an empty key, or if settings are missing or invalid.
         In-memory state is held inside the RegistryCore instance for the lifetime of the process.
 
     Limits:
@@ -195,9 +263,8 @@ def create_app(
     if not resolved_key or (isinstance(resolved_key, str) and not resolved_key.strip()):
         raise ValueError("Key provider returned an empty or whitespace key.")
 
-    delay_minutes = int(settings.get("listing_delay_minutes", 15))
+    delay_minutes, bank_settings = validate_nationalsim_settings(settings, file_name="config/nationalsim.yaml")
     listing_delay = timedelta(minutes=delay_minutes)
-    bank_settings = settings.get("banks", {})
 
     registry = RegistryCore(
         clock=clock,

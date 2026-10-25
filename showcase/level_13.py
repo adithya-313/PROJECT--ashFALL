@@ -101,7 +101,10 @@ async def check_1_report_then_screen(workspace: Any) -> CheckOutcome:
     app = create_app(
         clock=clock,
         key_provider=lambda: test_key,
-        settings={"listing_delay_minutes": 15},
+        settings={
+            "listing_delay_minutes": 15,
+            "banks": {"bank_0": {"dpip_participation": True}},
+        },
     )
 
     ident_hash = compute_identifier_hash(
@@ -203,7 +206,14 @@ async def check_2_revoke_and_dispute(workspace: Any) -> CheckOutcome:
     """
     clock = ManualClock(datetime(2026, 9, 1, 10, 0, tzinfo=IST))
     test_key = "showcase_test_secret_key"
-    app = create_app(clock=clock, key_provider=lambda: test_key, settings={"listing_delay_minutes": 5})
+    app = create_app(
+        clock=clock,
+        key_provider=lambda: test_key,
+        settings={
+            "listing_delay_minutes": 5,
+            "banks": {"bank_0": {"dpip_participation": True}},
+        },
+    )
 
     ident_hash = compute_identifier_hash(test_key, "showcase_run_2", "account", "acc_victim_disputed", 0)
 
@@ -318,11 +328,25 @@ async def check_3_clock_consistency(workspace: Any) -> CheckOutcome:
 
     source_1x = FakeMonotonicSource(start_seconds=100.0)
     clock_1x = ReplayClock(simulated_start=sim_start, speed=1.0, wall_source=source_1x)
-    app_1x = create_app(clock=clock_1x, key_provider=lambda: test_key, settings={"listing_delay_minutes": 15})
+    app_1x = create_app(
+        clock=clock_1x,
+        key_provider=lambda: test_key,
+        settings={
+            "listing_delay_minutes": 15,
+            "banks": {"bank_0": {"dpip_participation": True}},
+        },
+    )
 
     source_100x = FakeMonotonicSource(start_seconds=500.0)
     clock_100x = ReplayClock(simulated_start=sim_start, speed=100.0, wall_source=source_100x)
-    app_100x = create_app(clock=clock_100x, key_provider=lambda: test_key, settings={"listing_delay_minutes": 15})
+    app_100x = create_app(
+        clock=clock_100x,
+        key_provider=lambda: test_key,
+        settings={
+            "listing_delay_minutes": 15,
+            "banks": {"bank_0": {"dpip_participation": True}},
+        },
+    )
 
     target_hash = compute_identifier_hash(test_key, "showcase_run_3", "account", "acc_speed_sync", 0)
 
@@ -429,6 +453,7 @@ async def check_4_non_participant_and_wrong_key(workspace: Any) -> CheckOutcome:
         clock=clock,
         key_provider=lambda: correct_key,
         settings={
+            "listing_delay_minutes": 15,
             "banks": {
                 "bank_0": {"dpip_participation": True},
                 "bank_outsider": {"dpip_participation": False},
@@ -522,7 +547,14 @@ async def check_5_boundary_minute(workspace: Any) -> CheckOutcome:
     sim_start = datetime(2026, 9, 1, 10, 0, tzinfo=IST)
     clock = ManualClock(sim_start)
     test_key = "showcase_boundary_key"
-    app = create_app(clock=clock, key_provider=lambda: test_key, settings={"listing_delay_minutes": 15})
+    app = create_app(
+        clock=clock,
+        key_provider=lambda: test_key,
+        settings={
+            "listing_delay_minutes": 15,
+            "banks": {"bank_0": {"dpip_participation": True}},
+        },
+    )
 
     ident_hash = compute_identifier_hash(test_key, "showcase_run_5", "account", "acc_boundary_target", 0)
 
