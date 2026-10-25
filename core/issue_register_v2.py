@@ -422,12 +422,16 @@ def check_doc_evidence(issue_id: str, item: dict[str, Any], root: Path) -> list[
         >>> check_doc_evidence("F6", {"file": "docs/none.md"}, REPO_ROOT)
         ['F6: file docs/none.md not found']
     """
-    path = root / item.get("file", "")
+    file_rel = item.get("file", "")
+    path = root / file_rel
     if not (path.is_file() or path.is_dir()):
-        return [f"{issue_id}: file {item.get('file')} not found"]
+        return [f"{issue_id}: file {file_rel} not found"]
     text = item.get("text")
-    if text and path.is_file() and text not in path.read_text(encoding="utf-8"):
-        return [f"{issue_id}: text {text!r} not found in {item.get('file')}"]
+    if text:
+        if path.is_dir():
+            return [f"{issue_id}: evidence text needs a file, not a folder: {file_rel}"]
+        if path.is_file() and text not in path.read_text(encoding="utf-8"):
+            return [f"{issue_id}: text {text!r} not found in {file_rel}"]
     return []
 
 
