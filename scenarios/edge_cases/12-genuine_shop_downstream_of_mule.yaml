@@ -1,0 +1,40 @@
+name: genuine_shop_downstream_of_mule
+title: Genuine shop downstream of mule
+expected_behaviour: "Mule money reaches a genuine shop through cash-out, and the shop never holds a gang role."
+reason: Tests whether a legitimate merchant receiving payments from a mule account for genuine retail purchases is protected from wrongful fraud attribution.
+status: runnable
+split: training
+seed: 101
+days: 61
+preset: tiny
+layer_changes:
+  world_ranges:
+    share_of_mule_outflows_to_genuine_shops:
+      training: [0.25, 0.25]
+      test: [0.02, 0.4]
+      stress: [0.0, 0.7]
+gangs:
+  - gang_id: gang_shop_cashout
+    strength: 1
+    budget:
+      money_paise: 50000000
+      time_minutes: 500000
+      max_risk: 0.99
+    start_minute: 1440
+    steps:
+      - block: acquire
+        params:
+          count: 6
+      - block: scam
+        params:
+          receiving_mules: 2
+          victims_per_receiving_mule: 12
+      - block: route
+        params:
+          layers: 2
+          accounts_per_layer: 2
+          dwell_minutes: 30
+      - block: cash_out
+        params:
+          channels:
+            - genuine_shop

@@ -423,10 +423,10 @@ def check_doc_evidence(issue_id: str, item: dict[str, Any], root: Path) -> list[
         ['F6: file docs/none.md not found']
     """
     path = root / item.get("file", "")
-    if not path.is_file():
+    if not (path.is_file() or path.is_dir()):
         return [f"{issue_id}: file {item.get('file')} not found"]
     text = item.get("text")
-    if text and text not in path.read_text(encoding="utf-8"):
+    if text and path.is_file() and text not in path.read_text(encoding="utf-8"):
         return [f"{issue_id}: text {text!r} not found in {item.get('file')}"]
     return []
 

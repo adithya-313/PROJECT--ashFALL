@@ -72,9 +72,9 @@ def _is_skipped_path(relative_path: Path) -> bool:
 
 def _check_file_imports(relative_path: Path, tree: ast.AST) -> list[str]:
     """
-    WHAT: Inspects AST Import and ImportFrom nodes for unauthorized imports of 'evaluation' or 'evaluation.truth'.
+    WHAT: Inspects AST Import, ImportFrom, and dynamic import Call nodes for unauthorized imports of 'evaluation'.
 
-    WHY: Files outside allowed reader folders must never import truth loader modules.
+    WHY: Files outside allowed reader folders must never import truth loader modules statically or dynamically.
 
     Args:
         relative_path: Relative path of the file being inspected.
@@ -102,6 +102,20 @@ def _check_file_imports(relative_path: Path, tree: ast.AST) -> list[str]:
                     f"{relative_path.as_posix()}:{node.lineno}: "
                     f"forbidden import from '{node.module}' outside allowed reader folders"
                 )
+        elif isinstance(node, ast.Call):
+            is_import_call = False
+            if isinstance(node.func, ast.Name) and node.func.id in ("import_module", "__import__"):
+                is_import_call = True
+            elif isinstance(node.func, ast.Attribute) and node.func.attr in ("import_module", "__import__"):
+                is_import_call = True
+            if is_import_call and node.args:
+                first_arg = node.args[0]
+                if isinstance(first_arg, ast.Constant) and isinstance(first_arg.value, str):
+                    if first_arg.value.startswith("evaluation"):
+                        violations.append(
+                            f"{relative_path.as_posix()}:{node.lineno}: "
+                            f"forbidden dynamic import '{first_arg.value}' outside allowed reader folders"
+                        )
     return violations
 
 

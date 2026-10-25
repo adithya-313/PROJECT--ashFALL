@@ -423,8 +423,15 @@ world_splits:
 #                             world getting close to the line is visible.
 #   report_alongside: fraud_share -> show the fraud share next to it,
 #                             because the score only makes sense beside it.
-#   run_on: validation_worlds -> run only on validation worlds, never on
-#                             test or stress worlds (ground rule 17).
+#   gate_on: [training_worlds, validation_worlds]
+#     -> gates on every training and validation world: a world whose best
+#        single signal reaches AUPRC 0.90 or more fails, and the response
+#        is to fix the world, never the threshold.
+#   report_only_on: [test_worlds, stress_worlds]
+#     -> runs on every test and stress world as report-only: results are
+#        recorded and never used to tune the world or the threshold.
+#   report_held_out_per_family: true
+#     -> reports held-out gangs per family on report-only worlds.
 #
 # What happens on a failure
 #   The WORLD is made harder. The 0.90 line is never moved.
@@ -433,18 +440,21 @@ world_splits:
 #   Fraud share is 2%. The clue "account age" alone scores 0.93.
 #   0.93 >= 0.90 -> the world fails and its design must be fixed.
 #
-# Source: amendment A-013.
+# Source: amendment A-013; amendment A-026.
 # ---------------------------------------------------------------------
 trivial_world_check:
   label: policy
   issue_ids_v2: [12-6]
-  derived_from: "amendment A-013"
+  derived_from: "amendment A-013; amendment A-026"
   metric: best_single_feature_auprc
   fail_threshold: 0.90
   report_top_features: 3
   report_alongside: fraud_share
-  run_on: validation_worlds
-  reason: PaySim was rejected in Level 9 because single features separated fraud almost perfectly. 0.90 marks "almost perfectly"; it is a policy decision, not a measurement. A failing world is fixed, never the threshold, and the check never runs on test or stress worlds (rule 17).
+  gate_on: [training_worlds, validation_worlds]
+  report_only_on: [test_worlds, stress_worlds]
+  report_held_out_per_family: true
+  routine_min_gap_days: 20
+  reason: PaySim was rejected in Level 9 because single features separated fraud almost perfectly. 0.90 marks "almost perfectly"; it is a policy decision, not a measurement. The check gates on training and validation worlds (a failing world is fixed, never the threshold) and runs on test and stress worlds as report-only, where results are recorded per held-out family and never used for tuning (A-026). A minimum counterparty gap of 20 days (routine_min_gap_days) reflects genuine recurring life obligations like salaries, rent, and monthly bills that temporary laundering accounts lack.
 
 # ---------------------------------------------------------------------
 # validation_worlds: the worlds where tuning is allowed

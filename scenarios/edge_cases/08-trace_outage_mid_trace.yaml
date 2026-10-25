@@ -1,0 +1,7 @@
+name: trace_outage_mid_trace
+title: Trace outage mid trace
+expected_behaviour: "Active from Level 23: a trace that hits a ledger or registry outage fails safely and resumes."
+reason: Tests system resilience when an automated payment trace encounters an external registry or ledger infrastructure outage midway.
+status: later_level
+active_from_level: 23
+note: "the money tracer is built in Level 23; the outage itself exists as scenarios/stress/registry-outage.yaml"

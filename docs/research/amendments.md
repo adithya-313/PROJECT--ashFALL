@@ -309,3 +309,14 @@ No model code exists yet (models start in Level 18; `world/` is simulator code).
 | Why | Ground rule 17 and the Level 12g brief allow deferring `fake_routine_life` first, and require at least two real families before Level 12h; two now exist and attack different signals (timing and flow; device control). A bug in the money-entry path would corrupt every world's ledger, training worlds included, for one extra family. Writing down what is lost and what brings it back keeps the deferral honest (ground rule 1). No model code exists yet for the new engine (models start in Level 18); `models/` and `scripts/fraud_*` hold only v1 PaySim work, excluded by `earlier_work_note`. |
 | Results exist? | No model results. |
 
+## A-026
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-10-25 |
+| Issue IDs | None |
+| Issue IDs v2 | 12-6 |
+| Files | `config/evaluation.yaml`, `evaluation/trivial_world.py` |
+| What changed | Level 12h. Partly replaces A-013 (where it says the check runs on validation worlds only). (a) The trivial-world check GATES on every training and validation world: a world whose best single signal reaches AUPRC 0.90 or more fails, and the response is to fix the world, never the threshold. (b) It also runs on every test and stress world as REPORT-ONLY: results are recorded, with held-out gangs reported per family, and are never used to tune the world or the threshold. Looking at test worlds is allowed; changing anything because of what was seen there is not. (c) If a report-only run shows a family or signal at or above 0.90, the response is fixed in advance: report the family, the signal and the separation; any fix to a mechanism must be justified without the test result (for example "the mechanism was unrealistic"), and that reason is written in a new amendment; after a fix, test and stress worlds are regenerated from fresh seed ranges, so the worlds that were looked at are never the worlds that are scored. This route is open only because no model exists yet; it closes when Level 18 starts. (d) The six candidate signals are fixed before any result: routine life, pass-through, dwell, devices per account, payer count and payer regions, each computed per account from world events in the evaluation package, scored in both directions. Mules are accounts holding a mule role in the truth; genuine accounts hold no gang role at any time (victims included). |
+| Why | Rule 17 forbids tuning on test and stress worlds, not looking at them. Recording the response in advance stops a report-only result from quietly turning into tuning. The signals and the scoring are fixed before any result exists. No model code exists yet for the new engine (models start in Level 18); `models/` and `scripts/fraud_*` hold only v1 PaySim work, excluded by `earlier_work_note`. |
+| Results exist? | No model results. |

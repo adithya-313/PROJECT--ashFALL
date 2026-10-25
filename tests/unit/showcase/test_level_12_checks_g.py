@@ -23,7 +23,7 @@ from showcase.level_12_checks_g import (
 def test_part_g_checks_match_the_brief() -> None:
     """
     WHAT: Verifies that Level 12 exports 7 checks with part 'g', named 31 to 37 in order with kinds:
-    normal, edge, edge, edge, negative, negative, consistency, that validate_checks passes across all 37 checks.
+    normal, edge, edge, edge, negative, negative, consistency, that validate_checks passes across all 41 checks.
 
     WHY: Enforces the showcase framework contract and verifies exact check taxonomy and naming required by the brief.
 
@@ -38,7 +38,7 @@ def test_part_g_checks_match_the_brief() -> None:
     """
     all_checks = level_12.get_checks(quick=True)
     validate_checks(all_checks)
-    assert len(all_checks) == 37
+    assert len(all_checks) == 41
     part_g = [check for check in all_checks if check.part == "g"]
     assert len(part_g) == 7
     expected_numbers = ["31", "32", "33", "34", "35", "36", "37"]

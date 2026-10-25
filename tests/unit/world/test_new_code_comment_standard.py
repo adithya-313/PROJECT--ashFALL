@@ -276,6 +276,18 @@ NEW_CODE_FILES: list[str] = [
     "showcase/level_12_support_g.py",
     "showcase/level_12_checks_g.py",
     "tests/unit/showcase/test_level_12_checks_g.py",
+    # Level 12h edge-case library module and test suite.
+    "world/edge_cases.py",
+    "tests/unit/world/test_edge_cases.py",
+    # Level 12h base rate module and test suite.
+    "world/base_rate.py",
+    "tests/unit/world/test_base_rate.py",
+    # Level 12h trivial world check module and test suite.
+    "evaluation/trivial_world.py",
+    "tests/unit/evaluation/test_trivial_world.py",
+    # Level 12h world sanity report against PaySim genuine rows and test suite.
+    "evaluation/sanity_report.py",
+    "tests/unit/evaluation/test_sanity_report.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
@@ -291,6 +303,8 @@ NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
     ("world/interactive_runner.py", "_apply_gang_configs"),
     # Level 12b unified device event stream helper.
     ("world/interactive_runner.py", "device_event_stream"),
+    # Level 12h fraud world card builder.
+    ("world/world_card.py", "build_fraud_world_card"),
 ]
 
 

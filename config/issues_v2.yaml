@@ -306,16 +306,18 @@ issues:
     evidence:
       - {kind: amendment, id: A-013}
       - {kind: config, file: config/evaluation.yaml, name: trivial_world_check}
+      - {kind: amendment, id: A-026}
   12-7:
     title: "The inflation factor had three meanings"
     origin: revision_2
-    status: partial
+    status: built
     levels: [12]
     parts: [12a, 12g]
     evidence:
       - {kind: amendment, id: A-012}
       - {kind: config, file: config/world_ranges.yaml, name: world_fraud_inflation_factor}
-    later_work: ["Level 12g: measure the factor and write it on fraud-on world cards"]
+      - {kind: config, file: config/base_rate.yaml}
+      - {kind: doc, file: world/base_rate.py}
   12-8:
     title: "Held-out tactics overlapped training mechanisms"
     origin: revision_2
@@ -376,10 +378,12 @@ issues:
   12-13:
     title: "Edge-case expectations depend on later levels"
     origin: revision_2
-    status: planned
+    status: built
     levels: [12, 29]
     parts: [12g]
-    later_work: ["Level 12g: active_from_level"]
+    evidence:
+      - {kind: doc, file: scenarios/edge_cases}
+      - {kind: doc, file: world/edge_cases.py, text: "active_from_level"}
   12-14:
     title: "Latin hypercube sampling is thin across 30-plus parameters"
     origin: revision_2
@@ -402,10 +406,12 @@ issues:
   12-16:
     title: "The sanity report compared against PaySim"
     origin: revision_2
-    status: planned
+    status: built
     levels: [12]
     parts: [12g]
-    later_work: ["Level 12g: IBM AML-Data only"]
+    evidence:
+      - {kind: config, file: config/sanity_report.yaml}
+      - {kind: doc, file: reports/sanity/summary.md}
   12-17:
     title: "Mule depth was not recorded; gang routing must obey the same limits"
     origin: revision_2
@@ -852,14 +858,15 @@ issues:
   E1:
     title: "Base rate and inflation factor"
     origin: level_11
-    status: partial
+    status: built
     levels: [12]
     parts: [12a, 12g]
     v1_status: built
     evidence:
       - {kind: amendment, id: A-012}
       - {kind: config, file: config/world_ranges.yaml, name: world_fraud_inflation_factor}
-    later_work: ["Level 12g: measure the factor and write it on fraud-on world cards"]
+      - {kind: config, file: config/base_rate.yaml}
+      - {kind: doc, file: world/base_rate.py}
   R7:
     title: "Failed payments in the transaction feed"
     origin: level_11

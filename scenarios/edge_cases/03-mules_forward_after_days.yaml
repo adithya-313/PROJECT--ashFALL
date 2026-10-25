@@ -1,0 +1,34 @@
+name: mules_forward_after_days
+title: Mules forward after days
+expected_behaviour: "Every slow-drip piece waits at least one day at each mule; the gang is tagged held-out in the truth."
+reason: Tests detection of held-out slow drip evasion where money is forwarded in small increments across multiple days with 24-hour holds at each intermediary mule.
+status: runnable
+split: test
+seed: 101
+days: 61
+preset: tiny
+gangs:
+  - gang_id: gang_slow_drip_days
+    strength: 1
+    family: slow_drip
+    budget:
+      money_paise: 50000000
+      time_minutes: 500000
+      max_risk: 0.99
+    start_minute: 1440
+    steps:
+      - block: acquire
+        params:
+          count: 4
+          origin_mix: all_rented
+      - block: scam
+        params:
+          receiving_mules: 1
+          victims_per_receiving_mule: 5
+      - block: route
+        params:
+          layers: 2
+          accounts_per_layer: 1
+          drip_piece_max_inr: 1999
+          drip_spread_days: 3
+          drip_hold_minutes: 1440

@@ -26,7 +26,7 @@ def test_part_f_checks_match_the_brief() -> None:
     """Part f is five checks named 26 to 30 in order, of kinds edge, edge, normal, consistency, edge."""
     all_checks = level_12.get_checks(quick=True)
     validate_checks(all_checks)
-    assert len(all_checks) == 37
+    assert len(all_checks) == 41
     part_f = [check for check in all_checks if check.part == "f"]
     assert [check.name.split(".")[0] for check in part_f] == ["26", "27", "28", "29", "30"]
     assert [check.kind for check in part_f] == ["edge", "edge", "normal", "consistency", "edge"]

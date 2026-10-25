@@ -185,3 +185,67 @@ def test_main_cli_returns_clean_exit_code() -> None:
     # 1. Invoke main CLI function and assert clean exit code 0.
     exit_code = main()
     assert exit_code == 0
+
+
+def test_dynamic_import_outside_allowed_folders_is_flagged(tmp_path: Path) -> None:
+    """
+    WHAT: Creates a temporary script outside allowed folders calling importlib.import_module('evaluation.truth')
+    and asserts that find_truth_violations flags the dynamic import attempt.
+
+    WHY: Dynamic imports using importlib or __import__ must not be used to circumvent static truth isolation checks.
+
+    Args:
+        tmp_path: Pytest temporary directory fixture for creating test files.
+
+    Returns:
+        None. Fails if dynamic evaluation import outside allowed folders is not detected.
+
+    Example:
+        # A file under scripts/ dynamically importing evaluation.truth is flagged.
+    """
+    # 1. Create temporary scripts directory and source file with dynamic import.
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    content = (
+        "import importlib\n"
+        "def run():\n"
+        "    return importlib.import_module('evaluation.truth')\n"
+    )
+    (scripts_dir / "worker.py").write_text(content, encoding="utf-8")
+
+    # 2. Assert that dynamic import outside allowed folders is flagged.
+    violations = find_truth_violations(tmp_path)
+    assert len(violations) == 1
+    assert "scripts/worker.py:3: forbidden dynamic import 'evaluation.truth'" in violations[0]
+
+
+def test_dynamic_import_inside_evaluation_is_permitted(tmp_path: Path) -> None:
+    """
+    WHAT: Creates a temporary file inside the evaluation package directory calling importlib.import_module
+    and asserts that find_truth_violations reports no violations.
+
+    WHY: Modules inside allowed reader folders are legitimately permitted to inspect evaluation modules.
+
+    Args:
+        tmp_path: Pytest temporary directory fixture for creating test files.
+
+    Returns:
+        None. Fails if dynamic import inside evaluation folder triggers false positive.
+
+    Example:
+        # A file under evaluation/ dynamically importing evaluation.truth passes cleanly.
+    """
+    # 1. Create temporary evaluation directory and file with dynamic import.
+    eval_dir = tmp_path / "evaluation"
+    eval_dir.mkdir(parents=True, exist_ok=True)
+    content = (
+        "import importlib\n"
+        "def run():\n"
+        "    return importlib.import_module('evaluation.truth')\n"
+    )
+    (eval_dir / "runner.py").write_text(content, encoding="utf-8")
+
+    # 2. Assert that dynamic import within evaluation directory is allowed.
+    violations = find_truth_violations(tmp_path)
+    assert violations == []
+

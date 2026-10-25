@@ -1,0 +1,7 @@
+name: mule_imitating_salaried_employee
+title: Mule imitating salaried employee
+expected_behaviour: "Deferred under A-025; no expectation is checked."
+reason: Tests detection of a mule account disguised to receive monthly salary credits like a regular salaried employee.
+status: deferred
+deferred_by: A-025
+note: "needs gang-funded salary credits, deferred with fake_routine_life"
