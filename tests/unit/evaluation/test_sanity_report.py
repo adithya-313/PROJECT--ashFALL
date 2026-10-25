@@ -11,8 +11,6 @@ import ast
 from pathlib import Path
 from typing import Any
 
-import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 
 from evaluation.sanity_report import (
@@ -51,11 +49,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
 }
 
 
-def test_hand_computed_paysim_and_world_stats(tmp_path: Path) -> None:
+@pytest.mark.needs_dvc
+def test_hand_computed_paysim_stats(tmp_path: Path) -> None:
     """
-    Validates statistical distribution calculations on hand-crafted analytical datasets.
+    Validates statistical distribution calculations on hand-crafted analytical datasets for PaySim.
     Proves mathematical exactness of quantile ratios, payer repeat transaction share, and payments per payer.
     """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
     fixture_parquet = tmp_path / "mini_paysim.parquet"
     table_data = {
         "step": [1, 1, 2, 2, 3, 3],
@@ -83,6 +85,12 @@ def test_hand_computed_paysim_and_world_stats(tmp_path: Path) -> None:
     assert abs(stats["type_shares"]["PAYMENT"] - 0.8) < 1e-6
     assert abs(stats["type_shares"]["TRANSFER"] - 0.2) < 1e-6
 
+
+def test_hand_computed_world_stats() -> None:
+    """
+    Validates statistical distribution calculations on hand-crafted analytical datasets for simulated worlds.
+    Proves mathematical exactness of quantile ratios, payer repeat transaction share, and payments per payer.
+    """
     mock_events = [
         PaymentEvent(
             minute=10, from_account="u1", to_account="u2", amount_paise=1000,
@@ -127,7 +135,16 @@ def test_hand_computed_paysim_and_world_stats(tmp_path: Path) -> None:
     assert w_stats["payments_per_payer"]["median"] == 1.0
     assert "not comparable" in str(w_stats["type_shares"])
 
-    report_text = build_report(w_stats, stats, DEFAULT_CONFIG)
+    dummy_paysim = {
+        "genuine_count": 5,
+        "amount_median": 50.0,
+        "amount_quantiles": {0.1: 14.0, 0.25: 25.0, 0.5: 50.0, 0.75: 75.0, 0.9: 90.0, 0.99: 99.0},
+        "amount_quantile_ratios": {0.1: 0.28, 0.25: 0.5, 0.5: 1.0, 0.75: 1.5, 0.9: 1.8, 0.99: 1.98},
+        "payer_repeat_share": 0.2,
+        "payments_per_payer": {"median": 1.0, "p90": 2.6},
+        "type_shares": {"PAYMENT": 0.8, "TRANSFER": 0.2},
+    }
+    report_text = build_report(w_stats, dummy_paysim, DEFAULT_CONFIG)
     expected_header = (
         "Both datasets are synthetic, so agreement with them shows plausibility, not realism. "
         "This report is recorded and never used to set or tune any world setting."
@@ -138,11 +155,15 @@ def test_hand_computed_paysim_and_world_stats(tmp_path: Path) -> None:
     assert "IBM AML-Data: pending (not downloaded); register 12-16 records it." in report_text
 
 
+@pytest.mark.needs_dvc
 def test_paysim_reader_never_reads_excluded_columns(tmp_path: Path) -> None:
     """
     Asserts that the PaySim reader explicitly excludes Kaggle balance columns from loaded dataframes.
     Passes a synthetic parquet dataset containing forbidden balance columns and confirms they are omitted.
     """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
     fixture_parquet = tmp_path / "has_balances.parquet"
     data = {
         "step": [1, 2],
