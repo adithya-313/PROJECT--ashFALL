@@ -8,6 +8,7 @@ customer disputes, feedback recording, and explicit HTTP error handling for bad 
 
 import os
 from datetime import datetime, timedelta
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,6 +16,7 @@ from fastapi.testclient import TestClient
 from core.event_clock import IST, ManualClock
 from nationalsim.app import create_app, create_app_prod
 from nationalsim.keyed_hash import compute_identifier_hash
+from nationalsim.registry import NotParticipantError
 
 
 def test_health_check_returns_ok_and_simulated_time() -> None:
@@ -26,7 +28,7 @@ def test_health_check_returns_ok_and_simulated_time() -> None:
     """
     fixed_time = datetime(2026, 9, 1, 10, 0, tzinfo=IST)
     clock = ManualClock(fixed_time)
-    app = create_app(clock=clock, key_provider=lambda: "test_key_secret")
+    app = create_app(clock=clock, key_provider=lambda: "test_key_secret", settings={})
     client = TestClient(app)
 
     response = client.get("/health")
@@ -183,7 +185,7 @@ def test_http_feedback_endpoint_records_call() -> None:
     screening logic unaffected.
     """
     clock = ManualClock()
-    app = create_app(clock=clock, key_provider=lambda: "key")
+    app = create_app(clock=clock, key_provider=lambda: "key", settings={})
     client = TestClient(app)
 
     feedback_payload = {
@@ -230,7 +232,7 @@ def test_http_malformed_inputs_return_422() -> None:
     FastAPI schema validation must reject the request before it reaches business logic.
     """
     clock = ManualClock()
-    app = create_app(clock=clock, key_provider=lambda: "key")
+    app = create_app(clock=clock, key_provider=lambda: "key", settings={})
     client = TestClient(app)
 
     # 1. Invalid hash (not 64 lowercase hex)
@@ -269,3 +271,52 @@ def test_production_factory_fails_loudly_when_secret_key_missing() -> None:
     finally:
         if old_env is not None:
             os.environ["NATIONALSIM_DPIP_KEY"] = old_env
+
+
+def test_not_participant_error_gives_403_regardless_of_message_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Proves that NotParticipantError always returns HTTP 403 Forbidden even if error text changes.
+
+    What it is for:
+        When an unapproved bank attempts to screen an identifier, the registry core raises
+        a typed NotParticipantError. The HTTP route must catch this exception class directly
+        and return HTTP 403 Forbidden, rather than relying on brittle message substring matches.
+
+    Inputs:
+        monkeypatch: Pytest fixture to temporarily alter the registry's screen method.
+
+    What it returns:
+        None. Asserts the HTTP status code remains 403 when the error message is changed.
+
+    How it works:
+        1. Build an application with a manual clock, secret key, and empty settings.
+        2. Monkeypatch app.state.registry.screen to raise NotParticipantError with completely novel text.
+        3. Send a screening request to POST /screen.
+        4. Assert that the HTTP response code is 403 and the detail preserves the custom message.
+
+    Errors and side effects:
+        Fails assertion if the HTTP layer fails to map the typed exception to HTTP 403.
+
+    Limits:
+        Evaluates the exception handling behavior of the POST /screen endpoint.
+    """
+    clock = ManualClock()
+    app = create_app(clock=clock, key_provider=lambda: "test_key", settings={})
+    client = TestClient(app)
+
+    def custom_screen(*args: Any, **kwargs: Any) -> Any:
+        raise NotParticipantError("Custom refusal: institution has not signed bilateral agreement")
+
+    monkeypatch.setattr(app.state.registry, "screen", custom_screen)
+
+    screen_payload = {
+        "requesting_bank_id": "bank_arbitrary",
+        "identifier_hash": "c" * 64,
+        "identifier_type": "account",
+        "run_id": "run_test_typed_refusal",
+    }
+    response = client.post("/screen", json=screen_payload)
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Custom refusal: institution has not signed bilateral agreement"
+

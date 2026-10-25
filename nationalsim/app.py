@@ -21,7 +21,7 @@ from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
 
 from core.event_clock import Clock, WallClock
-from nationalsim.registry import RegistryCore
+from nationalsim.registry import NotParticipantError, RegistryCore
 
 
 class IngestRequest(BaseModel):
@@ -155,67 +155,52 @@ def load_nationalsim_config() -> tuple[timedelta, dict[str, Any]]:
 
 
 def create_app(
-    clock: Clock | None = None,
-    key_provider: Callable[[], str | bytes] | None = None,
-    settings: dict[str, Any] | None = None,
+    clock: Clock,
+    key_provider: Callable[[], str | bytes],
+    settings: dict[str, Any],
 ) -> FastAPI:
     """Create and configure the FastAPI application for the national registry mock.
 
     What it is for:
         Builds the web application exposing DPIP screening, ingestion, dispute, revoke,
-        and feedback HTTP routes. Tests call this factory to inject fake clocks and test keys,
-        while production calls it with system clocks and environment secrets.
+        and feedback HTTP routes. Callers must supply the clock, secret key provider,
+        and registry settings explicitly so test and production environments never mix.
 
     Inputs:
         clock: An instance conforming to the Clock protocol, providing timezone-aware IST time.
-            If None, defaults to a WallClock using the computer's real clock.
+            For example, ManualClock or ReplayClock in tests, or WallClock in production.
         key_provider: A callable returning the shared secret key used for HMAC verification.
-            If None, the factory reads NATIONALSIM_DPIP_KEY from the environment and fails loudly if absent.
-        settings: Optional dictionary holding listing_delay_minutes and bank participation settings.
-            If None, settings are loaded from config/nationalsim.yaml.
+            For example, a lambda returning a fixed test string or reading from the environment.
+        settings: Dictionary holding listing_delay_minutes (int) and banks (dict).
+            For example, {"listing_delay_minutes": 15, "banks": {"bank_0": {"dpip_participation": True}}}.
 
     What it returns:
         A fully configured FastAPI application ready to serve HTTP traffic.
 
     How it works:
-        1. Resolve the time clock, defaulting to WallClock for live deployments.
-        2. Resolve the secret key, ensuring the key is present and refusing to start without it.
-        3. Resolve registry settings from the argument or from config/nationalsim.yaml.
-        4. Instantiate the core RegistryCore state container.
-        5. Register HTTP routes for /health, /ingest, /screen, /dispute, /revoke, and /feedback.
-        6. Attach error handlers so business rule rejections return explicit HTTP 4xx error codes.
+        1. Read listing delay and bank participation settings from the provided dictionary.
+        2. Evaluate key_provider to verify that the secret key is present and non-empty.
+        3. Instantiate the core RegistryCore state container with the clock and settings.
+        4. Register HTTP routes for /health, /ingest, /screen, /dispute, /revoke, and /feedback.
+        5. Attach error handlers so NotParticipantError returns 403 and ValueError returns 400.
 
     Errors and side effects:
-        Raises ValueError if key_provider is None and NATIONALSIM_DPIP_KEY is missing from the environment.
+        Raises ValueError if key_provider returns an empty key.
         In-memory state is held inside the RegistryCore instance for the lifetime of the process.
 
     Limits:
         Stores registry data in memory. Restarting the server clears all ingested reports.
     """
-    resolved_clock: Clock = clock if clock is not None else WallClock()
+    resolved_key = key_provider()
+    if not resolved_key or (isinstance(resolved_key, str) and not resolved_key.strip()):
+        raise ValueError("Key provider returned an empty or whitespace key.")
 
-    # Verify that a valid secret key is available before starting
-    if key_provider is not None:
-        resolved_key = key_provider()
-    else:
-        env_key = os.environ.get("NATIONALSIM_DPIP_KEY")
-        if not env_key or not env_key.strip():
-            raise ValueError(
-                "Environment variable 'NATIONALSIM_DPIP_KEY' is missing or empty. "
-                "The national simulation service requires this secret key to initialize."
-            )
-        resolved_key = env_key
-
-    # Resolve listing delay and bank participation settings
-    if settings is not None:
-        delay_minutes = int(settings.get("listing_delay_minutes", 15))
-        listing_delay = timedelta(minutes=delay_minutes)
-        bank_settings = settings.get("banks", {})
-    else:
-        listing_delay, bank_settings = load_nationalsim_config()
+    delay_minutes = int(settings.get("listing_delay_minutes", 15))
+    listing_delay = timedelta(minutes=delay_minutes)
+    bank_settings = settings.get("banks", {})
 
     registry = RegistryCore(
-        clock=resolved_clock,
+        clock=clock,
         listing_delay=listing_delay,
         bank_settings=bank_settings,
     )
@@ -228,13 +213,13 @@ def create_app(
 
     # Store references on app state so tests or inspection tools can examine them directly
     app.state.registry = registry
-    app.state.clock = resolved_clock
+    app.state.clock = clock
     app.state.key = resolved_key
 
     @app.get("/health")
     def health_check() -> dict[str, str]:
         """Return service health status and current simulated time in IST."""
-        current_time = resolved_clock.now_ist().isoformat()
+        current_time = clock.now_ist().isoformat()
         return {
             "status": "ok",
             "service": "nationalsim",
@@ -279,12 +264,12 @@ def create_app(
                 distinct_accounts_linked=result.distinct_accounts_linked,
                 risk_score=result.risk_score,
             )
+        except NotParticipantError as exc:
+            # A non-participating bank is refused with an explicit 403 Forbidden
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
         except ValueError as exc:
-            # A non-participating bank or invalid hash must return an explicit 4xx error
-            err_msg = str(exc)
-            if "not a participating DPIP member" in err_msg:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=err_msg) from exc
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err_msg) from exc
+            # Invalid input or badly shaped hash returns 400 Bad Request
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     @app.post("/revoke")
     def revoke_report(payload: RevokeRequest) -> dict[str, Any]:
@@ -370,4 +355,13 @@ def create_app_prod() -> FastAPI:
             "Environment variable 'NATIONALSIM_DPIP_KEY' is missing or empty. "
             "The national simulation service requires this secret key to initialize."
         )
-    return create_app(clock=WallClock(), key_provider=lambda: key)
+    listing_delay, bank_settings = load_nationalsim_config()
+    prod_settings: dict[str, Any] = {
+        "listing_delay_minutes": int(listing_delay.total_seconds() // 60),
+        "banks": bank_settings,
+    }
+    return create_app(
+        clock=WallClock(),
+        key_provider=lambda: key,
+        settings=prod_settings,
+    )

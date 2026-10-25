@@ -227,7 +227,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: ["uvicorn", "nationalsim.app:create_app_prod", "--factory", "--host", "0.0.0.0", "--port", "8080"]
+    command: ["uvicorn", "--factory", "--host", "0.0.0.0", "--port", "8080", "nationalsim.app:create_app_prod"]
     expose:
       - "8080"
     ports:

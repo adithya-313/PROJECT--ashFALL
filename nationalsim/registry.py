@@ -14,6 +14,22 @@ from core.event_clock import IST, Clock
 from nationalsim.keyed_hash import validate_identifier_hash
 
 
+class NotParticipantError(ValueError):
+    """Raised when an operation is requested by a bank that does not take part in DPIP.
+
+    What it is for:
+        DPIP screening requires banks to hold a shared secret key and agree to national
+        intelligence rules. If an unauthorized bank requests screening, the registry refuses
+        with this specific error so the HTTP layer can return a 403 Forbidden.
+
+    Inputs:
+        message: Plain-text explanation naming the bank that was refused.
+
+    What it returns:
+        An instance of NotParticipantError, which is also a ValueError.
+    """
+
+
 @dataclass
 class RegistryEntry:
     """
@@ -217,7 +233,7 @@ class RegistryCore:
             ValueError: If requesting bank is not a DPIP participant or hash is invalid.
         """
         if not self.is_participant(requesting_bank_id):
-            raise ValueError(f"Bank '{requesting_bank_id}' is not a participating DPIP member")
+            raise NotParticipantError(f"Bank '{requesting_bank_id}' is not a participating DPIP member")
 
         validate_identifier_hash(identifier_hash)
 
