@@ -1,0 +1,50 @@
+# Configuration fixture for Level 12 Showcase Part D checks 17 and 18 (tactic families in a training world).
+#
+# TERM: tactic family = one named way a mule gang moves stolen money, defined in config/tactic_families.yaml.
+# TERM: training family = a family that gang worlds used for training and tuning may contain.
+# TERM: scam gang = syndicate funded through victim fraud payments rather than a fixture source.
+#
+# Both families below are in the training section of config/tactic_families.yaml. The gangs differ only in family
+# and start minute, so the per-family counts in check 18 come from different gangs.
+
+gangs:
+  - gang_id: gang_fast
+    strength: 1
+    family: fast_pass_through
+    budget:
+      money_paise: 50000000
+      time_minutes: 500000
+      max_risk: 0.99
+    start_minute: 1440
+    steps:
+      - block: acquire
+        params:
+          count: 4
+          origin_mix: all_rented
+      - block: scam
+        params:
+          receiving_mules: 2
+      - block: route
+        params:
+          layers: 1
+          accounts_per_layer: 2
+  - gang_id: gang_layered
+    strength: 1
+    family: layered_chain
+    budget:
+      money_paise: 50000000
+      time_minutes: 500000
+      max_risk: 0.99
+    start_minute: 8640
+    steps:
+      - block: acquire
+        params:
+          count: 6
+          origin_mix: all_rented
+      - block: scam
+        params:
+          receiving_mules: 2
+      - block: route
+        params:
+          layers: 3
+          accounts_per_layer: 2

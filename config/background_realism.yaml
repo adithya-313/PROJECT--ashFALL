@@ -1,11 +1,52 @@
-# Background realism parameters for the Level 11 simulated world.
+# =====================================================================
+# BACKGROUND REALISM: the daily and yearly rhythm of everyday payments
+# =====================================================================
 #
-# Every parameter is registered as an assumption with nested ranges [min, max].
-# Training sits inside test, and test sits inside stress.
-# Evaluated and validated by core.config_validator.
+# What this file is
+#   Real payment traffic is not flat. It rises before festivals, jumps at the
+#   start of a month when salaries and rents are paid, differs at weekends,
+#   and follows the hours of the day. This file gives the allowed range for
+#   each of those rhythms in the simulated world. It belongs to Level 11
+#   (the everyday-payments world), which is frozen: do not change values.
+#
+# Who reads it
+#   world/background_config.py (read_background_realism) loads it.
+#   world/festivals.py draws the festivals, world/rhythms.py draws the
+#   month, weekend and hour-of-day settings, and world/world_plan.py puts
+#   them into the plan of a world. world/grounding.py counts the entries.
+#   World layers (world/layers.py) can narrow a range for a stress scenario.
+#
+# How to read an entry
+#   label       "assumption": nobody published the number, so the range is
+#               our registered guess.
+#   unit        what the numbers count. A fraction over normal of 0.1 means
+#               10% more payments than a normal day.
+#   training / test / stress
+#               the range for each kind of world: training is what the
+#               detector learns from, test is the final exam, stress is
+#               extreme cases. Training sits inside test, and test inside
+#               stress (config/world_ranges.yaml explains why). Each world
+#               picks one value inside the range for its kind.
+#   reason      one sentence on why the range looks the way it does.
+#
+# The five kinds of simulated person ("personas") used below
+#   salaried_employee, student, retiree, small_shopkeeper, gig_worker.
+#
+# Where the full reasoning lives
+#   The reason lines below. No decision document is specific to this file.
+#
 # Checked by: python -m core.config_validator config/background_realism.yaml
+# =====================================================================
 
 parameters:
+  # ---- Festivals ----
+  # Each world has one main festival (Diwali) and some smaller ones. Payments
+  # rise towards a festival's peak day, then fall back. At the peak, the
+  # number of payments is (1 + uplift) times a normal day.
+
+  # The day of the run on which the main festival peaks. Example: training
+  # [30, 50] means somewhere between day 30 and day 50 of a 61-day run. A run
+  # must be longer than the top value, or it is refused.
   festival_peak_day_in_world:
     label: assumption
     unit: day number in world
@@ -14,6 +55,8 @@ parameters:
     stress: [10, 60]
     reason: "Assumption; window of calendar days within which the primary annual festival peak falls in a simulated world."
 
+  # How much busier the main festival's peak day is than a normal day.
+  # Example: training [0.05, 0.25] means 5% to 25% more payments at the peak.
   festival_uplift_fraction:
     label: assumption
     unit: fraction over normal
@@ -22,6 +65,7 @@ parameters:
     stress: [0.01, 0.8]
     reason: "The only reported figure is that Diwali-eve volume was about 6-9% above that October's daily average (NPCI-based reports, Oct 2025, as quoted in the Level 11 plan); uplift over normal non-festive weeks is not published, so this is a range."
 
+  # Days of build-up before the peak. Example: training [5, 12] days.
   festival_rise_days:
     label: assumption
     unit: days
@@ -30,6 +74,8 @@ parameters:
     stress: [2, 25]
     reason: "Assumption; duration over which celebratory retail payments progressively rise towards the festive peak."
 
+  # Days it takes to settle back to normal after the peak. Example: training
+  # [3, 10] days.
   festival_fade_days:
     label: assumption
     unit: days
@@ -38,6 +84,8 @@ parameters:
     stress: [1, 20]
     reason: "Assumption; duration over which heightened consumer spending recedes back to baseline transaction volumes."
 
+  # How many smaller festivals a world has. Each one peaks on a day chosen
+  # anywhere in the run. Example: training [1, 3] smaller festivals.
   other_festival_count:
     label: assumption
     unit: festivals per world
@@ -46,6 +94,8 @@ parameters:
     stress: [0, 6]
     reason: "Other festivals: no published series found; assumption for the number of secondary cultural festivals per simulated year."
 
+  # The peak-day rise of each smaller festival, same meaning as
+  # festival_uplift_fraction. Example: training [0.01, 0.08] means 1% to 8%.
   other_festival_uplift_fraction:
     label: assumption
     unit: fraction over normal
@@ -54,6 +104,8 @@ parameters:
     stress: [0.002, 0.2]
     reason: "Other festivals: no published series found; secondary regional celebrations induce smaller transaction surges than Diwali."
 
+  # Days of build-up and of fade for a smaller festival; the same number is
+  # used on both sides. Example: training [2, 5] days each side.
   other_festival_rise_fade_days:
     label: assumption
     unit: days (each side)
@@ -62,6 +114,11 @@ parameters:
     stress: [1, 12]
     reason: "Other festivals: no published series found; minor festivals exhibit tighter ramp-up and cool-down activity periods."
 
+  # ---- The calendar: month start and weekends ----
+
+  # How much busier the first day of a month is (salaries, rents and bills are
+  # paid). The extra fades in a straight line to nothing over the easing days
+  # below. Example: training [0.02, 0.15] means 2% to 15% more payments on day 1.
   month_start_uplift_fraction:
     label: assumption
     unit: fraction on day 1
@@ -70,6 +127,8 @@ parameters:
     stress: [0.0, 0.5]
     reason: "Assumption; beginning-of-month salary disbursement, residential rents, and utility bill settlements create an immediate liquidity surge."
 
+  # Days over which the month-start extra shrinks to nothing. Example:
+  # training [7, 15] means it is gone after 7 to 15 days.
   month_start_easing_days:
     label: assumption
     unit: days to ease to normal
@@ -78,6 +137,9 @@ parameters:
     stress: [3, 28]
     reason: "Assumption; number of days required for first-of-month financial settlement obligations to taper toward steady-state rates."
 
+  # How a Saturday or Sunday differs from a weekday. A plus sign means
+  # busier, a minus sign quieter, 0 means no difference. Example: training
+  # [-0.15, 0.15] means anything from 15% quieter to 15% busier.
   weekend_difference_fraction:
     label: assumption
     unit: signed, weekend vs weekday
@@ -86,6 +148,13 @@ parameters:
     stress: [-0.5, 0.5]
     reason: "Not found publicly; the range includes \"no difference\" (zero) as weekend consumer patterns vary across payment types."
 
+  # ---- The hours of the day ----
+  # Each kind of person pays most around a peak hour; activity falls off
+  # smoothly on either side and never below a night floor.
+
+  # The quietest level of the day, as a share of the peak level. Example:
+  # training [0.05, 0.2] means at night people pay at 5% to 20% of the
+  # peak-hour pace.
   night_activity_floor:
     label: assumption
     unit: share of peak activity
@@ -94,6 +163,9 @@ parameters:
     stress: [0.01, 0.6]
     reason: "The persona peak hours and the night floor are assumptions; reflects baseline nocturnal transaction volume from 24/7 automated flows."
 
+  # How wide the busy period around a peak hour is: the width of the bell
+  # curve, in hours. A larger value spreads payments more evenly over the day.
+  # Example: training [2, 4] hours.
   daily_peak_width_hours:
     label: assumption
     unit: hours
@@ -102,6 +174,9 @@ parameters:
     stress: [1, 8]
     reason: "Assumption; standard deviation width of diurnal Gaussian activity curves concentrating individual payments around preferred hours."
 
+  # The hour of day (0 to 24 on a clock; 18 is 6 pm) when each kind of person
+  # pays most. Example: training [18, 21] puts a salaried employee's peak
+  # between 6 pm and 9 pm.
   peak_hour_salaried_employee:
     label: assumption
     unit: hour of day (0-24)
@@ -110,6 +185,7 @@ parameters:
     stress: [12, 23.5]
     reason: "The persona peak hours and the night floor are assumptions; salaried professionals concentrate discretionary purchases during evening hours after office shifts."
 
+  # Same, for a student. Example: training [19, 22] means 7 pm to 10 pm.
   peak_hour_student:
     label: assumption
     unit: hour of day
@@ -118,6 +194,7 @@ parameters:
     stress: [14, 23.5]
     reason: "The persona peak hours and the night floor are assumptions; student demographic transactions peak in late evening social hours."
 
+  # Same, for a retired person. Example: training [10, 13] means 10 am to 1 pm.
   peak_hour_retiree:
     label: assumption
     unit: hour of day
@@ -126,6 +203,7 @@ parameters:
     stress: [7, 18]
     reason: "The persona peak hours and the night floor are assumptions; retired citizens conduct routine banking and household errands during morning hours."
 
+  # Same, for a small shopkeeper. Example: training [13, 17] means 1 pm to 5 pm.
   peak_hour_small_shopkeeper:
     label: assumption
     unit: hour of day
@@ -134,6 +212,8 @@ parameters:
     stress: [9, 22]
     reason: "The persona peak hours and the night floor are assumptions; merchant accounts process highest transaction density during afternoon commercial hours."
 
+  # Same, for a gig worker (ride or delivery platforms). Example: training
+  # [17, 21] means 5 pm to 9 pm.
   peak_hour_gig_worker:
     label: assumption
     unit: hour of day

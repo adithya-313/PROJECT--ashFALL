@@ -1,0 +1,7 @@
+name: recycled_phone_number
+title: Recycled phone number
+expected_behaviour: "Active from Level 13: a recycled number's new owner is not treated as the old owner."
+reason: Tests that a telecom subscriber receiving a re-issued phone number previously operated by a fraudster is not burdened with historical suspicion.
+status: later_level
+active_from_level: 13
+note: "recycle delay belongs to Level 13b (register 13-9)"

@@ -1,17 +1,64 @@
-# Ranges for the simulated worlds.
+# =====================================================================
+# WORLD RANGES: how far each setting of the simulated world may vary
+# =====================================================================
 #
-# Every parameter is either:
-#   sourced    = a public page was opened and a short quote is recorded,
-#   reported   = seen in a secondary source or not yet link-checked by the author,
-#   assumption = registered as an assumption (the rule PixSim uses).
-# "reported" becomes "sourced" after the author opens the link and sees the quote.
+# What this file is
+#   The simulated world has many settings: how big a payment is, how long a
+#   gang keeps a mule account, how late a bank hears about a complaint. For
+#   each one this file gives an allowed range, [lowest, highest], and says
+#   how well that range is backed by evidence. There are 79 settings.
+#   A world picks its own value for a setting at random inside the range
+#   for its kind of world. Some settings are picked once per world, some
+#   once per bank, per gang or per person.
 #
-# Training, test and stress ranges are nested: training sits inside test, test sits inside stress.
-# The widths around any centre value are the author's choices, not findings.
+# Who reads it
+#   world/config_reader.py (read_world_ranges, get_parameter_entry,
+#   draw_in_range) for most settings. Also world/build_world.py, banks.py,
+#   people.py, amounts.py, episodes.py, episode_payments.py, cash_out.py,
+#   scam_config.py, tactic_config.py, gang_feed.py, gang_reactions.py,
+#   account_market.py and mule_origins.py, which each read the entries they
+#   need. Other config files point here with "world_ranges_reference".
+#   core/config_validator.py checks the shape of this file.
+#
+# How to read an entry
+#   label       how well the range is backed:
+#     sourced     a public page was opened and a short quote is recorded.
+#     reported    seen in a second-hand source, or the link was not yet
+#                 checked by the author. It becomes "sourced" once checked.
+#     assumption  nobody has published the number, so the range is our
+#                 registered guess. Most entries are this.
+#     (A fourth label, "policy", means "our own rule"; this file has none.)
+#   unit        what the numbers count (rupees, minutes, a fraction ...).
+#               A fraction is a number from 0 to 1: 0.25 means 25%.
+#   training / test / stress
+#               the range for each kind of world:
+#                 training  the world the detector learns from.
+#                 test      the final exam; seen once, never used to adjust.
+#                 stress    extreme situations, to see what breaks.
+#               They are nested: training sits inside test, and test sits
+#               inside stress (the validator checks this). The test and
+#               stress ranges are wider on purpose, so the exam and the
+#               stress runs contain cases that training never showed. How
+#               far they are widened is the author's choice, not a finding.
+#               (Validation worlds use the training ranges.)
+#   issue_ids   the problem numbers (config/issues.yaml) the entry answers.
+#   reason      one sentence on why the range looks the way it does.
+#   source      for "sourced" and "reported" entries: web page, date, quote.
+#
+# Where the full reasoning lives
+#   docs/research/amendments.md (A-004, A-005, A-006 added most entries),
+#   config/evaluation.yaml (what the world kinds are for).
+#
 # Format of every range: [min, max].
 # Checked by: python -m core.config_validator config/world_ranges.yaml
+# =====================================================================
 
 parameters:
+  # ---- Mule accounts: how stolen money moves, and how it is reported ----
+
+  # How far down the chain of mule accounts the money goes before it is
+  # cashed out (1 = the first mule). Example: training [2, 5] means cash-out
+  # mostly happens at the 2nd to 5th mule.
   hops_to_cash_out:
     label: sourced
     unit: position in the chain of mule accounts
@@ -24,6 +71,8 @@ parameters:
       quote: "cashing out activity was mainly concentrated between the second and fifth mule accounts, with the highest concentration at the second mule account."
     reason: UK evidence, not India; test and stress widths are our choices.
 
+  # Of the mule accounts a bank closed ("offboarded"), the share that were
+  # less than a year old. Example: training [0.40, 0.55] means 40% to 55%.
   share_offboarded_within_first_year:
     label: sourced
     unit: fraction
@@ -36,6 +85,9 @@ parameters:
       quote: "In 2025, 114,984 accounts were offboarded within the first year of opening, representing 47.1% of the account tenure figures."
     reason: UK; it measures account age at offboarding, not at first illicit use; centre 0.471.
 
+  # Of the mule accounts a bank closed, the share the bank reported to a
+  # shared national fraud list. Example: training [0.25, 0.50] means a bank
+  # reports one in four to one in two.
   share_reported_to_shared_database:
     label: sourced
     unit: fraction
@@ -48,6 +100,9 @@ parameters:
       quote: "Of these offboarded money mules, only 37% were reported to the National Fraud Database (NFD)."
     reason: "UK proxy for India (no Indian figure found); covers Jan 2022 to Sep 2023. Measures firms reporting offboarded mules to the shared database, not victims complaining (corrected 2026-10-10, review item R1). Used for the bank-to-registry reporting share; the victim complaint share is a separate parameter added later. FCA also notes one firm reported only 6% and some over 66%."
 
+  # How long stolen money rests in a mule account before it is passed on
+  # (the "dwell"). Example: training [5, 60] minutes. Gang routes use it, and
+  # training routes may not wait longer than its top value (60).
   minutes_money_stays_in_mule_account:
     label: sourced
     unit: minutes
@@ -60,6 +115,10 @@ parameters:
       quote: "Money mules are incentivized to complete payout orders within a strictly enforced 10-minute window."
     reason: "CloudSEK's own page says mules must finish payout orders within a 10-minute window. This is a required payout window for one operation, not a measured average. UK secondary sources describe holds beyond 24 hours, so stress goes to 1440. Author checked the page by hand on 2026-10-10."
 
+  # Size of one transfer between mule accounts, in rupees. Example: training
+  # [2000, 50000] means Rs 2,000 to Rs 50,000. Scam victims' first payments
+  # use it too, and its lowest value (Rs 2,000) is the "slow drip" line that
+  # training worlds must stay above.
   mule_transfer_amount_inr:
     label: assumption
     unit: rupees
@@ -68,6 +127,8 @@ parameters:
     stress: [100, 1000000]
     reason: No Indian figure found; press reports of about 270 US dollars average for one operation conflict and are context only.
 
+  # Share of ordinary UPI payments that are Rs 2,000 or less. Example:
+  # training [0.90, 0.97] means 90 to 97 payments in every 100 are that small.
   genuine_payments_up_to_2000_inr_share:
     label: sourced
     unit: fraction
@@ -80,6 +141,9 @@ parameters:
       quote: "small-value UPI transactions up to ₹ 2,000, which comprise more than 95% of the total volume of UPI (P2M) transactions"
     reason: "NPCI's own FAQ says transactions up to 2,000 rupees are more than 95% of UPI P2M volume. P2M only, not all UPI. Author checked the page by hand on 2026-10-10."
 
+  # How long after a theft the victim reports it. Example: training [5, 120]
+  # minutes. The complaint_delay_* entries further down replace it for newer
+  # work; this one stays unchanged for Level 10.
   victim_report_delay_minutes:
     label: assumption
     unit: minutes
@@ -88,6 +152,8 @@ parameters:
     stress: [1, 10080]
     reason: No published delay found.
 
+  # How many mule accounts one gang uses. Example: training [5, 50] mules.
+  # A gang's "acquire" step uses it when the gang gives no count of its own.
   mules_per_gang:
     label: assumption
     unit: count
@@ -96,6 +162,8 @@ parameters:
     stress: [2, 2000]
     reason: Not found; press figures for one large operation conflict (16,000 to hundreds of thousands) and only justify the stress end.
 
+  # Share of mule owners who know what their account is used for ("witting")
+  # rather than being tricked. Example: training [0.20, 0.60] means 20% to 60%.
   share_of_mules_who_are_witting:
     label: assumption
     unit: fraction
@@ -104,6 +172,8 @@ parameters:
     stress: [0.0, 1.0]
     reason: Regulators recognise both kinds but publish no split.
 
+  # Share of mules that are business-type accounts (current or merchant)
+  # rather than personal ones. Example: training [0.05, 0.30] means 5% to 30%.
   share_of_mules_on_current_or_merchant_accounts:
     label: assumption
     unit: fraction
@@ -112,11 +182,17 @@ parameters:
     stress: [0.0, 0.80]
     reason: One report says current/corporate accounts were preferred; no share published.
 
+  # ---- Mule origins and rented accounts (issue G1) ----
+  # The three origin shares are independent ranges, so the world builder
+  # divides each drawn share by their sum before using them as chances.
+
   # Added 2026-10-10 (Level 11 Part 1, task 3, issues G1-G6). Logged as A-004
   # in docs/research/amendments.md. Widths of ranges are the author's choices,
   # not findings. Shares inside one group are rescaled to add up to 1 by the
   # world builder in Level 12; they are stored separately here.
 
+  # Chance that a mule is a real person's existing account, rented out by its
+  # owner. Example: training [0.2, 0.5] before rescaling.
   mule_origin_share_rented:
     label: assumption
     issue_ids: [G1]
@@ -126,6 +202,8 @@ parameters:
     stress: [0.0, 0.9]
     reason: Police cases describe rented accounts (a Bengaluru case in July 2025 involved 357+ accounts) but no origin split is published.
 
+  # Chance that a mule is a new account opened on someone else's identity
+  # papers (KYC is the bank's identity check). Example: training [0.1, 0.4].
   mule_origin_share_borrowed_kyc:
     label: assumption
     issue_ids: [G1]
@@ -135,6 +213,8 @@ parameters:
     stress: [0.0, 0.9]
     reason: Misused or borrowed KYC documents are described in press reports; no split is published.
 
+  # Chance that a mule is a new business account (a shop account in the
+  # simulation). Example: training [0.05, 0.3].
   mule_origin_share_business:
     label: assumption
     issue_ids: [G1]
@@ -144,6 +224,9 @@ parameters:
     stress: [0.0, 0.8]
     reason: One report says current and merchant accounts were preferred; no share is published.
 
+  # Share of a rented account owner's own outgoing payments that carry on
+  # while the account is rented; the rest are paused. Example: training
+  # [0.3, 0.8] means 30% to 80% carry on.
   rented_mule_owner_activity_kept_share:
     label: assumption
     issue_ids: [G1]
@@ -153,6 +236,12 @@ parameters:
     stress: [0.0, 1.0]
     reason: A rented mule keeps part of its owner's normal payments alongside the illicit flows (review issue G1); no figure is published.
 
+  # ---- Cash-out: how stolen money leaves (issue G2) ----
+  # The genuine-shop share is drawn first; the rest is split across crypto,
+  # ATM and branch/cheque in proportion to their drawn shares.
+
+  # Share of cashed-out money that leaves as cryptocurrency (USDT). Example:
+  # training [0.15, 0.45].
   cashout_share_crypto:
     label: assumption
     issue_ids: [G2]
@@ -162,6 +251,7 @@ parameters:
     stress: [0.0, 0.9]
     reason: One 2024 operation report (CloudSEK) describes crypto (USDT) cash-out; no channel split is published.
 
+  # Share of cashed-out money taken from ATMs. Example: training [0.1, 0.35].
   cashout_share_atm:
     label: assumption
     issue_ids: [G2]
@@ -171,6 +261,8 @@ parameters:
     stress: [0.0, 0.8]
     reason: ATM withdrawal is a known cash-out route; no split is published.
 
+  # Share of cashed-out money withdrawn at a bank branch or by cheque.
+  # Example: training [0.02, 0.2].
   cashout_share_branch_or_cheque:
     label: assumption
     issue_ids: [G2]
@@ -180,6 +272,8 @@ parameters:
     stress: [0.0, 0.6]
     reason: Branch and cheque withdrawals are known but slower; no split is published.
 
+  # Share of the money leaving mules that goes to ordinary shops (the mule
+  # buys goods). Example: training [0.05, 0.25] means 5% to 25%.
   share_of_mule_outflows_to_genuine_shops:
     label: assumption
     issue_ids: [G2, A2]
@@ -189,6 +283,9 @@ parameters:
     stress: [0.0, 0.7]
     reason: Mules also buy goods from genuine shops, so innocent shops receive stolen money (review issue A2); no figure is published.
 
+  # The most cash one ATM card gives in a day, in rupees; a limit is drawn
+  # from this range. Example: training [20000, 100000] means Rs 20,000 to
+  # Rs 1 lakh (1 lakh = 100,000).
   atm_daily_limit_inr:
     label: reported
     issue_ids: [G2]
@@ -201,6 +298,10 @@ parameters:
       date: "2026-10-01"
     reason: "RBI says ATM cash limits are set by the card issuer, so there is no national limit. SBI pages show 1 lakh rupees a day for one card and 2 lakh for its top card, and HDFC allows up to 2 lakh. Limits for basic cards and payments banks were not verified. Corrected 2026-10-10 from an earlier guess (see A-006)."
 
+  # ---- Mule lifetime and victims per mule (issue G3) ----
+
+  # Days a gang lets a new mule account sit unused before it starts moving
+  # money. Example: training [2, 14] days.
   mule_warmup_days:
     label: assumption
     issue_ids: [G3]
@@ -210,6 +311,9 @@ parameters:
     stress: [0, 60]
     reason: Warm-up before use is described as a tactic; no duration is published.
 
+  # How many days a mule stays in use before the gang drops it. Each
+  # receiving mule draws one value; victim payments after that window are
+  # not made. Example: training [2, 14] days.
   mule_active_days_before_dropped:
     label: assumption
     issue_ids: [G3]
@@ -219,6 +323,8 @@ parameters:
     stress: [1, 90]
     reason: A mule is dropped after a lien or after N days; no figure is published.
 
+  # How many victims a typical mule receives money from. Example: training
+  # [1, 5] victims.
   victims_per_mule_typical:
     label: assumption
     issue_ids: [G3]
@@ -228,6 +334,10 @@ parameters:
     stress: [1, 20]
     reason: Most mules receive money from few victims; no figure is published.
 
+  # The ceiling for the "heavy tail": most mules get a few victims, a few get
+  # many. A gang draws one ceiling from this range and mules' victim counts
+  # are spread up to it. Example: training [10, 50] means the busiest mule
+  # has between 10 and 50 victims.
   victims_per_mule_largest:
     label: reported
     issue_ids: [G3, E3]
@@ -240,6 +350,11 @@ parameters:
       date: "2026-09-03"
     reason: "Heavy tail: a few mules reach many victims. One Indore account was linked to 51 complaints from 15 states (complaints, not necessarily victims; a news report)."
 
+  # ---- How gangs react, and the account market (issues G4, G5) ----
+  # What each rule does is explained in config/gang_reactions.yaml.
+
+  # Chance that a gang follows the "stop using an account once it has a lien"
+  # rule. Example: training [0.6, 0.95] means 60% to 95%.
   gang_stops_using_liened_account_share:
     label: assumption
     issue_ids: [G4]
@@ -249,6 +364,8 @@ parameters:
     stress: [0.0, 1.0]
     reason: "Fixed gang reaction rule (a design choice): stop using an account once it has a lien; no rate is published."
 
+  # Chance that a gang follows the "send money to a spare account instead"
+  # rule. Example: training [0.4, 0.9].
   gang_rotates_to_spare_account_share:
     label: assumption
     issue_ids: [G4]
@@ -258,6 +375,8 @@ parameters:
     stress: [0.0, 1.0]
     reason: "Fixed gang reaction rule: move to spare accounts. A Jaipur report (July 2026) says a gang spread proceeds across many accounts to stay ahead of freezes, but gives no rate."
 
+  # Chance that a gang follows the "cut big payments into smaller pieces"
+  # rule once it has heard of trouble. Example: training [0.2, 0.7].
   gang_splits_amounts_share:
     label: assumption
     issue_ids: [G4]
@@ -267,6 +386,8 @@ parameters:
     stress: [0.0, 1.0]
     reason: "Fixed gang reaction rule: split amounts into smaller parts; no rate is published."
 
+  # How many minutes late a gang hears news about its accounts. Each gang
+  # draws one delay. Example: training [10, 240] minutes.
   gang_feed_delay_minutes:
     label: assumption
     issue_ids: [G4]
@@ -276,6 +397,8 @@ parameters:
     stress: [1, 2880]
     reason: A gang sees what happened to its accounts late, never the truth (review issue G4); no figure is published.
 
+  # The share of that news that never reaches the gang. Example: training
+  # [0.1, 0.4] means 10% to 40% is lost.
   gang_feed_miss_share:
     label: assumption
     issue_ids: [G4]
@@ -285,6 +408,9 @@ parameters:
     stress: [0.0, 0.9]
     reason: A gang's observation feed misses some events; no figure is published.
 
+  # Chance that a later gang's rented mule is replaced by a burned account
+  # bought from an earlier gang (see config/account_market.yaml). Example:
+  # training [0.05, 0.3] means 5% to 30%.
   share_of_accounts_sold_to_several_gangs:
     label: assumption
     issue_ids: [G5]
@@ -294,6 +420,12 @@ parameters:
     stress: [0.0, 0.8]
     reason: Police cases describe suppliers selling account kits to several buyers, so gang networks overlap; no share is published.
 
+  # ---- What scam victims pay (issue G6) ----
+  # Read through config/scam_schedules.yaml.
+
+  # Share of victims whose scam is an investment or job scam; every other
+  # victim is modelled as an unauthorised debit (money taken without the
+  # owner's say). Example: training [0.55, 0.80] means 55% to 80%.
   share_of_scams_investment_or_job:
     label: reported
     issue_ids: [G6]
@@ -306,6 +438,8 @@ parameters:
       date: "2025-11-01"
     reason: Kerala Police data reported 34.8% trading and 33% job scams (about 68% together) of cyber fraud cases in 2025. Shares of cases, not money; one state only.
 
+  # How many separate payments one investment or job victim makes. Example:
+  # training [1, 6] payments.
   scam_payments_per_victim:
     label: assumption
     issue_ids: [G6]
@@ -315,6 +449,8 @@ parameters:
     stress: [1, 30]
     reason: Different scam types have different numbers of payments; no distribution is published.
 
+  # Days over which one victim's payments are spread. Example: training
+  # [0, 10] days (0 = all on the same day).
   scam_payment_spread_days:
     label: assumption
     issue_ids: [G6]
@@ -324,6 +460,9 @@ parameters:
     stress: [0, 90]
     reason: Investment and job scams escalate over days; no figure is published.
 
+  # The share of what a victim has paid so far that the mule sends back once,
+  # to win trust. Example: training [0.05, 0.3]; a victim who paid Rs 10,000
+  # could get back Rs 500 to Rs 3,000.
   scam_small_payout_back_share:
     label: assumption
     issue_ids: [G6]
@@ -333,6 +472,8 @@ parameters:
     stress: [0.0, 0.8]
     reason: Some scams pay victims small amounts back to build trust; no figure is published.
 
+  # ---- Complaints, holds and the people who judge cases (issues L1 to L5) ----
+
   # Added 2026-10-10 (Level 11 Part 1, task 3b-1, issues L1-L5, A1, A3).
   # Logged as A-005 in docs/research/amendments.md. Widths of ranges are the
   # author's choices, not findings.
@@ -341,6 +482,8 @@ parameters:
   # share_reported_to_shared_database are the two halves of issue L2.
   # A2 is covered by share_of_mule_outflows_to_genuine_shops (added earlier).
 
+  # How long after money is taken from an account without the owner's say
+  # that the owner complains. Example: training [10, 240] minutes.
   complaint_delay_unauthorised_debit_minutes:
     label: assumption
     issue_ids: [L1]
@@ -350,6 +493,8 @@ parameters:
     stress: [2, 4320]
     reason: "Complaints about unauthorised debits can come within minutes (one Telangana case in April 2024 was reported in 12 minutes), but no distribution is published."
 
+  # How many days after an investment scam the victim complains. Example:
+  # training [3, 15] days.
   complaint_delay_investment_scam_days:
     label: assumption
     issue_ids: [L1]
@@ -359,6 +504,8 @@ parameters:
     stress: [0.5, 60]
     reason: "The Maharashtra Chief Minister said in August 2026 that reporting delays of 3 to 15 days make recovery harder; this is a remark, not a measured distribution."
 
+  # How many days after a job scam the victim complains. Example: training
+  # [3, 15] days.
   complaint_delay_job_scam_days:
     label: assumption
     issue_ids: [L1]
@@ -368,6 +515,8 @@ parameters:
     stress: [0.5, 60]
     reason: "Job scams unfold over days like investment scams; no separate delay figure is published (Kerala Police data shows trading and job scams are the two largest types)."
 
+  # The share of scammed victims who complain at all. Example: training
+  # [0.2, 0.7] means 2 to 7 victims in every 10 complain.
   victim_complaint_share:
     label: assumption
     issue_ids: [L2]
@@ -377,6 +526,8 @@ parameters:
     stress: [0.05, 0.9]
     reason: "Share of scammed victims who complain at all. No Indian figure was found. This is separate from share_reported_to_shared_database, which is the bank-to-registry reporting share."
 
+  # How many days a bank keeps a lien before releasing it. Example: training
+  # [14, 90] days.
   lien_release_days:
     label: reported
     issue_ids: [L3, N4]
@@ -389,6 +540,8 @@ parameters:
       date: "2026-01-02"
     reason: "The MHA/I4C procedure (2 Jan 2026) has a 90-day route for grievances without a lawful direction, which is conditional; one High Court (Madhya Pradesh, 15 Jan 2026) ordered a three-month hold in one case; BNSS sections 106 and 107 state no general number of days."
 
+  # Of the money held under a lien, the share that is actually returned to
+  # victims. Example: training [0.3, 0.8] means 30% to 80% is given back.
   share_of_held_money_returned_to_victims:
     label: assumption
     issue_ids: [L3]
@@ -398,6 +551,8 @@ parameters:
     stress: [0.0, 1.0]
     reason: "No published share of held money that is actually returned. Context: about 12.3% of reported money was under lien in 2023 (derived from a Lok Sabha reply) and Odisha recovered about 2.7% of losses in 2023-2025 (news report)."
 
+  # How often a human analyst judges a case correctly when the evidence is
+  # good. Example: training [0.75, 0.95] means right 75 to 95 times in 100.
   analyst_accuracy_base:
     label: assumption
     issue_ids: [L4]
@@ -407,6 +562,8 @@ parameters:
     stress: [0.6, 0.99]
     reason: "Starting range from the project plan; no published analyst accuracy figure was found."
 
+  # How much the analyst's accuracy falls when a case has weak evidence.
+  # Example: training [0.05, 0.2]; a base of 0.90 with a drop of 0.10 gives 0.80.
   analyst_accuracy_drop_when_evidence_weak:
     label: assumption
     issue_ids: [L4]
@@ -416,6 +573,8 @@ parameters:
     stress: [0.0, 0.45]
     reason: "How many points of accuracy an analyst loses when the evidence in a case is weak (review issue L4); no figure is published."
 
+  # How much accuracy falls when more cases arrive than the team can check.
+  # Example: training [0.02, 0.15].
   analyst_accuracy_drop_when_queue_overloaded:
     label: assumption
     issue_ids: [L4]
@@ -425,6 +584,8 @@ parameters:
     stress: [0.0, 0.4]
     reason: "How many points of accuracy are lost when the queue is over capacity (review issue L4); no figure is published."
 
+  # How strongly a high score from the detector pushes the analyst to agree
+  # with it. Example: training [0.1, 0.4].
   analyst_follows_model_score_share:
     label: assumption
     issue_ids: [L4]
@@ -434,6 +595,9 @@ parameters:
     stress: [0.0, 0.9]
     reason: "How strongly a high model score pushes the analyst to agree (review issue L4); no figure is published."
 
+  # A "bulk confirmation" is a police crackdown that confirms many mule
+  # accounts at once. This is how many happen in a year. Example: training
+  # [1, 6] crackdowns a year.
   bulk_confirmation_events_per_year:
     label: assumption
     issue_ids: [L5]
@@ -443,6 +607,7 @@ parameters:
     stress: [0, 24]
     reason: "Police crackdowns confirm many mule accounts at once; no frequency is published."
 
+  # How many accounts one crackdown confirms. Example: training [100, 1000].
   bulk_confirmation_size_accounts:
     label: assumption
     issue_ids: [L5]
@@ -452,6 +617,8 @@ parameters:
     stress: [20, 10000]
     reason: "One Gujarat sweep (Operation Mule Hunt, June 2026) acted on 913 mule accounts; one example, not a distribution."
 
+  # Days between the payments and the crackdown that confirms the accounts.
+  # Example: training [7, 60] days.
   bulk_confirmation_delay_days:
     label: assumption
     issue_ids: [L5]
@@ -461,6 +628,14 @@ parameters:
     stress: [0, 365]
     reason: "How long after the transactions a crackdown confirms the accounts; no figure is published."
 
+  # ---- Episodes: ordinary people who briefly look like mules (issue A1) ----
+  # An episode is a short period when an ordinary person's account behaves
+  # like a mule's: many people pay in, then the money goes out again. The kinds
+  # are a wedding or medical collection, a chit fund (kitty), a college fest
+  # treasurer, and selling something then repaying a loan.
+
+  # Share of ordinary people who have an episode in a year. Example: training
+  # [0.02, 0.1] means 2 to 10 people in every 100.
   episode_share_of_ordinary_people_per_year:
     label: assumption
     issue_ids: [A1]
@@ -470,6 +645,8 @@ parameters:
     stress: [0.0, 0.4]
     reason: "Share of genuine people who have a short period that looks like mule activity in a year (a wedding or medical collection, a kitty, a fest treasurer); no figure is published."
 
+  # How long one episode lasts. Example: training [3, 30] days. A world must
+  # be at least as long as the top value.
   episode_length_days:
     label: assumption
     issue_ids: [A1]
@@ -479,6 +656,8 @@ parameters:
     stress: [1, 120]
     reason: "How long such a period lasts; no figure is published."
 
+  # How many different people pay into the collector during an episode;
+  # never more than the people available. Example: training [10, 100] payers.
   episode_payer_count:
     label: assumption
     issue_ids: [A1]
@@ -488,6 +667,9 @@ parameters:
     stress: [3, 1000]
     reason: "How many different people send money to the collector during an episode; no figure is published."
 
+  # How many times a payer's usual payment size each contribution is.
+  # Example: training [1, 10]; a payer who usually pays Rs 300 sends Rs 300
+  # to Rs 3,000.
   episode_contribution_multiple_of_payer_median:
     label: assumption
     issue_ids: [A1]
@@ -497,6 +679,8 @@ parameters:
     stress: [0.2, 40]
     reason: "Each payer sends this many times their own typical payment (a gift, a kitty share, a fest fee); no figure is published."
 
+  # In a chit fund (kitty), how many rounds of contributions each member
+  # pays. Example: training [2, 4] rounds.
   episode_kitty_contribution_rounds:
     label: assumption
     issue_ids: [A1]
@@ -506,6 +690,9 @@ parameters:
     stress: [1, 12]
     reason: "How many times each chit or kitty member pays in during one episode; no figure is published."
 
+  # Size of the one big payment a seller receives, in multiples of the
+  # seller's usual payment. Example: training [10, 60]; a usual Rs 300
+  # becomes Rs 3,000 to Rs 18,000.
   episode_sale_multiple_of_collector_median:
     label: assumption
     issue_ids: [A1]
@@ -515,6 +702,8 @@ parameters:
     stress: [2, 95]
     reason: "Size of the one large payment a seller receives, as a multiple of the seller's typical payment; capped below the buyer's opening balance multiple of 100; no figure is published."
 
+  # Share of the money received that is paid out again. Example: training
+  # [0.6, 0.95] means 60% to 95% leaves.
   episode_outflow_share_of_inflow:
     label: assumption
     issue_ids: [A1]
@@ -524,6 +713,8 @@ parameters:
     stress: [0.1, 1.0]
     reason: "Share of the money received during the episode that is paid out again (to vendors, a kitty winner, a lender or bills); no figure is published."
 
+  # Days between the end of an episode and the money going out. Example:
+  # training [0, 7] days.
   episode_outflow_delay_days:
     label: assumption
     issue_ids: [A1]
@@ -533,6 +724,8 @@ parameters:
     stress: [0, 30]
     reason: "Days between the end of an episode and the money going out again; no figure is published."
 
+  # Into how many separate payments the money going out is divided.
+  # Example: training [1, 3] payments.
   episode_outflow_payment_count:
     label: assumption
     issue_ids: [A1]
@@ -542,6 +735,10 @@ parameters:
     stress: [1, 10]
     reason: "How many separate payments a collector or bill-payer makes when paying money out; no figure is published."
 
+  # ---- Mistaken complaints (issue A3) ----
+
+  # How many complaints per 100,000 ordinary payments are mistaken or false.
+  # Example: training [0.05, 2] means between 1 in 2 million and 2 in 100,000.
   false_complaints_per_100000_genuine_payments:
     label: assumption
     issue_ids: [A3]
@@ -551,6 +748,8 @@ parameters:
     stress: [0.0, 50]
     reason: "Some complaints are mistaken or false; no rate is published."
 
+  # How many times more likely a payment to a shop is to get a false
+  # complaint than a payment to a person. Example: training [2, 10] times.
   false_complaint_merchant_weight:
     label: assumption
     issue_ids: [A3]
@@ -560,12 +759,17 @@ parameters:
     stress: [1, 50]
     reason: "How many times more likely a payment to a merchant is to get a false complaint than a payment to a person (review issue A3); no figure is published."
 
+  # ---- Shared identifiers, the suspect registry, holds, and world calibration
+  # (issues N1 to N3, E1 to E4) ----
+
   # Added 2026-10-10 (Level 11 Part 1, task 3b-2, issues N1-N3, E1-E4).
   # Logged as A-006 in docs/research/amendments.md. Widths of ranges are the
   # author's choices, not findings. The three bank_customer_share_* values are
   # rescaled to add up to 1 by the world builder in Level 12. Each simulated
   # bank draws its own value for bank_weak_kyc_account_share within the range.
 
+  # Share of mule accounts that share one phone number or device with other
+  # mule accounts. Example: training [0.1, 0.5] means 10% to 50%.
   identifier_shared_across_mule_accounts_share:
     label: assumption
     issue_ids: [N1]
@@ -575,6 +779,8 @@ parameters:
     stress: [0.0, 0.9]
     reason: "Police cases describe one phone number or device behind many mule accounts, and a 2024 DoT release says more than 1 crore mobile connections were disconnected (cumulative). No share of reused identifiers is published."
 
+  # Chance that a gang switches to fresh identifiers once one is flagged.
+  # Example: training [0.2, 0.6].
   identifier_changed_after_flag_share:
     label: assumption
     issue_ids: [N1]
@@ -584,6 +790,9 @@ parameters:
     stress: [0.0, 1.0]
     reason: "After one identifier is flagged a gang may switch to fresh ones; no rate is published."
 
+  # Share of first-layer mules (the ones victims pay directly) that appear in
+  # the Suspect Registry, a shared list of suspected mule accounts. Example:
+  # training [0.3, 0.7].
   registry_coverage_layer1_mule_share:
     label: assumption
     issue_ids: [N2]
@@ -593,6 +802,8 @@ parameters:
     stress: [0.05, 1.0]
     reason: "The Suspect Registry had 32.08 lakh layer-1 mule accounts shared by June 2026 (Lok Sabha reply) but no denominator, so the share of all layer-1 mules covered is unknown."
 
+  # The same, for mules further down the chain. Example: training
+  # [0.01, 0.15] means 1% to 15%.
   registry_coverage_deeper_mule_share:
     label: assumption
     issue_ids: [N2]
@@ -602,6 +813,8 @@ parameters:
     stress: [0.0, 0.5]
     reason: "Deeper mules are almost never reported (project design, review issue N2); no figure is published."
 
+  # Days between a mule being identified and its entry appearing in the
+  # registry. Example: training [1, 14] days.
   registry_entry_delay_days:
     label: assumption
     issue_ids: [N2]
@@ -611,6 +824,9 @@ parameters:
     stress: [0.0, 120]
     reason: "Time between a mule being identified and its entry appearing in the registry; no figure is published."
 
+  # The chance that each of the world's three banks takes part in DPIP (a
+  # shared bank scheme that went live on 1 September 2026; see the reason).
+  # Example: training [0.4, 1.0] means 40% to certain.
   probability_a_bank_takes_part_in_dpip:
     label: assumption
     issue_ids: [N2]
@@ -620,6 +836,8 @@ parameters:
     stress: [0.0, 1.0]
     reason: "DPIP went live on 1 September 2026 with 8 banks (reported, not hand-checked). The world draws a yes or no for each of its three banks using this chance."
 
+  # Minutes between a victim's report and the bank actually holding the
+  # money. Example: training [5, 60] minutes.
   hold_latency_minutes:
     label: assumption
     issue_ids: [N3]
@@ -629,6 +847,8 @@ parameters:
     stress: [1, 1440]
     reason: "One Telangana case (April 2024) held money 25 minutes after the victim reported at 12 minutes, which is one example and not a distribution."
 
+  # Share of hold requests that arrive too late because the money has already
+  # left. Example: training [0.05, 0.3] means 5% to 30%.
   hold_missed_share:
     label: assumption
     issue_ids: [N3]
@@ -638,6 +858,8 @@ parameters:
     stress: [0.0, 0.8]
     reason: "Share of hold requests that arrive after the money has already left; no figure is published."
 
+  # Share of victims who cannot get through to the 1930 reporting line on
+  # the first try. Example: training [0.05, 0.3].
   share_of_victims_unable_to_reach_1930_first_try:
     label: assumption
     issue_ids: [N3, L1]
@@ -647,6 +869,8 @@ parameters:
     stress: [0.0, 0.8]
     reason: "A 2023 Moneylife article recounts one test in which 2 of 15 calls to 1930 were answered; it is anecdotal and no statistics were found."
 
+  # The extra minutes such a victim waits before the report is made.
+  # Example: training [10, 180] minutes.
   unreachable_1930_extra_delay_minutes:
     label: assumption
     issue_ids: [N3]
@@ -656,6 +880,9 @@ parameters:
     stress: [1, 2880]
     reason: "Extra waiting when a victim cannot get through to 1930; no figure is published."
 
+  # Real-life fraud complaints per 100,000 UPI payments. It is used to
+  # re-weight scores, not as the fraud rate inside the small world. Example:
+  # training [0.7, 1.4]; the derivation is in the reason.
   real_world_complaints_per_100000_upi_payments:
     label: assumption
     issue_ids: [E1]
@@ -665,15 +892,23 @@ parameters:
     stress: [0.1, 6.0]
     reason: "Derived. 2,402,579 NCRP complaints in 2025 (PIB, confirmed) divided by about 228,281.85 million UPI payments (monthly figures from secondary copies, not NPCI's own table) is about 1.05 per 100,000. Complaints cover all financial fraud, so this is an upper-bound proxy for UPI. It is used to re-weight precision-style metrics, not as the fraud rate inside the small world."
 
+  # How many times more fraud than real life a small world is aimed to hold,
+  # so a detector sees enough examples. This is a target band, not a measured
+  # value. Example: training [100, 2000] means 100 to 2,000 times real life.
   world_fraud_inflation_factor:
     label: assumption
     issue_ids: [E1]
+    issue_ids_v2: [12-7]
+    derived_from: "amendment A-012"
     unit: times
     training: [100, 2000]
     test: [50, 5000]
     stress: [10, 20000]
-    reason: "How many times more fraud a small simulated world holds than real life, so models have enough examples. It is recorded on each world card; no external figure exists."
+    reason: "The TARGET BAND for fraud pressure: how many times more fraud a small simulated world is aimed to hold than real life, so models have enough examples. No external figure exists. This range is not the measured value. The measured factor of a world is its complaints per 100,000 payments divided by 1.05 (real_world_complaints_per_100000_upi_payments, an upper-bound proxy), so it is a lower bound on the true inflation. It is measured in Level 12g and written onto fraud-on world cards (amendment A-012)."
 
+  # The usual (median) size of an ordinary person's payment, in rupees. Each
+  # person draws their own. Example: training [150, 600] means a typical
+  # payment of Rs 150 to Rs 600.
   genuine_payment_median_amount_inr:
     label: assumption
     issue_ids: [E2]
@@ -683,6 +918,9 @@ parameters:
     stress: [20, 5000]
     reason: "NPCI says more than 95 percent of UPI person-to-merchant volume is up to 2,000 rupees (see genuine_payments_up_to_2000_inr_share), which implies a small median. No median is published."
 
+  # How widely a person's payments vary around the usual size. A higher
+  # value means more very large payments among mostly small ones. Example:
+  # training [0.9, 1.5]. It has no unit.
   genuine_payment_amount_spread_sigma:
     label: assumption
     issue_ids: [E2]
@@ -692,6 +930,9 @@ parameters:
     stress: [0.5, 2.5]
     reason: "Controls how heavy the tail of payment amounts is, so most payments are small and a few are very large. The value is the author's choice and no figure is published."
 
+  # The most one UPI payment may carry, in rupees. The world draws one limit;
+  # a bigger payment is sent as two or more pieces. Example: training
+  # [50000, 100000] means Rs 50,000 to Rs 1 lakh.
   upi_per_transaction_limit_inr:
     label: reported
     issue_ids: [E2]
@@ -704,6 +945,7 @@ parameters:
       date: "2025-08-28"
     reason: "NPCI keeps the standard person-to-person limit at 1 lakh rupees per transaction (no change found in 2025 or 2026) and raised verified-merchant categories such as tax payments to 5 lakh (circulars 185A and 185B). Banks and apps may set lower limits, so the range sits below the ceiling, and the stress end allows the higher category limits."
 
+  # Into how many regions the town is divided. Example: training [3, 6].
   number_of_regions:
     label: assumption
     issue_ids: [E3]
@@ -713,6 +955,8 @@ parameters:
     stress: [1, 20]
     reason: "How many regions the town is split into; the number is the author's choice."
 
+  # Share of victims who live in a different region from the mule they pay.
+  # Example: training [0.5, 0.9] means 50% to 90%.
   share_of_victims_in_a_different_region_from_the_mule:
     label: assumption
     issue_ids: [E3]
@@ -722,6 +966,11 @@ parameters:
     stress: [0.1, 1.0]
     reason: "One Indore account was linked to complaints from 15 states (news report), so victims are often far from the mule. No share is published."
 
+  # The world has three banks: a large public bank, a private bank and a
+  # payments bank. The three customer shares are drawn separately and then
+  # rescaled to add up to 1.
+
+  # Customers at the large public bank. Example: training [0.35, 0.55].
   bank_customer_share_large_public:
     label: assumption
     issue_ids: [E4]
@@ -731,6 +980,7 @@ parameters:
     stress: [0.1, 0.9]
     reason: "Share of the town's customers at the large public bank; the author's choice."
 
+  # Customers at the private bank. Example: training [0.25, 0.45].
   bank_customer_share_private:
     label: assumption
     issue_ids: [E4]
@@ -740,6 +990,7 @@ parameters:
     stress: [0.05, 0.8]
     reason: "Share of customers at the private bank; the author's choice."
 
+  # Customers at the payments bank. Example: training [0.05, 0.25].
   bank_customer_share_payments_bank:
     label: assumption
     issue_ids: [E4]
@@ -749,6 +1000,9 @@ parameters:
     stress: [0.0, 0.6]
     reason: "Share of customers at the payments bank; the author's choice."
 
+  # Share of a bank's accounts opened with weak identity checks. Each bank
+  # draws its own value; the payments bank gets the highest and the private
+  # bank the lowest. Example: training [0.02, 0.15].
   bank_weak_kyc_account_share:
     label: assumption
     issue_ids: [E4]
@@ -758,6 +1012,9 @@ parameters:
     stress: [0.0, 0.5]
     reason: "Share of a bank's accounts opened with weak identity checks; each bank draws its own value. No figure is published."
 
+  # How many times slower the slowest bank (the large public bank) is at
+  # applying a hold than the fastest (the private bank); the payments bank
+  # falls in between. Example: training [1.5, 5] means 1.5 to 5 times slower.
   slowest_to_fastest_bank_hold_ratio:
     label: assumption
     issue_ids: [E4, N3]
@@ -768,6 +1025,8 @@ parameters:
     reason: "How many times slower the slowest bank is at applying a hold than the fastest, so the three banks differ in speed; no figure is published."
 
 # Things that were searched for and not found. No numbers and no labels on purpose.
+# Each line is a gap in public evidence. It is listed so nobody mistakes a
+# missing number for one that was never looked for.
 searched_but_not_found:
   - mule account type shares for India
   - dormant or new account share

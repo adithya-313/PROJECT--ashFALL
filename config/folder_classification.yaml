@@ -1,17 +1,46 @@
-# Every top-level folder of the repository, sorted into "engine" or "not_engine".
+# =====================================================================
+# FOLDER CLASSIFICATION: every top-level folder, sorted on purpose
+# =====================================================================
 #
-# engine     = a folder for the NEW engine (simulator, new features, new model). It must ALSO be listed
-#              (as "<name>/") in config/new_engine_paths.yaml, so the pre-registration check watches it.
-# not_engine = everything else (the v1 system, tools, docs, tests, data).
+# What this file is
+#   The project promises that its evaluation rules were written BEFORE any
+#   code of the new engine (see config/evaluation.yaml). A check proves it by
+#   comparing dates, but it only watches the paths in
+#   config/new_engine_paths.yaml. If new-engine code could appear in a folder
+#   nobody listed, the check would miss it. So every top-level folder of the
+#   repository must be sorted here into one of two lists.
 #
-# A new top-level folder that is not listed here makes `python -m core.folder_check` fail (and CI fail),
-# so every new folder has to be classified on purpose before it is added.
-# api/ and models/ are not_engine as folders, but they hold engine paths (api/v1/, models/mule_*) that
-# config/new_engine_paths.yaml lists.
+# Who reads it
+#   core/folder_check.py (python -m core.folder_check). It also runs in CI.
+#
+# What the check does
+#   It lists the top-level folders that hold tracked files. A folder that is
+#   in neither list makes the check fail, and so does an "engine" folder that
+#   is not also listed as "<name>/" in config/new_engine_paths.yaml, so a
+#   new folder cannot be added without a decision. It also fails if a folder
+#   is in both lists, or if a watched path starts in an unclassified folder.
+#
+# The two lists
+#   engine      a folder for the NEW engine (simulator, new features, new
+#               model). It must ALSO be listed (as "<name>/") in
+#               config/new_engine_paths.yaml, so the order check watches it.
+#   not_engine  everything else: the v1 system, tools, docs, tests, data.
+#               api/ and models/ are not_engine as folders, but they hold
+#               engine paths (api/v1/, models/mule_*) that
+#               config/new_engine_paths.yaml lists.
+#
+# Example
+#   world/ is in engine, so a file added under world/ is checked against
+#   the evaluation rules' date. docs/ is in not_engine, so it is not.
+#
+# Checked by: python -m core.folder_check
+# =====================================================================
 
 folder_classification:
   label: policy
-  reason: A fixed list forces a decision about every new folder, so new-engine code cannot appear in a folder the order check does not watch.
+  reason: A fixed list forces a decision about every new folder, so new-engine code cannot appear in a folder the order check does not watch. evaluation and patterns are classified before any code exists in them (Level 12a task 2); evaluation/ will hold the truth loader and evaluation-only code, and patterns/ will hold gang pattern files.
+  issue_ids_v2: [K8]
+  derived_from: "policy; ground rule and Section 8"
   engine:
     - sim
     - world
@@ -20,6 +49,8 @@ folder_classification:
     - decisions
     - features_m1
     - scenarios
+    - evaluation
+    - patterns
   not_engine:
     - .dvc
     - .github

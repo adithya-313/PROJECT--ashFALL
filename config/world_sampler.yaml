@@ -1,0 +1,241 @@
+# =====================================================================
+# WORLD SAMPLER: how many different worlds are made, and which seeds
+# =====================================================================
+#
+# What this file is
+#   Training a detector on one world teaches it that world. The sampler makes
+#   many worlds, each with its own seed and its own values for a few "key"
+#   parameters. It spreads those values evenly over the parameter's range
+#   (Latin hypercube: the range is cut into n equal strata and each stratum
+#   is used exactly once). This file says which parameters are spread, which
+#   seeds each split may use, and which range each split reads.
+#
+# Who reads it
+#   world/world_sampler.py. The sampler only plans worlds; it never runs one.
+#
+# How to read each block
+#   world_ranges_reference: X  -> the range is the entry called X in
+#                              config/world_ranges.yaml.
+#   integer: true              -> the sampled value is rounded to a whole
+#                              number and kept inside the range.
+#   label: policy              -> our own design choice.
+#
+# Where the full reasoning lives
+#   docs/research/amendments.md, A-015.
+# =====================================================================
+
+world_sampler:
+  label: policy
+  reason: "Configuration for the many-worlds sampler per amendment A-015."
+  issue_ids_v2: [12-14, 12-18]
+  derived_from: "amendment A-015"
+
+  # ---------------------------------------------------------------------
+  # key_parameters: the values that differ from world to world
+  #
+  # The idea
+  #   Each world gets one value per key parameter from a Latin hypercube.
+  #   scope world: the value is pinned in the world's own copy of the ranges.
+  #   scope gang:  the value is a CENTRE; each gang of the world draws its own
+  #                value around it (config/gang_mix.yaml), so it is never
+  #                written into the ranges. Gang-scope values always use the
+  #                training column (or their own range), whatever the split,
+  #                because the route dividing lines apply in every split.
+  #   range:       an own [low, high] used instead of a world_ranges column.
+  #
+  # Left out on purpose
+  #   share_of_accounts_sold_to_several_gangs, mule_origin_share_business and
+  #   share_of_scams_investment_or_job are not stratified: their readers
+  #   (world/account_market.py:191 draw_resale_share, world/mule_origins.py:85
+  #   through world/tactic_config.py:596, and world/scam_planner.py:209
+  #   through world/scam_config.py:173-176) load world_ranges.yaml from disk,
+  #   so a pinned value would be ignored. Each world still draws them inside
+  #   the training range. Recorded in amendment A-023.
+  # ---------------------------------------------------------------------
+  key_parameters:
+    number_of_regions:
+      world_ranges_reference: number_of_regions
+      scope: world
+      integer: true
+      label: policy
+      reason: "How many regions the town has; a whole number, so it is rounded (issue 12-14)."
+    victim_complaint_share:
+      world_ranges_reference: victim_complaint_share
+      scope: world
+      integer: false
+      label: policy
+      reason: "Share of scammed victims who complain; changes how many true labels a world has (issue 12-14)."
+    false_complaints_per_100000_genuine_payments:
+      world_ranges_reference: false_complaints_per_100000_genuine_payments
+      scope: world
+      integer: false
+      label: policy
+      reason: "Rate of wrong complaints about ordinary payments; changes label noise (issue 12-14)."
+    false_complaint_merchant_weight:
+      world_ranges_reference: false_complaint_merchant_weight
+      scope: world
+      integer: false
+      label: policy
+      reason: "How much likelier a shop payment draws a wrong complaint; changes label noise (issue 12-14)."
+    share_reported_to_shared_database:
+      world_ranges_reference: share_reported_to_shared_database
+      scope: world
+      integer: false
+      label: policy
+      reason: "Share of confirmed mules that banks report to the shared registry (issue 12-14)."
+    gang_count:
+      range: [2, 4]
+      scope: gang
+      integer: true
+      label: assumption
+      reason: "Two gangs are needed for the account market (G5); four fits a small world; reviewed design."
+    route_layers:
+      world_ranges_reference: hops_to_cash_out
+      scope: gang
+      integer: true
+      label: policy
+      reason: "Centre of how many layers a gang's route has; each gang draws around it (issue 12-14)."
+    dwell_minutes:
+      world_ranges_reference: minutes_money_stays_in_mule_account
+      scope: gang
+      integer: true
+      label: policy
+      reason: "Centre of the minutes money rests in a mule account before forwarding; each gang draws around it (issue 12-14)."
+    devices_per_gang:
+      range: [1, 5]
+      scope: gang
+      integer: true
+      label: assumption
+      reason: "Centre of the gang phones count; the range is the take_control devices schema range in config/tactic_blocks.yaml."
+    victims_per_receiving_mule:
+      world_ranges_reference: victims_per_mule_typical
+      scope: gang
+      integer: true
+      label: policy
+      reason: "Centre of the victims paying each receiving mule; each gang draws around it (issue 12-14)."
+
+  # ---------------------------------------------------------------------
+  # seed_blocks: which seeds each split may use
+  #
+  # The idea
+  #   World k of a split uses seed first_seed + k. Blocks are far apart and
+  #   never overlap, so a validation world can never be a training world.
+  # ---------------------------------------------------------------------
+  seed_blocks:
+    training:
+      first_seed: 1000000
+      last_seed: 1999999
+      label: policy
+      reason: "Block for worlds the detector learns from."
+    validation:
+      first_seed: 2000000
+      last_seed: 2999999
+      label: policy
+      reason: "Block for worlds that tune the detector; separate seeds from training."
+    test:
+      first_seed: 3000000
+      last_seed: 3999999
+      label: policy
+      reason: "Block for worlds used once for the final score."
+    stress:
+      first_seed: 4000000
+      last_seed: 4999999
+      label: policy
+      reason: "Block for worlds with harsher values than test."
+
+  reserved_seeds:
+    seeds: [101]
+    label: policy
+    reason: "Level 11 golden world; no sampled world may use it."
+
+  # ---------------------------------------------------------------------
+  # range_name_for_split: which column of world_ranges.yaml a split reads
+  #
+  # The idea
+  #   Validation and test both read the TRAINING range, drawn independently
+  #   (their own seeds and streams). Only stress reads a wider range. The
+  #   world_ranges.yaml "test" column is intentionally unused by sampled
+  #   worlds; a world's split (which tactics it may hold) is passed to the
+  #   runner separately from its range column (amendment A-023).
+  # ---------------------------------------------------------------------
+  range_name_for_split:
+    mapping:
+      training: training
+      validation: training
+      test: training
+      stress: stress
+    label: policy
+    reason: "Report Section 6: validation and test use the same ranges as training, drawn independently again; stress uses wider ranges. The yaml test column is intentionally unused by sampled worlds (A-023 records why)."
+
+  # ---------------------------------------------------------------------
+  # block_size: worlds per Latin hypercube block
+  #
+  # The idea
+  #   World k of block b uses seed first_seed + b * block_size + k. Each block
+  #   is its own complete Latin hypercube, so a later level can use 1, 2, 4 ...
+  #   blocks and each one still covers every key range.
+  # ---------------------------------------------------------------------
+  block_size:
+    value: 40
+    label: policy
+    reason: "Every block is its own complete Latin hypercube, so a later level can use 1, 2, 4 ... blocks; reviewed design, Level 12f."
+
+  # ---------------------------------------------------------------------
+  # horizon_limits: how long a sampled world must be
+  #
+  # The idea
+  #   The world code refuses a world shorter than the longest thing a range
+  #   lets happen in it. A stress world reads wider ranges, so it needs more
+  #   days than the preset gives. For each listed parameter the required
+  #   days are its upper bound in the world's range column (times
+  #   days_per_unit, rounded up, plus one when the world must be strictly
+  #   longer). A world gets the largest of these, or the preset's days if
+  #   that is more. Training, validation and test read the training column
+  #   and keep the preset's days.
+  #
+  # Where each rule is enforced
+  #   episode_length_days        world/episodes.py:115 (n_days >= upper)
+  #   os_wave_length_days        world/device_schedule.py:77 (n_days >= upper)
+  #   festival_peak_day_in_world world/festivals.py:52 and
+  #                              world/world_sizing.py:401 (n_days > upper)
+  # ---------------------------------------------------------------------
+  horizon_limits:
+    entries:
+      - parameter: episode_length_days
+        config: world_ranges
+        days_per_unit: 1
+        strictly_greater: false
+      - parameter: os_wave_length_days
+        config: device_realism
+        days_per_unit: 1
+        strictly_greater: false
+      - parameter: festival_peak_day_in_world
+        config: background_realism
+        days_per_unit: 1
+        strictly_greater: true
+    label: policy
+    reason: "a world must be at least as long as the longest thing a range lets happen in it; derived from config, never a fixed number"
+
+  # ---------------------------------------------------------------------
+  # counts: how many worlds each split has, committed in amendment A-023
+  #
+  # The idea
+  #   Every split is made of blocks of block_size worlds (40), each block its
+  #   own Latin hypercube. Nothing in the code reads these numbers yet:
+  #   validate_sampler_config does not check them, so a later level that
+  #   uses them must check them first.
+  # ---------------------------------------------------------------------
+  counts:
+    worlds:
+      training: 320
+      validation: 120
+      test: 120
+      stress: 120
+    blocks_per_split:
+      training: 8
+      validation: 3
+      test: 3
+      stress: 3
+    derived_from: "amendment A-023"
+    label: policy
+    reason: "Sized from measurement, not a time budget (A-023 (a)): a 61-day world yields about 5 true complaints and 20 true mules, 4 workers give about 3 times the serial speed, and the whole set takes about 1.9 hours; validation is 120 because labels are scarce, test and stress are 120 so the spread across worlds rests on more than a handful of worlds."

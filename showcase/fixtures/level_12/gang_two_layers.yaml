@@ -1,0 +1,42 @@
+# Configuration fixture for Level 12 Showcase Part B checks.
+#
+# TERM: gang configuration = specification of an illicit syndicate's tactical campaign and resource bounds.
+# TERM: fixture source = initial collector account pre-funded with opening money from which fraud routing originates.
+# TERM: block step = single parametrized tactic building block in a gang's sequential action plan.
+# TERM: over-budget money = spending threshold deliberately set below plan costs to test budget refusal.
+
+gang:
+  gang_id: gang_two_layers
+  strength: 2
+  budget:
+    money_paise: 50000000
+    time_minutes: 50000
+    max_risk: 0.99
+  source:
+    account_id: acc_collector_01
+    bank_index: 0
+    opening_balance_paise: 50000000
+    start_minute: 1440
+  steps:
+    - block: acquire
+      params:
+        count: 4
+    - block: warm_up
+      params:
+        # lower bound of mule_warmup_days in config/world_ranges.yaml (training: [2, 14])
+        days: 2
+    - block: take_control
+      params:
+        devices: 2
+        sim_swap: true
+        remote_access: true
+    - block: route
+      params:
+        layers: 2
+        accounts_per_layer: 2
+    - block: disguise
+      params: {}
+
+# Deliberately set to 100 paise (Rs 1), far below what this plan costs (supplier fees for 4 mules routing money).
+# Check 8 uses this to assert that an over-budget gang is refused with a plain reason and no world execution.
+over_budget_money_paise: 100

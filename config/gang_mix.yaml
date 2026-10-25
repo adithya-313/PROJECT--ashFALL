@@ -1,0 +1,100 @@
+# =====================================================================
+# GANG MIX: how the gangs of one sampled world are drawn
+# =====================================================================
+#
+# What this file is
+#   Every sampled world gets its own set of gangs. The world sampler
+#   (config/world_sampler.yaml) sets the CENTRE of each gang-level setting
+#   for the world (layers, forwarding delay, devices, victims per mule, and
+#   how many gangs). Each gang then draws its own value around that centre,
+#   as set out below. The complaint delay is not here: it stays a draw per
+#   complaint, shaped by the scam-type mix, and is never pinned.
+#
+# Who reads it
+#   world/gang_mix.py. The gangs are built through the normal gang config
+#   reader, so every existing rule (dividing lines included) still applies.
+#
+# How to read each block
+#   label: policy      -> our own design choice.
+#   label: assumption  -> a number no source gives us.
+#
+# Where the full reasoning lives
+#   docs/research/amendments.md, A-023.
+# =====================================================================
+
+gang_mix:
+  label: policy
+  reason: "Configuration for the per-world gang mix (Level 12f task 1 (many-worlds sampler))."
+  issue_ids_v2: [12-14, 12-18]
+  derived_from: "Level 12f task 1 (many-worlds sampler); amendment A-023"
+
+  # ---------------------------------------------------------------------
+  # spread_share_of_range: how far a gang may stray from the world's centre
+  #
+  # The idea
+  #   A gang draws uniformly between centre - spread x width and
+  #   centre + spread x width (width = high - low of the parameter's range),
+  #   clipped to the range and rounded for whole numbers.
+  #
+  # Example
+  #   Centre 4 layers in a range of 2 to 5 (width 3): the gang draws between
+  #   3.55 and 4.45, which rounds to 4. A wider range or a larger spread
+  #   lets neighbouring whole numbers appear.
+  # ---------------------------------------------------------------------
+  spread_share_of_range:
+    value: 0.15
+    label: assumption
+    reason: "assumption; reviewed design. Small enough that a world's gangs look alike, large enough that they differ."
+
+  receiving_mules:
+    range: [1, 3]
+    label: assumption
+    reason: "assumption; reviewed design. Receiving mules per gang, drawn directly (not stratified); the scam block allows 1 to 10."
+
+  budget:
+    money_paise: 50000000
+    time_minutes: 2000000
+    max_risk: 0.99
+    label: assumption
+    reason: "Generous on purpose, measured use reached 0.309 of the money budget and 0.017 of the time budget across 10 stress worlds (A-023), so a refusal still means a generator bug."
+
+  start_day_range:
+    range: [1, 10]
+    label: assumption
+    reason: "assumption; reviewed design. Gangs start on different days inside the first ten days of the world."
+
+  # ---------------------------------------------------------------------
+  # family_rules: which training family tag a generated gang carries
+  #
+  # The idea
+  #   A tag must describe what the gang does, never label unrelated
+  #   behaviour. The first rule that matches wins; a gang that matches none
+  #   gets no family (null). Only training family names are allowed.
+  #   field layers is the gang's route layers.
+  # ---------------------------------------------------------------------
+  family_rules:
+    rules:
+      - family: layered_chain
+        field: layers
+        at_least: 2
+      - family: fast_pass_through
+        field: layers
+        at_most: 1
+    label: policy
+    reason: "A route of several layers is the layered_chain definition; a single layer is the fast pass-through. No other family describes what a generated gang does."
+
+  held_out_generation:
+    value: true
+    label: policy
+    reason: "Test and stress worlds get one held-out gang, so held-out results exist per family; training and validation worlds never do (Level 12g, A-025)."
+
+  held_out_gang:
+    label: policy
+    reason: "Governs held-out gang generation for test and stress worlds per Level 12g brief and amendment A-025."
+    issue_ids_v2: [12-8]
+    derived_from: "Level 12g brief; amendment A-025"
+    splits: [test, stress]
+    slow_drip_victims_per_receiving_mule:
+      range: [1, 3]
+      label: assumption
+      reason: "Few victims keep a slow-drip stream small; the piece cap is set from the measured maximum (Level 12g C11)."

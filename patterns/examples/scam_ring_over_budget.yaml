@@ -1,0 +1,29 @@
+# Identical to scam_ring_basic.yaml except that budget money_paise is 100, far too small for the steps.
+# Validating this file must be refused with "over budget:". It exists to show that refusal.
+
+pattern:
+  pattern_version: 1
+  name: scam_ring_over_budget
+  description: "The basic scam ring with a budget of 100 paise, which no plan can fit inside."
+  gang:
+    gang_id: pattern_scam_ring_over_budget
+    strength: 1
+    budget:
+      money_paise: 100
+      time_minutes: 500000
+      max_risk: 0.99
+    start_minute: 1440
+    steps:
+      - block: acquire
+        params:
+          count: 4
+      - block: scam
+        params:
+          receiving_mules: 2
+          victims_per_receiving_mule: 8
+      - block: route
+        params:
+          layers: 2
+          accounts_per_layer: 2
+      - block: cash_out
+        params: {}

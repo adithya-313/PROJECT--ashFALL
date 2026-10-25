@@ -85,9 +85,15 @@ def test_key_values_are_unchanged():
 
 
 def test_held_out_tactics():
+    # Since amendment A-025, held-out tactics consist of 2 active and 2 deferred families.
     held_out = load_config()["held_out_tactics"]
-    assert len(held_out["tactics"]) == 4
-    assert "basic_merchant_mule" not in held_out["tactics"]
+    active = set(held_out["tactics"])
+    deferred = {item["name"] for item in held_out.get("deferred", [])}
+    assert len(active) == 2
+    assert len(deferred) == 2
+    assert active.isdisjoint(deferred)
+    assert "basic_merchant_mule" not in active
+    assert "basic_merchant_mule" not in deferred
 
 
 def test_missing_reason_is_rejected():

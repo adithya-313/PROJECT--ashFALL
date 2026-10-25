@@ -1,21 +1,51 @@
-# Research status table for Level 10.
+# =====================================================================
+# RESEARCH STATUS: which facts about the real world we have actually checked
+# =====================================================================
 #
-# status is one of: confirmed, changed, reported, unverified.
-#   confirmed  = a source says it.
-#   changed    = the source says something different from the first plan.
-#   reported   = seen only in a secondary or vendor source.
-#   unverified = not found in a source yet.
-# hand_checked = the author opened the page and saw the text.
-# tool_rechecked = a search tool re-read the page:
-#   none     = no tool re-check.
-#   single   = one tool found it.
-#   both     = two tools found it.
-#   disagree = the two tools disagreed.
-# A tool re-check never sets hand_checked.
-# source_url is null where no URL is recorded.
-# note is a short plain-English remark (may be empty).
+# What this file is
+#   The project plan makes claims about real banks, regulators and papers
+#   (how a detection tool performs, what a procedure says, which licence a
+#   dataset has). Some claims were checked at the source and some were not.
+#   This table records, for each claim, how far it was checked, so nobody
+#   builds on an unchecked claim by accident.
+#
+# Who reads it
+#   core/level10_check.py counts the entries by status, by hand check and by
+#   tool re-check, and showcase/level_10.py shows those counts.
+#   tests/unit/test_research_status.py pins the file's shape and counts.
+#
+# How to read an entry
+#   id        a short name for the claim.
+#   claim     the claim itself.
+#   status    how well it is backed:
+#               confirmed   a source says it
+#               changed     the source says something different from the
+#                           first plan
+#               reported    seen only in a second-hand or vendor source
+#               unverified  not found in a source yet
+#   hand_checked   true if the author opened the page and saw the text.
+#   tool_rechecked a search tool re-read the page:
+#               none      no tool re-check
+#               single    one tool found it
+#               both      two tools found it
+#               disagree  the two tools disagreed
+#               A tool re-check never sets hand_checked.
+#   source_url  the page, or null where no address is recorded.
+#   note        a short plain-English remark; it may be empty.
+#
+# Example
+#   fca_37_percent_not_reported is confirmed, hand_checked true, and both
+#   tools found it: the author saw the sentence on the FCA page.
+#
+# Checked by: tests/unit/test_research_status.py and the Level 10 showcase
+# =====================================================================
 
 findings:
+  # ---- India's shared fraud systems: MuleHunter, I4C registry, DPIP ----
+  # MuleHunter.AI is the mule-detection tool RBIH built. The I4C Suspect
+  # Registry is a shared list of suspect identifiers and layer-1 mule
+  # accounts. DPIP is the Digital Payments Intelligence Platform (RBIH
+  # documentation). See docs/interfaces/national_systems.md.
   - id: mulehunter_rule_false_positives
     claim: "RBIH found rule-based mule detection gives high false positive rates."
     status: confirmed
@@ -51,6 +81,7 @@ findings:
     tool_rechecked: none
     source_url: null
     note: ""
+  # ---- DPIP (continued) ----
   - id: dpip_five_services
     claim: "DPIP has five services: Ingestion, Screening, Feedback, Revoke, Dispute."
     status: confirmed
@@ -79,6 +110,7 @@ findings:
     tool_rechecked: none
     source_url: null
     note: "The API reference page asks for a Pratirupa login and offers no public signup, so field names are not public. Mock shapes stay the author's own design."
+  # ---- NPCI, HDFC and other banking systems ----
   - id: npci_dozen_bank_pilot
     claim: "NPCI pilot with about a dozen banks, each running NPCI's model locally."
     status: reported
@@ -100,6 +132,10 @@ findings:
     tool_rechecked: both
     source_url: null
     note: ""
+  # ---- Holds and freezes (the legal side; see config/legal_actions.yaml) ----
+  # CFCFRMS is the system named in the Home Ministry procedure (the SOP),
+  # where a bank updates a hold. A hold keeps an amount in place; a freeze
+  # blocks the account.
   - id: cfcfrms_hold_process
     claim: "The beneficiary bank puts on hold an amount to the extent of the amount reported (MHA SOP, 2 Jan 2026)."
     status: confirmed
@@ -128,6 +164,8 @@ findings:
     tool_rechecked: both
     source_url: null
     note: ""
+  # ---- FCA findings used for world ranges ----
+  # These figures are UK evidence, not India's.
   - id: fca_37_percent_not_reported
     claim: "Only 37% of offboarded mule accounts were reported to the National Fraud Database (period Jan 2022 to Sep 2023)."
     status: confirmed
@@ -142,6 +180,8 @@ findings:
     tool_rechecked: none
     source_url: https://www.fca.org.uk/publications/multi-firm-reviews/proceeds-fraud-detecting-preventing-money-mules
     note: ""
+  # ---- Papers, open-source simulators and dataset licences ----
+  # The licence entries matter for whether outside code and data may be reused.
   - id: yield_paper_89_vs_61
     claim: "A live mule system's yield was 89% versus 61% under the incumbent rules (arXiv 2607.17586)."
     status: confirmed
@@ -191,6 +231,7 @@ findings:
     tool_rechecked: none
     source_url: null
     note: ""
+  # ---- Payment amounts and cash-out depth (feed config/world_ranges.yaml) ----
   - id: npci_95_percent_low_value_p2m
     claim: "Over 95% of UPI P2M volume is up to 2,000 rupees (NPCI FAQ)."
     status: confirmed

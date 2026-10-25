@@ -1,0 +1,116 @@
+# =====================================================================
+# LEVEL 12 SHOWCASE: fixed settings for the early checks
+# =====================================================================
+#
+# What this file is
+#   Level 12 is "a world that can react". Its showcase runs 25 checks
+#   (python -m showcase --level 12). The first part (checks 1-5) needs a few
+#   fixed choices: which world to use, which code-version label to record,
+#   and where in a run to place a lien or a hold. They live here.
+#
+# Who reads it
+#   showcase/level_12_checks.py, showcase/level_12_support.py and
+#   showcase/level_12_support_b.py (via load_level_12_config).
+#
+# Words used below
+#   lien          a bank's block on part of an account's money.
+#   hold          the bank keeps a payment back instead of sending it.
+#   split payment a payment above the bank's per-payment UPI limit, which is
+#                 sent as two or more pieces. (UPI is India's instant payment
+#                 system; the limit is drawn once per world.)
+#   equivalence   the fraud-on runner, told to allow everything, gives the
+#                 same events, fingerprints and ledgers as fraud-off.
+#   seed scan     trying seed after seed until one meets a condition.
+#   label / reason / issue_ids_v2 / derived_from
+#                 "policy" = our own choice; why; problem numbers; where the
+#                 choice came from.
+#
+# Checked by: tests/unit/showcase/test_level_12_checks.py
+# =====================================================================
+
+# ---------------------------------------------------------------------
+# split_world: the world for check 2 (payment splitting)
+#
+# The idea
+#   Check 2 proves that splitting a big payment into pieces behaves the same
+#   with fraud on and fraud off. It needs a world where this really happens.
+#   The seed was found by a scan of seeds 1 to 12: seed 1 is the first with
+#   at least 3 split payments (it has 21).
+#     seed 1, n_people 120, n_shops 20, n_days 61, range_name training
+#                         the world's recipe
+#     min_split_payments 3  the check fails if fewer than 3 payments split
+#                           (it stops "payment splitting is exercised" from
+#                           resting on one lucky case)
+#
+# Source: showcase/level_12_checks.py (run_split_world_check); derived_from below.
+# ---------------------------------------------------------------------
+split_world:
+  label: policy
+  issue_ids_v2: [K1, K3]
+  derived_from: >-
+    seed scan, B-4: seeds 1-12 at 120 people, 20 shops, 61 days, training; seed 1 is the first with at least
+    3 genuine split payments (21)
+  seed: 1
+  n_people: 120
+  n_shops: 20
+  n_days: 61
+  range_name: training
+  min_split_payments: 3
+  min_split_payments_reason: >-
+    At least three split payments demonstrates that payment splitting is repeatedly exercised rather than
+    occurring as an isolated edge case.
+  reason: >-
+    First seed in the systematic scan of seeds 1-12 that yields multiple split payments under training UPI limits
+    to verify fraud-on and fraud-off parity.
+
+# ---------------------------------------------------------------------
+# showcase_run: the code-version label used in showcase runs
+#
+# The idea
+#   A run's name includes a code version. If the real git version were used,
+#   every new commit would rename the showcase runs and their payment ids.
+#   This fixed label, "showcase-12a", keeps the names stable.
+#   (Part d's own checks use "showcase-12d", set in the code.)
+#
+# Source: showcase/level_12_checks.py and level_12_support_b.py.
+# ---------------------------------------------------------------------
+showcase_run:
+  label: policy
+  code_version: "showcase-12a"
+  reason: "Fixed code version recorded for Level 12a showcase runs so run ids and payment ids remain stable across git states."
+
+# ---------------------------------------------------------------------
+# check_3_lien: where to look for the payment that check 3 blocks
+#
+# The idea
+#   Check 3 places a lien that leaves one paisa less than a chosen payment
+#   needs, and shows that later outgoing payments are blocked. It first
+#   runs the world with no lien and searches for a suitable successful
+#   payment, starting at event number search_start.
+#     search_start 1000 -> look from the 1000th event on. About a third of
+#     the way through the run, so the account has real history first.
+#   A larger number means a later payment is chosen.
+#
+# Source: showcase/level_12_support.py (find_lien_candidate).
+# ---------------------------------------------------------------------
+check_3_lien:
+  label: policy
+  search_start: 1000
+  reason: "Position 1000 is approximately one third into the run, ensuring real prior transactions occur before placing a lien."
+
+# ---------------------------------------------------------------------
+# check_4_hold: which payment check 4 holds back
+#
+# The idea
+#   Check 4 asks the bank to hold one payment and shows that it leaves no
+#   event and no ledger entry, while every other event stays the same.
+#     target_index 100 -> the payment at position 100 of the run without
+#     the hold. It is an early payment that succeeds, so the effect of the
+#     hold is easy to see.
+#
+# Source: showcase/level_12_checks.py (the held-payment check).
+# ---------------------------------------------------------------------
+check_4_hold:
+  label: policy
+  target_index: 100
+  reason: "Baseline planned payment index 100 is an early successful debit that cleanly demonstrates isolation when held."

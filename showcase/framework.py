@@ -6,6 +6,11 @@
 #   LEVEL_NUMBER (int), LEVEL_TITLE (str), WHAT_YOU_SAW (str), NEEDS_DATABASE (bool),
 #   find_missing_preconditions() -> list[str]   (empty list = everything needed is there),
 #   get_checks(quick: bool) -> list[CheckDefinition].
+#
+# A level that is built in parts (for example Level 12a, 12b, ...) tags each check with part="a", "b", ...
+# Running one part (--part a) keeps only that part's checks, AFTER the coverage rules were checked on the whole
+# level, because one part on its own may not hold a normal, two edge and a negative check.
+# TERM: part = one letter naming a slice of a level that is built and reviewed on its own, e.g. "a" for Level 12a.
 import inspect
 import subprocess
 import time
@@ -42,6 +47,10 @@ class CheckCoverageError(Exception):
     """Raised when a level's list of checks breaks the coverage rules. The framework never weakens the rules."""
 
 
+class NoChecksForPart(Exception):
+    """Raised when --part names a part that no check of the level belongs to. A run never passes with zero checks."""
+
+
 @dataclass
 class CheckOutcome:
     """What a check hands back when it passes."""
@@ -61,6 +70,8 @@ class CheckDefinition:
     run: Callable[[Any], Awaitable[CheckOutcome]]
     likely_cause: str
     where_to_look: str
+    # Which part of the level this check belongs to ("a", "b", ...); None for levels that are not split.
+    part: str | None = None
 
 
 @dataclass
@@ -91,6 +102,8 @@ class LevelResult:
     code_version: str
     finished_at: str
     overall_status: str
+    # The part that was run, or None when the whole level was run.
+    part: str | None = None
 
 
 def validate_checks(checks: list[CheckDefinition]) -> None:
@@ -116,6 +129,38 @@ def validate_checks(checks: list[CheckDefinition]) -> None:
         raise CheckCoverageError(f"need at least {MIN_EDGE_CHECKS} edge checks, found {kinds.count('edge')}")
     if kinds.count("negative") < MIN_NEGATIVE_CHECKS:
         raise CheckCoverageError(f"need at least {MIN_NEGATIVE_CHECKS} negative check")
+
+
+def select_part_checks(checks: list[CheckDefinition], part: str | None) -> list[CheckDefinition]:
+    """
+    WHAT: Keeps only the checks whose part tag equals the requested part, in their original order.
+    When no part is requested (None), every check is kept unchanged, so whole-level runs behave as before.
+    If a part is requested but no check carries that tag, it raises NoChecksForPart instead of returning nothing.
+
+    WHY: A level built in pieces (12a, 12b, ...) needs to show one piece at a time while it is being reviewed.
+    The filter lives here, in the shared framework, so level files only tag their checks and never filter.
+    Refusing an empty selection matters because a run with zero checks would otherwise report PASSED.
+
+    Args:
+        checks: The level's full, already validated list of checks, in run order.
+        part: One lowercase letter such as "a", or None to keep every check.
+
+    Returns:
+        The checks to run: all of them when part is None, otherwise only those tagged with that part.
+
+    Example:
+        Four checks tagged a, b, a, b with part="a" keep checks 1 and 3 (2 of 4); with part=None all 4 stay.
+        With part="z" and no check tagged z, NoChecksForPart("z") is raised.
+    """
+    # No part requested: the whole level runs, exactly as it did before parts existed.
+    if part is None:
+        return checks
+    # Keep the order of the level file, so check numbers in the report still read 1, 3, ... in sequence.
+    selected = [check for check in checks if check.part == part]
+    # Never hand back an empty list: the caller would run nothing and call that a pass.
+    if not selected:
+        raise NoChecksForPart(part)
+    return selected
 
 
 def get_code_version() -> str:
@@ -212,16 +257,21 @@ async def run_level_module(
     workspace_factory: Callable[[], Awaitable[Any]],
     out_dir: Path,
     workspace_cleanup: Callable[[Any], Awaitable[None]] | None = None,
+    part: str | None = None,
 ) -> LevelResult:
     """
     Run every check of one level, in order, and return the result.
 
     workspace_factory and workspace_cleanup are parameters so unit tests can pass fakes. out_dir is where this
     level's reports go; the run itself writes nothing there (the report writer does).
+    part, when given, keeps only that part's checks. The coverage rules are checked on the WHOLE level first,
+    because a single part may legitimately lack an edge or negative check of its own.
     """
     started = time.perf_counter()
     checks = module.get_checks(quick)
     validate_checks(checks)
+    # Filter only after validation, so the coverage minimum always applies to the level as a whole.
+    checks = select_part_checks(checks, part)
 
     missing = await find_preconditions(module)
     if missing:
@@ -241,6 +291,7 @@ async def run_level_module(
         code_version=get_code_version(),
         finished_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         overall_status=decide_overall_status(results, allow_not_run),
+        part=part,
     )
 
 

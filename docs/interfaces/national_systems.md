@@ -101,3 +101,30 @@ N3, hold latency: in the mock hold response add `requested_at`, `applied_at`, `l
   "response": {"request_id": "example_req_1", "status": "example_status", "held_amount_inr": 1000, "updated_at": "2026-01-01T00:00:00Z", "requested_at": "2026-01-01T00:00:00Z", "applied_at": "2026-01-01T00:15:00Z", "latency_minutes": 15, "outcome": "applied"}
 }
 ```
+
+## Level 12e: registry-report events emitted by the world (OUR DESIGN)
+
+The simulated world emits one event each time a bank reports an account to the national registry. Level 13 reads
+these events and turns them into mock registry entries (hashing identifiers on the bank side, as Section 1
+describes). Times are world minutes, IST wall time with no offset (ground rule 30). The event carries no truth: it
+never says whether the account really is a mule.
+
+```json
+{
+  "report_id": "<run_id>-R000001",
+  "kind": "registry_report",
+  "reported_minute": 4321,
+  "reporting_bank_index": 1,
+  "account_id": "acc_person_0042",
+  "device_fingerprint": "example_fingerprint_or_null",
+  "confirmed_minute": 3900,
+  "complaint_ids": ["<run_id>-L000003"]
+}
+```
+
+- `reported_minute`: when the report reaches the registry (`confirmed_minute` + the drawn delay).
+- `confirmed_minute`: arrival minute of the first complaint naming the account.
+- `device_fingerprint`: the account holder's device fingerprint when the holder is a Level 11 person; null for shops
+  and accounts opened mid-run.
+- `complaint_ids`: every complaint about the account that arrived at or before `confirmed_minute`.
+- Every wrong registry entry in the simulation comes from these events. Level 13 adds no second error rate.

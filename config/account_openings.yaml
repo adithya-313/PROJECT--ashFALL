@@ -1,0 +1,75 @@
+# =====================================================================
+# ACCOUNT OPENINGS: ordinary people and shops opening new accounts mid-run
+# =====================================================================
+#
+# What this file is
+#   In real life ordinary people keep opening bank accounts. If only gangs
+#   opened accounts during a run, "a brand-new account" would give the gang
+#   away. With the account-openings switch on, the world also opens genuine
+#   accounts while it runs. This file says how many, what kind, and how many
+#   new people stay idle.
+#
+# Who reads it
+#   world/account_openings_config.py (load_account_openings_config and the
+#   opening-rate functions) schedules the openings; world/opened_routine.py
+#   reads the idle share; world/interactive_loop.py applies them. The
+#   switch is RunnerSettings.account_openings_enabled and is off by default.
+#
+# How to read an entry
+#   label       "assumption": nobody published a number, so it is our guess.
+#   unit        what the numbers count.
+#   training / test / stress
+#               the range for each kind of world (training: what the
+#               detector learns from; test: the final exam; stress: extreme
+#               cases). Each world picks one value inside the range.
+#   issue_ids_v2, derived_from
+#               the problem number (12-19) and where the idea came from.
+#   reason      one sentence on why the range looks the way it does.
+#
+# Where the full reasoning lives
+#   The reason lines below; the 12g trivial-world check will measure how
+#   well "new account" separates gang accounts from genuine ones.
+#
+# Checked by: python -m core.config_validator config/account_openings.yaml
+# =====================================================================
+
+parameters:
+  # How many ordinary accounts are opened. The count for a run is
+  # rate / 1000 x people x days / 30, rounded. Example: training [2, 10]
+  # means a 60-person, 61-day world gets about 0.002 to 0.01 x 60 x 2.03 = 0
+  # to 1 new accounts; stress [0, 40] gives up to about 5.
+  genuine_account_openings_per_1000_people_per_30_days:
+    label: assumption
+    unit: rate per 1000 people per 30 days
+    training: [2, 10]
+    test: [2, 10]
+    stress: [0, 40]
+    issue_ids_v2: [12-19]
+    derived_from: "assumption; world_ranges searched_but_not_found dormant or new account share"
+    reason: "No Indian new-account share was found (world_ranges searched_but_not_found: 'dormant or new account share'); the range is deliberately wide so the 12g trivial-world check can test whether 'new account' separates mules."
+
+  # Of the accounts opened, the share that belong to shops rather than
+  # people. Example: training [0.05, 0.2] means 5% to 20% are shops.
+  share_of_openings_that_are_shops:
+    label: assumption
+    unit: fraction
+    training: [0.05, 0.2]
+    test: [0.05, 0.2]
+    stress: [0.0, 0.5]
+    issue_ids_v2: [12-19]
+    derived_from: "assumption; world_ranges searched_but_not_found dormant or new account share"
+    reason: "No Indian new-account share was found (world_ranges searched_but_not_found: 'dormant or new account share'); the range is deliberately wide so the 12g trivial-world check can test whether 'new account' separates mules."
+
+  # Of the new ordinary people, the share who stay idle: no salary, no
+  # shopping, no payments at all. The rest get a normal routine from the day
+  # they open. Example: training [0.2, 0.6] means 20% to 60% stay idle. New
+  # shops get no customers either way.
+  share_of_new_genuine_people_with_no_routine:
+    label: assumption
+    unit: fraction
+    training: [0.2, 0.6]
+    test: [0.2, 0.6]
+    stress: [0.0, 1.0]
+    issue_ids_v2: [12-19]
+    derived_from: "assumption; world_ranges searched_but_not_found dormant or new account share"
+    reason: "No figure is published. Idle genuine new accounts exist, and without them 'new and idle' would single out gang-opened accounts, so a share of new genuine people get no routine payments at all; the 12g trivial-world check measures it. Only new people get a routine: new genuine shops stay without customers, because adding shops to the world would shift every existing shopper's draws."

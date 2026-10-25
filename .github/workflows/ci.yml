@@ -217,11 +217,11 @@ jobs:
 
       # Style check on the Level 7 code and the code it uses.
       - name: Lint (ruff)
-        run: ruff check showcase api core
+        run: ruff check showcase api core evaluation
 
       # Type check on the same folders.
       - name: Type check (mypy)
-        run: mypy showcase api core --ignore-missing-imports --no-strict-optional
+        run: mypy showcase api core evaluation --ignore-missing-imports --no-strict-optional
 
       # Fast unit tests that need no database or Kafka. Two kinds of old problems are left out on purpose and are
       # NOT fixed in Level 7 (known issues, tracked in the pull request):
@@ -285,6 +285,11 @@ jobs:
             echo "A test was skipped: a service was not reachable, which counts as a failure in CI."
             exit 1
           fi
+
+      # Dry-run make show with LEVEL=12 and PART=a to verify the Makefile passes --part through to the showcase CLI.
+      # Runs on the Linux CI runner where make is installed, ensuring part-filtered showcase runs work as intended.
+      - name: Check make passes PART through
+        run: make -n show LEVEL=12 PART=a | tee "$RUNNER_TEMP/make_dry_run.txt" && grep -q -- "--part a" "$RUNNER_TEMP/make_dry_run.txt"
 
       # Run every level showcase in quick mode (the Level 7 checks, including stopping the broker twice).
       - name: Run the showcase
@@ -365,10 +370,19 @@ jobs:
       - name: Check that every import is declared
         run: python -m core.imports_check
 
+      # Fails if hidden truth is imported outside allowed folders or truth env vars leak into operational code.
+      - name: Check hidden truth isolation
+        run: python -m core.truth_import_check
+
       # Fails if a top-level folder is not listed in config/folder_classification.yaml, or an engine folder is not
       # listed in config/new_engine_paths.yaml.
       - name: Check the top-level folder classification
         run: python -m core.folder_check
+
+      # Fails if config/issues_v2.yaml is not valid: an ID missing or invented, a built issue whose evidence cannot be
+      # found, or a config issue_ids_v2 tag that names an unknown ID or has no derived_from.
+      - name: Check the version 2 issue register
+        run: python -m core.issue_register_v2
 
       # Run the fast folders. "-m not needs_stack" skips tests that need the Docker stack. The geo-velocity tests and
       # test_velocity_features.py (which the level-showcase job leaves out) DO run here: the geo tests now use a small

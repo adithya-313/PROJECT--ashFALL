@@ -1,0 +1,494 @@
+# =====================================================================
+# TACTIC BLOCKS: the steps a gang can take, and the lines it must not cross
+# =====================================================================
+#
+# What this file is
+#   A gang in the simulated world is described as a list of steps. Each step
+#   is a "building block" with a name and a few settings. This file lists
+#   every block the simulator knows, what settings each accepts and their
+#   allowed values, and a few side rules (below the blocks).
+#
+# The blocks (in the order a gang usually uses them)
+#   acquire              get mule accounts (a mule passes stolen money along)
+#   take_control         take over the accounts with gang-run phones
+#   warm_up              let the accounts sit unused so they look settled
+#   scam                 victims pay money into the accounts (the gang's
+#                        money source; the other source is a pre-funded
+#                        "fixture" account)
+#   route                pass the money through layers of mule accounts
+#   disguise             shift payment times a little to hide the pattern
+#   cash_out             turn the money into cash, crypto or shop goods
+#   split_below_threshold  cut big payments into pieces under a size limit
+#
+# Strength 1 and 2
+#   Every gang has a "strength". Strength 1 is the simple gang: the same
+#   waiting time at every hop and round amounts in whole thousands of rupees.
+#   Strength 2 is the camouflaged gang: amounts down to the single rupee,
+#   and only strength 2 may use the disguise block. Each block lists which
+#   strengths may use it (allowed_strengths).
+#
+# Who reads it
+#   world/tactic_config.py loads it and answers questions about blocks.
+#   world/gang_config.py checks a gang's steps against it, world/gang_planner.py
+#   turns the steps into payments, and world/tactic_blocks.py,
+#   world/scam_planner.py, world/cash_out.py, world/split_below_threshold.py,
+#   world/mule_origins.py and world/gang_devices.py do the work of
+#   individual blocks.
+#
+# How to read an entry
+#   label       "assumption": no published figure, our guess; "policy": our
+#               own rule. The reason line says why.
+#   allowed_strengths, time_minutes_per_use
+#               which strengths may use the block, and how many simulated
+#               minutes one use takes (a range, a rule written in words, or
+#               0). The planner draws the time from this range for acquire
+#               and take_control; for the other blocks the time comes from
+#               what the block does (days waited, payments scheduled).
+#   parameters  the settings a gang may give that block. "range" is the
+#               allowed values; "world_ranges_reference" means the range is
+#               read from config/world_ranges.yaml.
+#   (More on cost and risk in config/tactic_costs.yaml.)
+#
+# Dividing lines (held_out_dividing_lines, further down)
+#   A "held-out" tactic is one the detector must not see during training.
+#   A dividing line is a limit that training gangs may not cross, so the
+#   held-out tactic stays clearly different.
+#
+# Where the full reasoning lives
+#   docs/research/amendments.md, A-014 (held-out lines) and A-016 (blocks).
+#
+# Checked by: python -m core.config_validator config/tactic_blocks.yaml
+# =====================================================================
+
+tactic_blocks:
+  label: policy
+  reason: "Catalogue of procedural building blocks used to specify gang laundering operations and attack tactics."
+  issue_ids_v2: [12-8, 12-9]
+  derived_from: "amendment A-014; amendment A-016"
+  blocks:
+    # ------------------------------------------------------------------
+    # acquire: get the mule accounts
+    #   count        how many mule accounts the gang gets. If left out, it is
+    #                drawn from the mules_per_gang range in world_ranges.yaml
+    #                (training [5, 50]).
+    #   origin_mix   where the mules come from. all_rented: ordinary people's
+    #                accounts, rented. world_ranges: each mule's origin
+    #                (rented, borrowed ID, business) is drawn, and new
+    #                accounts are opened for the last two. Left out: same as
+    #                all_rented, but no origin is recorded in the hidden truth.
+    #   time_minutes_per_use [60, 1440]: acquiring takes 1 hour to 1 day.
+    # ------------------------------------------------------------------
+    acquire:
+      label: assumption
+      reason: "No published figure; building block models account acquisition for comparison per amendment A-016."
+      meaning: "Recruit or rent mule accounts from ordinary persons"
+      allowed_strengths: [1, 2]
+      time_minutes_per_use: [60, 1440]
+      parameters:
+        count:
+          label: assumption
+          world_ranges_reference: mules_per_gang
+          split: training
+          reason: "Number of mule accounts acquired by a gang per campaign, referenced from config/world_ranges.yaml"
+        origin_mix:
+          label: policy
+          allowed_values: [all_rented, world_ranges]
+          default: all_rented
+          reason: "Where mule origins come from. all_rented takes every mule from the ordinary people of the world, as the 12b fixtures did before mule origins existed, and is the default when the parameter is left out; an omitted parameter records no origin in truth so those fixtures stay unchanged, while an explicit all_rented records origin rented. world_ranges draws each mule's origin from the mule_origin_share ranges."
+    # ------------------------------------------------------------------
+    # take_control: run the accounts from gang-controlled phones
+    #   devices                 how many gang phones (1 to 5), shared among the
+    #                           mule accounts in turn
+    #   sim_swap                true if the gang took over the owner's phone
+    #                           number, so text-message codes reach the gang
+    #   linked_number_switch    true if the phone number the bank has on file
+    #                           was changed
+    #   emulator                true if the gang uses a phone simulator on a
+    #                           computer instead of a real phone
+    #   remote_access           true if remote-control software lets the gang
+    #                           operate the session
+    #   rotate_every_days  how often each mule's phone is replaced.
+    #   rotations          how many replacements each mule's phone receives.
+    #   The four true/false settings are written into the hidden truth and
+    #   into the gang's device events. time_minutes_per_use [10, 120].
+    # ------------------------------------------------------------------
+    take_control:
+      label: assumption
+      reason: "No published figure; building block models unauthorized device takeover for comparison per amendment A-016."
+      meaning: "Take control of acquired mule accounts via dedicated gang devices and compromise tooling"
+      allowed_strengths: [1, 2]
+      time_minutes_per_use: [10, 120]
+      parameters:
+        devices:
+          label: assumption
+          range: [1, 5]
+          reason: "Number of external gang devices provisioned to control acquired mule accounts"
+        sim_swap:
+          label: policy
+          type: boolean
+          reason: "Whether SIM swapping was executed to divert two-factor SMS codes"
+        linked_number_switch:
+          label: policy
+          type: boolean
+          reason: "Whether the registered bank linked telephone number was altered"
+        emulator:
+          label: policy
+          type: boolean
+          reason: "Whether an emulator environment is used instead of a physical mobile device"
+        remote_access:
+          label: policy
+          type: boolean
+          reason: "Whether remote access software was installed to operate the session remotely"
+        rotate_every_days:
+          label: assumption
+          range: [3, 14]
+          held_out_family: device_rotation
+          issue_ids_v2: [12-8]
+          derived_from: "Level 12g brief"
+          reason: "how often each mule's phone is replaced."
+        rotations:
+          label: assumption
+          range: [1, 6]
+          held_out_family: device_rotation
+          issue_ids_v2: [12-8]
+          derived_from: "Level 12g brief"
+          reason: "how many replacements each mule's phone receives."
+    # ------------------------------------------------------------------
+    # warm_up: let the accounts sit before using them
+    #   days   how many days the gang waits. If left out, 1. The world range
+    #          is mule_warmup_days (training [2, 14]). The wait moves the
+    #          gang's clock forward; no payments are made. One use takes
+    #          days x 1440 minutes.
+    # ------------------------------------------------------------------
+    warm_up:
+      label: assumption
+      reason: "No published figure; building block models account seasoning for comparison per amendment A-016."
+      meaning: "Age or season acquired accounts before moving illicit funds"
+      allowed_strengths: [1, 2]
+      time_minutes_per_use: "days x 1440"
+      parameters:
+        days:
+          label: assumption
+          world_ranges_reference: mule_warmup_days
+          split: training
+          reason: "Number of days spent letting acquired accounts season before routing, referenced from config/world_ranges.yaml"
+    # ------------------------------------------------------------------
+    # scam: victims pay the gang's "receiving" mules
+    #   receiving_mules             how many of the acquired mules victims
+    #                               pay (1 to 10). A route after it must have
+    #                               exactly this many accounts per layer.
+    #   victims_per_receiving_mule  an exact number of victims per mule, from
+    #                               1 up to the top of victims_per_mule_largest
+    #                               (50 in training). If left out, each mule's
+    #                               number is drawn.
+    #   How the victims pay is in config/scam_schedules.yaml. A gang has one
+    #   money source: this block, or a pre-funded fixture account.
+    # ------------------------------------------------------------------
+    scam:
+      label: assumption
+      reason: "No published figure; building block models victims paying receiving mules for comparison per amendment A-016."
+      meaning: "Victims pay acquired receiving mules; this is the gang's money source in place of a fixture source"
+      allowed_strengths: [1, 2]
+      time_minutes_per_use: "span of the victim payment schedule"
+      parameters:
+        receiving_mules:
+          label: assumption
+          range: [1, 10]
+          reason: "Number of acquired mules that receive victim money; route accounts_per_layer must equal it"
+        victims_per_receiving_mule:
+          label: assumption
+          world_ranges_reference: victims_per_mule_largest
+          split: training
+          reason: "Number of victims paying each receiving mule, upper bound referenced from config/world_ranges.yaml"
+    # ------------------------------------------------------------------
+    # route: pass the money through layers of mule accounts
+    #   layers             how many layers (1 to 5): layer 1 is the mules that
+    #                      receive the money, the last is where it ends
+    #   accounts_per_layer how many parallel mule accounts per layer (1 to 10)
+    #   dwell_minutes      minutes money rests in an account before moving on.
+    #                      If left out it is drawn. A training gang may not
+    #                      exceed 60 (see training_max_dwell_minutes below).
+    #   amount_inr         rupees sent per hop. Not allowed when the money comes
+    #                      from a scam, because the amount is then what the
+    #                      victims paid. A training gang may not go below
+    #                      Rs 2,000 (see slow_drip_max_amount_inr below).
+    #   drip_piece_max_inr largest rupee piece for slow-drip transfer.
+    #   drip_spread_days   days over which the first hop's pieces leave.
+    #   drip_hold_minutes  minutes each piece rests at every mule before moving.
+    # Example: layers 2, accounts_per_layer 2 means 4 mules in two layers.
+    # ------------------------------------------------------------------
+    route:
+      label: assumption
+      reason: "No published figure; building block models layered forwarding for comparison per amendment A-016."
+      meaning: "Move money through layered mule accounts to obscure the audit trail"
+      allowed_strengths: [1, 2]
+      time_minutes_per_use: "hop dwell"
+      parameters:
+        layers:
+          label: assumption
+          range: [1, 5]
+          reason: "Number of hops in the laundering chain from collector to exit"
+        accounts_per_layer:
+          label: assumption
+          range: [1, 10]
+          reason: "Number of mule accounts per layer"
+        dwell_minutes:
+          label: assumption
+          world_ranges_reference: minutes_money_stays_in_mule_account
+          split: training
+          reason: "Dwell time money stays in intermediary mule account before forwarding, referenced from config/world_ranges.yaml"
+        amount_inr:
+          label: assumption
+          world_ranges_reference: mule_transfer_amount_inr
+          split: training
+          reason: "Transfer amount per hop, referenced from config/world_ranges.yaml"
+        drip_piece_max_inr:
+          label: assumption
+          range: [500, 1999]
+          held_out_family: slow_drip
+          issue_ids_v2: [12-8]
+          derived_from: "Level 12g brief"
+          reason: "largest piece of a slow-drip transfer, in rupees; stays below the slow-drip dividing line."
+        drip_spread_days:
+          label: assumption
+          range: [3, 14]
+          held_out_family: slow_drip
+          issue_ids_v2: [12-8]
+          derived_from: "Level 12g brief"
+          reason: "days over which the first hop's pieces leave, evenly spaced."
+        drip_hold_minutes:
+          label: assumption
+          range: [240, 2880]
+          held_out_family: slow_drip
+          issue_ids_v2: [12-8]
+          derived_from: "Level 12g brief"
+          reason: "minutes each piece rests at every mule before it moves on; above the training maximum dwell."
+    # ------------------------------------------------------------------
+    # disguise: shift forwarding times to hide the pattern (strength 2 only)
+    #   jitter_minutes  the most minutes a forward may be moved earlier inside
+    #                   its waiting time (0 to 30). Example: 10 means a
+    #                   forward due 30 minutes after arrival may happen
+    #                   between 20 and 30 minutes after.
+    # ------------------------------------------------------------------
+    disguise:
+      label: assumption
+      reason: "No published figure; building block models timing camouflage for comparison per amendment A-016."
+      meaning: "Perturb payment timings inside the dwell window to camouflage against detection"
+      allowed_strengths: [2]
+      time_minutes_per_use: [0, 30]
+      parameters:
+        jitter_minutes:
+          label: assumption
+          range: [0, 30]
+          reason: "Random minute offset applied to payment timings within dwell window"
+    # ------------------------------------------------------------------
+    # cash_out: turn the money into something else
+    #   channels  the ways out: crypto (to a gang-opened account), atm,
+    #             branch (a bank counter), genuine_shop (the mule buys goods
+    #             from an ordinary shop). Their shares and delays are in
+    #             config/cash_out.yaml.
+    # ------------------------------------------------------------------
+    cash_out:
+      label: assumption
+      reason: "No published figure; building block models downstream extraction via crypto, ATM, branch, and genuine shops per Decision D3."
+      meaning: "Extract stolen money from terminal mule accounts into physical cash, crypto, or genuine merchant goods"
+      allowed_strengths: [1, 2]
+      time_minutes_per_use: "cashing out window"
+      parameters:
+        channels:
+          label: policy
+          allowed_values: [crypto, atm, branch, genuine_shop]
+          reason: "Cash-out distribution channels specified in config/cash_out.yaml"
+    # ------------------------------------------------------------------
+    # split_below_threshold: cut big payments into smaller pieces
+    #   threshold_inr  the size limit in rupees. Put before a route or a
+    #                  cash_out step, it cuts every payment of that step
+    #                  above the limit into equal pieces at the same
+    #                  minute. Training [10000, 50000], test the same, stress
+    #                  [2000, 100000]. In a training world a piece may not
+    #                  fall below Rs 2,000 (the slow-drip line).
+    # Example: with a limit of Rs 20,000, a Rs 50,000 payment becomes 3 pieces.
+    # ------------------------------------------------------------------
+    split_below_threshold:
+      label: assumption
+      reason: "No published figure; building block models splitting payments below a threshold for comparison per amendment A-016."
+      meaning: "Split payments exceeding a threshold into smaller pieces to avoid reporting or rule limits"
+      allowed_strengths: [1, 2]
+      time_minutes_per_use: 0
+      parameters:
+        threshold_inr:
+          label: assumption
+          range: [10000, 50000]
+          training: [10000, 50000]
+          test: [10000, 50000]
+          stress: [2000, 100000]
+          reason: "Threshold in INR above which payments are split into pieces below it"
+
+# ---------------------------------------------------------------------
+# mule_origin_shares: where a mule account can come from
+#
+# The idea
+#   When acquire has origin_mix world_ranges, each mule gets an origin:
+#     rented        a real person's existing account, rented out (no new
+#                   account is opened)
+#     borrowed_kyc  a new personal account opened on someone else's identity
+#                   papers (new_account_owner_kind: person)
+#     business      a new business account, modelled as a shop account
+#                   (new_account_owner_kind: shop)
+#   The chance of each is read from world_ranges.yaml (see the reason below
+#   for why the three are divided by their sum).
+#
+# Source: world/mule_origins.py, world/tactic_config.py.
+# ---------------------------------------------------------------------
+mule_origin_shares:
+  label: policy
+  reason: "Chances that an acquired mule is rented, opened on borrowed documents or opened as a business account when origin_mix is world_ranges. The three ranges in config/world_ranges.yaml are independent and do not sum to 1, so each draw is divided by the sum of the three before it is used."
+  issue_ids_v2: [G1, 12-19]
+  derived_from: "amendment A-016; config/world_ranges.yaml"
+  rented:
+    label: policy
+    world_ranges_reference: mule_origin_share_rented
+    new_account_owner_kind: null
+    reason: "A rented mule is an existing ordinary account, so no account is opened for it; its share is read from config/world_ranges.yaml."
+  borrowed_kyc:
+    label: policy
+    world_ranges_reference: mule_origin_share_borrowed_kyc
+    new_account_owner_kind: person
+    reason: "A borrowed-KYC mule is a new personal account opened on someone else's identity documents; its share is read from config/world_ranges.yaml."
+  business:
+    label: policy
+    world_ranges_reference: mule_origin_share_business
+    new_account_owner_kind: shop
+    reason: "A business mule is a new business account, modelled as a shop account; its share is read from config/world_ranges.yaml."
+
+# ---------------------------------------------------------------------
+# rented_owner_activity: a rented account's owner keeps living
+#
+# The idea
+#   The owner of a rented account still pays for groceries, rent and so on.
+#   Each rented mule draws a "kept share" (training [0.3, 0.8] from
+#   world_ranges.yaml). While the account is rented, each of the owner's
+#   outgoing payments is made with that chance and paused otherwise.
+#
+# Example
+#   A kept share of 0.5 means about half of the owner's own payments carry
+#   on during the rental.
+#
+# Source: world/rented_owner_activity.py.
+# ---------------------------------------------------------------------
+rented_owner_activity:
+  label: policy
+  reason: "A rented mule keeps part of its owner's normal payments next to the illicit flows. The kept share is drawn once per rented mule; an outgoing owner payment inside the mule span is paused when a fresh draw is not below that share."
+  issue_ids_v2: [G1]
+  derived_from: "amendment A-016; config/world_ranges.yaml"
+  kept_share:
+    label: policy
+    world_ranges_reference: rented_mule_owner_activity_kept_share
+    reason: "Share of the owner's outgoing payments that a rented mule keeps; read from config/world_ranges.yaml, where its label and reason live."
+
+# ---------------------------------------------------------------------
+# held_out_dividing_lines: what a training gang may not do
+#
+# The idea
+#   Some tactics are kept out of training worlds, so a detector cannot learn
+#   them early (see config/tactic_families.yaml). These lines mark the edge:
+#     training_max_dwell_minutes 60 (upper end of how long money rests in
+#       a mule account in training): a training route may not wait longer.
+#     slow_drip_max_amount_inr 2000 (lower end of the mule transfer amount
+#       in training): a training route may not send less than Rs 2,000 per
+#       payment, and a split may not make pieces below it.
+#     training_devices_retired_on_schedule false: a rule, not a number.
+#       Training gangs do not retire devices on a fixed schedule, which is
+#       the held-out device_rotation tactic. world/tactic_config.py reports
+#       it, but no code enforces it yet (the reason says it is for B-2b).
+#   The numbers come from world_ranges.yaml, so they move with it.
+#
+# Source: world/tactic_config.py (resolve_dividing_line); world/gang_config.py
+#   and world/split_below_threshold.py enforce the two numbers.
+# ---------------------------------------------------------------------
+held_out_dividing_lines:
+  label: policy
+  reason: "Dividing lines derived from world ranges to separate training tactics from held-out tactics per amendment A-014."
+  issue_ids_v2: [12-8]
+  derived_from: "amendment A-014; config/world_ranges.yaml"
+  training_max_dwell_minutes:
+    label: policy
+    parameter_reference: minutes_money_stays_in_mule_account
+    bound: upper
+    split: training
+    reason: "Upper bound of minutes_money_stays_in_mule_account training range; training routes must forward within this."
+  slow_drip_max_amount_inr:
+    label: policy
+    parameter_reference: mule_transfer_amount_inr
+    bound: lower
+    split: training
+    reason: "Lower bound of mule_transfer_amount_inr training range; training routes never send below it."
+  training_devices_retired_on_schedule:
+    label: policy
+    value: false
+    reason: "A rule; training tactics do not retire devices strictly on schedule; enforced by world/held_out_options.py (Level 12g)."
+  exempt_splits:
+    label: policy
+    value: [test, stress]
+    issue_ids_v2: [12-8]
+    derived_from: "Level 12g brief"
+    reason: "Held-out options are allowed only in test and stress worlds; the check keys on the world's split, never on its range column (Level 12g brief)."
+
+# ---------------------------------------------------------------------
+# gang_payment_purpose: what every gang payment is labelled
+#
+# The idea
+#   Every payment carries a purpose label (salary, rent, everyday ...). Level
+#   11's list cannot grow, so all gang payments, including victim payments,
+#   are labelled "everyday". What the payment really is, such as which scam,
+#   is kept in the hidden truth instead.
+#
+# Source: world/tactic_config.py (get_gang_payment_purpose); ground rule 29.
+# ---------------------------------------------------------------------
+gang_payment_purpose:
+  label: policy
+  purpose: everyday
+  reason: "Payment purposes stay world-side (ground rule 29) and Level 11's purpose list cannot grow, so gang payments, victim payments included, reuse everyday; the truth story carries the scam type."
+
+# ---------------------------------------------------------------------
+# gang_devices: the phones a gang uses
+#
+# The idea
+#   device_id_prefix "dev_ext_": every gang phone gets an id starting with
+#   this ("ext" for external), for example dev_ext_000001.
+#   device_event_kinds: the kinds of device events the gang phones create:
+#   a phone is acquired, a SIM swap, a linked-number switch, an emulator
+#   switched on, remote access switched on.
+#
+# Source: world/tactic_config.py (get_gang_device_prefix and
+#   get_gang_device_event_kinds); world/gang_devices.py.
+# ---------------------------------------------------------------------
+gang_devices:
+  label: policy
+  reason: "External gang devices have neutral identifiers and generate synthetic device takeover events."
+  issue_ids_v2: [12-8, 12-9]
+  derived_from: "Decision E2; Decision E4"
+  device_id_prefix: "dev_ext_"
+  device_event_kinds:
+    - device_acquired
+    - sim_swap
+    - linked_number_switch
+    - emulator_enabled
+    - remote_access_enabled
+
+# ---------------------------------------------------------------------
+# slow_drip_limits: volume bounds on slow-drip payment streams
+# ---------------------------------------------------------------------
+slow_drip_limits:
+  label: assumption
+  issue_ids_v2: [12-8]
+  derived_from: "Level 12g brief"
+  reason: "Limits on slow-drip payment volume to ensure bounded world execution size."
+  max_pieces_per_stream:
+    label: assumption
+    value: 5000
+    issue_ids_v2: [12-8]
+    derived_from: "Level 12g C11: maximum pieces per slow-drip stream over all 240 planned test and stress worlds was 2411 (world test-b02-0007); cap = next hundred above it, doubled for headroom"
+    reason: "Keeps one slow-drip stream to a bounded number of payments; a stream above the cap is refused, never merged. Set from the measured maximum, so no planned test or stress world is refused."
+
+

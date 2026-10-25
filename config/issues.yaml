@@ -1,17 +1,55 @@
-# Issue register for the October 2026 world review (review item R6).
+# =====================================================================
+# LEVEL 11 ISSUE REGISTER: every known problem, so none is forgotten
+# =====================================================================
+#
+# What this file is
+#   In October 2026 the simulated world was reviewed and a list of problems
+#   and gaps came out of it (review item R6). This file records each one
+#   under an ID, says whether it is done, and points at proof. It is
+#   Level 11's list and it is FROZEN: it must keep exactly 31 IDs, of which
+#   28 are built, 2 planned and 1 deferred, and nothing may be added.
+#   New work goes in config/issues_v2.yaml, which has its own checker.
+#   The IDs (G1, L1, A2, N3, E4, R6 ...) come from the review; the letters
+#   are the review's own grouping and this file does not define them.
+#
+# Who reads it
+#   core/issue_register.py (python -m core.issue_register) checks every
+#   entry against the repository. tests/unit/test_issue_register.py runs the
+#   same check in CI, and scripts/verify_world.py and Level 11 showcase
+#   check 2 check the counts. config/issues_v2.yaml copies each Level 11
+#   status into its v1_status field. tests/unit/world/test_frozen_anchors.py
+#   pins the counts (see config/frozen_anchors.yaml).
+#
+# How to read an entry
+#   The entry's key is the ID, for example G1. Fields:
+#     title        one line saying what the problem is.
+#     status       one of three words:
+#                    built     the part owned by Level 11 Part 1 exists now
+#                              and is checked automatically (see evidence);
+#                              later_work lists what later levels add.
+#                    planned   nothing exists yet; a later level owns it
+#                              (see later_work).
+#                    deferred  deliberately not built; reason says why.
+#                  (The word "partial" is not allowed here; it exists only
+#                  in config/issues_v2.yaml.)
+#     evidence     for a built entry: a list of proofs. The checker looks
+#                  each one up for real. The kinds are:
+#                    config     a block in a config file that lists this
+#                               issue ID in issue_ids
+#                    amendment  an entry in docs/research/amendments.md
+#                               whose Issue IDs row lists this ID
+#                    doc        a doc file that contains the given text
+#                    test       a test function that exists in the given file
+#     later_work   what a later level still has to do, written "Level N: what".
+#     reason       only for a deferred entry: why it is not built.
+#
+# Example
+#   G1 is built because world_ranges.yaml has the block mule_origin_share_rented
+#   with G1 in its issue_ids, and amendment A-004 lists G1.
+#
 # Checked by: python -m core.issue_register
 # It is also checked by tests/unit/test_issue_register.py, which runs in CI.
-#
-# status words
-#   built    = the part owned by Level 11 Part 1 exists now and is checked
-#              automatically (see evidence). later_work lists what later levels add.
-#   planned  = nothing exists yet; a later level owns it (see later_work).
-#   deferred = deliberately not built; reason says why.
-# evidence kinds (the checker looks each one up for real)
-#   config    = a block in a config file that lists this issue ID in issue_ids
-#   amendment = an entry in docs/research/amendments.md whose Issue IDs row lists this ID
-#   doc       = a doc file that contains the given text
-#   test      = a test function that exists in the given file
+# =====================================================================
 
 G1:
   title: "Mule origin; rented mules keep normal life"

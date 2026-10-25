@@ -1,0 +1,135 @@
+# =====================================================================
+# FROZEN ANCHORS: the Level 11 numbers that must never move
+# =====================================================================
+#
+# What this file is
+#   Level 11 built the everyday-payments world and recorded fingerprints and
+#   counts of what it produced. Later levels add fraud on top. If a later
+#   change quietly altered the old world, we would no longer be testing the
+#   same thing. So the old results are written down here, and a test fails
+#   if any of them moves. A moved anchor is reverted, never updated.
+#   This is ground rule 27.
+#
+# Who reads it
+#   tests/unit/world/test_frozen_anchors.py checks every value. The Level 12
+#   showcase reads the fraud_off_events block to rebuild the same world.
+#
+# Words used below
+#   fraud-off world  Level 11's world with no fraud added.
+#   SHA-256 hash     a 64-character fingerprint of some text. Change one
+#                    character of the text and the fingerprint is completely
+#                    different.
+#   canonical form   one fixed way of writing data (sorted keys, no extra
+#                    spaces) so the same data gives the same fingerprint
+#                    on Windows and Linux.
+#   label / reason / issue_ids_v2 / derived_from
+#                    "policy" = our own rule; the reason in one sentence; the
+#                    problem numbers answered; how the numbers were obtained.
+#
+# Where the full reasoning lives
+#   Every value was measured by running the code at commit 7757091 (the
+#   Level 12a B-1 report).
+#
+# Checked by: tests/unit/world/test_frozen_anchors.py
+# =====================================================================
+
+# ---------------------------------------------------------------------
+# frozen_anchors: the one block in this file
+# ---------------------------------------------------------------------
+frozen_anchors:
+  label: policy
+  reason: Ground rule 27. These values were pinned by Level 11 at commit 7757091 and are gathered here so one test guards them all. A change that moves any of them is reverted, never refreshed.
+  issue_ids_v2: [F1, F2, F3, F6]
+  derived_from: "measured on main at 7757091; ground rule 27"
+  # ---------------------------------------------------------------------
+  # pinned_at_commit: when the numbers were measured
+  #
+  # The idea
+  #   The short name of the code version (a git commit) that produced every
+  #   number below. Anyone can check out that version and get the same values.
+  #
+  # Source: the Level 12a B-1 report.
+  # ---------------------------------------------------------------------
+  pinned_at_commit: "7757091"
+  # ---------------------------------------------------------------------
+  # fraud_off_events: the fingerprint of one whole fraud-off run
+  #
+  # The idea
+  #   The recipe for one small world, and the fingerprint of every payment
+  #   event it produces. If the fingerprint ever differs, something changed
+  #   the old world.
+  #     seed 101       the starting number that fixes all random choices
+  #     n_people 60    ordinary people in the world
+  #     n_shops 12     shops in the world
+  #     n_days 61      length of the run in days
+  #     range_name     the kind of world: training
+  #     sha256         the fingerprint of all 2,915 payment events
+  #
+  # Example
+  #   Both showcases rebuild this world and check that its fingerprint still
+  #   starts 24fc0e25.
+  #
+  # Source: tests/unit/world/test_frozen_anchors.py; measured at 7757091.
+  # ---------------------------------------------------------------------
+  fraud_off_events:
+    seed: 101
+    n_people: 60
+    n_shops: 12
+    n_days: 61
+    range_name: training
+    sha256: "24fc0e25009d79462d508f040a109620dd4308486cc78aee589393fe921f92fd"
+  # ---------------------------------------------------------------------
+  # level_11_register: the Level 11 problem list, counted
+  #
+  # The idea
+  #   config/issues.yaml lists the problems Level 11 tracked. It must stay
+  #   exactly as shipped: total_ids 31 entries, of which built 28 (finished),
+  #   planned 2 (not yet done) and deferred 1 (put off on purpose).
+  #   New problems go in config/issues_v2.yaml instead.
+  #
+  # Source: tests/unit/world/test_frozen_anchors.py; Level 11 check 2.
+  # ---------------------------------------------------------------------
+  level_11_register:
+    total_ids: 31
+    built: 28
+    planned: 2
+    deferred: 1
+  # ---------------------------------------------------------------------
+  # grounded_parameters: Level 11's settings, counted by how well they are backed
+  #
+  # The idea
+  #   Level 11's realism files hold 33 settings (total). Each carries a label:
+  #   assumption (nobody published the number, so it is our guess) for 30 of
+  #   them, reported (taken from a published report) for 3. If a count
+  #   moves, one of those Level 11 files was edited, and with it the
+  #   fraud-off world.
+  #
+  # Source: tests/unit/world/test_frozen_anchors.py; world/grounding.py.
+  # ---------------------------------------------------------------------
+  grounded_parameters:
+    total: 33
+    assumption: 30
+    reported: 3
+  # ---------------------------------------------------------------------
+  # stress_scenario_files: how many stress files Level 11 has
+  #
+  # The idea
+  #   scenarios/stress/ holds 6 files, each describing one extreme situation
+  #   (an outage, a big festival, ...). Adding or removing one changes Level 11.
+  #   New fraud stress files go in scenarios/stress_fraud/ instead.
+  #
+  # Source: tests/unit/world/test_frozen_anchors.py.
+  # ---------------------------------------------------------------------
+  stress_scenario_files: 6
+  # ---------------------------------------------------------------------
+  # golden_values_canonical_sha256: the fingerprint of the "golden values" file
+  #
+  # The idea
+  #   scripts/golden_values.yaml stores reference fingerprints of Level 11
+  #   results. A test already checks the code against that file; this
+  #   fingerprint checks the file itself, so a golden value cannot be
+  #   "refreshed" together with the code that changed it.
+  #
+  # Source: tests/unit/world/test_frozen_anchors.py (test_golden_values_file_is_unchanged).
+  # ---------------------------------------------------------------------
+  golden_values_canonical_sha256: "324cecb443c646b07193463dbec15f0bdc2f36982199e0cfb601207d5d5d9757"

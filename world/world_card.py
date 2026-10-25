@@ -249,6 +249,57 @@ def build_world_card(
     }
 
 
+def build_fraud_world_card(
+    settings: Any,
+    output: Any,
+    base_rate: dict[str, Any],
+    layers: list[Layer] | None = None,
+) -> dict[str, Any]:
+    """
+    WHAT: Constructs a complete world card dictionary for a fraud-on interactive simulation run.
+    It compiles settings, clock start, cryptographic fingerprint, banks, regions, stress tests, layers,
+    payment counts by failure domain from output.result.run_result.counts, and measured base-rate metrics.
+
+    WHY: Level 12h requires fraud-on worlds to report measured fraud share and fraud inflation factors
+    derived against NCRP empirical base rates on their world card summary artifacts.
+
+    Args:
+        settings: Sizing settings or RunnerSettings container specifying seed, population, shops, and horizon.
+        output: InteractiveWorldOutput holding the simulated world, plan, and interactive execution result.
+        base_rate: Measured base-rate dictionary computed via world.base_rate.base_rate_for.
+        layers: Optional list of Layer instances applied during world execution.
+
+    Returns:
+        Dictionary containing all standardized world card attributes with measured base_rate.
+
+    Example:
+        >>> # card = build_fraud_world_card(settings, interactive_output, base_rate)
+    """
+    # 1. Compile simulation settings, clock start, and cryptographic fingerprint.
+    clock_start = output.plan.clock.to_datetime(0).isoformat()
+    fingerprint = world_fingerprint(output.world)
+    stress_tests, non_stress_layers = _build_layers_summary(layers)
+    settings_dict = {
+        "seed": settings.seed,
+        "n_people": settings.n_people,
+        "n_shops": settings.n_shops,
+        "n_days": settings.n_days,
+        "range_name": settings.range_name,
+    }
+    # 2. Assemble complete standardized fraud-on world card dictionary.
+    return {
+        "settings": settings_dict,
+        "clock_start": clock_start,
+        "world_fingerprint": fingerprint,
+        "banks": _build_banks_summary(output.world),
+        "regions": _build_regions_summary(output.world),
+        "stress_tests": stress_tests,
+        "layers": non_stress_layers,
+        "payments": _build_payments_summary(output.result.run_result.counts),
+        "base_rate": base_rate,
+    }
+
+
 def _render_banks_and_regions_md(
     banks: list[dict[str, Any]],
     regions: dict[str, Any],

@@ -1,0 +1,57 @@
+# =====================================================================
+# THE SIMULATED ANALYST: how a person reviewing a case gets it right or wrong
+# =====================================================================
+#
+# What this file is
+#   Settings for world/analyst.py. Accuracy starts from a base, falls when
+#   evidence is weak and when there are more cases than the team can
+#   handle, and sometimes the analyst just follows the model's score.
+#   The accuracy numbers live in config/world_ranges.yaml and are named here.
+#
+# Where the full reasoning lives
+#   docs/research/amendments.md, A-022.
+# =====================================================================
+
+analyst:
+  label: policy
+  reason: "Configuration for the simulated analyst per amendment A-022."
+  issue_ids_v2: [L4, 12-4]
+  derived_from: "amendment A-022"
+  accuracy_base:
+    world_ranges_reference: analyst_accuracy_base
+    reason: "Accuracy on a case with strong evidence and a manageable queue."
+  accuracy_drop_when_evidence_weak:
+    world_ranges_reference: analyst_accuracy_drop_when_evidence_weak
+    reason: "Accuracy lost when evidence strength is 0; scaled by (1 - evidence strength)."
+  accuracy_drop_when_queue_overloaded:
+    world_ranges_reference: analyst_accuracy_drop_when_queue_overloaded
+    reason: "Accuracy lost as the overload fraction approaches 1."
+  follows_model_score_share:
+    world_ranges_reference: analyst_follows_model_score_share
+    reason: "Chance the analyst copies the model score instead of judging (automation bias)."
+  minutes_per_case:
+    label: assumption
+    unit: minutes
+    training: [10, 30]
+    test: [5, 60]
+    stress: [3, 120]
+    reason: "Time one analyst spends on one case. No figure is published (amendment A-022)."
+  analysts_on_shift:
+    label: assumption
+    unit: count
+    training: [2, 10]
+    test: [1, 20]
+    stress: [1, 40]
+    reason: "Analysts reviewing cases in one bank on one day. No figure is published (amendment A-022)."
+  shift_minutes:
+    label: policy
+    value: 480
+    reason: "One eight-hour working day per analyst."
+  accuracy_floor:
+    label: policy
+    value: 0.5
+    reason: "An analyst is assumed no worse than a coin flip; the unfloored accuracy is also returned."
+  score_threshold:
+    label: policy
+    value: 0.5
+    reason: "A model score at or above this reads as 'mule' to an analyst who follows the score."

@@ -1,0 +1,154 @@
+# =====================================================================
+# TACTIC FAMILIES: the named ways a mule gang moves stolen money
+# =====================================================================
+#
+# What this file is
+#   A "tactic family" is one named pattern of how a gang moves stolen money,
+#   for example "fast_pass_through": money lands in an account and leaves
+#   again quickly. This file writes down a definition of each family. The
+#   definitions were frozen BEFORE the first gang world existed (amendment
+#   A-014), so no world could be shaped around a result.
+#
+# Training families and held-out families
+#   training   families that worlds used for training and tuning may
+#              contain. Seven are defined below.
+#   held-out   families that appear ONLY in test and stress worlds. They
+#              exist to show whether a detector learned a real signal or just
+#              memorised the training tactics. Four are defined below.
+#   Every held-out family names its "nearest training family": the training
+#   family it looks most like. What differs between the two is exactly the
+#   thing the held-out test measures.
+#   A gang may carry an optional family. If it names a held-out family and
+#   the world is a training world (validation worlds count as training), the
+#   run is refused with an error before anything is planned
+#   (world/tactic_families.py). An unknown family name is refused too.
+#
+# Who reads it
+#   world/tactic_families.py (load_tactic_families, check_family_lists_agree
+#   and validate_gang_families), world/interactive_runner.py (the check
+#   before a gang world starts), and tests/unit/test_tactic_families.py.
+#
+# How to read an entry
+#   definition / mechanism   what the family does, and how.
+#   typology_rows            row numbers of the table in
+#                            docs/research/mule_typologies.md, which says how
+#                            well each real-world pattern is sourced. The
+#                            status words copy that table:
+#                              confirmed   a source says it;
+#                              changed     the source says something a bit
+#                                          different from the first plan;
+#                              reported    seen only in a second-hand or
+#                                          vendor source;
+#                              unverified  no source found yet.
+#   finding_ids              short names of single verified sources in the
+#                            same document.
+#   signal_families_used     the groups of clues a detector can read to spot
+#                            the family, for example "amount and speed" or
+#                            "shared-device signals".
+#   trait                    a feature any family may show; it is not a
+#                            family itself (see the traits section).
+#   what_differs, forbidden_in_training   (held-out only) how the family
+#                            differs from its nearest training family, and
+#                            what training worlds must never contain.
+#
+# Where the held-out LIST is owned
+#   config/evaluation.yaml (held_out_tactics). The active and deferred lists
+#   live in evaluation.yaml. This file describes each name, and a test fails
+#   if the two lists disagree. The held-out definitions are project design
+#   (typology row 8) and are NOT sourced.
+#
+# Checked by: tests/unit/test_tactic_families.py and python -m core.config_validator config/tactic_families.yaml
+# =====================================================================
+
+tactic_families:
+  label: policy
+  reason: Held-out tactics overlapped training mechanisms and only basic_merchant_mule was named on the training side, so "held out" could not be checked. Writing each definition down before any gang world exists means a world cannot be shaped around a result. The held-out definitions are project design and are NOT sourced; the training families cite typology rows or findings with their status copied from docs/research/mule_typologies.md.
+  issue_ids_v2: [12-8]
+  derived_from: "amendment A-014"
+  held_out_list_owner: config/evaluation.yaml held_out_tactics
+
+  # ---- Training families: allowed in every kind of world ----
+  training:
+    fast_pass_through:
+      definition: A new or dormant account receives high-value credits and sends out similar amounts quickly.
+      mechanism: Money lands and leaves within a short dwell time, in about the same amount.
+      typology_rows:
+        - {row: 1, status: confirmed}
+      signal_families_used: [amount and speed, account age]
+    layered_chain:
+      definition: Money moves through several mule accounts, and cash-out is concentrated at depth 2 to 5, with the peak at depth 2.
+      mechanism: Each hop forwards the money to the next mule account until a cash-out account is reached.
+      typology_rows:
+        - {row: 2, status: confirmed}
+      signal_families_used: [network depth, amount and speed]
+    fan_in_collector:
+      definition: Many unrelated payers pay into one account, followed by fast dispersal.
+      mechanism: One collector account receives from many sources, then pays the money out quickly.
+      typology_rows:
+        - {row: 3, status: changed}
+      signal_families_used: [network shape, amount and speed]
+    rented_account_mule:
+      definition: An existing person's account is rented out, and the owner's REAL routine life continues alongside the mule flows.
+      mechanism: Mule money passes through an account that still shows the owner's own salary, bills and shopping.
+      finding_ids:
+        - {id: bengaluru_rented_mule_suppliers, status: reported}
+      typology_rows:
+        - {row: 1, status: confirmed}
+        - {row: 5, status: reported}
+      signal_families_used: [no-routine signal, account age]
+    shared_device_ring:
+      definition: Several mule accounts are operated from a small set of devices, with SIM swaps, emulators and remote access.
+      mechanism: The same few devices log in to many mule accounts, so a device cluster forms.
+      typology_rows:
+        - {row: 6, status: reported}
+      signal_families_used: [shared-device signals]
+    app_run_payout:
+      definition: App-coordinated payouts completed inside a short enforced window, cashed out via crypto collectors.
+      mechanism: A mobile app tells each mule when and where to send money, and the payout must finish inside the window.
+      typology_rows:
+        - {row: 7, status: changed}
+      signal_families_used: [amount and speed, shared-device signals]
+    basic_merchant_mule:
+      definition: A shop or business account receives victim money as if it were sales, with no disguise.
+      mechanism: Victim payments land on a business account and are cashed out, and nothing is added to look like genuine trade.
+      note: Already the training tactic named in config/evaluation.yaml (kept_in_training). It is project design, not a typology row.
+      signal_families_used: [account-type signals]
+
+  # A trait can be used by any family. It is not a family.
+  traits:
+    low_balance_after_outflow:
+      definition: The account balance sits near zero after money leaves.
+      typology_rows:
+        - {row: 4, status: unverified}
+      note: Unverified. Its parameter will be registered as an assumption in Level 12b.
+
+  # ---- Held-out families: test and stress worlds only ----
+  # A gang naming one of these in a training world is refused. Each differs
+  # from its nearest training family in one way only (see what_differs).
+  held_out:
+    slow_drip:
+      status: active
+      definition: Money arrives and leaves in small amounts spread over days or weeks.
+      nearest_training_family: fast_pass_through
+      what_differs: Money arrives and leaves in small amounts spread over days or weeks, keeping dwell time and amounts inside the genuine range.
+      forbidden_in_training: Any multi-day trickle routing.
+    device_rotation:
+      status: active
+      definition: Every mule account gets its own fresh device, retired and replaced on a schedule.
+      nearest_training_family: shared_device_ring
+      what_differs: Each account gets its own fresh device, retired and replaced on a schedule, so no device cluster forms.
+      forbidden_in_training: Scheduled device replacement.
+    pseudo_merchant_camouflage:
+      status: deferred
+      deferred_by: A-025
+      definition: A business account mixes in made-up customer-like payments so it looks like a genuine shop.
+      nearest_training_family: basic_merchant_mule
+      what_differs: A business account mixes in fabricated customer-like payments that copy a genuine shop's amount and hour profile.
+      forbidden_in_training: Business-account disguise blocks.
+    fake_routine_life:
+      status: deferred
+      deferred_by: A-025
+      definition: The gang makes up regular salary-like and bill-like payments on an account that has no real owner activity.
+      nearest_training_family: rented_account_mule
+      what_differs: The gang FABRICATES recurring salary-like and bill-like payments on an account with no real owner activity. A rented mule's routine is the real owner's.
+      forbidden_in_training: Gang-generated recurring payments.
