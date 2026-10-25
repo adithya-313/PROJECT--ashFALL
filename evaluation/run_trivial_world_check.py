@@ -3,6 +3,7 @@ WHAT: Evaluates trivial separability across all planned worlds under amendment A
 Runs 680 planned worlds (training 320, validation 120, test 120, stress 120) using
 process pool workers, computes six candidate behavioral signals per account, scores
 AP against ground truth mules, gates training/validation splits, and reports test/stress splits.
+Executed via: py -3.12 -m evaluation.run_trivial_world_check.
 
 WHY: Ground Rule 17 and amendment A-026 forbid trivial worlds where a single simple feature
 separates fraud so well (AUPRC >= 0.90) that any model looks artificially competent.
@@ -15,7 +16,6 @@ TERM: report-only split: worlds (test, stress) where results are audited and nev
 
 import argparse
 import csv
-import importlib
 import json
 import statistics
 import sys
@@ -29,12 +29,10 @@ REPO_ROOT: Path = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from core.config_validator import load_yaml  # noqa: E402
+from evaluation.trivial_world import check_world  # noqa: E402
 from world.sampled_world import run_sampled_world  # noqa: E402
 from world.world_configs import read_world_configs  # noqa: E402
 from world.world_sampler import WorldSpec, load_sampler_config, sample_block  # noqa: E402
-
-_trivial_world_module = importlib.import_module("evaluation.trivial_world")
-check_world = _trivial_world_module.check_world
 
 PLANNED_BLOCKS: dict[str, int] = {
     "training": 8,
