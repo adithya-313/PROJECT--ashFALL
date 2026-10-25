@@ -46,11 +46,11 @@ jobs:
 
       # ruff checks for style errors, unused imports, and formatting issues.
       - name: Lint (ruff)
-        run: ruff check api/ core/
+        run: ruff check api/ core/ nationalsim/
 
       # mypy checks for type mismatches without running the code.
       - name: Type check (mypy)
-        run: mypy api/ core/ --ignore-missing-imports --no-strict-optional
+        run: mypy api/ core/ nationalsim/ --ignore-missing-imports --no-strict-optional
 
       # Log in to Docker Hub so image pulls are not limited as anonymous requests (the rate limit that failed the
       # boot check). The step is skipped when the secrets are absent, for example on pull requests from forks.
@@ -217,11 +217,11 @@ jobs:
 
       # Style check on the Level 7 code and the code it uses.
       - name: Lint (ruff)
-        run: ruff check showcase api core evaluation
+        run: ruff check showcase api core evaluation nationalsim
 
       # Type check on the same folders.
       - name: Type check (mypy)
-        run: mypy showcase api core evaluation --ignore-missing-imports --no-strict-optional
+        run: mypy showcase api core evaluation nationalsim --ignore-missing-imports --no-strict-optional
 
       # Fast unit tests that need no database or Kafka. Two kinds of old problems are left out on purpose and are
       # NOT fixed in Level 7 (known issues, tracked in the pull request):
