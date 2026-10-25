@@ -444,3 +444,40 @@ def test_level_11_register_is_untouched() -> None:
     assert check_v1_register(v1_register, REPO_ROOT) == []
     assert len(v1_register) == len(EXPECTED_IDS) == 31
     assert count_statuses(v1_register) == {"built": 28, "planned": 2, "deferred": 1}
+
+
+def test_doc_evidence_directory_and_text() -> None:
+    """
+    WHAT: Checks that doc evidence pointing to a directory with text is rejected, pointing to a directory
+    alone is accepted, and pointing to a file with missing text is rejected.
+
+    WHY: A directory cannot be scanned for a single text snippet; text verification requires a specific file.
+    A directory without text is valid container evidence.
+
+    Returns:
+        None.
+    """
+    register = real_register()
+    # 1. dir alone -> OK (12-13 already uses scenarios/edge_cases as doc evidence without text)
+    assert errors_of(register) == ""
+
+    # 2. dir + text -> error
+    broken_dir_text = real_register()
+    edge_cases_item = next(
+        item for item in broken_dir_text["issues"]["12-13"]["evidence"]
+        if item.get("file") == "scenarios/edge_cases"
+    )
+    edge_cases_item["text"] = "some_search_text"
+    errs = errors_of(broken_dir_text)
+    assert "12-13: evidence text needs a file, not a folder: scenarios/edge_cases" in errs
+
+    # 3. file + missing text -> error (existing check)
+    broken_file_text = real_register()
+    file_item = next(
+        item for item in broken_file_text["issues"]["12-13"]["evidence"]
+        if item.get("file") == "world/edge_cases.py"
+    )
+    file_item["text"] = "nonexistent_anchor_phrase"
+    errs_file = errors_of(broken_file_text)
+    assert "12-13: text 'nonexistent_anchor_phrase' not found in world/edge_cases.py" in errs_file
+
