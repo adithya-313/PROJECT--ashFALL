@@ -1,7 +1,7 @@
 """
-WHAT: Prints, in markdown, the facts a Level 12g handoff note needs, read from the code and the config files
+WHAT: Prints, in markdown, the facts a Level 12h handoff note needs, read from the code and the config files
 themselves: public function and dataclass signatures, dataclass fields, configuration keys, random stream
-children with the tie-break order, and the register status of the issues Level 12g touches.
+children with the tie-break order, and the register status of the issues Level 12h touches.
 
 WHY: A handoff note typed by hand drifts from the code. Pasting this script's output into the note keeps every
 signature, field and key exactly as the code has it, and a reader can run the same command to check the note.
@@ -26,24 +26,20 @@ sys.path.insert(0, str(REPO_ROOT))
 from core.config_validator import load_yaml  # noqa: E402
 
 INTERFACE_MODULES: tuple[str, ...] = (
-    "world.held_out_options",
-    "world.tactic_families",
-    "world.gang_mix",
-    "world.gang_planner",
-    "world.gang_devices",
-    "world.truth_writer",
-    "evaluation.truth",
+    "world.edge_cases",
+    "world.base_rate",
+    "evaluation.trivial_world",
+    "evaluation.sanity_report",
+    "world.world_card",
 )
-RECORDS_MODULE: str = "world.truth_records"
-RECORD_NAMES: tuple[str, ...] = ("GangTruth", "TruthFacts")
+RECORDS_MODULE: str = "world.edge_cases"
+RECORD_NAMES: tuple[str, ...] = ("EdgeCase",)
 CONFIG_FILES: tuple[str, ...] = (
-    "config/tactic_blocks.yaml",
+    "config/base_rate.yaml",
+    "config/sanity_report.yaml",
     "config/evaluation.yaml",
-    "config/tactic_families.yaml",
-    "config/gang_mix.yaml",
-    "config/truth_store.yaml",
 )
-REGISTER_IDS: tuple[str, ...] = ("12-8",)
+REGISTER_IDS: tuple[str, ...] = ("E1", "12-6", "12-7", "12-13", "12-16")
 RUNNER_CONFIG_PATH: str = "config/interactive_runner.yaml"
 REGISTER_PATH: str = "config/issues_v2.yaml"
 
@@ -198,7 +194,9 @@ def print_records() -> None:
     missing: list[str] = []
     for record_name in RECORD_NAMES:
         if hasattr(records_module, record_name):
-            records.append(getattr(records_module, record_name))
+            rec = getattr(records_module, record_name)
+            if rec not in records:
+                records.append(rec)
         else:
             missing.append(record_name)
     for record in records:
