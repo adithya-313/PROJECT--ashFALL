@@ -67,6 +67,12 @@ from showcase.level_12_checks_g import (
     run_tagged_gangs_check,
     run_training_held_out_refusal_check,
 )
+from showcase.level_12_checks_h import (
+    run_edge_cases_check,
+    run_fraud_world_card_check,
+    run_sanity_report_check,
+    run_trivial_world_check,
+)
 
 LEVEL_NUMBER = 12
 LEVEL_TITLE = "World engine II: a world that can react (built: parts 12a-12f of 12a-12g)"
@@ -95,6 +101,10 @@ REQUIRED_FILES = [
     REPO_ROOT / "config" / "showcase_level_12.yaml",
     REPO_ROOT / "config" / "issues_v2.yaml",
     REPO_ROOT / "config" / "frozen_anchors.yaml",
+    REPO_ROOT / "config" / "base_rate.yaml",
+    REPO_ROOT / "config" / "sanity_report.yaml",
+    REPO_ROOT / "reports" / "trivial_world" / "summary.md",
+    REPO_ROOT / "reports" / "sanity" / "summary.md",
     REPO_ROOT / "scripts" / "golden_values.yaml",
     REPO_ROOT / "showcase" / "fixtures" / "level_12" / "gang_two_layers.yaml",
     REPO_ROOT / "showcase" / "fixtures" / "level_12" / "gang_victims_cashout.yaml",
@@ -590,14 +600,65 @@ def _get_checks_31_to_37() -> list[CheckDefinition]:
     return [check_31, check_32, check_33, check_34, check_35, check_36, check_37]
 
 
+def _get_checks_38_to_41() -> list[CheckDefinition]:
+    """
+    WHAT: Constructs check definition descriptors for Level 12h checks 38 through 41.
+    It builds CheckDefinition objects for the edge-case scenario library, trivial-world single-signal
+    separability check across live and recorded worlds, fraud-on world card base rate and inflation factor,
+    and outside dataset sanity reporting against PaySim and IBM AML-Data.
+
+    WHY: Decomposing check construction into modular subroutines keeps all functions under 30 code lines.
+    Separates the final verification and benchmark checks of part h into a focused builder.
+
+    Returns:
+        List of CheckDefinition containers representing checks 38 through 41.
+
+    Example:
+        checks = _get_checks_38_to_41(); assert len(checks) == 4
+    """
+    check_38 = CheckDefinition(
+        "38. the edge-case library is listed, and each runnable case shows its expected behaviour", "edge",
+        "The edge-case library is evaluated across all cases in scenarios/edge_cases; every runnable case passes "
+        "and non-runnable cases record their active level or deferred amendment.",
+        run_edge_cases_check,
+        "An edge case failed its expectation assertion or an inactive case lacked level/amendment metadata.",
+        "world/edge_cases.py, scenarios/edge_cases", part="h",
+    )
+    check_39 = CheckDefinition(
+        "39. the trivial-world check: the best single signal stays below the threshold", "consistency",
+        "trivial_world.check_world run live on training and validation blocks stays below threshold, and recorded "
+        "summary metrics across 680 worlds report zero gated failures.",
+        run_trivial_world_check,
+        "A live gated world exceeded the single-signal threshold or the recorded summary contained failures.",
+        "evaluation/trivial_world.py, config/evaluation.yaml, reports/trivial_world/summary.md", part="h",
+    )
+    check_40 = CheckDefinition(
+        "40. a fraud-on world card carries its base rate and inflation factor", "normal",
+        "A fraud-enabled world card built by build_fraud_world_card reports fraud share, complaint count, complaint "
+        "rate per 100,000 payments, and a lower-bound fraud inflation factor.",
+        run_fraud_world_card_check,
+        "Base rate calculation failed or the inflation factor did not exceed the baseline lower bound.",
+        "world/world_card.py, world/base_rate.py, config/base_rate.yaml", part="h",
+    )
+    check_41 = CheckDefinition(
+        "41. the sanity report: what matched outside data and what did not, recorded as-is", "edge",
+        "world_genuine_stats run live on training worlds compares against recorded PaySim and IBM tables, verifying "
+        "licensing and plausibility declarations, and mapping 17 brief items to checks.",
+        run_sanity_report_check,
+        "Plausibility declaration missing, dataset references corrupted, or live genuine payments failed to sample.",
+        "evaluation/sanity_report.py, config/sanity_report.yaml, reports/sanity/summary.md", part="h",
+    )
+    return [check_38, check_39, check_40, check_41]
+
+
 def get_checks(quick: bool = False) -> list[CheckDefinition]:
     """
-    WHAT: Constructs the ordered sequence of 37 Level 12 showcase verification checks across parts a to g.
-    All checks span consistency, normal, edge, and negative check kinds across parts 'a' to 'g'.
+    WHAT: Constructs the ordered sequence of 41 Level 12 showcase verification checks across parts a to h.
+    All checks span consistency, normal, edge, and negative check kinds across parts 'a' to 'h'.
 
     WHY: Supplies the showcase execution engine with the authoritative test suite for Level 12.
     Enforces required coverage distribution across normal, edge, and negative categories while
-    tagging each check with part='a', 'b', 'c', 'd', 'e', 'f' or 'g' for selective execution.
+    tagging each check with part='a', 'b', 'c', 'd', 'e', 'f', 'g' or 'h' for selective execution.
 
     Args:
         quick: Boolean flag indicating whether quick execution mode is requested.
@@ -606,7 +667,7 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
         List of CheckDefinition instances configuring Level 12 showcase evaluations.
 
     Example:
-        checks = get_checks(quick=True); assert len(checks) == 37
+        checks = get_checks(quick=True); assert len(checks) == 41
     """
     # Concatenate checks from helper builders to construct complete Level 12 suite.
     checks: list[CheckDefinition] = []
@@ -620,6 +681,8 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
     checks.extend(_get_checks_21_to_25())
     checks.extend(_get_checks_26_to_30())
     checks.extend(_get_checks_31_to_37())
+    checks.extend(_get_checks_38_to_41())
     return checks
+
 
 
