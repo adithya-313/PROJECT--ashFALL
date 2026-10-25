@@ -366,6 +366,14 @@ def build_markdown_summary(results: list[dict[str, Any]]) -> str:
             "",
         ])
         lines.extend(findings)
+        lines.extend([
+            "",
+            "Decision (architect, 2026-10-25): no change to the world. The separating signal is routine_life, "
+            "not a slow_drip mechanism (dwell or amount); it reaches 1.0 in 2 of 111 slow_drip worlds, where "
+            "the held-out gang has few mules; and routine life is the signal A-025 (c) already records as "
+            "untested because fake_routine_life is deferred. No fix can be justified without the test result, "
+            "so nothing is changed and no test or stress world is regenerated.",
+        ])
 
     lines.append("")
     return "\n".join(lines)

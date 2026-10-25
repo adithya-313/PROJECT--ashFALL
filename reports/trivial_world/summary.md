@@ -42,3 +42,5 @@ The following report-only signals or held-out families reached or exceeded 0.90 
 
 - Held-out family `slow_drip` in `test-b00-0012` (test): best signal `routine_life` achieved AUPRC 1.0000.
 - Held-out family `slow_drip` in `stress-b02-0032` (stress): best signal `routine_life` achieved AUPRC 1.0000.
+
+Decision (architect, 2026-10-25): no change to the world. The separating signal is routine_life, not a slow_drip mechanism (dwell or amount); it reaches 1.0 in 2 of 111 slow_drip worlds, where the held-out gang has few mules; and routine life is the signal A-025 (c) already records as untested because fake_routine_life is deferred. No fix can be justified without the test result, so nothing is changed and no test or stress world is regenerated.
