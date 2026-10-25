@@ -453,7 +453,8 @@ trivial_world_check:
   gate_on: [training_worlds, validation_worlds]
   report_only_on: [test_worlds, stress_worlds]
   report_held_out_per_family: true
-  reason: PaySim was rejected in Level 9 because single features separated fraud almost perfectly. 0.90 marks "almost perfectly"; it is a policy decision, not a measurement. The check gates on training and validation worlds (a failing world is fixed, never the threshold) and runs on test and stress worlds as report-only, where results are recorded per held-out family and never used for tuning (A-026).
+  routine_min_gap_days: 20
+  reason: PaySim was rejected in Level 9 because single features separated fraud almost perfectly. 0.90 marks "almost perfectly"; it is a policy decision, not a measurement. The check gates on training and validation worlds (a failing world is fixed, never the threshold) and runs on test and stress worlds as report-only, where results are recorded per held-out family and never used for tuning (A-026). A minimum counterparty gap of 20 days (routine_min_gap_days) reflects genuine recurring life obligations like salaries, rent, and monthly bills that temporary laundering accounts lack.
 
 # ---------------------------------------------------------------------
 # validation_worlds: the worlds where tuning is allowed

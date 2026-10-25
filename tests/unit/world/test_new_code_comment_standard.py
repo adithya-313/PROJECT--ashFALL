@@ -282,6 +282,9 @@ NEW_CODE_FILES: list[str] = [
     # Level 12h base rate module and test suite.
     "world/base_rate.py",
     "tests/unit/world/test_base_rate.py",
+    # Level 12h trivial world check module and test suite.
+    "evaluation/trivial_world.py",
+    "tests/unit/evaluation/test_trivial_world.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
