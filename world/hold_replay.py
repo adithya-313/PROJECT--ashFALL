@@ -436,7 +436,7 @@ def run_two_pass_replay(
             encumbered_paise_by_account[hold_req.account_id] = prior_encumbered + outcome.held_amount_paise
 
         # 10. Evaluate naive single-hop forwarding for departed money
-        if outcome.status in ("too_late", "partial"):
+        if outcome.status != "missed" and outcome.shortfall_paise > 0:
             # Inspect outgoing transfer debits from this account that posted before landing minute
             outgoing_transfers: list[OutgoingTransfer] = []
             for entry in target_ledger.entries:
@@ -565,9 +565,9 @@ def measure_hold_latencies_by_window(replay_result: HoldReplayResult) -> dict[st
     start_date = replay_result.pass1_output.plan.clock.start_date
 
     for hold in replay_result.primary_holds:
-        complaint = complaints_by_id.get(hold.complaint_id)
-        if complaint is None:
-            continue
+        if hold.complaint_id not in complaints_by_id:
+            raise ValueError(f"Complaint '{hold.complaint_id}' not found in Pass 1 complaints")
+        complaint = complaints_by_id[hold.complaint_id]
 
         latency_minutes = hold.landing_minute - complaint.arrival_minute
         arrival_dt = world_minute_to_ist(complaint.arrival_minute, start_date)

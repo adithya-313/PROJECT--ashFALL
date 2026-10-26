@@ -10,8 +10,6 @@ and strictly single-hop forwarding constraints under Amendment A-029.
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-import pytest
-
 from nationalsim.hold_flow import (
     HoldFlowTracker,
     HoldOutcome,
@@ -20,7 +18,6 @@ from nationalsim.hold_flow import (
     classify_hold_outcome,
     compute_hold_latency,
     decide_one_hop_forwarding,
-    is_night_hour,
 )
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -264,27 +261,29 @@ def test_unreachable_extra_delay_added_only_when_draw_says_so() -> None:
     assert latency_reachable == 10
 
 
-def test_outcome_classification_covers_applied_too_late_partial_missed() -> None:
-    """Proves that classify_hold_outcome exhaustively covers applied, partial, too_late, and missed.
+def test_outcome_classification_covers_applied_too_late_missed_with_shortfall() -> None:
+    """Proves that classify_hold_outcome exhaustively covers applied, too_late, and missed.
 
     What it is for:
         Guarantees that every administrative hold maps to a mathematically consistent outcome
-        based on available account balance at landing minute and bank action status.
+        based on available account balance at landing minute, recording shortfall for partly-funded holds.
 
     Inputs:
-        None. Tests all four outcome states with explicit monetary balances.
+        None. Tests all three outcome states with explicit monetary balances.
 
     What it returns:
-        None. Asserts status and held_amount_paise for each case.
+        None. Asserts status, held_amount_paise, and shortfall_paise for each case.
 
     How it works:
-        1. Missed: missed=True -> status='missed', held=0.
-        2. Applied: balance >= requested (10,000 >= 10,000) -> status='applied', held=10,000.
-        3. Too Late: balance <= 0 (0 <= 10,000) -> status='too_late', held=0.
-        4. Partial: 0 < balance < requested (4,000 < 10,000) -> status='partial', held=4,000.
+        1. Missed: missed=True -> status='missed', held=0, shortfall=10,000.
+        2. Applied (fully funded): balance >= requested (12,000 >= 10,000) -> status='applied', held=10,000,
+           shortfall=0.
+        3. Too Late: balance <= 0 (0 <= 10,000) -> status='too_late', held=0, shortfall=10,000.
+        4. Applied (partly funded): 0 < balance < requested (4,000 < 10,000) -> status='applied', held=4,000,
+           shortfall=6,000.
 
     Errors and side effects:
-        Raises AssertionError if any outcome status or held balance is misclassified.
+        Raises AssertionError if any outcome status, held balance, or shortfall is misclassified.
 
     Limits:
         Evaluates point-in-time financial classification.
@@ -304,8 +303,9 @@ def test_outcome_classification_covers_applied_too_late_partial_missed() -> None
     assert res_missed.status == "missed"
     assert res_missed.held_amount_paise == 0
     assert res_missed.requested_amount_paise == req_paise
+    assert res_missed.shortfall_paise == req_paise
 
-    # 2. Applied: Entire requested balance is available
+    # 2. Applied (fully funded): Entire requested balance is available
     res_applied = classify_hold_outcome(
         available_balance_paise=1200000,
         requested_amount_paise=req_paise,
@@ -315,6 +315,7 @@ def test_outcome_classification_covers_applied_too_late_partial_missed() -> None
     )
     assert res_applied.status == "applied"
     assert res_applied.held_amount_paise == req_paise
+    assert res_applied.shortfall_paise == 0
 
     # 3. Too late: Account was depleted prior to hold landing
     res_too_late = classify_hold_outcome(
@@ -326,17 +327,19 @@ def test_outcome_classification_covers_applied_too_late_partial_missed() -> None
     )
     assert res_too_late.status == "too_late"
     assert res_too_late.held_amount_paise == 0
+    assert res_too_late.shortfall_paise == req_paise
 
-    # 4. Partial: Some funds remain, but less than full amount
-    res_partial = classify_hold_outcome(
+    # 4. Applied (partly funded): Some funds remain, but less than full amount
+    res_partly_funded = classify_hold_outcome(
         available_balance_paise=400000,
         requested_amount_paise=req_paise,
         account_id=acc,
         landing_minute=minute,
         missed=False,
     )
-    assert res_partial.status == "partial"
-    assert res_partial.held_amount_paise == 400000
+    assert res_partly_funded.status == "applied"
+    assert res_partly_funded.held_amount_paise == 400000
+    assert res_partly_funded.shortfall_paise == 600000
 
 
 def test_forwarding_is_exactly_one_hop() -> None:

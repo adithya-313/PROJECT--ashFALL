@@ -8,6 +8,9 @@ single-hop forwarding termination, and fraud-off backward compatibility under Am
 """
 
 import statistics
+from dataclasses import replace
+
+import pytest
 
 from nationalsim.hold_flow import (
     HoldOutcome,
@@ -430,4 +433,102 @@ def test_hold_latency_medians_higher_at_night_and_weekends() -> None:
     assert med_weekend > med_weekday, (
         f"Weekend median latency ({med_weekend}) must exceed weekday median ({med_weekday})"
     )
+
+
+def test_missing_complaint_raises_value_error() -> None:
+    """Proves that measure_hold_latencies_by_window raises ValueError if a complaint is missing.
+
+    What it is for:
+        Guarantees fail-fast integrity: if a primary hold references a complaint_id
+        that cannot be found in the Pass 1 complaint registry, measure_hold_latencies_by_window
+        raises ValueError naming the missing complaint rather than silently skipping it.
+
+    Inputs:
+        None. Modifies a valid replay result by replacing primary_holds with a hold
+        referencing a non-existent complaint ID.
+
+    What it returns:
+        None. Asserts ValueError is raised naming the missing complaint ID.
+
+    How it works:
+        1. Set up small FastRunSettings and run two-pass replay to obtain a valid result structure.
+        2. Construct an artificial HoldRequest referencing 'c_missing_complaint_404'.
+        3. Replace primary_holds on the replay result using dataclasses.replace.
+        4. Call measure_hold_latencies_by_window with pytest.raises(ValueError) and check error message.
+
+    Errors and side effects:
+        Raises AssertionError if ValueError is not raised or does not name 'c_missing_complaint_404'.
+
+    Limits:
+        Evaluates missing complaint error handling on Pass 1 complaint mismatch.
+    """
+    settings, code_version = get_showcase_b_settings()
+    gang = load_showcase_c_fixture()
+
+    replay = run_two_pass_replay(
+        fast_settings=settings,
+        runner_settings=RunnerSettings(fraud_enabled=True),
+        gang_configs=(gang,),
+        code_version=code_version,
+    )
+
+    bogus_hold = HoldRequest(
+        complaint_id="c_missing_complaint_404",
+        payment_id="p_test_missing",
+        receiving_bank_index=0,
+        account_id="acc_missing_01",
+        amount_paise=100000,
+        landing_minute=100,
+        is_forwarded=False,
+    )
+    tampered_replay = replace(replay, primary_holds=[bogus_hold])
+
+    with pytest.raises(ValueError, match="c_missing_complaint_404"):
+        measure_hold_latencies_by_window(tampered_replay)
+
+
+def test_partly_funded_hold_is_applied_with_shortfall() -> None:
+    """Proves that a partly-funded hold receives status 'applied' with correct held amount and shortfall.
+
+    What it is for:
+        Verifies that when an account has positive balance less than the requested hold amount,
+        the hold outcome status is 'applied', held_amount_paise equals the available balance,
+        and shortfall_paise records the unencumbered difference under Amendment A-029.
+
+    Inputs:
+        None. Constructs an isolated ledger with 400,000 paise available balance and 1,000,000 paise hold.
+
+    What it returns:
+        None. Asserts status is 'applied', held_amount_paise is 400,000, and shortfall_paise is 600,000.
+
+    How it works:
+        1. Create an isolated bank ledger and deposit 400,000 paise opening balance.
+        2. Reconstruct balance at minute 50; assert available balance is 400,000 paise.
+        3. Classify hold outcome for 1,000,000 paise requested hold.
+        4. Assert status == 'applied', held_amount_paise == 400,000, and shortfall_paise == 600,000.
+
+    Errors and side effects:
+        Raises AssertionError if status is not 'applied' or held/shortfall amounts are incorrect.
+
+    Limits:
+        Evaluates partly-funded administrative hold classification.
+    """
+    ledger = Ledger(bank_index=0, upi_limit_paise=10000000)
+    target_account = "acc_partly_funded"
+    ledger.add_account(target_account, opening_balance_paise=400000, minute=0)
+
+    landing_minute = 50
+    reconstructed_bal = reconstruct_account_balance(ledger, target_account, landing_minute)
+    assert reconstructed_bal == 400000
+
+    outcome = classify_hold_outcome(
+        available_balance_paise=reconstructed_bal,
+        requested_amount_paise=1000000,
+        account_id=target_account,
+        landing_minute=landing_minute,
+        missed=False,
+    )
+    assert outcome.status == "applied"
+    assert outcome.held_amount_paise == 400000
+    assert outcome.shortfall_paise == 600000
 

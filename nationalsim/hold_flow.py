@@ -69,14 +69,15 @@ class HoldOutcome:
 
     What it is for:
         Records the exact financial effect of a hold at its landing minute, distinguishing
-        between full preservation, partial hold, pre-arrival fund flight, and bank inaction.
+        between preservation (applied), pre-arrival fund flight (too_late), and bank inaction (missed).
 
     Inputs:
-        status: One of 'applied', 'partial', 'too_late', or 'missed'.
+        status: Exactly one of 'applied', 'too_late', or 'missed'.
         held_amount_paise: Amount actually encumbered in paise (0 <= held <= requested).
         requested_amount_paise: Full amount requested by the hold directive in paise.
         account_id: Account identifier targeted by the hold.
         landing_minute: Simulation minute when the bank evaluated or attempted the hold.
+        shortfall_paise: Difference between requested and held funds in paise (requested - held).
 
     What it returns:
         Frozen HoldOutcome dataclass instance.
@@ -85,7 +86,7 @@ class HoldOutcome:
         Stores immutable evaluation fields for downstream metrics and forwarding analysis.
 
     Errors and side effects:
-        Raises ValueError if status is unrecognized or held amount exceeds requested amount.
+        Raises ValueError if status is unrecognized, held amount exceeds requested, or shortfall mismatch.
 
     Limits:
         Evaluates point-in-time account status without mutating balances directly.
@@ -96,10 +97,11 @@ class HoldOutcome:
     requested_amount_paise: int
     account_id: str
     landing_minute: int
+    shortfall_paise: int = 0
 
     def __post_init__(self) -> None:
         """Validate status classification and encumbered amount bounds."""
-        valid_statuses = {"applied", "partial", "too_late", "missed"}
+        valid_statuses = {"applied", "too_late", "missed"}
         if self.status not in valid_statuses:
             raise ValueError(f"Invalid hold status '{self.status}': must be one of {valid_statuses}")
         if self.held_amount_paise < 0:
@@ -108,6 +110,14 @@ class HoldOutcome:
             raise ValueError(
                 f"held_amount_paise ({self.held_amount_paise}) cannot exceed "
                 f"requested_amount_paise ({self.requested_amount_paise})"
+            )
+        expected_shortfall = self.requested_amount_paise - self.held_amount_paise
+        if self.shortfall_paise == 0 and expected_shortfall != 0:
+            object.__setattr__(self, "shortfall_paise", expected_shortfall)
+        elif self.shortfall_paise != expected_shortfall:
+            raise ValueError(
+                f"shortfall_paise ({self.shortfall_paise}) does not equal "
+                f"requested ({self.requested_amount_paise}) - held ({self.held_amount_paise})"
             )
 
 
@@ -343,8 +353,9 @@ def classify_hold_outcome(
     """Classify the execution outcome of an administrative hold directive at its landing minute.
 
     What it is for:
-        Exhaustively categorizes the hold result into one of four mutually exclusive states:
-        'applied', 'partial', 'too_late', or 'missed' per Amendment A-029.
+        Exhaustively categorizes the hold result into one of three mutually exclusive states:
+        'applied', 'too_late', or 'missed' under Amendment A-029 and Round 2 specification.
+        A hold finding some money but less than requested is 'applied' with shortfall_paise > 0.
 
     Inputs:
         available_balance_paise: Total balance present in the account at landing minute.
@@ -354,13 +365,14 @@ def classify_hold_outcome(
         missed: Boolean indicating whether the bank failed to act due to administrative omission.
 
     What it returns:
-        HoldOutcome audit record with status and exact held amount.
+        HoldOutcome audit record with status, held amount, and shortfall in paise.
 
     How it works:
-        1. If missed is True, bank never acted: status is 'missed', held amount is 0.
-        2. If available balance >= requested amount: full hold, status is 'applied', held is requested.
-        3. If available balance <= 0: all funds departed, status is 'too_late', held is 0.
-        4. If 0 < available balance < requested: partial hold, status is 'partial', held is available balance.
+        1. If missed is True, bank never acted: status is 'missed', held is 0, shortfall is requested.
+        2. If available balance >= requested amount: full hold, status is 'applied', held is requested, shortfall is 0.
+        3. If available balance <= 0: all funds departed, status is 'too_late', held is 0, shortfall is requested.
+        4. If 0 < available balance < requested: partly-funded hold, status is 'applied', held is available balance,
+           shortfall is requested minus available balance.
 
     Errors and side effects:
         Raises ValueError if requested_amount_paise <= 0.
@@ -379,16 +391,18 @@ def classify_hold_outcome(
             requested_amount_paise=requested_amount_paise,
             account_id=account_id,
             landing_minute=landing_minute,
+            shortfall_paise=requested_amount_paise,
         )
 
     if available_balance_paise >= requested_amount_paise:
-        # Sufficient funds: entire requested amount is encumbered
+        # Sufficient funds: entire requested amount is encumbered without shortfall
         return HoldOutcome(
             status="applied",
             held_amount_paise=requested_amount_paise,
             requested_amount_paise=requested_amount_paise,
             account_id=account_id,
             landing_minute=landing_minute,
+            shortfall_paise=0,
         )
 
     if available_balance_paise <= 0:
@@ -399,15 +413,17 @@ def classify_hold_outcome(
             requested_amount_paise=requested_amount_paise,
             account_id=account_id,
             landing_minute=landing_minute,
+            shortfall_paise=requested_amount_paise,
         )
 
-    # Partial funds present: hold encumbers whatever money remains
+    # Partly-funded funds present: hold encumbers whatever money remains with shortfall
     return HoldOutcome(
-        status="partial",
+        status="applied",
         held_amount_paise=available_balance_paise,
         requested_amount_paise=requested_amount_paise,
         account_id=account_id,
         landing_minute=landing_minute,
+        shortfall_paise=requested_amount_paise - available_balance_paise,
     )
 
 
@@ -450,8 +466,8 @@ def decide_one_hop_forwarding(
     if original_hold.is_forwarded:
         return None
 
-    # 2. If the full amount was encumbered or the bank never acted, no forward directive is generated
-    if outcome.status in ("applied", "missed"):
+    # 2. If the bank never acted, no forward directive is generated
+    if outcome.status == "missed":
         return None
 
     # 3. Calculate how much money departed before the hold could freeze it
