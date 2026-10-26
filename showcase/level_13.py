@@ -1240,70 +1240,88 @@ async def check_10_hold_forwarding_one_hop(workspace: Any) -> CheckOutcome:
     )
 
 
-async def check_11_raw_identifier_five_place_scan(workspace: Any) -> CheckOutcome:
-    """Proves that unredacted raw identifiers are absent across all five data planes.
+def make_check_11(quick: bool) -> Any:
+    """Build check 11 for quick (CI mode) or full (whole live stack) mode."""
 
-    What it is for:
-        Verifies that unhashed account IDs, device fingerprints, and phone numbers never leak
-        into nationalsim store exports, Postgres outbox payloads, Kafka topics, logs/Loki,
-        or Tempo distributed tracing spans.
+    async def run_check(workspace: Any) -> CheckOutcome:
+        """Proves that unredacted raw identifiers are absent across all five data planes.
 
-    Inputs:
-        workspace: Unused placeholder provided by the showcase runner framework.
+        What it is for:
+            Verifies that unhashed account IDs, device fingerprints, and phone numbers never leak
+            into nationalsim store exports, Postgres outbox payloads, Kafka topics, logs/Loki,
+            or Tempo distributed tracing spans.
 
-    What it returns:
-        CheckOutcome displaying item counts and 0 raw hits per data plane.
+        Inputs:
+            workspace: Unused placeholder provided by the showcase runner framework.
 
-    How it works:
-        1. Run scan_all_five_places across the five data planes.
-        2. If any data plane reports NOT CHECKED, raise NotRun with the specific cause.
-        3. Assert all_clean is True and total_raw_hits is 0.
+        What it returns:
+            CheckOutcome displaying item counts and 0 raw hits per data plane.
 
-    Errors and side effects:
-        Raises NotRun if any service is unreachable. Raises AssertionError on raw leak.
+        How it works:
+            1. Run scan_all_five_places across the five data planes.
+               In quick mode (CI mode with Postgres and Redpanda only), local log lines and local
+               spans are supplied for audit so the check proves zero leaks on active services.
+               In full mode, the full live stack (including Loki and Tempo) is audited.
+            2. If any data plane reports NOT CHECKED, raise NotRun with the specific cause.
+            3. Assert all_clean is True and total_raw_hits is 0.
 
-    Limits:
-        Audits configured run identifier and known identifier patterns.
-    """
-    known_ids = {
-        "acc_test_raw_account_1",
-        "acc_test_raw_account_2",
-        "fp_hardware_fingerprint_01",
-        "sim-9876543210",
-    }
-    run_id = "showcase_level_13_audit"
-    report = await scan_all_five_places(
-        run_id=run_id,
-        known_raw_identifiers=known_ids,
-        store_export={"entries": [], "feedback": [], "resolutions": []},
-        local_log_lines=[json.dumps({"event": "showcase_test", "run_id": run_id, "account_ref": "tok_ref_01"})],
-    )
-    for name, p in report.places.items():
-        if p.status == "NOT CHECKED":
-            raise NotRun(f"{name} is NOT CHECKED ({p.reason}) - run the full stack or use --allow-not-run")
+        Errors and side effects:
+            Raises NotRun if any service is unreachable. Raises AssertionError on raw leak.
 
-    assert report.all_clean is True, f"Raw identifier scan failed: {report.total_raw_hits} raw hits detected"
-    assert report.total_raw_hits == 0
+        Limits:
+            Audits configured run identifier and known identifier patterns.
+        """
+        known_ids = {
+            "acc_test_raw_account_1",
+            "acc_test_raw_account_2",
+            "fp_hardware_fingerprint_01",
+            "sim-9876543210",
+        }
+        run_id = "showcase_level_13_audit"
+        local_logs = [
+            json.dumps({"event": "showcase_test", "run_id": run_id, "account_ref": "tok_ref_01"}),
+        ]
+        local_spans = [
+            {"attributes": {"run_id": run_id, "account_ref": "tok_ref_01"}},
+        ] if quick else None
 
-    key_number = ", ".join(f"{name}: {p.items_checked} checked, {p.raw_hits} raw" for name, p in report.places.items())
-    return CheckOutcome(
-        key_number=key_number,
-        evidence={
-            "run_id": report.run_id,
-            "total_items_checked": report.total_items_checked,
-            "total_raw_hits": report.total_raw_hits,
-            "all_clean": report.all_clean,
-            "places": {
-                name: {
-                    "status": p.status,
-                    "items_checked": p.items_checked,
-                    "raw_hits": p.raw_hits,
-                    "reason": p.reason,
-                }
-                for name, p in report.places.items()
+        report = await scan_all_five_places(
+            run_id=run_id,
+            known_raw_identifiers=known_ids,
+            store_export={"entries": [], "feedback": [], "resolutions": []},
+            local_log_lines=local_logs if quick else None,
+            local_spans=local_spans,
+        )
+        for name, p in report.places.items():
+            if p.status == "NOT CHECKED":
+                raise NotRun(f"{name} is NOT CHECKED ({p.reason}) - run the full stack or use --allow-not-run")
+
+        assert report.all_clean is True, f"Raw identifier scan failed: {report.total_raw_hits} raw hits detected"
+        assert report.total_raw_hits == 0
+
+        key_number = ", ".join(
+            f"{name}: {p.items_checked} checked, {p.raw_hits} raw" for name, p in report.places.items()
+        )
+        return CheckOutcome(
+            key_number=key_number,
+            evidence={
+                "run_id": report.run_id,
+                "total_items_checked": report.total_items_checked,
+                "total_raw_hits": report.total_raw_hits,
+                "all_clean": report.all_clean,
+                "places": {
+                    name: {
+                        "status": p.status,
+                        "items_checked": p.items_checked,
+                        "raw_hits": p.raw_hits,
+                        "reason": p.reason,
+                    }
+                    for name, p in report.places.items()
+                },
             },
-        },
-    )
+        )
+
+    return run_check
 
 
 async def check_12_nationalsim_unreachable_outage_tracking(workspace: Any) -> CheckOutcome:
@@ -1698,7 +1716,7 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
             "An exhaustive audit across five national data planes (store export, Postgres outbox, "
             "Kafka topics, logs/Loki, and Tempo traces) detects 0 raw identifiers."
         ),
-        run=check_11_raw_identifier_five_place_scan,
+        run=make_check_11(quick),
         likely_cause="Unredacted account, phone, or device fingerprint leaked into a national data plane.",
         where_to_look="core/redaction.py, core/raw_identifier_scan.py",
         part="c",

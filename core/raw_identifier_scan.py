@@ -371,45 +371,57 @@ async def scan_tempo_spans(
     run_id: str,
     known_raw_identifiers: set[str],
     tempo_url: str = "http://localhost:3200",
+    local_spans: list[dict[str, Any]] | None = None,
 ) -> PlaceScanResult:
-    """Audits Tempo HTTP search API for raw identifiers in span attributes."""
+    """Audits Tempo HTTP search API and local span attributes for raw identifiers."""
+    items_checked = 0
+    hits: list[str] = []
+    tempo_reachable = False
+    tempo_error: str | None = None
+
+    # 1. Audit local span attributes if provided
+    if local_spans is not None:
+        for span in local_spans:
+            items_checked += 1
+            hits.extend(_scan_json_object(span, known_raw_identifiers))
+
+    # 2. Query Tempo HTTP search API
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
             resp = await client.get(
                 f"{tempo_url.rstrip('/')}/api/search",
                 params={"tags": f"run_id={run_id}", "limit": 50},
             )
-            if resp.status_code != 200:
-                return PlaceScanResult(
-                    place="tempo_spans",
-                    status="NOT CHECKED",
-                    items_checked=0,
-                    raw_hits=0,
-                    reason=f"Tempo search returned HTTP {resp.status_code}",
-                )
-
-            data = resp.json()
-            traces = data.get("traces", [])
-            items_checked = len(traces)
-            hits: list[str] = []
-            for trace in traces:
-                hits.extend(_scan_json_object(trace, known_raw_identifiers))
-
-            return PlaceScanResult(
-                place="tempo_spans",
-                status="CHECKED",
-                items_checked=items_checked,
-                raw_hits=len(hits),
-                details=hits[:20],
-            )
+            if resp.status_code == 200:
+                tempo_reachable = True
+                data = resp.json()
+                traces = data.get("traces", [])
+                items_checked += len(traces)
+                for trace in traces:
+                    hits.extend(_scan_json_object(trace, known_raw_identifiers))
+            else:
+                tempo_error = f"Tempo search returned HTTP {resp.status_code}"
     except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError, OSError) as err:
+        tempo_error = f"Tempo unreachable at {tempo_url}: {type(err).__name__}"
+
+    # If local spans were not supplied and Tempo was not reached, report NOT CHECKED
+    if local_spans is None and not tempo_reachable:
         return PlaceScanResult(
             place="tempo_spans",
             status="NOT CHECKED",
             items_checked=0,
             raw_hits=0,
-            reason=f"Tempo unreachable at {tempo_url}: {type(err).__name__}",
+            reason=tempo_error or "Tempo unreachable",
         )
+
+    return PlaceScanResult(
+        place="tempo_spans",
+        status="CHECKED",
+        items_checked=items_checked,
+        raw_hits=len(hits),
+        reason=None if tempo_reachable else f"Checked local spans only ({tempo_error})",
+        details=hits[:20],
+    )
 
 
 async def scan_all_five_places(
@@ -417,6 +429,7 @@ async def scan_all_five_places(
     known_raw_identifiers: set[str],
     store_export: dict[str, Any] | None = None,
     local_log_lines: list[str] | None = None,
+    local_spans: list[dict[str, Any]] | None = None,
     database_url: str | None = None,
     kafka_servers: str | None = None,
     loki_url: str = "http://localhost:3100",
@@ -436,7 +449,7 @@ async def scan_all_five_places(
     res_logs = await scan_logs_and_loki(run_id, known_raw_identifiers, local_log_lines, loki_url)
 
     # Place 5: Tempo
-    res_tempo = await scan_tempo_spans(run_id, known_raw_identifiers, tempo_url)
+    res_tempo = await scan_tempo_spans(run_id, known_raw_identifiers, tempo_url, local_spans)
 
     places = {
         "nationalsim_store": res_store,
@@ -465,6 +478,7 @@ def scan_all_five_places_sync(
     known_raw_identifiers: set[str],
     store_export: dict[str, Any] | None = None,
     local_log_lines: list[str] | None = None,
+    local_spans: list[dict[str, Any]] | None = None,
     database_url: str | None = None,
     kafka_servers: str | None = None,
     loki_url: str = "http://localhost:3100",
@@ -477,6 +491,7 @@ def scan_all_five_places_sync(
             known_raw_identifiers=known_raw_identifiers,
             store_export=store_export,
             local_log_lines=local_log_lines,
+            local_spans=local_spans,
             database_url=database_url,
             kafka_servers=kafka_servers,
             loki_url=loki_url,
