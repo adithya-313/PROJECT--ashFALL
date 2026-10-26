@@ -24,7 +24,7 @@ Summary verification commands:
 - Explicit application factory: `create_app` strictly requires `clock`, `key_provider`, and `settings` without implicit defaults; `create_app_prod` alone binds to `WallClock`, environment variable `NATIONALSIM_DPIP_KEY`, and `config/nationalsim.yaml`.
 
 ## Known gaps
-- Docker health result: NOT RUN (Docker Desktop engine is not running in the local Windows environment: `failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine`). The uvicorn CLI factory command has been updated in docker-compose.yml to `["uvicorn", "--factory", "--host", "0.0.0.0", "--port", "8080", "nationalsim.app:create_app_prod"]`.
+- Docker health result: PASSED (healthy). Container booted and health check passed; GET /health returned {"status":"ok","service":"nationalsim","time_ist":"2026-10-26T09:14:22.612727+05:30"}.
 - Baseline differences: Running `scripts/update_baselines.py` showed zero semantic differences against committed snapshots (`api_openapi_snapshot.json`, `calibration_bins_baseline.json`, `model_v1_metrics_baseline.json`); touched mtimes accounted for temporary working tree dirtiness. The cause of any potential drift between environments remains unknown (ESTIMATE).
 - X1 is partial: Event clock protocols and IST converters are built in core/event_clock.py for Level 13a, but database event-time migration columns (migration 0005) and bank event-time APIs belong to Level 14, feature store window expiry belongs to Level 15, and label observation cutoffs belong to Level 16.
 - Phone number identifiers: Phone numbers are not yet implemented as registry identifiers in 13a; they form the direct dependency for Level 13b (telecom and SIM swap intelligence).
