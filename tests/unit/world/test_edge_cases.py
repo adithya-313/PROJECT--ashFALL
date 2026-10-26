@@ -54,14 +54,13 @@ def test_counts_by_status_match_the_authored_files() -> None:
     later_level = [c for c in cases if c.status == "later_level"]
     deferred = [c for c in cases if c.status == "deferred"]
 
-    assert len(runnable) == 9
-    assert len(later_level) == 3
+    assert len(runnable) == 10
+    assert len(later_level) == 2
     assert len(deferred) == 1
 
     assert {c.name for c in later_level} == {
         "busy_shop_tiny_payments",
         "trace_outage_mid_trace",
-        "recycled_phone_number",
     }
     assert {c.name for c in deferred} == {"mule_imitating_salaried_employee"}
 

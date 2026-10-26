@@ -105,7 +105,7 @@ class ScreenResult:
     match: bool
     status: str  # "listed", "contested", "none"
     distinct_accounts_linked: int
-    risk_score: float | None = 0.0
+    risk_score: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         """Convert result into JSON-serializable dictionary matching mock schema."""
