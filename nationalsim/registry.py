@@ -445,3 +445,65 @@ class RegistryCore:
             ],
             "bank_settings": self._bank_settings,
         }
+
+
+def draw_dpip_participation(
+    bank_ids: Any,
+    world_ranges: dict[str, Any],
+    split: str,
+    rng: Any,
+) -> dict[str, dict[str, bool]]:
+    """Draw per-world DPIP participation enrollment settings for banks.
+
+    What it is for:
+        Determines which banking institutions take part in the shared DPIP registry
+        for a simulated world, based on the research assumption probability_a_bank_takes_part_in_dpip.
+
+    Inputs:
+        bank_ids: Iterable of bank identifiers or indices (e.g. ['bank_0', 'bank_1', 'bank_2']).
+        world_ranges: Dictionary containing world ranges read from config/world_ranges.yaml.
+        split: Range split name, such as 'training', 'test', or 'stress'.
+        rng: Injected random generator providing .uniform() and .random() methods.
+
+    What it returns:
+        Mapping of canonical bank keys (e.g. 'bank_0') to participation dictionaries:
+        {'bank_0': {'dpip_participation': True}, ...}.
+
+    How it works:
+        1. Locate the 'probability_a_bank_takes_part_in_dpip' parameter block in world_ranges.
+        2. Extract the [min, max] boundary list for the requested evaluation split.
+        3. Draw a single uniform probability between min and max bounds using the injected generator.
+        4. For each bank in bank_ids, evaluate a Bernoulli trial (rng.random() < probability).
+        5. Return the resulting bank settings dictionary.
+
+    Errors and side effects:
+        Raises ValueError if probability_a_bank_takes_part_in_dpip is missing from world_ranges,
+        or if the requested split is not present in its bounds mapping.
+
+    Limits:
+        Evaluated once per world; results stay fixed throughout the run.
+    """
+    params = world_ranges.get("parameters", world_ranges)
+    if "probability_a_bank_takes_part_in_dpip" not in params:
+        raise ValueError("Missing 'probability_a_bank_takes_part_in_dpip' in world_ranges.")
+    entry = params["probability_a_bank_takes_part_in_dpip"]
+    if split not in entry:
+        raise ValueError(f"Split '{split}' not found in 'probability_a_bank_takes_part_in_dpip'.")
+
+    bounds = entry[split]
+    if not isinstance(bounds, list) or len(bounds) != 2:
+        raise ValueError(f"Invalid bounds for split '{split}': expected [min, max], got {bounds!r}")
+
+    low = float(bounds[0])
+    high = float(bounds[1])
+    prob = float(rng.uniform(low, high))
+
+    bank_settings: dict[str, dict[str, bool]] = {}
+    for raw_id in bank_ids:
+        b_str = str(raw_id).strip()
+        b_key = b_str if b_str.startswith("bank_") else f"bank_{b_str}"
+        takes_part = bool(float(rng.random()) < prob)
+        bank_settings[b_key] = {"dpip_participation": takes_part}
+
+    return bank_settings
+

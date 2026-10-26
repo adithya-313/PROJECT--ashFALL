@@ -21,6 +21,7 @@ from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
 
 from core.event_clock import Clock, WallClock
+from nationalsim.i4c_feed import I4CFeedCore
 from nationalsim.registry import NotParticipantError, RegistryCore
 
 
@@ -36,7 +37,7 @@ class IngestRequest(BaseModel):
     )
     identifier_type: str = Field(
         ...,
-        description="Type of identifier, either 'account' or 'device'.",
+        description="Type of identifier: 'account', 'device', or 'phone'.",
     )
     reason_code: str
     reported_at: datetime
@@ -226,6 +227,7 @@ def create_app(
     clock: Clock,
     key_provider: Callable[[], str | bytes],
     settings: dict[str, Any],
+    i4c_key_provider: Callable[[], str | bytes] | None = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application for the national registry mock.
 
@@ -271,17 +273,23 @@ def create_app(
         listing_delay=listing_delay,
         bank_settings=bank_settings,
     )
+    i4c_feed = I4CFeedCore(
+        clock=clock,
+        listing_delay=listing_delay,
+    )
 
     app = FastAPI(
-        title="National Systems Mock (DPIP)",
-        description="Mock HTTP service for national fraud registry and DPIP intelligence screening.",
+        title="National Systems Mock (DPIP / I4C)",
+        description="Mock HTTP service for national fraud registry (DPIP) and I4C shared intelligence feed.",
         version="0.1.0",
     )
 
     # Store references on app state so tests or inspection tools can examine them directly
     app.state.registry = registry
+    app.state.i4c_feed = i4c_feed
     app.state.clock = clock
     app.state.key = resolved_key
+    app.state.i4c_key = i4c_key_provider() if i4c_key_provider is not None else None
 
     @app.get("/health")
     def health_check() -> dict[str, str]:
@@ -307,6 +315,17 @@ def create_app(
                 run_id=payload.run_id,
                 linked_account_hash=payload.linked_account_hash,
             )
+            # When identifier is an account or phone, also ingest into I4C feed
+            if payload.identifier_type in ("account", "phone"):
+                i4c_feed.ingest(
+                    bank_id=payload.bank_id,
+                    report_id=payload.report_id,
+                    identifier_hash=payload.identifier_hash,
+                    identifier_type=payload.identifier_type,
+                    reason_code=payload.reason_code,
+                    reported_at=payload.reported_at,
+                    run_id=payload.run_id,
+                )
             return {
                 "status": "ingested",
                 "entry": entry.to_dict(),
@@ -388,6 +407,48 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+    @app.get("/i4c/feed")
+    def get_i4c_feed(bank_id: str, run_id: str) -> dict[str, Any]:
+        """Return visible I4C intelligence feed entries for a requesting bank.
+
+        What it is for:
+            Delivers shared fraud intelligence to institutions under the I4C program.
+            Returns the bank's own reported accounts plus all publicly visible shared
+            phone numbers. Unenrolled or non-participating banks can query the I4C feed.
+
+        Inputs:
+            bank_id: Identifier of the requesting bank (e.g. 'bank_0').
+            run_id: Simulation namespace identifier (e.g. 'run1').
+
+        What it returns:
+            JSON dictionary containing 'status': 'ok', 'bank_id', 'run_id',
+            'entries_count', and 'entries' list.
+
+        How it works:
+            1. Validate that bank_id and run_id query parameters are non-empty.
+            2. Retrieve visible entries from I4CFeedCore where visible_at <= clock.now_ist().
+            3. Return serialized entry dicts.
+
+        Errors and side effects:
+            Raises HTTPException 400 if bank_id or run_id is missing or empty.
+
+        Limits:
+            Returns only active, non-revoked entries that have passed the listing delay.
+        """
+        if not bank_id or not bank_id.strip():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing 'bank_id' parameter.")
+        if not run_id or not run_id.strip():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing 'run_id' parameter.")
+
+        feed_entries = app.state.i4c_feed.get_feed(bank_id=bank_id, run_id=run_id)
+        return {
+            "status": "ok",
+            "bank_id": bank_id,
+            "run_id": run_id,
+            "entries_count": len(feed_entries),
+            "entries": [entry.to_dict() for entry in feed_entries],
+        }
+
     return app
 
 
@@ -416,10 +477,16 @@ def create_app_prod() -> FastAPI:
         Uses the machine's real clock, so this factory is meant for live network deployments,
         not for controllable simulation replays.
     """
-    key = os.environ.get("NATIONALSIM_DPIP_KEY")
-    if not key or not key.strip():
+    dpip_key = os.environ.get("NATIONALSIM_DPIP_KEY")
+    if not dpip_key or not dpip_key.strip():
         raise ValueError(
             "Environment variable 'NATIONALSIM_DPIP_KEY' is missing or empty. "
+            "The national simulation service requires this secret key to initialize."
+        )
+    i4c_key = os.environ.get("NATIONALSIM_I4C_KEY")
+    if not i4c_key or not i4c_key.strip():
+        raise ValueError(
+            "Environment variable 'NATIONALSIM_I4C_KEY' is missing or empty. "
             "The national simulation service requires this secret key to initialize."
         )
     listing_delay, bank_settings = load_nationalsim_config()
@@ -429,6 +496,7 @@ def create_app_prod() -> FastAPI:
     }
     return create_app(
         clock=WallClock(),
-        key_provider=lambda: key,
+        key_provider=lambda: dpip_key,
         settings=prod_settings,
+        i4c_key_provider=lambda: i4c_key,
     )
