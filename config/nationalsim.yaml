@@ -37,6 +37,23 @@ nationalsim:
     derived_from: policy
     reason: "Assumed time in minutes taken by the national registry to verify telecom reassignment evidence and uphold a customer dispute; no statutory SLA is published."
 
+  night_hours:
+    value: [22, 6]
+    label: assumption
+    derived_from: policy
+    reason: "Assumed off-hours window (22:00 to 06:00 IST) when banking back-office hold processing and 1930 operational triage operate with reduced staffing."
+
+  night_multiplier:
+    value: 2.0
+    label: assumption
+    derived_from: policy
+    reason: "Assumed multiplier scaling hold latency during night hours due to skeleton staffing; no empirical inter-bank SLA is published."
+
+  weekend_multiplier:
+    value: 1.5
+    label: assumption
+    derived_from: policy
+    reason: "Assumed multiplier scaling hold latency on Saturdays and Sundays when bank branch operations and fraud desks operate with reduced staffing."
 
   banks:
     bank_0:
@@ -45,3 +62,4 @@ nationalsim:
       dpip_participation: true
     bank_2:
       dpip_participation: true
+

@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from core.event_clock import IST, ManualClock
-from nationalsim.app import create_app, create_app_prod, load_nationalsim_config
+from nationalsim.app import create_app, create_app_prod, load_nationalsim_config, validate_hold_settings
 from nationalsim.keyed_hash import compute_identifier_hash
 from nationalsim.registry import NotParticipantError
 
@@ -547,4 +547,190 @@ def test_real_nationalsim_config_still_loads() -> None:
     assert bank_settings["bank_0"]["dpip_participation"] is True
     assert bank_settings["bank_1"]["dpip_participation"] is True
     assert bank_settings["bank_2"]["dpip_participation"] is True
+
+
+def test_missing_night_hours_raises_value_error() -> None:
+    """Proves that omitting night_hours raises a ValueError naming the key and file.
+
+    What it is for:
+        The 1930 hold latency calculation requires an explicit off-hours operational window.
+        Failing loudly when night_hours is missing prevents silent default assumptions.
+
+    Inputs:
+        None. Supplies settings dict lacking 'night_hours'.
+
+    What it returns:
+        None. Asserts ValueError names 'night_hours' and 'config/nationalsim.yaml'.
+
+    How it works:
+        1. Create settings dictionary with night_multiplier and weekend_multiplier but no night_hours.
+        2. Call validate_hold_settings and catch ValueError.
+        3. Verify error message names 'night_hours' and 'config/nationalsim.yaml'.
+
+    Errors and side effects:
+        Raises AssertionError if ValueError is not raised or error message is incomplete.
+
+    Limits:
+        Evaluates missing key condition.
+    """
+    settings = {"night_multiplier": 2.0, "weekend_multiplier": 1.5}
+    with pytest.raises(ValueError) as excinfo:
+        validate_hold_settings(settings)
+    err = str(excinfo.value)
+    assert "night_hours" in err
+    assert "config/nationalsim.yaml" in err
+
+
+def test_invalid_night_hours_raises_value_error() -> None:
+    """Proves that non-pair, out-of-bounds, or boolean night hours are rejected.
+
+    What it is for:
+        Night hours define starting and ending clock hour boundaries (0 to 23).
+        Enforcing strict tuple/list validation prevents runtime clock parsing crashes.
+
+    Inputs:
+        None. Tests single int, out-of-range hour 25, and boolean True.
+
+    What it returns:
+        None. Asserts ValueError is raised in all malformed variations.
+
+    How it works:
+        1. Call validate_hold_settings with night_hours=[22]. Assert ValueError.
+        2. Call validate_hold_settings with night_hours=[22, 25]. Assert ValueError.
+        3. Call validate_hold_settings with night_hours=[True, 6]. Assert ValueError.
+
+    Errors and side effects:
+        Raises AssertionError if any invalid night_hours representation is accepted.
+
+    Limits:
+        Evaluates boundary and type checking on night_hours.
+    """
+    base = {"night_multiplier": 2.0, "weekend_multiplier": 1.5}
+    with pytest.raises(ValueError):
+        validate_hold_settings({**base, "night_hours": [22]})
+
+    with pytest.raises(ValueError):
+        validate_hold_settings({**base, "night_hours": [22, 25]})
+
+    with pytest.raises(ValueError):
+        validate_hold_settings({**base, "night_hours": [True, 6]})
+
+
+def test_missing_or_invalid_night_multiplier_raises_value_error() -> None:
+    """Proves that missing, non-positive, or boolean night_multiplier is rejected.
+
+    What it is for:
+        Night multiplier scales administrative delay during off-hours and must be strictly positive.
+        Preventing invalid multipliers ensures mathematical latency models cannot produce non-positive delays.
+
+    Inputs:
+        None. Tests missing key, negative multiplier -1.0, zero 0.0, and boolean True.
+
+    What it returns:
+        None. Asserts ValueError is raised in all invalid cases.
+
+    How it works:
+        1. Verify omitting 'night_multiplier' raises ValueError naming key and file.
+        2. Verify negative multiplier raises ValueError.
+        3. Verify zero multiplier raises ValueError.
+        4. Verify boolean multiplier raises ValueError.
+
+    Errors and side effects:
+        Raises AssertionError if any invalid night_multiplier is accepted.
+
+    Limits:
+        Evaluates presence and numerical constraints.
+    """
+    base = {"night_hours": [22, 6], "weekend_multiplier": 1.5}
+    with pytest.raises(ValueError) as exc_missing:
+        validate_hold_settings(base)
+    assert "night_multiplier" in str(exc_missing.value)
+    assert "config/nationalsim.yaml" in str(exc_missing.value)
+
+    with pytest.raises(ValueError):
+        validate_hold_settings({**base, "night_multiplier": -1.0})
+
+    with pytest.raises(ValueError):
+        validate_hold_settings({**base, "night_multiplier": 0.0})
+
+    with pytest.raises(ValueError):
+        validate_hold_settings({**base, "night_multiplier": True})
+
+
+def test_missing_or_invalid_weekend_multiplier_raises_value_error() -> None:
+    """Proves that missing, non-positive, or boolean weekend_multiplier is rejected.
+
+    What it is for:
+        Weekend multiplier scales hold processing delay on Saturdays and Sundays.
+        Enforcing positive numeric validation prevents corrupted latency projections.
+
+    Inputs:
+        None. Tests missing key, negative multiplier -0.5, and boolean True.
+
+    What it returns:
+        None. Asserts ValueError is raised naming the key and file.
+
+    How it works:
+        1. Verify omitting 'weekend_multiplier' raises ValueError naming key and file.
+        2. Verify negative multiplier raises ValueError.
+        3. Verify boolean multiplier raises ValueError.
+
+    Errors and side effects:
+        Raises AssertionError if any invalid weekend_multiplier is accepted.
+
+    Limits:
+        Evaluates presence and numerical constraints.
+    """
+    base = {"night_hours": [22, 6], "night_multiplier": 2.0}
+    with pytest.raises(ValueError) as exc_missing:
+        validate_hold_settings(base)
+    assert "weekend_multiplier" in str(exc_missing.value)
+    assert "config/nationalsim.yaml" in str(exc_missing.value)
+
+    with pytest.raises(ValueError):
+        validate_hold_settings({**base, "weekend_multiplier": -0.5})
+
+    with pytest.raises(ValueError):
+        validate_hold_settings({**base, "weekend_multiplier": True})
+
+
+def test_valid_hold_settings_unpacks_correctly() -> None:
+    """Proves that valid hold settings dictionaries and YAML-wrapped value blocks unpack correctly.
+
+    What it is for:
+        Verifies that both raw values and YAML metadata dictionaries with 'value' keys
+        are correctly extracted into clean typed primitives.
+
+    Inputs:
+        None. Supplies raw values and metadata-wrapped values.
+
+    What it returns:
+        None. Asserts returned tuple matches expected values and types.
+
+    How it works:
+        1. Pass raw primitive values; verify extracted tuple.
+        2. Pass YAML metadata-wrapped dictionaries; verify extracted tuple.
+
+    Errors and side effects:
+        Raises AssertionError if unpacking fails or returns incorrect types.
+
+    Limits:
+        Evaluates valid schema parsing.
+    """
+    raw_cfg = {"night_hours": [22, 6], "night_multiplier": 2.0, "weekend_multiplier": 1.5}
+    hours, night_m, wknd_m = validate_hold_settings(raw_cfg)
+    assert hours == (22, 6)
+    assert night_m == 2.0
+    assert wknd_m == 1.5
+
+    wrapped_cfg = {
+        "night_hours": {"value": [21, 5], "label": "assumption"},
+        "night_multiplier": {"value": 2.5, "label": "assumption"},
+        "weekend_multiplier": {"value": 1.8, "label": "assumption"},
+    }
+    hours_w, night_w, wknd_w = validate_hold_settings(wrapped_cfg)
+    assert hours_w == (21, 5)
+    assert night_w == 2.5
+    assert wknd_w == 1.8
+
 
