@@ -63,3 +63,15 @@ nationalsim:
     bank_2:
       dpip_participation: true
 
+  client_timeout_seconds:
+    value: 2.0
+    label: assumption
+    derived_from: policy
+    reason: "Strict 2.0s HTTP client timeout on bank-to-nationalsim calls so an unresponsive national registry never delays real-time payment auth loops beyond standard banking SLA."
+
+  client_retry_backoff_seconds:
+    value: 0.2
+    label: assumption
+    derived_from: policy
+    reason: "Brief 200ms delay before at most one retry on connection glitch to avoid retry storming a degraded national system."
+
