@@ -3,6 +3,7 @@
   "fluent-bit": false,
   "grafana": false,
   "loki": false,
+  "nationalsim": true,
   "outbox-relay": false,
   "postgres": true,
   "prometheus": false,

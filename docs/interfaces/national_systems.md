@@ -128,3 +128,37 @@ never says whether the account really is a mule.
   and accounts opened mid-run.
 - `complaint_ids`: every complaint about the account that arrived at or before `confirmed_minute`.
 - Every wrong registry entry in the simulation comes from these events. Level 13 adds no second error rate.
+
+## Revision 2 (Level 13a) (OUR DESIGN, not official)
+
+National systems mock contract additions and updates for Level 13a:
+
+- **Amounts in paise**: All monetary amounts are integer paise. Mocks no longer use floating or rupee units.
+- **Hold requests carry complaint and payment references**: Every hold request carries `complaint_id` and the victim's `payment_id`, and uses `amount_paise`. Amended hold example:
+```json
+{
+  "request": {
+    "request_id": "example_req_1",
+    "account_ref": "example_account_1",
+    "amount_paise": 100000,
+    "complaint_id": "example_complaint_001",
+    "payment_id": "example_payment_001",
+    "action": "hold_reported_amount",
+    "issued_at": "2026-09-01T10:00:00+05:30"
+  },
+  "response": {
+    "request_id": "example_req_1",
+    "status": "example_status",
+    "held_amount_paise": 100000,
+    "updated_at": "2026-09-01T10:15:00+05:30",
+    "requested_at": "2026-09-01T10:00:00+05:30",
+    "applied_at": "2026-09-01T10:15:00+05:30",
+    "latency_minutes": 15,
+    "outcome": "applied"
+  }
+}
+```
+- **Timestamps follow docs/interfaces/time.md**: Timestamps are ISO 8601 strings with timezone offset `+05:30` (aware IST), conforming to Ground Rule 30.
+- **Keyed hashing for identifiers**: Identifiers are hashed using HMAC-SHA256 with a key held strictly by DPIP participants. The message format is `<run_id>|<identifier_type>|<namespaced raw value>`, where for account identifiers the raw value is namespaced as `<bank_index>:<account_id>` and for devices the raw value is the device fingerprint string.
+- **DPIP Phase-2 transaction scores out of scope**: Transaction scoring is out of scope and is not built. Mock risk scores are fixed at `None` or `0.0`.
+- **Listing delay distinct from report delay**: The registry listing delay (`listing_delay_minutes`) represents the registry's internal ingestion processing time before an entry becomes visible to screening, separate and distinct from Level 12's `registry_report_delay_minutes` (bank reporting latency).

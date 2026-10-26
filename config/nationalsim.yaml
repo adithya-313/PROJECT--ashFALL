@@ -1,0 +1,24 @@
+# =====================================================================
+# NATIONALSIM: configuration for national shared mock systems (DPIP / I4C)
+# =====================================================================
+
+nationalsim:
+  label: policy
+  reason: "Configuration for mock national registry and DPIP systems (Level 13a, amendment A-027)."
+  issue_ids_v2: [13-11, 13-12]
+  derived_from: "policy (amendment A-027)"
+
+  listing_delay_minutes:
+    value: 15
+    label: assumption
+    reason: "Registry processing delay between ingestion receipt and visibility to screening; this is the registry's own processing time ON TOP of Level 12's registry_report_delay_minutes."
+    issue_ids_v2: [13-11]
+    derived_from: "policy (amendment A-027)"
+
+  banks:
+    bank_0:
+      dpip_participation: true
+    bank_1:
+      dpip_participation: true
+    bank_2:
+      dpip_participation: true

@@ -29,6 +29,10 @@ jobs:
       - name: Create .env from example
         run: cp .env.example .env
 
+      # The real file is gitignored because it holds the key, so CI uses the example's dummy key.
+      - name: Create nationalsim.env from example
+        run: cp envs/nationalsim.env.example envs/nationalsim.env
+
       # Python 3.11 and the same requirements-dev.txt as every other job, so lint and types see the same versions.
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -46,11 +50,11 @@ jobs:
 
       # ruff checks for style errors, unused imports, and formatting issues.
       - name: Lint (ruff)
-        run: ruff check api/ core/
+        run: ruff check api/ core/ nationalsim/
 
       # mypy checks for type mismatches without running the code.
       - name: Type check (mypy)
-        run: mypy api/ core/ --ignore-missing-imports --no-strict-optional
+        run: mypy api/ core/ nationalsim/ --ignore-missing-imports --no-strict-optional
 
       # Log in to Docker Hub so image pulls are not limited as anonymous requests (the rate limit that failed the
       # boot check). The step is skipped when the secrets are absent, for example on pull requests from forks.
@@ -150,6 +154,10 @@ jobs:
       - name: Create .env from example
         run: cp .env.example .env
 
+      # The real file is gitignored because it holds the key, so CI uses the example's dummy key.
+      - name: Create nationalsim.env from example
+        run: cp envs/nationalsim.env.example envs/nationalsim.env
+
       - name: Run quality gate on the committed metrics
         run: python scripts/ci_quality_gate.py
 
@@ -209,6 +217,10 @@ jobs:
       - name: Create .env from example
         run: cp .env.example .env
 
+      # The real file is gitignored because it holds the key, so CI uses the example's dummy key.
+      - name: Create nationalsim.env from example
+        run: cp envs/nationalsim.env.example envs/nationalsim.env
+
       # Install exactly the pinned packages from the ONE dev file. It includes requirements.txt (the pinned app, ruff,
       # mypy, pytest and anyio), requirements-test.txt and requirements-showcase.txt (dvc and the test packages,
       # kept out of requirements.txt because that feeds the Docker image), and the type stubs.
@@ -217,11 +229,11 @@ jobs:
 
       # Style check on the Level 7 code and the code it uses.
       - name: Lint (ruff)
-        run: ruff check showcase api core evaluation
+        run: ruff check showcase api core evaluation nationalsim
 
       # Type check on the same folders.
       - name: Type check (mypy)
-        run: mypy showcase api core evaluation --ignore-missing-imports --no-strict-optional
+        run: mypy showcase api core evaluation nationalsim --ignore-missing-imports --no-strict-optional
 
       # Fast unit tests that need no database or Kafka. Two kinds of old problems are left out on purpose and are
       # NOT fixed in Level 7 (known issues, tracked in the pull request):
@@ -362,6 +374,10 @@ jobs:
       - name: Create .env from example
         run: cp .env.example .env
 
+      # The real file is gitignored because it holds the key, so CI uses the example's dummy key.
+      - name: Create nationalsim.env from example
+        run: cp envs/nationalsim.env.example envs/nationalsim.env
+
       # The same ONE dev file as the other jobs (pinned app packages, test-only packages and type stubs).
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
@@ -423,6 +439,10 @@ jobs:
       # The scripts read their settings from .env, so create it from the example.
       - name: Create .env from example
         run: cp .env.example .env
+
+      # The real file is gitignored because it holds the key, so CI uses the example's dummy key.
+      - name: Create nationalsim.env from example
+        run: cp envs/nationalsim.env.example envs/nationalsim.env
 
       # requirements-ml.txt installs in one go (numpy stays 1.26.4 for the frozen model v1; shap is pinned to 0.49.1).
       # pytest, PyYAML and orjson use the same versions as requirements.txt and requirements-test.txt.

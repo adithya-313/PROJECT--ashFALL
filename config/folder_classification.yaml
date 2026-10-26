@@ -51,6 +51,7 @@ folder_classification:
     - scenarios
     - evaluation
     - patterns
+    - nationalsim
   not_engine:
     - .dvc
     - .github
