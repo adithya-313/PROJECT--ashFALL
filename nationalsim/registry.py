@@ -102,21 +102,37 @@ class RegistryCore:
         clock: Clock,
         listing_delay: timedelta,
         bank_settings: dict[str, dict[str, Any]] | None = None,
-        default_dpip_participation: bool = True,
     ) -> None:
-        """
-        Initialize the registry core with injected clock and configuration.
+        """Initialize the in-memory registry core.
 
-        Args:
-            clock: Time provider implementing the Clock protocol.
-            listing_delay: Delay between ingestion and public visibility to screening.
-            bank_settings: Mapping of bank ID strings to bank configuration dicts.
-            default_dpip_participation: Default participation status for unlisted banks.
+        What it is for:
+            Creates an isolated registry instance for a simulation, holding reported
+            fraud identifiers, timestamps, and enrolled bank participant settings.
+
+        Inputs:
+            clock: Time provider implementing the Clock protocol (e.g. ManualClock).
+            listing_delay: Duration before an ingested report becomes visible for screening
+                (e.g. timedelta(minutes=15)).
+            bank_settings: Optional mapping of bank identifiers to configuration dictionaries.
+                Defaults to an empty dictionary if omitted.
+
+        What it returns:
+            A new RegistryCore instance ready to ingest and screen fraud reports.
+
+        How it works:
+            1. Store the injected clock and listing delay.
+            2. Store bank settings, defaulting to an empty dictionary if None was passed.
+            3. Initialize empty storage tables for registry entries and feedback records.
+
+        Errors and side effects:
+            None.
+
+        Limits:
+            In-memory storage only; all records are lost when the process terminates.
         """
         self._clock: Clock = clock
         self._listing_delay: timedelta = listing_delay
         self._bank_settings: dict[str, dict[str, Any]] = bank_settings if bank_settings is not None else {}
-        self._default_participation: bool = default_dpip_participation
 
         # Storage collections:
         # _entries: keyed by (run_id, bank_id, report_id, identifier_type) for idempotency
@@ -124,10 +140,32 @@ class RegistryCore:
         self._feedback_records: list[FeedbackRecord] = []
 
     def is_participant(self, bank_id: str) -> bool:
+        """Check whether a bank is enrolled as an active DPIP participant.
+
+        What it is for:
+            Prevents unapproved banks from querying the shared national fraud registry.
+            Only banks that have explicitly joined DPIP with participation enabled can
+            screen identifiers.
+
+        Inputs:
+            bank_id: Bank identifier string, such as 'bank_0' or '0'.
+
+        What it returns:
+            True if the bank is explicitly listed with dpip_participation set to True;
+            False if the bank is missing from settings or set to False.
+
+        How it works:
+            1. Form lookup keys for both prefixed ('bank_0') and raw numeric ('0') forms.
+            2. Look up the bank in the bank settings mapping.
+            3. If found, return True if and only if dpip_participation is True.
+            4. If the bank is not found in settings, return False.
+
+        Errors and side effects:
+            None. This is a read-only configuration lookup.
+
+        Limits:
+            Checks only local bank settings supplied at registry initialization.
         """
-        Check if a bank is configured as an active DPIP participant.
-        """
-        # Support both raw bank index ("0") and prefixed ("bank_0") lookups
         lookup_keys = [str(bank_id)]
         if str(bank_id).startswith("bank_"):
             lookup_keys.append(str(bank_id)[5:])
@@ -136,9 +174,9 @@ class RegistryCore:
 
         for key in lookup_keys:
             if key in self._bank_settings:
-                return bool(self._bank_settings[key].get("dpip_participation", True))
+                return self._bank_settings[key].get("dpip_participation") is True
 
-        return self._default_participation
+        return False
 
     def ingest(
         self,

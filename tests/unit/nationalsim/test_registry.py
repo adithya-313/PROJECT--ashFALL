@@ -20,7 +20,13 @@ from nationalsim.adapter import (
     registry_report_to_ingestions,
 )
 from nationalsim.keyed_hash import compute_identifier_hash
-from nationalsim.registry import RegistryCore
+from nationalsim.registry import NotParticipantError, RegistryCore
+
+DEFAULT_TEST_BANK_SETTINGS = {
+    "bank_0": {"dpip_participation": True},
+    "bank_1": {"dpip_participation": True},
+}
+
 
 
 class FakeWallSource:
@@ -56,7 +62,7 @@ def test_screened_identifier_visibility_boundary() -> None:
     """
     clock = ManualClock(datetime(2026, 9, 1, 10, 0, tzinfo=IST))
     listing_delay = timedelta(minutes=15)
-    registry = RegistryCore(clock=clock, listing_delay=listing_delay)
+    registry = RegistryCore(clock=clock, listing_delay=listing_delay, bank_settings=DEFAULT_TEST_BANK_SETTINGS)
 
     hash_val = compute_identifier_hash("test-key", "run1", "account", "acc_100", 0)
     reported_at = datetime(2026, 9, 1, 10, 0, tzinfo=IST)
@@ -104,7 +110,7 @@ def test_revoke_behavior_and_authorization() -> None:
     """
     clock = ManualClock(datetime(2026, 9, 1, 10, 0, tzinfo=IST))
     listing_delay = timedelta(minutes=15)
-    registry = RegistryCore(clock=clock, listing_delay=listing_delay)
+    registry = RegistryCore(clock=clock, listing_delay=listing_delay, bank_settings=DEFAULT_TEST_BANK_SETTINGS)
 
     hash_val = compute_identifier_hash("test-key", "run1", "account", "acc_mule_shared", 0)
     now = datetime(2026, 9, 1, 10, 0, tzinfo=IST)
@@ -150,7 +156,9 @@ def test_dispute_marks_entry_contested() -> None:
     Dispute marks the entry contested and screening says 'contested'.
     """
     clock = ManualClock(datetime(2026, 9, 1, 10, 0, tzinfo=IST))
-    registry = RegistryCore(clock=clock, listing_delay=timedelta(minutes=10))
+    registry = RegistryCore(
+        clock=clock, listing_delay=timedelta(minutes=10), bank_settings=DEFAULT_TEST_BANK_SETTINGS
+    )
 
     hash_val = compute_identifier_hash("key", "run1", "account", "acc_victim_falsely_listed", 0)
     registry.ingest(
@@ -232,19 +240,22 @@ def test_no_raw_identifiers_stored_in_registry() -> None:
             assert re.fullmatch(r"^[0-9a-f]{64}$", entry["linked_account_hash"]) is not None
 
 
-def test_non_participating_bank_refused_at_screen() -> None:
-    """
-    A non-participating bank is refused at screen with an explicit error.
+def test_unlisted_bank_refused_at_screen() -> None:
+    """An unlisted bank is refused at screen with NotParticipantError.
+
+    Recreates a situation where an institution that never joined DPIP attempts to query
+    the shared registry. Catches a bug where missing bank configuration silently defaults
+    to granting screening access.
     """
     clock = ManualClock()
     registry = RegistryCore(
         clock=clock,
         listing_delay=timedelta(minutes=5),
-        bank_settings={"bank_outsider": {"dpip_participation": False}},
+        bank_settings={"bank_0": {"dpip_participation": True}},
     )
     valid_hash = "a" * 64
 
-    with pytest.raises(ValueError, match="not a participating DPIP member"):
+    with pytest.raises(NotParticipantError, match="not a participating DPIP member"):
         registry.screen(
             requesting_bank_id="bank_outsider",
             identifier_hash=valid_hash,
@@ -253,12 +264,62 @@ def test_non_participating_bank_refused_at_screen() -> None:
         )
 
 
+def test_listed_bank_set_to_false_refused_at_screen() -> None:
+    """A listed bank set to false is refused at screen with NotParticipantError.
+
+    Recreates a situation where a bank has opted out or had its participation revoked.
+    Catches a bug where having a dictionary entry for a bank mistakenly grants screening
+    privileges regardless of its boolean participation setting.
+    """
+    clock = ManualClock()
+    registry = RegistryCore(
+        clock=clock,
+        listing_delay=timedelta(minutes=5),
+        bank_settings={"bank_inactive": {"dpip_participation": False}},
+    )
+    valid_hash = "a" * 64
+
+    with pytest.raises(NotParticipantError, match="not a participating DPIP member"):
+        registry.screen(
+            requesting_bank_id="bank_inactive",
+            identifier_hash=valid_hash,
+            identifier_type="account",
+            run_id="run1",
+        )
+
+
+def test_listed_bank_set_to_true_allowed_at_screen() -> None:
+    """A listed bank set to true is allowed to screen identifiers without refusal.
+
+    Recreates standard screening by an enrolled member bank.
+    Catches a bug where explicit participation settings are ignored or rejected.
+    """
+    clock = ManualClock()
+    registry = RegistryCore(
+        clock=clock,
+        listing_delay=timedelta(minutes=5),
+        bank_settings={"bank_0": {"dpip_participation": True}},
+    )
+    valid_hash = "a" * 64
+
+    result = registry.screen(
+        requesting_bank_id="bank_0",
+        identifier_hash=valid_hash,
+        identifier_type="account",
+        run_id="run1",
+    )
+    assert result.match is False
+    assert result.status == "none"
+
+
 def test_wrong_key_hash_never_matches() -> None:
     """
     A hash made with the wrong key never matches.
     """
     clock = ManualClock(datetime(2026, 9, 1, 10, 0, tzinfo=IST))
-    registry = RegistryCore(clock=clock, listing_delay=timedelta(minutes=10))
+    registry = RegistryCore(
+        clock=clock, listing_delay=timedelta(minutes=10), bank_settings=DEFAULT_TEST_BANK_SETTINGS
+    )
 
     correct_hash = compute_identifier_hash("correct_key", "run1", "account", "acc_target", 0)
     wrong_hash = compute_identifier_hash("wrong_key", "run1", "account", "acc_target", 0)
@@ -386,11 +447,15 @@ def test_1x_vs_100x_replay_clock_consistency() -> None:
 
     wall_source_1x = FakeWallSource(start=100.0)
     clock_1x = ReplayClock(simulated_start=sim_start, speed=1.0, wall_source=wall_source_1x)
-    registry_1x = RegistryCore(clock=clock_1x, listing_delay=listing_delay)
+    registry_1x = RegistryCore(
+        clock=clock_1x, listing_delay=listing_delay, bank_settings=DEFAULT_TEST_BANK_SETTINGS
+    )
 
     wall_source_100x = FakeWallSource(start=500.0)
     clock_100x = ReplayClock(simulated_start=sim_start, speed=100.0, wall_source=wall_source_100x)
-    registry_100x = RegistryCore(clock=clock_100x, listing_delay=listing_delay)
+    registry_100x = RegistryCore(
+        clock=clock_100x, listing_delay=listing_delay, bank_settings=DEFAULT_TEST_BANK_SETTINGS
+    )
 
     target_hash = compute_identifier_hash("shared-key", "run1", "account", "acc_sync_test", 0)
 
@@ -432,7 +497,9 @@ def test_simulation_runs_are_strictly_isolated() -> None:
     report that was ingested during a completely separate run.
     """
     clock = ManualClock(datetime(2026, 9, 1, 10, 0, tzinfo=IST))
-    registry = RegistryCore(clock=clock, listing_delay=timedelta(minutes=10))
+    registry = RegistryCore(
+        clock=clock, listing_delay=timedelta(minutes=10), bank_settings=DEFAULT_TEST_BANK_SETTINGS
+    )
 
     shared_hash = "f" * 64
     now = clock.now_ist()
