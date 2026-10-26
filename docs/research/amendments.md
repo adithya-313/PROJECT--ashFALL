@@ -333,3 +333,15 @@ No model code exists yet (models start in Level 18; `world/` is simulator code).
 | Why | Establishes explicit paise and event-time standards for national systems mocks, distinguishes bank reporting delay from registry listing delay, avoids double-counting delay across world ranges and nationalsim, and clarifies that Phase-2 scores are not implemented. |
 | Results exist? | No model results. |
 
+## A-028
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-10-26 |
+| Issue IDs | None |
+| Issue IDs v2 | N2, 13-5 |
+| Files | `evaluation/registry_coverage.py` (new), `tests/unit/evaluation/test_registry_coverage.py` (new), `docs/research/amendments.md` |
+| What changed | Level 13b registry coverage evaluation. Coverage is emergent from Level 12 reports: for each mule depth (1, 2, 3+), reported mules / all mules is computed directly from the world's registry reports and truth roles. The configured ranges in `config/world_ranges.yaml` (`registry_coverage_layer1_mule_share` and `registry_coverage_deeper_mule_share`) serve as reference ranges beside the measured values rather than an active filter or sampling mask. Pass rule requires layer-1 coverage > deeper coverage. |
+| Why | Using coverage parameters as reference ranges avoids applying a second error rate or artificial filtering on top of Level 12's emergent victim complaint and bank reporting dynamics (X8). |
+| Results exist? | No model results. Measured coverage values across synthetic world runs only. |
+
