@@ -274,21 +274,35 @@ def test_http_malformed_inputs_return_422() -> None:
 
 
 def test_production_factory_fails_loudly_when_secret_key_missing() -> None:
-    """Proves that production startup crashes immediately if the HMAC secret key is omitted.
+    """Proves that production startup crashes immediately if an HMAC secret key is omitted.
 
     In production deployments, running with a blank secret key would cause security vulnerabilities
-    or corrupt hash comparisons. The server must refuse to start until an operator supplies the key.
+    or corrupt hash comparisons. The server must refuse to start until an operator supplies the keys.
     """
-    old_env = os.environ.get("NATIONALSIM_DPIP_KEY")
+    old_dpip = os.environ.get("NATIONALSIM_DPIP_KEY")
+    old_i4c = os.environ.get("NATIONALSIM_I4C_KEY")
     if "NATIONALSIM_DPIP_KEY" in os.environ:
         del os.environ["NATIONALSIM_DPIP_KEY"]
+    if "NATIONALSIM_I4C_KEY" in os.environ:
+        del os.environ["NATIONALSIM_I4C_KEY"]
 
     try:
         with pytest.raises(ValueError, match="NATIONALSIM_DPIP_KEY' is missing or empty"):
             create_app_prod()
+
+        os.environ["NATIONALSIM_DPIP_KEY"] = "some_dpip_key"
+        with pytest.raises(ValueError, match="NATIONALSIM_I4C_KEY' is missing or empty"):
+            create_app_prod()
     finally:
-        if old_env is not None:
-            os.environ["NATIONALSIM_DPIP_KEY"] = old_env
+        if old_dpip is not None:
+            os.environ["NATIONALSIM_DPIP_KEY"] = old_dpip
+        elif "NATIONALSIM_DPIP_KEY" in os.environ:
+            del os.environ["NATIONALSIM_DPIP_KEY"]
+
+        if old_i4c is not None:
+            os.environ["NATIONALSIM_I4C_KEY"] = old_i4c
+        elif "NATIONALSIM_I4C_KEY" in os.environ:
+            del os.environ["NATIONALSIM_I4C_KEY"]
 
 
 def test_not_participant_error_gives_403_regardless_of_message_text(

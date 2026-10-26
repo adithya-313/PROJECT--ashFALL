@@ -68,6 +68,33 @@ PART_CONFIGS: dict[str, dict[str, Any]] = {
         ),
         "REGISTER_IDS": ("X1", "K8", "13-11", "13-12", "13-14", "13-15"),
     },
+    "13b": {
+        "INTERFACE_MODULES": (
+            "world.phone_book",
+            "nationalsim.i4c_feed",
+            "nationalsim.registry",
+            "nationalsim.adapter",
+            "evaluation.registry_coverage",
+        ),
+        "RECORDS_MODULE": (
+            "world.phone_book",
+            "nationalsim.i4c_feed",
+            "nationalsim.registry",
+            "evaluation.registry_coverage",
+        ),
+        "RECORD_NAMES": (
+            "PhoneRecord",
+            "PhoneBook",
+            "I4CEntry",
+            "DisputeResolutionRecord",
+            "MuleDepthMetrics",
+            "RegistryCoverageResult",
+        ),
+        "CONFIG_FILES": (
+            "config/nationalsim.yaml",
+        ),
+        "REGISTER_IDS": ("13-5", "13-9", "13-10"),
+    },
 }
 
 
@@ -454,9 +481,38 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--part",
         default="12h",
-        help="Named part to extract facts for (e.g. '12h' or '13a'). Defaults to '12h'.",
+        help="Named part to extract facts for (e.g. '12h', '13a', or '13b'). Defaults to '12h'.",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Check that the handoff note exists and contains all required facts sections.",
     )
     args = parser.parse_args(argv)
+
+    if args.check:
+        target_file = REPO_ROOT / f"docs/handoff/level_{args.part}.md"
+        if not target_file.is_file():
+            candidate_13b = REPO_ROOT / "docs/handoff/level_13b.md"
+            if candidate_13b.is_file():
+                target_file = candidate_13b
+            else:
+                sys.stderr.write(f"Handoff file '{target_file}' not found.\n")
+                return 1
+        content = target_file.read_text(encoding="utf-8")
+        required_headings = (
+            "## Register Changes",
+            "## Public Interfaces",
+            "## Records and Fields",
+            "## Configuration Keys",
+            "## Random Stream Children and Tie-Break Order",
+        )
+        for heading in required_headings:
+            if heading not in content:
+                sys.stderr.write(f"Missing required heading '{heading}' in {target_file}.\n")
+                return 1
+        print(f"Handoff check passed: {target_file.name} is complete.")
+        return 0
 
     if args.part not in PART_CONFIGS:
         available = ", ".join(sorted(PART_CONFIGS.keys()))

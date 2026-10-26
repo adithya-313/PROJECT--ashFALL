@@ -477,24 +477,33 @@ issues:
   13-5:
     title: "DPIP and the I4C registry were conflated"
     origin: revision_2
-    status: planned
+    status: built
     levels: [13]
     parts: [13b]
-    later_work: ["Level 13b: Separate participation and feeds"]
+    evidence:
+      - {kind: config, file: config/nationalsim.yaml, name: nationalsim}
+      - {kind: test, file: tests/unit/nationalsim/test_i4c_feed.py, name: test_non_participating_bank_gets_no_dpip_match_but_does_get_i4c_feed_entries}
+      - {kind: test, file: tests/unit/nationalsim/test_i4c_feed.py, name: test_dpip_hash_and_i4c_hash_of_same_phone_differ}
   13-9:
     title: "Dispute actor and recycle delay unspecified"
     origin: revision_2
-    status: planned
+    status: built
     levels: [13]
     parts: [13b]
-    later_work: ["Level 13b: Genuine customer via their bank; sourced delay"]
+    evidence:
+      - {kind: config, file: config/nationalsim.yaml, name: nationalsim}
+      - {kind: test, file: tests/unit/nationalsim/test_dispute_resolution.py, name: test_recycled_number_wrongly_matches_then_dispute_resolves_with_exact_minutes}
+      - {kind: test, file: tests/unit/world/test_phone_book.py, name: test_recycled_number_deactivation_is_at_least_90_days_before_reassignment}
   13-10:
     title: "Dispute actor and recycle delay unspecified"
     origin: revision_2
-    status: planned
+    status: built
     levels: [13]
     parts: [13b]
-    later_work: ["Level 13b: Genuine customer via their bank; sourced delay"]
+    evidence:
+      - {kind: config, file: config/nationalsim.yaml, name: nationalsim}
+      - {kind: test, file: tests/unit/nationalsim/test_dispute_resolution.py, name: test_shared_household_dispute_stays_contested}
+      - {kind: test, file: tests/unit/world/test_phone_book.py, name: test_shared_numbers_exist_when_share_positive_and_none_when_zero}
   13-11:
     title: "Phase-2 scores and early Feedback calls unscoped"
     origin: revision_2

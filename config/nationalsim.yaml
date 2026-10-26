@@ -15,6 +15,29 @@ nationalsim:
     issue_ids_v2: [13-11]
     derived_from: "policy (amendment A-027)"
 
+  recycle_min_days:
+    value: 90
+    label: reported
+    source:
+      url: "https://api.sci.gov.in/supremecourt/2021/13468/13468_2021_3_45_47839_Judgement_30-Oct-2023.pdf"
+      date: "2023-10-30"
+      quote: "the cellular mobile telephone number once deactivated for non-usage or disconnected on the request of subscriber, is not allocated to the new subscriber for at least a period of 90 days."
+    reason: "Supreme Court judgment (30 Oct 2023) records: \"the cellular mobile telephone number once deactivated for non-usage or disconnected on the request of subscriber, is not allocated to the new subscriber for at least a period of 90 days.\""
+    derived_from: "Supreme Court of India (30 Oct 2023)"
+
+  recycled_number_share:
+    value: 0.05
+    label: assumption
+    derived_from: policy
+    reason: "Assumed share of genuine customer accounts whose assigned mobile number was previously held by a mule account deactivated before day 0; no official industry figure is published."
+
+  dispute_resolution_minutes:
+    value: 60
+    label: assumption
+    derived_from: policy
+    reason: "Assumed time in minutes taken by the national registry to verify telecom reassignment evidence and uphold a customer dispute; no statutory SLA is published."
+
+
   banks:
     bank_0:
       dpip_participation: true

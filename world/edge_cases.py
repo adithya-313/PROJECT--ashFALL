@@ -298,6 +298,38 @@ def check_genuine_shop_downstream_of_mule(output: InteractiveWorldOutput, case: 
     return True, f"cashout_shops={len(shop_cashouts)}", ""
 
 
+def check_recycled_phone_number(output: InteractiveWorldOutput, case: EdgeCase) -> tuple[bool, str, str]:
+    """
+    WHAT: Asserts that the world phone book contains at least one recycled phone number whose prior holder
+    was deactivated at least 90 days before reassignment, and that instances exist.
+    WHY: Verifies edge-case 13: telecom recycling delay (>= 90 days statutory quarantine) separates the prior
+    fraudster's deactivation from the new subscriber's reassignment.
+    """
+    from world.phone_book import build_phone_book
+
+    seed = case.seed if case.seed is not None else 103
+    phone_book = build_phone_book(output, run_seed=seed)
+
+    recycled_records = [
+        rec for rec in phone_book.records.values()
+        if rec.reassigned_minute is not None
+    ]
+    # Nothing passes on zero instances
+    if not recycled_records:
+        return False, "", "zero recycled phone numbers found in phone book"
+
+    # Verify each recycled number's previous holder was deactivated at least 90 days before reassignment
+    for rec in recycled_records:
+        if rec.previous_holder_deactivated_minute is None:
+            return False, "", f"recycled phone {rec.phone_number} missing previous_holder_deactivated_minute"
+        assert rec.reassigned_minute is not None
+        gap_days = (rec.reassigned_minute - rec.previous_holder_deactivated_minute) / 1440.0
+        if gap_days < 90.0:
+            return False, "", f"quarantine gap {gap_days:.1f} days < 90 days statutory minimum"
+
+    return True, f"recycled_count={len(recycled_records)}", ""
+
+
 # EXPECTATIONS: dict mapping each runnable case name to its check function.
 EXPECTATIONS: dict[str, Callable[[InteractiveWorldOutput, EdgeCase], tuple[bool, str, str]]] = {
     "mules_forward_after_days": check_mules_forward_after_days,
@@ -309,6 +341,7 @@ EXPECTATIONS: dict[str, Callable[[InteractiveWorldOutput, EdgeCase], tuple[bool,
     "medical_fundraiser": check_medical_fundraiser,
     "chit_fund": check_chit_fund,
     "genuine_shop_downstream_of_mule": check_genuine_shop_downstream_of_mule,
+    "recycled_phone_number": check_recycled_phone_number,
 }
 
 

@@ -50,7 +50,7 @@ def test_part_h_checks_match_the_brief() -> None:
 def test_check_38_fast_passes() -> None:
     """
     WHAT: Runs fast edge Check 38 asynchronously and verifies that the edge-case library evaluates all 13 cases,
-    with 9 runnable passing, 3 later level, and 1 deferred.
+    with 10 runnable passing, 2 later level, and 1 deferred.
 
     WHY: Proves Check 38 executes successfully and asserts expected boundary behavior for all edge-case scenarios.
 
@@ -64,13 +64,13 @@ def test_check_38_fast_passes() -> None:
         test_check_38_fast_passes()
     """
     outcome = asyncio.run(run_edge_cases_check(None))
-    assert "9 runnable PASS" in outcome.key_number
-    assert "3 later level" in outcome.key_number
+    assert "10 runnable PASS" in outcome.key_number
+    assert "2 later level" in outcome.key_number
     assert "1 deferred" in outcome.key_number
     cases = outcome.evidence["cases"]
     assert len(cases) == 13
     runnable = [c for c in cases if c["status"] == "runnable"]
-    assert len(runnable) == 9
+    assert len(runnable) == 10
     for c in runnable:
         assert "PASS" in c["result"]
 

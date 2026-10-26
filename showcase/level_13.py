@@ -15,24 +15,25 @@ from typing import Any
 import httpx
 
 from core.event_clock import IST, ManualClock, ReplayClock
-from nationalsim.adapter import DEFAULT_FRAUD_REASON_CODE, IDENTIFIER_TYPE_ACCOUNT
+from nationalsim.adapter import (
+    DEFAULT_FRAUD_REASON_CODE,
+    IDENTIFIER_TYPE_ACCOUNT,
+    IDENTIFIER_TYPE_PHONE,
+)
 from nationalsim.app import create_app
 from nationalsim.keyed_hash import compute_identifier_hash
 from showcase.framework import CheckDefinition, CheckOutcome
 
 LEVEL_NUMBER = 13
-LEVEL_TITLE = "Mock national systems and event clock (built: part 13a)"
+LEVEL_TITLE = "Mock national systems and event clock (built: parts 13a, 13b)"
 NEEDS_DATABASE = False
 
 WHAT_YOU_SAW = (
-    "Level 13a introduces the national systems simulator (nationalsim) and an injectable event clock. "
-    "The event clock lets tests advance simulated time without sleeping and guarantees that 1x and 100x "
-    "replays produce identical decision timestamps. "
-    "The registry mock stores fraud reports using HMAC hashes so raw bank account numbers and device "
-    "fingerprints are never held in the national database. "
-    "Banks screening an account must wait through a 15-minute listing delay before new reports match. "
-    "Banks outside the DPIP network are denied screening access, and customer disputes flag listings "
-    "as contested."
+    "Level 13 introduces the national systems simulator (nationalsim) and an injectable event clock. "
+    "Part 13a adds the DPIP keyed registry mock, a 15-minute listing delay, customer disputes, and speed-invariant "
+    "clock replays. Part 13b introduces registry intelligence: synthetic telecom recycling with 90-day statutory "
+    "quarantines, dispute resolution timelines logged for N4 metrics, independent I4C intelligence feeds for all "
+    "licensed banks, and emergent registry coverage across mule routing depths."
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -43,6 +44,9 @@ REQUIRED_FILES = [
     REPO_ROOT / "nationalsim" / "keyed_hash.py",
     REPO_ROOT / "nationalsim" / "registry.py",
     REPO_ROOT / "nationalsim" / "adapter.py",
+    REPO_ROOT / "evaluation" / "registry_coverage.py",
+    REPO_ROOT / "world" / "phone_book.py",
+    REPO_ROOT / "scenarios" / "edge_cases" / "13-recycled_phone_number.yaml",
 ]
 
 
@@ -614,32 +618,504 @@ async def check_5_boundary_minute(workspace: Any) -> CheckOutcome:
     )
 
 
+async def check_6_recycled_phone_dispute(workspace: Any) -> CheckOutcome:
+    """Proves that a recycled phone wrongly matches a genuine person until a customer dispute resolves it.
+
+    What it is for:
+        When a telecom provider reassigns a disconnected mobile number, innocent new subscribers
+        risk inheriting collateral fraud suspicion from prior mule operators. This check proves that
+        while the registry initially matches the historical listing, filing a dispute on behalf of the customer
+        automatically schedules resolution after the configured delay and transitions screening to resolved.
+
+    Inputs:
+        workspace: Unused placeholder provided by the showcase runner framework.
+
+    What it returns:
+        CheckOutcome recording match before dispute, contested status, resolved status, and exact minutes_to_resolve.
+
+    How it works:
+        1. Set up a ManualClock starting at 10:00 IST on 2026-09-01.
+        2. Create the FastAPI app with bank_0 enrolled in DPIP and dispute_resolution_minutes configured to 60.
+        3. Register a public telecom reassignment for a phone hash at simulation minute -10.
+        4. Ingest an old mule report reported before reassignment (at minute -200).
+        5. Advance time by 20 minutes; verify screening matches with status 'listed'.
+        6. Submit POST /dispute on behalf of the customer via bank_0; verify response returns status 'resolved'
+           and minutes_to_resolve=60.
+        7. Advance time by 59 minutes (before delay expires); verify screening is status 'contested'.
+        8. Advance time by 1 more minute (60 total); verify screening returns match=False and status 'resolved'.
+
+    Errors and side effects:
+        Raises AssertionError if the dispute fails to schedule resolution or screening fails to transition.
+
+    Limits:
+        Runs in-process against the real FastAPI endpoints via httpx.ASGITransport.
+    """
+    sim_time = datetime(2026, 9, 1, 10, 0, tzinfo=IST)
+    clock = ManualClock(sim_time)
+    test_key = "showcase_test_secret_key"
+    app = create_app(
+        clock=clock,
+        key_provider=lambda: test_key,
+        settings={
+            "listing_delay_minutes": 15,
+            "dispute_resolution_minutes": 60,
+            "banks": {"bank_0": {"dpip_participation": True}},
+        },
+    )
+
+    phone_num = "sim-0000000888"
+    run_id = "showcase_run_13b"
+    phone_hash = compute_identifier_hash(test_key, run_id, IDENTIFIER_TYPE_PHONE, phone_num)
+
+    # Register telecom reassignment at minute -10 (after 90 days statutory quarantine)
+    app.state.registry.register_telecom_reassignment(
+        identifier_hash=phone_hash,
+        reassigned_minute=-10,
+        run_id=run_id,
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        # Ingest old report reported before reassignment (minute -200)
+        await client.post(
+            "/ingest",
+            json={
+                "bank_id": "bank_0",
+                "report_id": "R-SHOWCASE-OLD-MULE",
+                "identifier_hash": phone_hash,
+                "identifier_type": IDENTIFIER_TYPE_PHONE,
+                "reason_code": DEFAULT_FRAUD_REASON_CODE,
+                "reported_at": (sim_time - timedelta(minutes=200)).isoformat(),
+                "run_id": run_id,
+            },
+        )
+        # Tag entry's reported_minute to pre-reassignment minute (-200)
+        for entry in app.state.registry._entries.values():
+            if entry.identifier_hash == phone_hash:
+                entry.reported_minute = -200
+
+        clock.advance(timedelta(minutes=20))
+
+        # 1. Screen initially matches against the innocent customer
+        res_before = await client.post(
+            "/screen",
+            json={
+                "requesting_bank_id": "bank_0",
+                "identifier_hash": phone_hash,
+                "identifier_type": IDENTIFIER_TYPE_PHONE,
+                "run_id": run_id,
+            },
+        )
+        before_data = res_before.json()
+        assert before_data["match"] is True
+        assert before_data["status"] == "listed"
+
+        # 2. File dispute on behalf of customer via bank
+        res_disp = await client.post(
+            "/dispute",
+            json={
+                "bank_id": "bank_0",
+                "identifier_hash": phone_hash,
+                "reason_code": "recycled_number_dispute",
+                "run_id": run_id,
+                "filed_by": "customer_via_bank",
+            },
+        )
+        disp_data = res_disp.json()
+        assert disp_data["status"] == "resolved"
+        assert disp_data["minutes_to_resolve"] == 60
+
+        # 3. Before 60m delay expires (at 59m): still contested
+        clock.advance(timedelta(minutes=59))
+        res_mid = await client.post(
+            "/screen",
+            json={
+                "requesting_bank_id": "bank_0",
+                "identifier_hash": phone_hash,
+                "identifier_type": IDENTIFIER_TYPE_PHONE,
+                "run_id": run_id,
+            },
+        )
+        mid_data = res_mid.json()
+        assert mid_data["match"] is True
+        assert mid_data["status"] == "contested"
+
+        # 4. At 60m (1 minute later): resolved match=False
+        clock.advance(timedelta(minutes=1))
+        res_after = await client.post(
+            "/screen",
+            json={
+                "requesting_bank_id": "bank_0",
+                "identifier_hash": phone_hash,
+                "identifier_type": IDENTIFIER_TYPE_PHONE,
+                "run_id": run_id,
+            },
+        )
+        after_data = res_after.json()
+        assert after_data["match"] is False
+        assert after_data["status"] == "resolved"
+
+    key_number = f"wrong match resolved in {disp_data['minutes_to_resolve']}m; match before=True, after=False"
+    return CheckOutcome(
+        key_number=key_number,
+        evidence={
+            "phone_hash": phone_hash,
+            "status_before": before_data["status"],
+            "minutes_to_resolve": disp_data["minutes_to_resolve"],
+            "status_mid": mid_data["status"],
+            "match_after": after_data["match"],
+            "status_after": after_data["status"],
+        },
+    )
+
+
+async def check_7_non_participant_i4c_feed(workspace: Any) -> CheckOutcome:
+    """Proves that a non-participating bank gets no DPIP match but still sees the I4C feed.
+
+    What it is for:
+        DPIP screening requires formal bilateral enrollment with keyed HMAC hashes, while
+        the I4C national suspect registry feed is broadcast to all licensed financial institutions.
+        This check proves that a non-participating bank is refused screening with HTTP 403 but
+        successfully pulls broadcast telephone records from the shared I4C feed endpoint.
+
+    Inputs:
+        workspace: Unused placeholder provided by the showcase runner framework.
+
+    What it returns:
+        CheckOutcome recording 403 refusal on DPIP screening and 200 success on I4C feed ingestion.
+
+    How it works:
+        1. Set up app with bank_0 enrolled in DPIP and bank_2 not enrolled.
+        2. Ingest a fraud report via bank_0 into DPIP (which automatically mirrors to I4C feed).
+        3. Advance time past listing delay.
+        4. Bank_2 calls POST /screen; verify HTTP 403 is returned.
+        5. Bank_2 calls GET /i4c/feed; verify HTTP 200 is returned with populated entries.
+
+    Errors and side effects:
+        Raises AssertionError if screening succeeds or I4C feed is refused.
+
+    Limits:
+        Evaluates HTTP gateway access controls in-process.
+    """
+    sim_time = datetime(2026, 9, 1, 10, 0, tzinfo=IST)
+    clock = ManualClock(sim_time)
+    test_key = "showcase_dpip_key"
+    i4c_key = "showcase_i4c_key"
+    app = create_app(
+        clock=clock,
+        key_provider=lambda: test_key,
+        i4c_key_provider=lambda: i4c_key,
+        settings={
+            "listing_delay_minutes": 15,
+            "banks": {
+                "bank_0": {"dpip_participation": True},
+                "bank_2": {"dpip_participation": False},
+            },
+        },
+    )
+
+    run_id = "showcase_run_i4c"
+    phone_num = "sim-0000000777"
+    phone_hash = compute_identifier_hash(test_key, run_id, IDENTIFIER_TYPE_PHONE, phone_num)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        # Ingest report through enrolled bank_0
+        res_ingest = await client.post(
+            "/ingest",
+            json={
+                "bank_id": "bank_0",
+                "report_id": "R-I4C-001",
+                "identifier_hash": phone_hash,
+                "identifier_type": IDENTIFIER_TYPE_PHONE,
+                "reason_code": DEFAULT_FRAUD_REASON_CODE,
+                "reported_at": sim_time.isoformat(),
+                "run_id": run_id,
+            },
+        )
+        assert res_ingest.status_code == 200
+
+        clock.advance(timedelta(minutes=20))
+
+        # Non-participating bank_2 attempts DPIP screening -> 403
+        res_screen = await client.post(
+            "/screen",
+            json={
+                "requesting_bank_id": "bank_2",
+                "identifier_hash": phone_hash,
+                "identifier_type": IDENTIFIER_TYPE_PHONE,
+                "run_id": run_id,
+            },
+        )
+        assert res_screen.status_code == 403
+        assert "not a participating DPIP member" in res_screen.json()["detail"]
+
+        # Non-participating bank_2 accesses I4C feed -> 200
+        res_feed = await client.get("/i4c/feed", params={"bank_id": "bank_2", "run_id": run_id})
+        assert res_feed.status_code == 200
+        feed_data = res_feed.json()
+        assert feed_data["entries_count"] >= 1
+        assert any(item["identifier_hash"] == phone_hash for item in feed_data["entries"])
+
+    key_number = f"DPIP screen 403 forbidden, I4C feed 200 OK ({feed_data['entries_count']} items)"
+    return CheckOutcome(
+        key_number=key_number,
+        evidence={
+            "screen_status_code": res_screen.status_code,
+            "feed_status_code": res_feed.status_code,
+            "feed_item_count": feed_data["entries_count"],
+        },
+    )
+
+
+async def check_8_registry_coverage_by_mule_depth(workspace: Any) -> CheckOutcome:
+    """Proves that registry coverage is measured across mule depths and satisfies layer-1 dominance.
+
+    What it is for:
+        Victim complaints emerge almost exclusively at layer 1 (the initial mule accounts victims pay directly).
+        This check measures emergent coverage across depths in a fraud-on world and confirms that observed
+        coverage for layer 1 strictly exceeds deeper mule coverage, displaying configured bounds beside it.
+
+    Inputs:
+        workspace: Unused placeholder provided by the showcase runner framework.
+
+    What it returns:
+        CheckOutcome recording observed fractions, configured reference ranges, and scatter chart data.
+
+    How it works:
+        1. Executes a fast fraud-on world with a scam-and-route syndicate (seed 102, 60 people, 61 days).
+        2. Evaluates registry coverage across mule depth tiers using evaluate_world_registry_coverage.
+        3. Asserts the pass condition: layer 1 coverage strictly exceeds deeper coverage.
+        4. Constructs a scatter chart comparing observed coverage against configured range bounds.
+
+    Errors and side effects:
+        Raises AssertionError if layer 1 coverage does not exceed deeper coverage.
+
+    Limits:
+        Uses an in-process synthetic world run to evaluate emergent reporting dynamics.
+    """
+    from evaluation.registry_coverage import evaluate_world_registry_coverage
+    from world.fast_mode import FastRunSettings
+    from world.gang_config import BlockStep, GangBudget, GangConfig
+    from world.interactive_records import RunnerSettings
+    from world.interactive_runner import run_interactive_world
+
+    steps = (
+        BlockStep("acquire", (("count", 8), ("origin_mix", "all_rented"))),
+        BlockStep("scam", (("receiving_mules", 2), ("victims_per_receiving_mule", 12))),
+        BlockStep("route", (("layers", 2), ("accounts_per_layer", 2))),
+    )
+    budget = GangBudget(money_paise=50_000_000, time_minutes=500_000, max_risk=0.99)
+    gang = GangConfig("g_eval", 1, budget, None, steps, 1440)
+    fast_settings = FastRunSettings(
+        seed=102,
+        n_people=60,
+        n_shops=12,
+        n_days=61,
+        range_name="training",
+    )
+    runner_settings = RunnerSettings(fraud_enabled=True)
+    output = run_interactive_world(fast_settings, runner_settings, gang_configs=(gang,))
+
+    result = evaluate_world_registry_coverage(output)
+    assert result.passed is True, (
+        f"Layer-1 coverage {result.layer1_coverage:.4f} must exceed deeper coverage {result.deeper_coverage:.4f}"
+    )
+
+    m1 = result.by_depth["1"]
+    m2 = result.by_depth["2"]
+    m3 = result.by_depth["3+"]
+    m_deep = result.by_depth["deeper"]
+
+    chart = {
+        "type": "scatter",
+        "title": "Registry coverage by mule depth vs configured bounds",
+        "x_label": "Mule depth layer",
+        "y_label": "Coverage fraction",
+        "series": [
+            {
+                "name": "Observed coverage",
+                "points": [
+                    [1, m1.coverage],
+                    [2, m2.coverage],
+                    [3, m3.coverage],
+                ],
+            },
+            {
+                "name": "Configured range (low)",
+                "points": [
+                    [1, result.layer1_range[0]],
+                    [2, result.deeper_range[0]],
+                    [3, result.deeper_range[0]],
+                ],
+            },
+            {
+                "name": "Configured range (high)",
+                "points": [
+                    [1, result.layer1_range[1]],
+                    [2, result.deeper_range[1]],
+                    [3, result.deeper_range[1]],
+                ],
+            },
+        ],
+    }
+
+    key_number = (
+        f"layer 1: {m1.coverage * 100:.1f}% ({m1.reported_mules}/{m1.total_mules}), "
+        f"deeper: {m_deep.coverage * 100:.1f}% ({m_deep.reported_mules}/{m_deep.total_mules})"
+    )
+
+    return CheckOutcome(
+        key_number=key_number,
+        evidence={
+            "layer1_coverage": m1.coverage,
+            "layer1_range": list(result.layer1_range),
+            "deeper_coverage": m_deep.coverage,
+            "deeper_range": list(result.deeper_range),
+            "table_text": result.table_text,
+        },
+        chart=chart,
+    )
+
+
+async def check_9_unlisted_bank_refused_and_shared_dispute(workspace: Any) -> CheckOutcome:
+    """Proves that an unlisted bank is refused with HTTP 403, and shared-household disputes remain contested.
+
+    What it is for:
+        Defense-in-depth access controls must reject completely unlisted institutions, while
+        shared-household phone numbers linked to ongoing illicit activity must not be automatically
+        resolved by customer claims alone.
+
+    Inputs:
+        workspace: Unused placeholder provided by the showcase runner framework.
+
+    What it returns:
+        CheckOutcome recording 403 refusal for unlisted banks and contested status retention.
+
+    How it works:
+        1. Set up app with bank_0 configured.
+        2. Call POST /screen with an unlisted bank ('bank_unlisted_99'); verify HTTP 403 is returned.
+        3. Ingest a fraud report on a shared household phone where report minute is within the current era.
+        4. Submit POST /dispute for the shared number; verify response status is 'contested'
+           and minutes_to_resolve is None.
+        5. Advance time by 100 minutes; verify screening remains match=True and status 'contested'.
+
+    Errors and side effects:
+        Raises AssertionError if unlisted bank screening succeeds or shared dispute is resolved.
+
+    Limits:
+        Evaluates negative security boundaries in-process.
+    """
+    sim_time = datetime(2026, 9, 1, 10, 0, tzinfo=IST)
+    clock = ManualClock(sim_time)
+    test_key = "showcase_test_secret_key"
+    app = create_app(
+        clock=clock,
+        key_provider=lambda: test_key,
+        settings={
+            "listing_delay_minutes": 15,
+            "dispute_resolution_minutes": 60,
+            "banks": {"bank_0": {"dpip_participation": True}},
+        },
+    )
+
+    phone_num = "sim-0000000999"
+    run_id = "showcase_run_neg"
+    phone_hash = compute_identifier_hash(test_key, run_id, IDENTIFIER_TYPE_PHONE, phone_num)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Unlisted bank attempted screening -> 403
+        res_unlisted = await client.post(
+            "/screen",
+            json={
+                "requesting_bank_id": "bank_unlisted_99",
+                "identifier_hash": phone_hash,
+                "identifier_type": IDENTIFIER_TYPE_PHONE,
+                "run_id": run_id,
+            },
+        )
+        assert res_unlisted.status_code == 403
+        assert "not a participating DPIP member" in res_unlisted.json()["detail"]
+
+        # 2. Ingest active fraud report on shared household phone
+        res_ingest = await client.post(
+            "/ingest",
+            json={
+                "bank_id": "bank_0",
+                "report_id": "R-SHARED-ACTIVE",
+                "identifier_hash": phone_hash,
+                "identifier_type": IDENTIFIER_TYPE_PHONE,
+                "reason_code": DEFAULT_FRAUD_REASON_CODE,
+                "reported_at": sim_time.isoformat(),
+                "run_id": run_id,
+            },
+        )
+        assert res_ingest.status_code == 200
+        clock.advance(timedelta(minutes=40))
+
+        # 3. Customer disputes the shared household listing
+        res_disp = await client.post(
+            "/dispute",
+            json={
+                "bank_id": "bank_0",
+                "identifier_hash": phone_hash,
+                "reason_code": "shared_household_dispute",
+                "run_id": run_id,
+                "filed_by": "customer_via_bank",
+            },
+        )
+        disp_data = res_disp.json()
+        assert disp_data["status"] == "contested"
+        assert disp_data["minutes_to_resolve"] is None
+
+        # 4. Advance time by 100 minutes (past normal resolution delay) -> remains contested
+        clock.advance(timedelta(minutes=100))
+        res_screen = await client.post(
+            "/screen",
+            json={
+                "requesting_bank_id": "bank_0",
+                "identifier_hash": phone_hash,
+                "identifier_type": IDENTIFIER_TYPE_PHONE,
+                "run_id": run_id,
+            },
+        )
+        screen_data = res_screen.json()
+        assert screen_data["match"] is True
+        assert screen_data["status"] == "contested"
+
+    key_number = f"unlisted bank refused 403; shared household dispute status '{screen_data['status']}' after 100m"
+    return CheckOutcome(
+        key_number=key_number,
+        evidence={
+            "unlisted_status_code": res_unlisted.status_code,
+            "dispute_status": disp_data["status"],
+            "screen_match_after_100m": screen_data["match"],
+            "screen_status_after_100m": screen_data["status"],
+        },
+    )
+
+
 def get_checks(quick: bool = False) -> list[CheckDefinition]:
     """Construct the ordered list of Level 13 showcase verification checks.
 
     What it is for:
-        Supplies the showcase runner framework with the suite of checks evaluating Level 13a.
-        All checks run in-process and satisfy the coverage requirement (1 normal, 2 edge, 1 negative).
+        Supplies the showcase runner framework with the suite of checks evaluating Level 13 (parts a and b).
+        All checks run in-process and satisfy the coverage requirement across normal, edge, and negative checks.
 
     Inputs:
         quick: Boolean flag indicating if quick mode is requested. All Level 13 checks are fast.
 
     What it returns:
-        List of 5 CheckDefinition containers tagged with part='a'.
+        List of 9 CheckDefinition containers tagged with their respective part.
 
     How it works:
-        1. Construct CheckDefinition for check 1 (normal: report then screen).
-        2. Construct CheckDefinition for check 2 (edge: revoke and dispute).
-        3. Construct CheckDefinition for check 3 (consistency: 1x vs 100x clock replay).
-        4. Construct CheckDefinition for check 4 (negative: outsider refused and wrong key).
-        5. Construct CheckDefinition for check 5 (edge: boundary minute check).
-        6. Return all 5 checks in order.
+        1. Construct CheckDefinitions for checks 1 through 5 (Part 13a).
+        2. Construct CheckDefinitions for checks 6 through 9 (Part 13b).
+        3. Return all 9 checks in order.
 
     Errors and side effects:
         None. Pure constructor returning check definitions.
-
-    Limits:
-        Part 13a only. Later parts (13b, 13c) will append subsequent checks.
     """
     check_1 = CheckDefinition(
         name="1. report then screen: no match before the delay, match after",
@@ -701,4 +1177,62 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
         where_to_look="nationalsim/registry.py, nationalsim/app.py",
         part="a",
     )
-    return [check_1, check_2, check_3, check_4, check_5]
+    check_6 = CheckDefinition(
+        name="6. recycled number wrongly matches genuine person, dispute resolves it",
+        kind="edge",
+        proves=(
+            "An innocent customer holding a recycled phone number matching a prior mule listing "
+            "has the match resolved after the dispute resolution delay, logging minutes_to_resolve for N4."
+        ),
+        run=check_6_recycled_phone_dispute,
+        likely_cause="Dispute resolution logic failed to verify pre-reassignment timeline or delay calculation.",
+        where_to_look="nationalsim/registry.py, nationalsim/app.py, config/nationalsim.yaml",
+        part="b",
+    )
+    check_7 = CheckDefinition(
+        name="7. non-participating bank gets no DPIP match but still sees I4C feed",
+        kind="edge",
+        proves=(
+            "A licensed bank not participating in DPIP is denied DPIP screening with HTTP 403, "
+            "but successfully pulls unencrypted suspect listings from the I4C feed."
+        ),
+        run=check_7_non_participant_i4c_feed,
+        likely_cause="DPIP enrollment was checked on I4C feed endpoint or I4C route was blocked.",
+        where_to_look="nationalsim/app.py, nationalsim/i4c_feed.py",
+        part="b",
+    )
+    check_8 = CheckDefinition(
+        name="8. registry coverage by mule depth, with configured ranges shown beside it",
+        kind="normal",
+        proves=(
+            "National registry coverage is emergent and strictly higher on layer 1 receiver mules "
+            "than deeper routing mules, matching empirical reference intervals."
+        ),
+        run=check_8_registry_coverage_by_mule_depth,
+        likely_cause="Layer 1 coverage failed to exceed deeper coverage or world runner failed to generate complaints.",
+        where_to_look="evaluation/registry_coverage.py, config/world_ranges.yaml",
+        part="b",
+    )
+    check_9 = CheckDefinition(
+        name="9. unlisted bank is refused, and shared-household dispute is not wrongly upheld",
+        kind="negative",
+        proves=(
+            "An unlisted institution is denied DPIP screening with HTTP 403, and a dispute on a "
+            "shared household phone with active fraud is not auto-resolved and stays contested."
+        ),
+        run=check_9_unlisted_bank_refused_and_shared_dispute,
+        likely_cause="Unlisted bank guard allowed screening or shared-household dispute was erroneously resolved.",
+        where_to_look="nationalsim/app.py, nationalsim/registry.py",
+        part="b",
+    )
+    return [
+        check_1,
+        check_2,
+        check_3,
+        check_4,
+        check_5,
+        check_6,
+        check_7,
+        check_8,
+        check_9,
+    ]
