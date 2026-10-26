@@ -59,8 +59,8 @@ class PlaceScanResult:
     details: list[str] = field(default_factory=list)
 
     def is_clean(self) -> bool:
-        """A target is clean strictly when it was successfully checked and has 0 raw hits."""
-        return self.status == "CHECKED" and self.raw_hits == 0
+        """A target is clean strictly when it was successfully checked with >0 items and 0 raw hits."""
+        return self.status == "CHECKED" and self.items_checked > 0 and self.raw_hits == 0
 
 
 @dataclass(frozen=True)
@@ -162,6 +162,14 @@ def scan_nationalsim_store(
     feedback = store_export.get("feedback", [])
     resolutions = store_export.get("resolutions", [])
     total_items = len(entries) + len(feedback) + len(resolutions)
+    if total_items == 0:
+        return PlaceScanResult(
+            place="nationalsim_store",
+            status="EMPTY",
+            items_checked=0,
+            raw_hits=0,
+            reason="Store export is reachable but contains 0 items",
+        )
 
     hits: list[str] = []
     for item in entries + feedback + resolutions:
@@ -209,6 +217,15 @@ async def scan_ashfall_postgres(
             "SELECT id, payload FROM national_outbox WHERE run_id = $1",
             run_id,
         )
+        if len(rows) == 0:
+            return PlaceScanResult(
+                place="ashfall_postgres",
+                status="EMPTY",
+                items_checked=0,
+                raw_hits=0,
+                reason=f"national_outbox is reachable but contains 0 rows for run_id '{run_id}'",
+            )
+
         hits: list[str] = []
         for row in rows:
             payload_str = (
@@ -297,6 +314,15 @@ async def scan_kafka_payloads(
                 hits.extend(find_raw_identifiers_in_text(val_text, known_raw_identifiers))
                 hits.extend(find_raw_identifiers_in_text(key_text, known_raw_identifiers))
 
+        if items_checked == 0:
+            return PlaceScanResult(
+                place="kafka_payloads",
+                status="EMPTY",
+                items_checked=0,
+                raw_hits=0,
+                reason=f"Kafka is reachable but contains 0 messages on topics {topics} for run_id '{run_id}'",
+            )
+
         return PlaceScanResult(
             place="kafka_payloads",
             status="CHECKED",
@@ -312,7 +338,8 @@ async def scan_logs_and_loki(
     run_id: str,
     known_raw_identifiers: set[str],
     local_log_lines: list[str] | None = None,
-    loki_url: str = "http://localhost:3100",
+    loki_url: str | None = "http://localhost:3100",
+    place_name: str = "logs_and_loki",
 ) -> PlaceScanResult:
     """Audits local JSON logs and queries Loki HTTP query API for raw identifiers."""
     items_checked = 0
@@ -326,43 +353,53 @@ async def scan_logs_and_loki(
             items_checked += 1
             hits.extend(find_raw_identifiers_in_text(line, known_raw_identifiers))
 
-    # 2. Query Loki HTTP query API
-    try:
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            resp = await client.get(
-                f"{loki_url.rstrip('/')}/loki/api/v1/query_range",
-                params={"query": f'{{environment=~".+"}} |= "{run_id}"', "limit": 100},
-            )
-            if resp.status_code == 200:
-                loki_reachable = True
-                data = resp.json()
-                streams = data.get("data", {}).get("result", [])
-                for stream in streams:
-                    for val in stream.get("values", []):
-                        items_checked += 1
-                        line_text = val[1] if len(val) > 1 else ""
-                        hits.extend(find_raw_identifiers_in_text(line_text, known_raw_identifiers))
-            else:
-                loki_error = f"Loki returned HTTP {resp.status_code}"
-    except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError, OSError) as err:
-        loki_error = f"Loki unreachable: {type(err).__name__}"
+    # 2. Query Loki HTTP query API if configured
+    if loki_url is not None:
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                resp = await client.get(
+                    f"{loki_url.rstrip('/')}/loki/api/v1/query_range",
+                    params={"query": f'{{environment=~".+"}} |= "{run_id}"', "limit": 100},
+                )
+                if resp.status_code == 200:
+                    loki_reachable = True
+                    data = resp.json()
+                    streams = data.get("data", {}).get("result", [])
+                    for stream in streams:
+                        for val in stream.get("values", []):
+                            items_checked += 1
+                            line_text = val[1] if len(val) > 1 else ""
+                            hits.extend(find_raw_identifiers_in_text(line_text, known_raw_identifiers))
+                else:
+                    loki_error = f"Loki returned HTTP {resp.status_code}"
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError, OSError) as err:
+            loki_error = f"Loki unreachable: {type(err).__name__}"
 
     # If local logs were not supplied and Loki was not reached, report NOT CHECKED
     if local_log_lines is None and not loki_reachable:
         return PlaceScanResult(
-            place="logs_and_loki",
+            place=place_name,
             status="NOT CHECKED",
             items_checked=0,
             raw_hits=0,
             reason=loki_error or "Logs and Loki unreachable",
         )
 
+    if items_checked == 0:
+        return PlaceScanResult(
+            place=place_name,
+            status="EMPTY",
+            items_checked=0,
+            raw_hits=0,
+            reason=f"Logging source is reachable but contains 0 log records for run_id '{run_id}'",
+        )
+
     return PlaceScanResult(
-        place="logs_and_loki",
+        place=place_name,
         status="CHECKED",
         items_checked=items_checked,
         raw_hits=len(hits),
-        reason=None if loki_reachable else f"Checked local logs only ({loki_error})",
+        reason=None if (loki_reachable or loki_url is None) else f"Checked local logs only ({loki_error})",
         details=hits[:20],
     )
 
@@ -370,8 +407,9 @@ async def scan_logs_and_loki(
 async def scan_tempo_spans(
     run_id: str,
     known_raw_identifiers: set[str],
-    tempo_url: str = "http://localhost:3200",
+    tempo_url: str | None = "http://localhost:3200",
     local_spans: list[dict[str, Any]] | None = None,
+    place_name: str = "tempo_spans",
 ) -> PlaceScanResult:
     """Audits Tempo HTTP search API and local span attributes for raw identifiers."""
     items_checked = 0
@@ -385,41 +423,51 @@ async def scan_tempo_spans(
             items_checked += 1
             hits.extend(_scan_json_object(span, known_raw_identifiers))
 
-    # 2. Query Tempo HTTP search API
-    try:
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            resp = await client.get(
-                f"{tempo_url.rstrip('/')}/api/search",
-                params={"tags": f"run_id={run_id}", "limit": 50},
-            )
-            if resp.status_code == 200:
-                tempo_reachable = True
-                data = resp.json()
-                traces = data.get("traces", [])
-                items_checked += len(traces)
-                for trace in traces:
-                    hits.extend(_scan_json_object(trace, known_raw_identifiers))
-            else:
-                tempo_error = f"Tempo search returned HTTP {resp.status_code}"
-    except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError, OSError) as err:
-        tempo_error = f"Tempo unreachable at {tempo_url}: {type(err).__name__}"
+    # 2. Query Tempo HTTP search API if configured
+    if tempo_url is not None:
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                resp = await client.get(
+                    f"{tempo_url.rstrip('/')}/api/search",
+                    params={"tags": f"run_id={run_id}", "limit": 50},
+                )
+                if resp.status_code == 200:
+                    tempo_reachable = True
+                    data = resp.json()
+                    traces = data.get("traces", [])
+                    items_checked += len(traces)
+                    for trace in traces:
+                        hits.extend(_scan_json_object(trace, known_raw_identifiers))
+                else:
+                    tempo_error = f"Tempo search returned HTTP {resp.status_code}"
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError, OSError) as err:
+            tempo_error = f"Tempo unreachable at {tempo_url}: {type(err).__name__}"
 
     # If local spans were not supplied and Tempo was not reached, report NOT CHECKED
     if local_spans is None and not tempo_reachable:
         return PlaceScanResult(
-            place="tempo_spans",
+            place=place_name,
             status="NOT CHECKED",
             items_checked=0,
             raw_hits=0,
             reason=tempo_error or "Tempo unreachable",
         )
 
+    if items_checked == 0:
+        return PlaceScanResult(
+            place=place_name,
+            status="EMPTY",
+            items_checked=0,
+            raw_hits=0,
+            reason=f"Tracing source is reachable but contains 0 spans for run_id '{run_id}'",
+        )
+
     return PlaceScanResult(
-        place="tempo_spans",
+        place=place_name,
         status="CHECKED",
         items_checked=items_checked,
         raw_hits=len(hits),
-        reason=None if tempo_reachable else f"Checked local spans only ({tempo_error})",
+        reason=None if (tempo_reachable or tempo_url is None) else f"Checked local spans only ({tempo_error})",
         details=hits[:20],
     )
 
@@ -432,8 +480,9 @@ async def scan_all_five_places(
     local_spans: list[dict[str, Any]] | None = None,
     database_url: str | None = None,
     kafka_servers: str | None = None,
-    loki_url: str = "http://localhost:3100",
-    tempo_url: str = "http://localhost:3200",
+    loki_url: str | None = "http://localhost:3100",
+    tempo_url: str | None = "http://localhost:3200",
+    mode: str = "full",
 ) -> RawScanReport:
     """Runs concurrent audit across all five candidate data planes for a run."""
     # Place 1: Store export
@@ -445,23 +494,57 @@ async def scan_all_five_places(
     # Place 3: Kafka
     res_kafka = await scan_kafka_payloads(run_id, known_raw_identifiers, kafka_servers)
 
-    # Place 4: Logs & Loki
-    res_logs = await scan_logs_and_loki(run_id, known_raw_identifiers, local_log_lines, loki_url)
-
-    # Place 5: Tempo
-    res_tempo = await scan_tempo_spans(run_id, known_raw_identifiers, tempo_url, local_spans)
-
-    places = {
-        "nationalsim_store": res_store,
-        "ashfall_postgres": res_pg,
-        "kafka_payloads": res_kafka,
-        "logs_and_loki": res_logs,
-        "tempo_spans": res_tempo,
-    }
+    if mode == "quick":
+        # Quick mode (CI: Postgres and Redpanda only):
+        # Places 4 and 5 are audited from local run logs and spans without querying Loki or Tempo.
+        res_logs = await scan_logs_and_loki(
+            run_id=run_id,
+            known_raw_identifiers=known_raw_identifiers,
+            local_log_lines=local_log_lines,
+            loki_url=None,
+            place_name="local_logs",
+        )
+        res_tempo = await scan_tempo_spans(
+            run_id=run_id,
+            known_raw_identifiers=known_raw_identifiers,
+            tempo_url=None,
+            local_spans=local_spans,
+            place_name="local_spans",
+        )
+        places = {
+            "nationalsim_store": res_store,
+            "ashfall_postgres": res_pg,
+            "kafka_payloads": res_kafka,
+            "local_logs": res_logs,
+            "local_spans": res_tempo,
+        }
+    else:
+        # Full mode: queries live Loki and live Tempo by run_id
+        res_logs = await scan_logs_and_loki(
+            run_id=run_id,
+            known_raw_identifiers=known_raw_identifiers,
+            local_log_lines=local_log_lines,
+            loki_url=loki_url,
+            place_name="logs_and_loki",
+        )
+        res_tempo = await scan_tempo_spans(
+            run_id=run_id,
+            known_raw_identifiers=known_raw_identifiers,
+            tempo_url=tempo_url,
+            local_spans=local_spans,
+            place_name="tempo_spans",
+        )
+        places = {
+            "nationalsim_store": res_store,
+            "ashfall_postgres": res_pg,
+            "kafka_payloads": res_kafka,
+            "logs_and_loki": res_logs,
+            "tempo_spans": res_tempo,
+        }
 
     total_items = sum(p.items_checked for p in places.values())
     total_hits = sum(p.raw_hits for p in places.values())
-    # All clean strictly requires every place was CHECKED and had 0 hits
+    # All clean strictly requires every place was CHECKED (>0 items) and had 0 hits
     all_clean = all(p.is_clean() for p in places.values())
 
     return RawScanReport(
@@ -481,8 +564,9 @@ def scan_all_five_places_sync(
     local_spans: list[dict[str, Any]] | None = None,
     database_url: str | None = None,
     kafka_servers: str | None = None,
-    loki_url: str = "http://localhost:3100",
-    tempo_url: str = "http://localhost:3200",
+    loki_url: str | None = "http://localhost:3100",
+    tempo_url: str | None = "http://localhost:3200",
+    mode: str = "full",
 ) -> RawScanReport:
     """Synchronous entry point for audit invocation."""
     return asyncio.run(
@@ -496,6 +580,7 @@ def scan_all_five_places_sync(
             kafka_servers=kafka_servers,
             loki_url=loki_url,
             tempo_url=tempo_url,
+            mode=mode,
         )
     )
 

@@ -100,3 +100,16 @@ async def test_unreachable_place_is_not_checked_not_clean() -> None:
     assert report.places["tempo_spans"].status == "NOT CHECKED"
     # Even though store and logs have 0 hits, overall status MUST NOT be clean
     assert report.all_clean is False
+
+
+def test_reachable_place_with_no_items_is_empty_and_not_clean() -> None:
+    """Proves that a reachable data plane with zero items is marked EMPTY and not clean."""
+    empty_store = {"entries": [], "feedback": [], "resolutions": []}
+    result = scan_nationalsim_store(empty_store, known_raw_identifiers=set())
+    assert result.status == "EMPTY"
+    assert result.items_checked == 0
+    assert result.raw_hits == 0
+    assert result.reason is not None
+    assert "0 items" in result.reason
+    assert not result.is_clean()
+
