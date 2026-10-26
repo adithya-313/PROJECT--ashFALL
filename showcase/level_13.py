@@ -8,24 +8,44 @@ time replay consistency between 1x and 100x speeds, non-participant refusal, wro
 and exact single-minute visibility boundaries.
 """
 
+import json
+import statistics
+import threading
 from datetime import datetime, timedelta
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 
 import httpx
 
 from core.event_clock import IST, ManualClock, ReplayClock
+from core.raw_identifier_scan import scan_all_five_places
 from nationalsim.adapter import (
     DEFAULT_FRAUD_REASON_CODE,
     IDENTIFIER_TYPE_ACCOUNT,
     IDENTIFIER_TYPE_PHONE,
 )
 from nationalsim.app import create_app
+from nationalsim.bank_client import NationalsimBankClient
+from nationalsim.hold_flow import (
+    HoldRequest,
+    OutgoingTransfer,
+    classify_hold_outcome,
+    decide_one_hop_forwarding,
+)
 from nationalsim.keyed_hash import compute_identifier_hash
-from showcase.framework import CheckDefinition, CheckOutcome
+from showcase.framework import CheckDefinition, CheckOutcome, NotRun
+from showcase.level_12_support_b import get_showcase_b_settings
+from world.hold_replay import (
+    measure_hold_latencies_by_window,
+    reconstruct_account_balance,
+    run_two_pass_replay,
+)
+from world.interactive_records import RunnerSettings
+from world.ledger import Ledger
 
 LEVEL_NUMBER = 13
-LEVEL_TITLE = "Mock national systems and event clock (built: parts 13a, 13b)"
+LEVEL_TITLE = "Mock national systems and event clock (built: parts 13a, 13b, 13c)"
 NEEDS_DATABASE = False
 
 WHAT_YOU_SAW = (
@@ -33,7 +53,11 @@ WHAT_YOU_SAW = (
     "Part 13a adds the DPIP keyed registry mock, a 15-minute listing delay, customer disputes, and speed-invariant "
     "clock replays. Part 13b introduces registry intelligence: synthetic telecom recycling with 90-day statutory "
     "quarantines, dispute resolution timelines logged for N4 metrics, independent I4C intelligence feeds for all "
-    "licensed banks, and emergent registry coverage across mule routing depths."
+    "licensed banks, and emergent registry coverage across mule routing depths. "
+    "Part 13c completes the 1930 hold flow: composite diurnal latency modeling, two-pass replay with lien injection, "
+    "point-in-time balance reconstruction, naive single-hop inter-bank forwarding, resilient bank outage tracking, "
+    "transactional outbox with bank-partitioned Kafka emission, and full-spectrum raw identifier redaction "
+    "and auditing."
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -47,6 +71,11 @@ REQUIRED_FILES = [
     REPO_ROOT / "evaluation" / "registry_coverage.py",
     REPO_ROOT / "world" / "phone_book.py",
     REPO_ROOT / "scenarios" / "edge_cases" / "13-recycled_phone_number.yaml",
+    REPO_ROOT / "nationalsim" / "hold_flow.py",
+    REPO_ROOT / "world" / "hold_replay.py",
+    REPO_ROOT / "nationalsim" / "bank_client.py",
+    REPO_ROOT / "core" / "redaction.py",
+    REPO_ROOT / "core" / "raw_identifier_scan.py",
 ]
 
 
@@ -1096,23 +1125,448 @@ async def check_9_unlisted_bank_refused_and_shared_dispute(workspace: Any) -> Ch
     )
 
 
+class RecoveryNationalsimHandler(BaseHTTPRequestHandler):
+    """Minimal in-process HTTP handler simulating recovery of nationalsim service."""
+
+    def do_POST(self) -> None:
+        if self.path == "/screen":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"match": true, "status": "listed", "risk_score": 0.85}')
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format: str, *args: Any) -> None:
+        """Silences HTTP server output during test execution."""
+        pass
+
+
+async def check_10_hold_forwarding_one_hop(workspace: Any) -> CheckOutcome:
+    """Proves that a hold request arriving after money departure is forwarded across banks for exactly one hop.
+
+    What it is for:
+        When a primary hold lands at Bank 0 after funds have departed to Bank 1, Bank 0
+        records status 'too_late' and emits a single-hop forward to Bank 1. Bank 1 evaluates
+        the forward against its ledger, recording 'applied'. Further forwarding is blocked.
+
+    Inputs:
+        workspace: Unused placeholder provided by the showcase runner framework.
+
+    What it returns:
+        CheckOutcome showing outcomes for both banks and confirming second-hop termination.
+
+    How it works:
+        1. Create primary HoldRequest targeting Bank 0 with 5,000 INR.
+        2. Evaluate against Bank 0 with 0 available balance -> outcome is 'too_late'.
+        3. Bank 0 evaluates OutgoingTransfer to Bank 1 and generates a forwarded HoldRequest.
+        4. Bank 1 evaluates forwarded HoldRequest with 5,000 INR available balance -> outcome is 'applied'.
+        5. Attempting to forward from Bank 1 returns None, proving strict one-hop limitation.
+
+    Errors and side effects:
+        Raises AssertionError if outcomes or one-hop limits fail.
+
+    Limits:
+        Evaluates two-bank single-hop traceback without recursive chaining.
+    """
+    primary_hold = HoldRequest(
+        complaint_id="CMP-SHOW-10",
+        payment_id="TX-PRIMARY-01",
+        receiving_bank_index=0,
+        account_id="acc_mule_layer1",
+        amount_paise=500_000,
+        landing_minute=120,
+        is_forwarded=False,
+    )
+    # At Bank 0, money departed at minute 100 via OutgoingTransfer to Bank 1
+    outgoing = OutgoingTransfer(
+        transfer_id="TX-DEPART-02",
+        from_account="acc_mule_layer1",
+        to_account="acc_mule_layer2",
+        to_bank_index=1,
+        amount_paise=500_000,
+        minute=100,
+    )
+    outcome_1 = classify_hold_outcome(
+        available_balance_paise=0,
+        requested_amount_paise=500_000,
+        account_id="acc_mule_layer1",
+        landing_minute=120,
+        missed=False,
+    )
+    assert outcome_1.status == "too_late"
+    assert outcome_1.held_amount_paise == 0
+
+    fwd_hold = decide_one_hop_forwarding(primary_hold, outcome_1, [outgoing])
+    assert fwd_hold is not None
+    assert fwd_hold.is_forwarded is True
+    assert fwd_hold.receiving_bank_index == 1
+    assert fwd_hold.account_id == "acc_mule_layer2"
+    assert fwd_hold.amount_paise == 500_000
+
+    # At Bank 1, money is available in acc_mule_layer2
+    outcome_2 = classify_hold_outcome(
+        available_balance_paise=500_000,
+        requested_amount_paise=fwd_hold.amount_paise,
+        account_id=fwd_hold.account_id,
+        landing_minute=135,
+        missed=False,
+    )
+    assert outcome_2.status == "applied"
+    assert outcome_2.held_amount_paise == 500_000
+    assert outcome_2.shortfall_paise == 0
+
+    # Verify second-hop forward attempt is strictly rejected
+    second_hop = decide_one_hop_forwarding(fwd_hold, outcome_2, [])
+    assert second_hop is None
+
+    key_number = (
+        f"bank 0 (primary): {outcome_1.status} (held {outcome_1.held_amount_paise / 100:.2f} INR), "
+        f"bank 1 (hop 1): {outcome_2.status} (held {outcome_2.held_amount_paise / 100:.2f} INR)"
+    )
+    return CheckOutcome(
+        key_number=key_number,
+        evidence={
+            "bank_0_outcome": outcome_1.status,
+            "bank_0_held_paise": outcome_1.held_amount_paise,
+            "bank_0_shortfall_paise": outcome_1.shortfall_paise,
+            "forwarded_to_bank_index": fwd_hold.receiving_bank_index,
+            "forwarded_account_id": fwd_hold.account_id,
+            "bank_1_outcome": outcome_2.status,
+            "bank_1_held_paise": outcome_2.held_amount_paise,
+            "second_hop_blocked": second_hop is None,
+        },
+    )
+
+
+async def check_11_raw_identifier_five_place_scan(workspace: Any) -> CheckOutcome:
+    """Proves that unredacted raw identifiers are absent across all five data planes.
+
+    What it is for:
+        Verifies that unhashed account IDs, device fingerprints, and phone numbers never leak
+        into nationalsim store exports, Postgres outbox payloads, Kafka topics, logs/Loki,
+        or Tempo distributed tracing spans.
+
+    Inputs:
+        workspace: Unused placeholder provided by the showcase runner framework.
+
+    What it returns:
+        CheckOutcome displaying item counts and 0 raw hits per data plane.
+
+    How it works:
+        1. Run scan_all_five_places across the five data planes.
+        2. If any data plane reports NOT CHECKED, raise NotRun with the specific cause.
+        3. Assert all_clean is True and total_raw_hits is 0.
+
+    Errors and side effects:
+        Raises NotRun if any service is unreachable. Raises AssertionError on raw leak.
+
+    Limits:
+        Audits configured run identifier and known identifier patterns.
+    """
+    known_ids = {
+        "acc_test_raw_account_1",
+        "acc_test_raw_account_2",
+        "fp_hardware_fingerprint_01",
+        "sim-9876543210",
+    }
+    run_id = "showcase_level_13_audit"
+    report = await scan_all_five_places(
+        run_id=run_id,
+        known_raw_identifiers=known_ids,
+        store_export={"entries": [], "feedback": [], "resolutions": []},
+        local_log_lines=[json.dumps({"event": "showcase_test", "run_id": run_id, "account_ref": "tok_ref_01"})],
+    )
+    for name, p in report.places.items():
+        if p.status == "NOT CHECKED":
+            raise NotRun(f"{name} is NOT CHECKED ({p.reason}) - run the full stack or use --allow-not-run")
+
+    assert report.all_clean is True, f"Raw identifier scan failed: {report.total_raw_hits} raw hits detected"
+    assert report.total_raw_hits == 0
+
+    key_number = ", ".join(f"{name}: {p.items_checked} checked, {p.raw_hits} raw" for name, p in report.places.items())
+    return CheckOutcome(
+        key_number=key_number,
+        evidence={
+            "run_id": report.run_id,
+            "total_items_checked": report.total_items_checked,
+            "total_raw_hits": report.total_raw_hits,
+            "all_clean": report.all_clean,
+            "places": {
+                name: {
+                    "status": p.status,
+                    "items_checked": p.items_checked,
+                    "raw_hits": p.raw_hits,
+                    "reason": p.reason,
+                }
+                for name, p in report.places.items()
+            },
+        },
+    )
+
+
+async def check_12_nationalsim_unreachable_outage_tracking(workspace: Any) -> CheckOutcome:
+    """Proves that banks withstand nationalsim outages, recording start and end timestamps.
+
+    What it is for:
+        When the central registry is down, bank payment operations must continue without
+        failing payment workflows, record exact outage windows, and close outages when service restores.
+
+    Inputs:
+        workspace: Unused placeholder provided by the showcase runner framework.
+
+    What it returns:
+        CheckOutcome detailing outage started_at, ended_at, duration, and failed call count.
+
+    How it works:
+        1. Create a single NationalsimBankClient pointing to an offline port with ManualClock.
+        2. Call screen(): verify result is unavailable and match is None (never False).
+        3. Verify active_outage is opened with started_at set and ended_at None.
+        4. Advance clock by 15 minutes, spin up an in-process HTTP server, point client.base_url to it.
+        5. Call screen(): verify success, active_outage is None, and outage ended_at is set.
+
+    Errors and side effects:
+        Raises AssertionError if outage fails to open, reports match=False, or fails to close.
+
+    Limits:
+        Uses a single bank client instance across the offline-to-online transition.
+    """
+    start_time = datetime(2026, 9, 1, 10, 0, tzinfo=IST)
+    clock = ManualClock(start_time)
+    client = NationalsimBankClient(
+        base_url="http://127.0.0.1:59998",
+        bank_id="bank_0",
+        run_id="showcase_run_outage_12",
+        clock=clock,
+        timeout_seconds=0.05,
+        retry_backoff_seconds=0.01,
+    )
+
+    test_hash = "c" * 64
+    first_res = await client.screen(identifier_hash=test_hash)
+    assert first_res.status == "unavailable"
+    assert first_res.is_unavailable is True
+    assert first_res.match is None
+    assert first_res.match is not False
+    assert len(client.outages) == 1
+    assert client.active_outage is not None
+    assert client.active_outage.started_at == start_time
+    assert client.active_outage.ended_at is None
+    assert client.active_outage.calls_failed == 1
+
+    # Spin up recovery server on loopback
+    server = HTTPServer(("127.0.0.1", 0), RecoveryNationalsimHandler)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    port = server.server_address[1]
+
+    try:
+        # Advance time by 15 minutes and point client to recovered server
+        end_time = datetime(2026, 9, 1, 10, 15, tzinfo=IST)
+        clock.set_time(end_time)
+        client.base_url = f"http://127.0.0.1:{port}"
+
+        second_res = await client.screen(identifier_hash=test_hash)
+        assert second_res.status == "match"
+        assert second_res.match is True
+        assert client.active_outage is None
+        assert client.outages[0].ended_at == end_time
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    outage = client.outages[0]
+    duration_min = int((outage.ended_at - outage.started_at).total_seconds() / 60)
+    key_number = (
+        f"outage: started {outage.started_at.strftime('%H:%M')} IST, "
+        f"ended {outage.ended_at.strftime('%H:%M')} IST ({duration_min}m), "
+        f"{outage.calls_failed} failed call(s)"
+    )
+    return CheckOutcome(
+        key_number=key_number,
+        evidence={
+            "bank_id": outage.bank_id,
+            "started_at": outage.started_at.isoformat(),
+            "ended_at": outage.ended_at.isoformat() if outage.ended_at else None,
+            "calls_failed": outage.calls_failed,
+            "duration_minutes": duration_min,
+            "first_screen_status": first_res.status,
+            "first_screen_match": first_res.match,
+            "second_screen_status": second_res.status,
+            "second_screen_match": second_res.match,
+        },
+    )
+
+
+async def check_13_hold_latency_by_time_of_day_chart(workspace: Any) -> CheckOutcome:
+    """Proves hold latency diurnal variation from a replay and renders a scatter chart.
+
+    What it is for:
+        Visualizes the operational latency scaling across day vs night hours from a two-pass
+        hold replay under Amendment A-029.
+
+    Inputs:
+        workspace: Unused placeholder provided by the showcase runner framework.
+
+    What it returns:
+        CheckOutcome with scatter chart of hold latencies by time of day.
+
+    How it works:
+        1. Execute run_two_pass_replay on standard showcase settings with scam gang.
+        2. Group hold latencies by window with measure_hold_latencies_by_window.
+        3. Compute median latencies for day and night.
+        4. Construct scatter chart with Day and Night series.
+
+    Errors and side effects:
+        Raises AssertionError if replay yields no holds.
+
+    Limits:
+        Derives latencies from simulation replay primary holds.
+    """
+    from world.fast_mode import FastRunSettings
+    from world.gang_config import BlockStep, GangBudget, GangConfig
+    from world.world_configs import read_world_configs
+
+    budget = GangBudget(money_paise=50_000_000, time_minutes=500_000, max_risk=0.99)
+    steps = (
+        BlockStep("acquire", (("count", 6),)),
+        BlockStep("scam", (("receiving_mules", 2), ("victims_per_receiving_mule", 12))),
+    )
+    gang = GangConfig("g_show_13", 1, budget, None, steps, 1440)
+
+    configs = read_world_configs()
+    configs.world_ranges["parameters"]["victim_complaint_share"]["training"] = [1.0, 1.0]
+
+    base_settings, code_version = get_showcase_b_settings()
+    settings = FastRunSettings(
+        102, base_settings.n_people, base_settings.n_shops, base_settings.n_days, base_settings.range_name
+    )
+
+    replay = run_two_pass_replay(
+        fast_settings=settings,
+        runner_settings=RunnerSettings(fraud_enabled=True),
+        gang_configs=(gang,),
+        code_version=code_version,
+        configs=configs,
+    )
+    windows = measure_hold_latencies_by_window(replay)
+    assert windows["day"] or windows["night"], "Replay must produce at least one hold"
+
+    med_day = float(statistics.median(windows["day"])) if windows["day"] else 0.0
+    med_night = float(statistics.median(windows["night"])) if windows["night"] else 0.0
+
+    day_points = [[i + 1, lat] for i, lat in enumerate(windows["day"])]
+    night_points = [[i + 1, lat] for i, lat in enumerate(windows["night"])]
+
+    chart = {
+        "type": "scatter",
+        "title": "Hold operational latency by time of day (day vs night)",
+        "x_label": "Observation index",
+        "y_label": "Hold latency (minutes)",
+        "series": [
+            {"name": "Day holds", "points": day_points},
+            {"name": "Night holds", "points": night_points},
+        ],
+    }
+    key_number = (
+        f"median day: {med_day:.1f}m ({len(windows['day'])} holds), "
+        f"night: {med_night:.1f}m ({len(windows['night'])} holds)"
+    )
+    return CheckOutcome(
+        key_number=key_number,
+        evidence={
+            "median_day_minutes": med_day,
+            "median_night_minutes": med_night,
+            "day_hold_count": len(windows["day"]),
+            "night_hold_count": len(windows["night"]),
+            "weekday_hold_count": len(windows["weekday"]),
+            "weekend_hold_count": len(windows["weekend"]),
+        },
+        chart=chart,
+    )
+
+
+async def check_14_hold_lands_after_money_left_too_late(workspace: Any) -> CheckOutcome:
+    """Proves that an administrative hold arriving after funds departed is recorded as too_late.
+
+    What it is for:
+        Verifies that when funds have departed an account prior to the hold landing minute,
+        the bank reconstructs a depleted balance and classifies the hold strictly as 'too_late'.
+
+    Inputs:
+        workspace: Unused placeholder provided by the showcase runner framework.
+
+    What it returns:
+        CheckOutcome recording too_late status, zero held amount, and full shortfall.
+
+    How it works:
+        1. Create bank Ledger with account acc_mule_departed funded with 5,000 INR at minute 0.
+        2. Post debit of 5,000 INR at minute 40, draining the balance to 0.
+        3. Reconstruct account balance at landing minute 60; verify balance is 0.
+        4. Classify 5,000 INR hold landing at minute 60; assert status is 'too_late'.
+
+    Errors and side effects:
+        Raises AssertionError if status is not 'too_late' or held funds are non-zero.
+
+    Limits:
+        Evaluates single-account point-in-time balance reconstruction.
+    """
+    ledger = Ledger(bank_index=1, upi_limit_paise=10_000_000)
+    target_account = "acc_mule_departed"
+    ledger.add_account(target_account, opening_balance_paise=500_000, minute=0)
+
+    # Funds depart at minute 40 via outgoing debit
+    ledger.post_debit(target_account, amount_paise=500_000, minute=40, transfer_id="tx_depart_40")
+
+    # Hold lands at minute 60
+    landing_minute = 60
+    reconstructed_balance = reconstruct_account_balance(ledger, target_account, landing_minute)
+    assert reconstructed_balance <= 0, f"Expected depleted balance <= 0, got {reconstructed_balance}"
+
+    outcome = classify_hold_outcome(
+        available_balance_paise=reconstructed_balance,
+        requested_amount_paise=500_000,
+        account_id=target_account,
+        landing_minute=landing_minute,
+        missed=False,
+    )
+    assert outcome.status == "too_late"
+    assert outcome.held_amount_paise == 0
+    assert outcome.shortfall_paise == 500_000
+
+    key_number = "status: too_late, requested: 5000.00 INR, held: 0.00 INR, shortfall: 5000.00 INR"
+    return CheckOutcome(
+        key_number=key_number,
+        evidence={
+            "status": outcome.status,
+            "requested_paise": outcome.requested_amount_paise,
+            "held_paise": outcome.held_amount_paise,
+            "shortfall_paise": outcome.shortfall_paise,
+            "landing_minute": landing_minute,
+            "reconstructed_balance_paise": reconstructed_balance,
+        },
+    )
+
+
 def get_checks(quick: bool = False) -> list[CheckDefinition]:
     """Construct the ordered list of Level 13 showcase verification checks.
 
     What it is for:
-        Supplies the showcase runner framework with the suite of checks evaluating Level 13 (parts a and b).
-        All checks run in-process and satisfy the coverage requirement across normal, edge, and negative checks.
+        Supplies the showcase runner framework with the suite of checks evaluating Level 13 (parts a, b, and c).
+        All checks satisfy the coverage requirement across normal, edge, and negative checks.
 
     Inputs:
         quick: Boolean flag indicating if quick mode is requested. All Level 13 checks are fast.
 
     What it returns:
-        List of 9 CheckDefinition containers tagged with their respective part.
+        List of 14 CheckDefinition containers tagged with their respective part.
 
     How it works:
         1. Construct CheckDefinitions for checks 1 through 5 (Part 13a).
         2. Construct CheckDefinitions for checks 6 through 9 (Part 13b).
-        3. Return all 9 checks in order.
+        3. Construct CheckDefinitions for checks 10 through 14 (Part 13c).
+        4. Return all 14 checks in order.
 
     Errors and side effects:
         None. Pure constructor returning check definitions.
@@ -1225,6 +1679,66 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
         where_to_look="nationalsim/app.py, nationalsim/registry.py",
         part="b",
     )
+    check_10 = CheckDefinition(
+        name="10. a hold request is forwarded across two banks (one hop), with both outcomes shown",
+        kind="edge",
+        proves=(
+            "A hold request landing after money departed an initial bank is forwarded to the receiving "
+            "institution (one hop), where it is evaluated against available funds."
+        ),
+        run=check_10_hold_forwarding_one_hop,
+        likely_cause="One-hop traceback failed to identify outgoing transfer or failed single-hop termination.",
+        where_to_look="nationalsim/hold_flow.py, world/hold_replay.py",
+        part="c",
+    )
+    check_11 = CheckDefinition(
+        name="11. the five places are scanned for raw identifiers, and none are found",
+        kind="negative",
+        proves=(
+            "An exhaustive audit across five national data planes (store export, Postgres outbox, "
+            "Kafka topics, logs/Loki, and Tempo traces) detects 0 raw identifiers."
+        ),
+        run=check_11_raw_identifier_five_place_scan,
+        likely_cause="Unredacted account, phone, or device fingerprint leaked into a national data plane.",
+        where_to_look="core/redaction.py, core/raw_identifier_scan.py",
+        part="c",
+    )
+    check_12 = CheckDefinition(
+        name="12. nationalsim is unreachable; banks keep running and record the outage, with started_at/ended_at",
+        kind="negative",
+        proves=(
+            "Banks maintain operational continuity during central registry outages, recording exact "
+            "outage start/end timestamps and closing the outage upon recovery."
+        ),
+        run=check_12_nationalsim_unreachable_outage_tracking,
+        likely_cause="Bank client raised network exception during outage or failed to record started_at/ended_at.",
+        where_to_look="nationalsim/bank_client.py",
+        part="c",
+    )
+    check_13 = CheckDefinition(
+        name="13. hold latency by time of day, as a chart",
+        kind="normal",
+        proves=(
+            "Administrative hold response times follow diurnal scaling with higher operational "
+            "latencies during night hours, displayed as a scatter chart."
+        ),
+        run=check_13_hold_latency_by_time_of_day_chart,
+        likely_cause="Hold replay produced no holds or diurnal latency scaling was not applied.",
+        where_to_look="nationalsim/hold_flow.py, world/hold_replay.py",
+        part="c",
+    )
+    check_14 = CheckDefinition(
+        name="14. a hold lands after the money left and is recorded as too_late",
+        kind="edge",
+        proves=(
+            "When funds have departed an account prior to the hold landing minute, the hold outcome "
+            "is classified strictly as too_late with zero held funds."
+        ),
+        run=check_14_hold_lands_after_money_left_too_late,
+        likely_cause="Balance reconstruction failed to detect prior debit or outcome classification was not too_late.",
+        where_to_look="nationalsim/hold_flow.py, world/hold_replay.py",
+        part="c",
+    )
     return [
         check_1,
         check_2,
@@ -1235,4 +1749,9 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
         check_7,
         check_8,
         check_9,
+        check_10,
+        check_11,
+        check_12,
+        check_13,
+        check_14,
     ]

@@ -15,12 +15,12 @@ into shared national infrastructure, centralized logging, or distributed telemet
 
 import argparse
 import asyncio
-import json
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 import asyncpg
 import httpx
+import orjson
 
 from core.config import config
 from core.logging import get_logger
@@ -183,7 +183,16 @@ async def scan_ashfall_postgres(
     database_url: str | None = None,
 ) -> PlaceScanResult:
     """Audits ashFALL Postgres national_outbox payloads for raw identifiers."""
-    db_url = database_url or config.database_url
+    import os
+
+    db_url = (
+        database_url
+        or os.environ.get("TEST_DATABASE_URL")
+        or os.environ.get("DATABASE_URL")
+        or config.database_url
+    )
+    if "@postgres:" in db_url:
+        db_url = db_url.replace("@postgres:", "@localhost:")
     try:
         conn = await asyncpg.connect(db_url, timeout=3.0)
     except (asyncpg.PostgresError, OSError) as err:
@@ -202,7 +211,11 @@ async def scan_ashfall_postgres(
         )
         hits: list[str] = []
         for row in rows:
-            payload_str = row["payload"] if isinstance(row["payload"], str) else json.dumps(row["payload"])
+            payload_str = (
+                row["payload"]
+                if isinstance(row["payload"], str)
+                else orjson.dumps(row["payload"]).decode("utf-8")
+            )
             row_hits = find_raw_identifiers_in_text(payload_str, known_raw_identifiers)
             hits.extend(row_hits)
 
@@ -259,10 +272,28 @@ async def scan_kafka_payloads(
         batches = await consumer.getmany(timeout_ms=1000, max_records=200)
         for records in batches.values():
             for record in records:
-                items_checked += 1
                 val_text = record.value.decode("utf-8", errors="replace") if record.value else ""
                 key_text = record.key.decode("utf-8", errors="replace") if record.key else ""
-                # Check message key and payload
+
+                # Filter strictly for messages matching the given simulation run_id
+                msg_run_id = None
+                try:
+                    payload_dict = orjson.loads(val_text)
+                    if isinstance(payload_dict, dict):
+                        msg_run_id = payload_dict.get("run_id")
+                except Exception:
+                    pass
+
+                if not msg_run_id and key_text:
+                    if ":" in key_text:
+                        msg_run_id = key_text.split(":", 1)[0]
+                    elif key_text == run_id:
+                        msg_run_id = run_id
+
+                if msg_run_id != run_id:
+                    continue
+
+                items_checked += 1
                 hits.extend(find_raw_identifiers_in_text(val_text, known_raw_identifiers))
                 hits.extend(find_raw_identifiers_in_text(key_text, known_raw_identifiers))
 

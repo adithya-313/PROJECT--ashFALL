@@ -95,6 +95,35 @@ PART_CONFIGS: dict[str, dict[str, Any]] = {
         ),
         "REGISTER_IDS": ("13-5", "13-9", "13-10"),
     },
+    "13c": {
+        "INTERFACE_MODULES": (
+            "nationalsim.hold_flow",
+            "world.hold_replay",
+            "nationalsim.bank_client",
+            "nationalsim.national_outbox",
+            "core.redaction",
+            "core.raw_identifier_scan",
+        ),
+        "RECORDS_MODULE": (
+            "nationalsim.hold_flow",
+            "world.hold_replay",
+            "nationalsim.bank_client",
+            "core.raw_identifier_scan",
+        ),
+        "RECORD_NAMES": (
+            "HoldRequest",
+            "HoldOutcome",
+            "OutgoingTransfer",
+            "HoldReplayResult",
+            "OutageEvent",
+            "PlaceScanResult",
+            "RawScanReport",
+        ),
+        "CONFIG_FILES": (
+            "config/nationalsim.yaml",
+        ),
+        "REGISTER_IDS": ("13-2", "13-3", "13-16", "13-17"),
+    },
 }
 
 
