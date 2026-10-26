@@ -8,18 +8,31 @@ time replay consistency between 1x and 100x speeds, non-participant refusal, wro
 and exact single-minute visibility boundaries.
 """
 
-import json
+import asyncio
+import logging
 import statistics
 import threading
-from datetime import datetime, timedelta
+import time
+import uuid
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 
+import asyncpg
 import httpx
+from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from core.event_clock import IST, ManualClock, ReplayClock
-from core.raw_identifier_scan import scan_all_five_places
+from api.services.outbox_relay import start_producer
+from core.config import config
+from core.event_clock import IST, ManualClock, ReplayClock, WallClock
+from core.logging import configure_logging, get_logger
+from core.raw_identifier_scan import scan_all_five_places, scan_nationalsim_store
 from nationalsim.adapter import (
     DEFAULT_FRAUD_REASON_CODE,
     IDENTIFIER_TYPE_ACCOUNT,
@@ -30,12 +43,18 @@ from nationalsim.bank_client import NationalsimBankClient
 from nationalsim.hold_flow import (
     HoldRequest,
     OutgoingTransfer,
+    build_hold_payload,
     classify_hold_outcome,
     decide_one_hop_forwarding,
 )
 from nationalsim.keyed_hash import compute_identifier_hash
+from nationalsim.national_outbox import relay_national_outbox, write_event
+from nationalsim.registry import RegistryCore
 from showcase.framework import CheckDefinition, CheckOutcome, NotRun
+from showcase.isolation import get_showcase_database_url
 from showcase.level_12_support_b import get_showcase_b_settings
+from world.fast_mode import FastRunSettings
+from world.gang_config import BlockStep, GangBudget, GangConfig
 from world.hold_replay import (
     measure_hold_latencies_by_window,
     reconstruct_account_balance,
@@ -43,6 +62,8 @@ from world.hold_replay import (
 )
 from world.interactive_records import RunnerSettings
 from world.ledger import Ledger
+from world.phone_book import build_phone_book
+from world.world_configs import read_world_configs
 
 LEVEL_NUMBER = 13
 LEVEL_TITLE = "Mock national systems and event clock (built: parts 13a, 13b, 13c)"
@@ -1240,86 +1261,358 @@ async def check_10_hold_forwarding_one_hop(workspace: Any) -> CheckOutcome:
     )
 
 
+class InMemoryLogHandler(logging.Handler):
+    """Captures structured JSON log records emitted during a simulation run."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.lines: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.lines.append(record.getMessage())
+
+
 def make_check_11(quick: bool) -> Any:
-    """Build check 11 for quick (CI mode) or full (whole live stack) mode."""
+    """Build check 11 for quick (CI mode) or full (whole live stack) mode.
+
+    Precedent from Level 8 (showcase/level_08.py):
+        - Lines 54-56: "Quick mode (used in CI) restores generated files instead of the real artifacts,
+          watches only Postgres, Redis and Redpanda for 20 seconds, and runs a smaller set of tests for
+          the first check; full mode uses the real artifacts and the whole stack."
+        - Lines 93-98: require_full_mode_stack() raises NotRun("the stack is not running (missing: ...)
+          - run: docker compose up -d --wait") when full stack components are missing.
+        - Lines 252-253: if not quick: require_full_mode_stack() gates full-stack auditing.
+
+    Under this precedent:
+        In quick mode (quick=True), Postgres and Redpanda are active in CI; places 4 and 5 audit the
+        in-process local JSON logs and local spans emitted during the real run ("local_logs" and "local_spans"),
+        with key_number explicitly noting that Loki and Tempo were not queried.
+        In full mode (quick=False), live Loki (http://localhost:3100) and live Tempo (http://localhost:3200)
+        are queried live by run_id; if either is unreachable or returns 0 items for the run, NotRun is raised.
+    """
 
     async def run_check(workspace: Any) -> CheckOutcome:
-        """Proves that unredacted raw identifiers are absent across all five data planes.
+        """Proves that unredacted raw identifiers are absent across all five data planes for a real run.
 
         What it is for:
-            Verifies that unhashed account IDs, device fingerprints, and phone numbers never leak
-            into nationalsim store exports, Postgres outbox payloads, Kafka topics, logs/Loki,
-            or Tempo distributed tracing spans.
+            Executes a real simulation run on the tiny fixture world and verifies that raw, unhashed
+            account identifiers, hardware device fingerprints, and customer telephone numbers never leak
+            into nationalsim store exports, Postgres outbox payloads, Kafka topics, logs, or traces.
 
         Inputs:
             workspace: Unused placeholder provided by the showcase runner framework.
 
         What it returns:
-            CheckOutcome displaying item counts and 0 raw hits per data plane.
+            CheckOutcome displaying per-plane item counts (>0) and 0 raw hits.
 
         How it works:
-            1. Run scan_all_five_places across the five data planes.
-               In quick mode (CI mode with Postgres and Redpanda only), local log lines and local
-               spans are supplied for audit so the check proves zero leaks on active services.
-               In full mode, the full live stack (including Loki and Tempo) is audited.
-            2. If any data plane reports NOT CHECKED, raise NotRun with the specific cause.
-            3. Assert all_clean is True and total_raw_hits is 0.
+            1. Executes the real 13c two-pass hold replay on the tiny fixture world with scam syndicate.
+            2. Collects all real account IDs, device fingerprints, and phone numbers involved in the run's
+               complaints, holds, and registry reports.
+            3. Verifies scanner efficacy by asserting that a deliberately planted raw identifier in a throwaway
+               data structure is detected.
+            4. Stages real hold requests and registry events in Postgres national_outbox and relays them to Kafka.
+            5. Ingests registry reports into nationalsim and captures emitted logs and exported spans.
+            6. In quick mode (CI precedent from Level 8 lines 54-56 and 93-98), audits local logs and spans.
+               In full mode, pushes logs to Loki, flushes spans to Tempo, and queries live Loki and Tempo by run_id.
+            7. Audits all five places, asserting items_checked > 0 and raw_hits == 0 for every place.
 
         Errors and side effects:
-            Raises NotRun if any service is unreachable. Raises AssertionError on raw leak.
+            Raises NotRun if full-stack services are unreachable or return 0 items.
+            Raises AssertionError if scanner misses planted leak or detects raw leak.
 
         Limits:
-            Audits configured run identifier and known identifier patterns.
+            Audits the synthetic entities generated during the isolated simulation run.
         """
-        known_ids = {
-            "acc_test_raw_account_1",
-            "acc_test_raw_account_2",
-            "fp_hardware_fingerprint_01",
-            "sim-9876543210",
-        }
-        run_id = "showcase_level_13_audit"
-        local_logs = [
-            json.dumps({"event": "showcase_test", "run_id": run_id, "account_ref": "tok_ref_01"}),
-        ]
-        local_spans = [
-            {"attributes": {"run_id": run_id, "account_ref": "tok_ref_01"}},
-        ] if quick else None
+        run_id = f"showcase-13c-{uuid.uuid4().hex[:8]}"
+        i4c_key = "local-dev-i4c-key-001"
+        dpip_key = "local-dev-dpip-key-001"
+        logger = get_logger("showcase.level_13.check_11")
 
-        report = await scan_all_five_places(
-            run_id=run_id,
-            known_raw_identifiers=known_ids,
-            store_export={"entries": [], "feedback": [], "resolutions": []},
-            local_log_lines=local_logs if quick else None,
-            local_spans=local_spans,
-        )
-        for name, p in report.places.items():
-            if p.status == "NOT CHECKED":
-                raise NotRun(f"{name} is NOT CHECKED ({p.reason}) - run the full stack or use --allow-not-run")
+        # 1. Setup logging capture
+        configure_logging("INFO")
+        log_handler = InMemoryLogHandler()
+        root_logger = logging.getLogger()
+        root_logger.addHandler(log_handler)
 
-        assert report.all_clean is True, f"Raw identifier scan failed: {report.total_raw_hits} raw hits detected"
-        assert report.total_raw_hits == 0
+        # 2. Setup tracer provider and span exporters
+        in_memory_exporter = InMemorySpanExporter()
+        provider = trace.get_tracer_provider()
+        if not isinstance(provider, TracerProvider):
+            provider = TracerProvider(resource=Resource.create({"service.name": "ashfall-showcase"}))
+            trace.set_tracer_provider(provider)
+        in_mem_processor = SimpleSpanProcessor(in_memory_exporter)
+        provider.add_span_processor(in_mem_processor)
 
-        key_number = ", ".join(
-            f"{name}: {p.items_checked} checked, {p.raw_hits} raw" for name, p in report.places.items()
-        )
-        return CheckOutcome(
-            key_number=key_number,
-            evidence={
-                "run_id": report.run_id,
-                "total_items_checked": report.total_items_checked,
-                "total_raw_hits": report.total_raw_hits,
-                "all_clean": report.all_clean,
-                "places": {
-                    name: {
-                        "status": p.status,
-                        "items_checked": p.items_checked,
-                        "raw_hits": p.raw_hits,
-                        "reason": p.reason,
-                    }
-                    for name, p in report.places.items()
+        tempo_processor = None
+        if not quick:
+            otlp_exporter = OTLPSpanExporter(endpoint="http://localhost:4318/v1/traces")
+            tempo_processor = BatchSpanProcessor(otlp_exporter)
+            provider.add_span_processor(tempo_processor)
+
+        tracer = trace.get_tracer("nationalsim.showcase")
+
+        try:
+            # 3. Run real two-pass replay
+            with tracer.start_as_current_span("two_pass_hold_replay") as span:
+                span.set_attribute("run_id", run_id)
+                logger.info("starting_two_pass_replay", run_id=run_id)
+
+                budget = GangBudget(money_paise=50_000_000, time_minutes=500_000, max_risk=0.99)
+                steps = (
+                    BlockStep("acquire", (("count", 6),)),
+                    BlockStep("scam", (("receiving_mules", 2), ("victims_per_receiving_mule", 12))),
+                )
+                gang = GangConfig("g_show_13c", 1, budget, None, steps, 1440)
+                configs = read_world_configs()
+                configs.world_ranges["parameters"]["victim_complaint_share"]["training"] = [1.0, 1.0]
+                base_settings, code_version = get_showcase_b_settings()
+                settings = FastRunSettings(
+                    102, base_settings.n_people, base_settings.n_shops, base_settings.n_days, base_settings.range_name
+                )
+
+                replay = run_two_pass_replay(
+                    fast_settings=settings,
+                    runner_settings=RunnerSettings(fraud_enabled=True),
+                    gang_configs=(gang,),
+                    code_version=code_version,
+                    configs=configs,
+                )
+                span.set_attribute("primary_holds_count", len(replay.primary_holds))
+                logger.info("two_pass_replay_completed", run_id=run_id, primary_holds=len(replay.primary_holds))
+
+            assert len(replay.primary_holds) > 0, "Simulation replay produced 0 holds"
+
+            # 4. Generate phone book and collect known raw identifiers
+            phone_book = build_phone_book(replay.pass2_output, run_seed=102)
+            hold_accounts = {h.account_id for h in replay.primary_holds}
+            event_dict = dict(zip(replay.pass2_output.result.payment_ids, replay.pass2_output.result.run_result.events))
+            victim_accounts = {
+                event_dict[h.payment_id].from_account
+                for h in replay.primary_holds
+                if h.payment_id in event_dict
+            }
+            involved_accounts = hold_accounts | victim_accounts
+
+            involved_fps = {
+                p.device.fingerprint
+                for p in replay.pass2_output.world.people
+                if p.account_id in involved_accounts and hasattr(p, "device") and p.device
+            }
+            involved_phones = {
+                rec.phone_number
+                for acc in involved_accounts
+                if (rec := phone_book.get_record(acc)) is not None
+            }
+            known_ids = involved_accounts | involved_fps | involved_phones
+            assert len(known_ids) > 0, "Known raw identifiers set is empty"
+
+            # 5. Planted leak test: prove scanner detects real raw identifier
+            planted_account = next(iter(hold_accounts))
+            throwaway_store = {
+                "entries": [{"planted_field": planted_account}],
+                "feedback": [],
+                "resolutions": [],
+            }
+            planted_res = scan_nationalsim_store(throwaway_store, known_ids)
+            assert planted_res.raw_hits > 0, "Scanner failed to detect deliberately planted raw identifier leak!"
+            assert planted_account in planted_res.details
+
+            # 6. Stage hold requests and registry events in national_outbox
+            db_url = get_showcase_database_url()
+            conn = await asyncpg.connect(db_url)
+            try:
+                with tracer.start_as_current_span("stage_national_outbox") as span:
+                    span.set_attribute("run_id", run_id)
+                    # Write real hold requests
+                    for h in replay.primary_holds:
+                        hold_payload = build_hold_payload(
+                            complaint_id=h.complaint_id,
+                            payment_id=h.payment_id,
+                            amount_paise=h.amount_paise,
+                            account_id=h.account_id,
+                            receiving_bank_index=h.receiving_bank_index,
+                            run_id=run_id,
+                            i4c_key=i4c_key,
+                        )
+                        await write_event(conn, "hold.requests", run_id, h.receiving_bank_index, hold_payload)
+                        logger.info(
+                            "staged_hold_request",
+                            run_id=run_id,
+                            complaint_id=h.complaint_id,
+                            account_ref=hold_payload["account_ref"],
+                        )
+
+                    # Write registry events for reported accounts
+                    for h in replay.primary_holds[:4]:
+                        mule_hash = compute_identifier_hash(
+                            key=dpip_key,
+                            run_id=run_id,
+                            identifier_type="account",
+                            raw_value=h.account_id,
+                            bank_index=h.receiving_bank_index,
+                        )
+                        reg_payload = {
+                            "report_id": f"rep-{uuid.uuid4().hex[:8]}",
+                            "identifier_hash": mule_hash,
+                            "identifier_type": "account",
+                            "reason_code": "fraud_mule",
+                            "bank_id": f"bank_{h.receiving_bank_index}",
+                        }
+                        await write_event(conn, "registry.events", run_id, h.receiving_bank_index, reg_payload)
+                        logger.info(
+                            "staged_registry_event",
+                            run_id=run_id,
+                            report_id=reg_payload["report_id"],
+                            identifier_hash=mule_hash,
+                        )
+
+                # 7. Relay publish to Kafka
+                with tracer.start_as_current_span("relay_national_outbox") as span:
+                    span.set_attribute("run_id", run_id)
+                    producer = await start_producer()
+                    try:
+                        published = await relay_national_outbox(conn, producer)
+                        logger.info("relayed_national_outbox", run_id=run_id, published=published)
+                        span.set_attribute("published", published)
+                    finally:
+                        await producer.stop()
+            finally:
+                await conn.close()
+
+            # 8. Ingest reports into nationalsim store
+            with tracer.start_as_current_span("nationalsim_ingest") as span:
+                span.set_attribute("run_id", run_id)
+                registry = RegistryCore(clock=WallClock(), listing_delay=timedelta(minutes=15))
+                for h in replay.primary_holds[:4]:
+                    mule_hash = compute_identifier_hash(
+                        key=dpip_key,
+                        run_id=run_id,
+                        identifier_type="account",
+                        raw_value=h.account_id,
+                        bank_index=h.receiving_bank_index,
+                    )
+                    registry.ingest(
+                        bank_id=f"bank_{h.receiving_bank_index}",
+                        report_id=f"rep-{uuid.uuid4().hex[:8]}",
+                        identifier_hash=mule_hash,
+                        identifier_type="account",
+                        reason_code="fraud_mule",
+                        reported_at=datetime.now(timezone.utc),
+                        run_id=run_id,
+                    )
+                    logger.info("registry_report_ingested", run_id=run_id, bank_id=f"bank_{h.receiving_bank_index}")
+                store_export = registry.export_store()
+
+            # 9. Harvest emitted logs and spans
+            captured_logs = [line for line in log_handler.lines if run_id in line]
+            assert len(captured_logs) > 0, "No log lines captured for run_id"
+
+            finished_spans = in_memory_exporter.get_finished_spans()
+            local_spans = [
+                {"name": s.name, "attributes": dict(s.attributes or {})}
+                for s in finished_spans
+                if (s.attributes or {}).get("run_id") == run_id
+            ]
+            assert len(local_spans) > 0, "No spans captured for run_id"
+
+            # 10. In full mode, push logs to Loki and flush spans to Tempo
+            if not quick:
+                now_ns = str(time.time_ns())
+                loki_payload = {
+                    "streams": [
+                        {
+                            "stream": {"environment": "development", "job": "showcase_13", "run_id": run_id},
+                            "values": [
+                                [str(int(now_ns) + i * 1000), line] for i, line in enumerate(captured_logs)
+                            ],
+                        }
+                    ]
+                }
+                async with httpx.AsyncClient(timeout=3.0) as http_client:
+                    try:
+                        push_res = await http_client.post("http://localhost:3100/loki/api/v1/push", json=loki_payload)
+                        if push_res.status_code != 204:
+                            raise NotRun(f"Loki push failed with HTTP {push_res.status_code}")
+                    except (httpx.ConnectError, OSError) as err:
+                        raise NotRun(f"Loki unreachable at http://localhost:3100 ({err})")
+
+                if tempo_processor:
+                    tempo_processor.force_flush()
+
+                # Poll Tempo search until traces are indexed (up to 5 seconds)
+                async with httpx.AsyncClient(timeout=3.0) as tempo_check_client:
+                    for _ in range(10):
+                        try:
+                            t_resp = await tempo_check_client.get(
+                                "http://localhost:3200/api/search",
+                                params={"tags": f"run_id={run_id}"},
+                            )
+                            if t_resp.status_code == 200 and len(t_resp.json().get("traces", [])) > 0:
+                                break
+                        except (httpx.ConnectError, OSError):
+                            pass
+                        await asyncio.sleep(0.5)
+
+            # 11. Run scan across all 5 places
+            report = await scan_all_five_places(
+                run_id=run_id,
+                known_raw_identifiers=known_ids,
+                store_export=store_export,
+                local_log_lines=captured_logs if quick else None,
+                local_spans=local_spans if quick else None,
+                database_url=db_url,
+                kafka_servers=config.kafka_bootstrap_servers,
+                mode="quick" if quick else "full",
+            )
+
+            for name, p in report.places.items():
+                if p.status == "NOT CHECKED":
+                    raise NotRun(f"{name} is NOT CHECKED ({p.reason}) - run the full stack or use --allow-not-run")
+                if p.status == "EMPTY":
+                    if not quick:
+                        raise NotRun(f"{name} returned 0 items in full mode ({p.reason})")
+                    raise AssertionError(f"{name} contains 0 items ({p.reason})")
+                assert p.items_checked > 0, f"{name} reported 0 items checked"
+                assert p.raw_hits == 0, f"{name} detected {p.raw_hits} raw identifier leaks: {p.details}"
+
+            assert report.all_clean is True, f"Raw identifier scan failed: {report.total_raw_hits} raw hits detected"
+            assert report.total_raw_hits == 0
+
+            place_counts = [f"{n}: {p.items_checked} checked, {p.raw_hits} raw" for n, p in report.places.items()]
+            summary_str = ", ".join(place_counts)
+            if quick:
+                key_number = f"{summary_str} (Loki and Tempo not queried in quick mode)"
+            else:
+                key_number = summary_str
+
+            return CheckOutcome(
+                key_number=key_number,
+                evidence={
+                    "run_id": report.run_id,
+                    "total_items_checked": report.total_items_checked,
+                    "total_raw_hits": report.total_raw_hits,
+                    "all_clean": report.all_clean,
+                    "known_identifiers_count": len(known_ids),
+                    "planted_leak_proof": {
+                        "planted_account": planted_account,
+                        "detected": True,
+                        "hits": planted_res.raw_hits,
+                    },
+                    "places": {
+                        name: {
+                            "status": p.status,
+                            "items_checked": p.items_checked,
+                            "raw_hits": p.raw_hits,
+                            "reason": p.reason,
+                        }
+                        for name, p in report.places.items()
+                    },
                 },
-            },
-        )
+            )
+
+        finally:
+            root_logger.removeHandler(log_handler)
 
     return run_check
 
@@ -1666,7 +1959,7 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
         kind="edge",
         proves=(
             "A licensed bank not participating in DPIP is denied DPIP screening with HTTP 403, "
-            "but successfully pulls unencrypted suspect listings from the I4C feed."
+            "but successfully pulls suspect listings hashed with the I4C key from the I4C feed."
         ),
         run=check_7_non_participant_i4c_feed,
         likely_cause="DPIP enrollment was checked on I4C feed endpoint or I4C route was blocked.",
