@@ -93,6 +93,8 @@ class DisputeRequest(BaseModel):
     )
     reason_code: str
     run_id: str
+    filed_by: str = "customer_via_bank"
+    reassigned_minute: int | None = None
 
 
 class FeedbackRequest(BaseModel):
@@ -267,11 +269,14 @@ def create_app(
 
     delay_minutes, bank_settings = validate_nationalsim_settings(settings, file_name="config/nationalsim.yaml")
     listing_delay = timedelta(minutes=delay_minutes)
+    dispute_delay_minutes = int(settings.get("dispute_resolution_minutes", 60))
+    dispute_resolution_delay = timedelta(minutes=dispute_delay_minutes)
 
     registry = RegistryCore(
         clock=clock,
         listing_delay=listing_delay,
         bank_settings=bank_settings,
+        dispute_resolution_delay=dispute_resolution_delay,
     )
     i4c_feed = I4CFeedCore(
         clock=clock,
@@ -383,10 +388,15 @@ def create_app(
                 identifier_hash=payload.identifier_hash,
                 reason_code=payload.reason_code,
                 run_id=payload.run_id,
+                filed_by=payload.filed_by,
+                reassigned_minute=payload.reassigned_minute,
             )
+            resolutions = registry.get_resolutions()
+            latest_res = resolutions[-1] if resolutions else None
             return {
-                "status": "contested",
+                "status": latest_res.status if latest_res else "contested",
                 "contested_count": len(contested_entries),
+                "minutes_to_resolve": latest_res.minutes_to_resolve if latest_res else None,
             }
         except ValueError as exc:
             # Missing entries or invalid hash raises 400
@@ -492,6 +502,7 @@ def create_app_prod() -> FastAPI:
     listing_delay, bank_settings = load_nationalsim_config()
     prod_settings: dict[str, Any] = {
         "listing_delay_minutes": int(listing_delay.total_seconds() // 60),
+        "dispute_resolution_minutes": 60,
         "banks": bank_settings,
     }
     return create_app(

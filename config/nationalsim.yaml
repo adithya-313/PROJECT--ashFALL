@@ -31,6 +31,12 @@ nationalsim:
     derived_from: policy
     reason: "Assumed share of genuine customer accounts whose assigned mobile number was previously held by a mule account deactivated before day 0; no official industry figure is published."
 
+  dispute_resolution_minutes:
+    value: 60
+    label: assumption
+    derived_from: policy
+    reason: "Assumed time in minutes taken by the national registry to verify telecom reassignment evidence and uphold a customer dispute; no statutory SLA is published."
+
 
   banks:
     bank_0:

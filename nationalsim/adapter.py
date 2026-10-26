@@ -66,10 +66,11 @@ class IngestionItem:
     reported_at: datetime
     run_id: str
     linked_account_hash: str | None = None
+    reported_minute: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert ingestion item to dictionary suitable for JSON serialization."""
-        return {
+        data: dict[str, Any] = {
             "bank_id": self.bank_id,
             "report_id": self.report_id,
             "identifier_hash": self.identifier_hash,
@@ -79,6 +80,9 @@ class IngestionItem:
             "run_id": self.run_id,
             "linked_account_hash": self.linked_account_hash,
         }
+        if self.reported_minute is not None:
+            data["reported_minute"] = self.reported_minute
+        return data
 
 
 def registry_report_to_ingestions(
@@ -158,6 +162,7 @@ def registry_report_to_ingestions(
             reported_at=reported_at,
             run_id=run_id,
             linked_account_hash=account_hash,
+            reported_minute=reported_minute,
         )
     ]
 
@@ -179,6 +184,7 @@ def registry_report_to_ingestions(
                 reported_at=reported_at,
                 run_id=run_id,
                 linked_account_hash=account_hash,
+                reported_minute=reported_minute,
             )
         )
 
@@ -205,6 +211,7 @@ def registry_report_to_ingestions(
                         reported_at=reported_at,
                         run_id=run_id,
                         linked_account_hash=account_hash,
+                        reported_minute=reported_minute,
                     )
                 )
 
@@ -367,8 +374,26 @@ def ingest_report(
             reported_at=item.reported_at,
             run_id=item.run_id,
             linked_account_hash=item.linked_account_hash,
+            reported_minute=item.reported_minute,
         )
         entries.append(entry)
+
+    # Register telecom reassignment in registry if this account holds a recycled phone
+    if phone_book is not None and hasattr(phone_book, "get_record"):
+        account_id = str(report["account_id"] if isinstance(report, dict) else report.account_id)
+        phone_record = phone_book.get_record(account_id)
+        if phone_record is not None and phone_record.reassigned_minute is not None:
+            phone_hash = compute_identifier_hash(
+                key=key,
+                run_id=run_id,
+                identifier_type=IDENTIFIER_TYPE_PHONE,
+                raw_value=phone_record.phone_number,
+            )
+            registry.register_telecom_reassignment(
+                identifier_hash=phone_hash,
+                reassigned_minute=phone_record.reassigned_minute,
+                run_id=run_id,
+            )
 
     if i4c_feed is not None and i4c_key is not None:
         i4c_items = registry_report_to_i4c_ingestions(
