@@ -146,7 +146,7 @@ issues:
       - {kind: test, file: tests/unit/test_event_clock.py, name: test_world_minute_to_ist_at_zero}
       - {kind: test, file: tests/unit/test_event_clock.py, name: test_round_trip_conversion_holds}
       - {kind: test, file: tests/unit/test_event_clock.py, name: test_replay_clock_at_speed_1_and_speed_100}
-    later_work: ["Level 14: event-time columns in migration 0005 and bank APIs", "Level 15: event-time window expiry in feature store", "Level 16: label cutoff and observation windows in event time"]
+    later_work: ["Level 14: event-time columns in migration 0006 and bank APIs", "Level 15: event-time window expiry in feature store", "Level 16: label cutoff and observation windows in event time"]
   X2:
     title: "The complaint path was defined twice"
     origin: revision_2
@@ -622,7 +622,7 @@ issues:
     status: planned
     levels: [14]
     parts: [14a]
-    later_work: ["Level 14a: Migration 0005"]
+    later_work: ["Level 14a: Migration 0006"]
   14-14:
     title: "Outbox schema \"1\" is locked; processed_events expects UUIDs"
     origin: revision_2
