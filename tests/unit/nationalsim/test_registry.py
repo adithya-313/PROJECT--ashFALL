@@ -538,3 +538,47 @@ def test_simulation_runs_are_strictly_isolated() -> None:
     assert result_b.match is False
     assert result_b.status == "none"
 
+
+def test_screen_risk_score_is_always_zero_for_contested_and_resolved() -> None:
+    """Screening returns risk_score 0.0 for contested and resolved matches because Phase-2 scores are out of scope."""
+    sim_time = datetime(2026, 9, 1, 10, 0, tzinfo=IST)
+    clock = ManualClock(sim_time)
+    registry = RegistryCore(
+        clock=clock,
+        listing_delay=timedelta(minutes=15),
+        bank_settings=DEFAULT_TEST_BANK_SETTINGS,
+        dispute_resolution_delay=timedelta(minutes=60),
+    )
+    h = "a" * 64
+    run_id = "test_run_risk"
+    registry.ingest(
+        bank_id="bank_0",
+        report_id="R-RISK-1",
+        identifier_hash=h,
+        identifier_type="phone",
+        reason_code="fraud",
+        reported_at=sim_time,
+        run_id=run_id,
+        reported_minute=-100,
+    )
+    registry.register_telecom_reassignment(h, -20, run_id)
+    clock.advance(timedelta(minutes=20))
+
+    # Listed match has risk_score 0.0
+    res_listed = registry.screen("bank_0", h, "phone", run_id)
+    assert res_listed.match is True
+    assert res_listed.risk_score == 0.0
+
+    # Contested match has risk_score 0.0
+    registry.dispute("bank_0", h, "recycled_dispute", run_id)
+    res_contested = registry.screen("bank_0", h, "phone", run_id)
+    assert res_contested.status == "contested"
+    assert res_contested.risk_score == 0.0
+
+    # Resolved screening has risk_score 0.0
+    clock.advance(timedelta(minutes=61))
+    res_resolved = registry.screen("bank_0", h, "phone", run_id)
+    assert res_resolved.status == "resolved"
+    assert res_resolved.risk_score == 0.0
+
+

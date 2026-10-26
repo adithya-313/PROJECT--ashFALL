@@ -409,7 +409,7 @@ class RegistryCore:
             match=True,
             status=status,
             distinct_accounts_linked=max(1, distinct_count),
-            risk_score=0.5 if status == "contested" else 1.0,
+            risk_score=0.0,
         )
 
     def revoke(
