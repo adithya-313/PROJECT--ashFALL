@@ -25,7 +25,7 @@ from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from api.services.outbox_relay import start_producer
@@ -1347,7 +1347,7 @@ def make_check_11(quick: bool) -> Any:
         tempo_processor = None
         if not quick:
             otlp_exporter = OTLPSpanExporter(endpoint="http://localhost:4318/v1/traces")
-            tempo_processor = BatchSpanProcessor(otlp_exporter)
+            tempo_processor = SimpleSpanProcessor(otlp_exporter)
             provider.add_span_processor(tempo_processor)
 
         tracer = trace.get_tracer("nationalsim.showcase")
@@ -1540,9 +1540,9 @@ def make_check_11(quick: bool) -> Any:
                 if tempo_processor:
                     tempo_processor.force_flush()
 
-                # Poll Tempo search until traces are indexed (up to 5 seconds)
+                # Poll Tempo search until traces are indexed (up to 15 seconds)
                 async with httpx.AsyncClient(timeout=3.0) as tempo_check_client:
-                    for _ in range(10):
+                    for _ in range(30):
                         try:
                             t_resp = await tempo_check_client.get(
                                 "http://localhost:3200/api/search",
