@@ -21,11 +21,24 @@ from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from core.config import config
 from core.event_clock import IST
 from core.logging import get_logger
+from nationalsim.hold_flow import build_hold_payload, resolve_account_ref
 
 logger = get_logger(__name__)
 
 ALLOWED_TOPICS: tuple[str, str] = ("registry.events", "hold.requests")
 NATIONAL_SCHEMA_VERSION: str = "national-1"
+
+__all__ = [
+    "ALLOWED_TOPICS",
+    "NATIONAL_SCHEMA_VERSION",
+    "BankConsumerResult",
+    "build_hold_payload",
+    "consume_own_messages",
+    "create_national_envelope",
+    "relay_national_outbox",
+    "resolve_account_ref",
+    "write_event",
+]
 
 
 def create_national_envelope(
@@ -119,6 +132,11 @@ async def write_event(
     """
     if topic not in ALLOWED_TOPICS:
         raise ValueError(f"Invalid topic '{topic}'. Must be one of {ALLOWED_TOPICS}")
+
+    # Enforce national boundary privacy: payloads must carry account_ref, never raw account_id
+    inner_data = payload.get("data", payload) if isinstance(payload, dict) else {}
+    if isinstance(inner_data, dict) and "account_id" in inner_data:
+        raise ValueError("National outbox payloads must carry 'account_ref', never raw 'account_id'")
 
     # Extract or derive event_id
     if "event_id" in payload:

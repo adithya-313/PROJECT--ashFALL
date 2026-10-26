@@ -11,7 +11,9 @@ This module is strictly decoupled: no numpy, no world/ imports, and no HTTP depe
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Sequence
+from typing import Any, Sequence
+
+from nationalsim.keyed_hash import compute_identifier_hash
 
 
 @dataclass(frozen=True)
@@ -61,6 +63,31 @@ class HoldRequest:
             raise ValueError(f"Hold amount_paise cannot be negative, got {self.amount_paise}")
         if self.landing_minute < 0:
             raise ValueError(f"Hold landing_minute cannot be negative, got {self.landing_minute}")
+
+    def to_national_payload(self, run_id: str, i4c_key: str | bytes) -> dict[str, Any]:
+        """Converts hold request to a national outbox payload carrying account_ref.
+
+        What it is for:
+            Ensures that administrative hold requests published to national brokers
+            or external institutions identify the target account strictly by account_ref,
+            never revealing the raw internal account identifier.
+
+        Inputs:
+            run_id: Simulation or environment run identifier.
+            i4c_key: Secret HMAC key shared among participating institutions.
+
+        What it returns:
+            Payload dictionary with complaint_id, payment_id, amount_paise, and account_ref.
+        """
+        return build_hold_payload(
+            complaint_id=self.complaint_id,
+            payment_id=self.payment_id,
+            amount_paise=self.amount_paise,
+            account_id=self.account_id,
+            receiving_bank_index=self.receiving_bank_index,
+            run_id=run_id,
+            i4c_key=i4c_key,
+        )
 
 
 @dataclass(frozen=True)
@@ -496,3 +523,104 @@ def decide_one_hop_forwarding(
         is_forwarded=True,
         originating_hold_id=original_hold.complaint_id,
     )
+
+
+def build_hold_payload(
+    complaint_id: str,
+    payment_id: str,
+    amount_paise: int,
+    account_id: str,
+    receiving_bank_index: int | str,
+    run_id: str,
+    i4c_key: str | bytes,
+) -> dict[str, Any]:
+    """Constructs a hold request payload carrying account_ref across the national boundary.
+
+    What it is for:
+        Prepares a hold request for publication into national Kafka topics (hold.requests)
+        without exposing raw account identifiers. Replaces account_id with a keyed HMAC
+        digest (account_ref) scoped to the receiving bank.
+
+    Inputs:
+        complaint_id: Unique victim complaint reference.
+        payment_id: Identifier of the disputed payment.
+        amount_paise: Monetary amount to hold in paise.
+        account_id: Raw internal account identifier at the receiving bank.
+        receiving_bank_index: Destination bank index for identifier namespacing.
+        run_id: Simulation or environment run identifier.
+        i4c_key: Secret HMAC key shared among participating institutions.
+
+    What it returns:
+        Dictionary containing complaint_id, payment_id, amount_paise, and account_ref.
+
+    How it works:
+        Hashes account_id using compute_identifier_hash and packages the national payload.
+
+    Errors and side effects:
+        Raises ValueError if i4c_key is empty or parameters are invalid.
+
+    Limits:
+        Does not interact with the network or database.
+    """
+    account_ref = compute_identifier_hash(
+        key=i4c_key,
+        run_id=run_id,
+        identifier_type="account",
+        raw_value=account_id,
+        bank_index=receiving_bank_index,
+    )
+    return {
+        "complaint_id": complaint_id,
+        "payment_id": payment_id,
+        "amount_paise": amount_paise,
+        "account_ref": account_ref,
+    }
+
+
+def resolve_account_ref(
+    account_ref: str,
+    bank_accounts: Sequence[str],
+    run_id: str,
+    bank_index: int | str,
+    i4c_key: str | bytes,
+) -> str | None:
+    """Resolves an incoming national account_ref against a bank's own account portfolio.
+
+    What it is for:
+        Enables a receiving bank to identify which local account is targeted by an
+        administrative hold request, by hashing its own local accounts with the shared key.
+
+    Inputs:
+        account_ref: 64-character lowercase hexadecimal HMAC digest received in the hold payload.
+        bank_accounts: Iterable of the receiving bank's own local account strings.
+        run_id: Simulation or environment run identifier.
+        bank_index: Receiving bank index.
+        i4c_key: Secret HMAC key shared among participating institutions.
+
+    What it returns:
+        The matching local account_id string if found, or None if no local account matches.
+
+    How it works:
+        1. Iterates over bank_accounts.
+        2. Computes the candidate account_ref for each local account.
+        3. Returns the first matching account_id.
+        4. If no match is found, returns None.
+
+    Errors and side effects:
+        Raises ValueError if i4c_key is empty.
+
+    Limits:
+        Evaluates against candidate accounts supplied in-memory.
+    """
+    for candidate_account in bank_accounts:
+        candidate_ref = compute_identifier_hash(
+            key=i4c_key,
+            run_id=run_id,
+            identifier_type="account",
+            raw_value=candidate_account,
+            bank_index=bank_index,
+        )
+        if candidate_ref == account_ref:
+            return candidate_account
+    return None
+

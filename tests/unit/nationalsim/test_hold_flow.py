@@ -15,9 +15,11 @@ from nationalsim.hold_flow import (
     HoldOutcome,
     HoldRequest,
     OutgoingTransfer,
+    build_hold_payload,
     classify_hold_outcome,
     compute_hold_latency,
     decide_one_hop_forwarding,
+    resolve_account_ref,
 )
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -437,3 +439,75 @@ def test_forwarding_is_exactly_one_hop() -> None:
     )
     forward_for_applied = decide_one_hop_forwarding(primary_hold, outcome_applied, departed_transfers)
     assert forward_for_applied is None, "Applied hold must not emit forwarded hold"
+
+
+def test_resolve_account_ref_and_build_hold_payload() -> None:
+    """Proves national hold payloads use account_ref and receiving bank resolves by hashing own accounts."""
+    run_id = "test-run-ref-101"
+    bank_index = 1
+    i4c_key = "test-secret-i4c-key"
+    target_account = "acc_victim_hold_001"
+
+    # 1. Build national payload from HoldRequest
+    hold = HoldRequest(
+        complaint_id="c-ref-001",
+        payment_id="p-ref-001",
+        receiving_bank_index=bank_index,
+        account_id=target_account,
+        amount_paise=500000,
+        landing_minute=120,
+    )
+    payload = hold.to_national_payload(run_id=run_id, i4c_key=i4c_key)
+
+    # Also verify direct build_hold_payload helper output matches
+    direct_payload = build_hold_payload(
+        complaint_id="c-ref-001",
+        payment_id="p-ref-001",
+        amount_paise=500000,
+        account_id=target_account,
+        receiving_bank_index=bank_index,
+        run_id=run_id,
+        i4c_key=i4c_key,
+    )
+    assert direct_payload == payload
+
+    # 2. Assert payload carries account_ref, not raw account_id
+    assert "account_ref" in payload
+    assert "account_id" not in payload
+    assert payload["complaint_id"] == "c-ref-001"
+    assert payload["payment_id"] == "p-ref-001"
+    assert payload["amount_paise"] == 500000
+
+    # 3. Receiving bank resolves account_ref against its own portfolio
+    bank_accounts = ["acc_other_1", target_account, "acc_other_2"]
+    resolved = resolve_account_ref(
+        account_ref=payload["account_ref"],
+        bank_accounts=bank_accounts,
+        run_id=run_id,
+        bank_index=bank_index,
+        i4c_key=i4c_key,
+    )
+    assert resolved == target_account
+
+    # 4. Unknown account or wrong bank index returns None
+    assert (
+        resolve_account_ref(
+            account_ref=payload["account_ref"],
+            bank_accounts=["acc_random_1", "acc_random_2"],
+            run_id=run_id,
+            bank_index=bank_index,
+            i4c_key=i4c_key,
+        )
+        is None
+    )
+    assert (
+        resolve_account_ref(
+            account_ref=payload["account_ref"],
+            bank_accounts=bank_accounts,
+            run_id=run_id,
+            bank_index=2,  # Wrong bank index
+            i4c_key=i4c_key,
+        )
+        is None
+    )
+

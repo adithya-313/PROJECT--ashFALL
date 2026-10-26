@@ -11,9 +11,11 @@ from aiokafka import AIOKafkaConsumer
 
 from api.services.outbox_relay import start_producer
 from core.config import config
+from nationalsim.keyed_hash import compute_identifier_hash
 from nationalsim.national_outbox import (
     consume_own_messages,
     relay_national_outbox,
+    resolve_account_ref,
     write_event,
 )
 
@@ -26,12 +28,20 @@ async def test_hold_request_published_once_even_if_relay_runs_twice(isolated_sch
     run_id = f"run-idemp-{uuid.uuid4().hex[:8]}"
     bank_id = 1
     topic = "hold.requests"
+    i4c_key = "local-dev-i4c-key-001"
+    account_ref = compute_identifier_hash(
+        key=i4c_key,
+        run_id=run_id,
+        identifier_type="account",
+        raw_value="acc_target_01",
+        bank_index=bank_id,
+    )
 
     hold_payload = {
         "complaint_id": f"comp-{uuid.uuid4().hex[:6]}",
         "payment_id": f"pay-{uuid.uuid4().hex[:6]}",
         "amount_paise": 750000,
-        "account_id": "acc_target_01",
+        "account_ref": account_ref,
     }
 
     # 1. Stage the hold request
@@ -63,6 +73,18 @@ async def test_hold_request_published_once_even_if_relay_runs_twice(isolated_sch
     assert msg["event_id"] == str(event_id)
     assert msg["data"]["complaint_id"] == hold_payload["complaint_id"]
     assert msg["data"]["amount_paise"] == 750000
+    assert msg["data"]["account_ref"] == account_ref
+    assert "account_id" not in msg["data"]
+
+    # 5. Receiving bank resolves account_ref back to local account
+    resolved = resolve_account_ref(
+        account_ref=msg["data"]["account_ref"],
+        bank_accounts=["acc_other_01", "acc_target_01"],
+        run_id=run_id,
+        bank_index=bank_id,
+        i4c_key=i4c_key,
+    )
+    assert resolved == "acc_target_01"
 
 
 async def test_same_complaint_id_written_twice_gives_one_message(isolated_schema) -> None:
@@ -72,16 +94,24 @@ async def test_same_complaint_id_written_twice_gives_one_message(isolated_schema
     bank_id = 0
     topic = "hold.requests"
     complaint_id = f"c_repeat_{uuid.uuid4().hex[:6]}"
+    i4c_key = "local-dev-i4c-key-001"
+    account_ref = compute_identifier_hash(
+        key=i4c_key,
+        run_id=run_id,
+        identifier_type="account",
+        raw_value="acc_victim_01",
+        bank_index=bank_id,
+    )
 
     payload_a = {
         "complaint_id": complaint_id,
         "amount_paise": 500000,
-        "account_id": "acc_victim_01",
+        "account_ref": account_ref,
     }
     payload_b = {
         "complaint_id": complaint_id,
         "amount_paise": 500000,
-        "account_id": "acc_victim_01",
+        "account_ref": account_ref,
     }
 
     # Write twice with identical complaint_id
@@ -113,6 +143,20 @@ async def test_same_complaint_id_written_twice_gives_one_message(isolated_schema
     )
     assert len(consumer_res.accepted_messages) == 1
     assert consumer_res.accepted_messages[0]["event_id"] == str(id_a)
+
+
+async def test_write_event_rejects_raw_account_id(isolated_schema) -> None:
+    """Proves national outbox rejects payloads containing raw account_id."""
+    connection, _ = isolated_schema
+    run_id = f"run-reject-{uuid.uuid4().hex[:8]}"
+    with pytest.raises(ValueError, match="National outbox payloads must carry 'account_ref'"):
+        await write_event(
+            connection,
+            topic="hold.requests",
+            run_id=run_id,
+            bank_id=1,
+            payload={"complaint_id": "c1", "account_id": "acc_raw_01", "amount_paise": 100},
+        )
 
 
 async def test_bank_1_consumer_receives_only_bank_1_messages_and_bank_0_is_foreign(isolated_schema) -> None:

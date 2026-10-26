@@ -176,7 +176,7 @@ All national events published to Kafka topics (`registry.events` and `hold.reque
   "occurred_at": "2026-09-01T10:00:00+05:30",
   "data": {
     "report_id": "seed-101-run-R000001",
-    "account_id": "acc_person_0042",
+    "account_ref": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
     "amount_paise": 100000
   }
 }
@@ -189,3 +189,6 @@ All national events published to Kafka topics (`registry.events` and `hold.reque
 - `occurred_at`: ISO 8601 string in Indian Standard Time (`+05:30`) per `docs/interfaces/time.md` (Ground Rule 30).
 - `data`: Event-specific dictionary holding hashes, system identifiers, and monetary amounts in paise only. No raw personal identifiers are included.
 - Message Key on wire: Encoded as `<run_id>:<bank_id>`, partitioning topics and enabling bank-level message filtering.
+
+Note on identifier privacy (Level 13c, Commit 9):
+Payloads crossing the national boundary (including `hold.requests` and `registry.events`) must never carry raw account identifiers (`account_id`), device fingerprints, or telephone numbers. Target accounts are identified strictly via `account_ref`, computed as `compute_identifier_hash(I4C key, run_id, "account", account_id, bank_index)`. Receiving banks resolve `account_ref` by hashing their own account portfolios. Hold requests preserve `complaint_id`, `payment_id`, and `amount_paise`.
