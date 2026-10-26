@@ -171,3 +171,90 @@ def test_shared_numbers_exist_when_share_positive_and_none_when_zero(
     for r in book_none.records.values():
         assert r.is_shared is False
         assert r.shared_with_account_id is None
+
+
+def test_missing_recycled_number_share_raises(fraud_on_world: InteractiveWorldOutput) -> None:
+    """Omitting recycled_number_share raises ValueError naming the key and config/nationalsim.yaml.
+
+    Recreates a misconfigured deployment where the research assumption for recycled phone
+    shares is omitted. Catches a bug where missing configuration values silently default to 0.05
+    rather than failing fast.
+    """
+    with pytest.raises(ValueError, match="recycled_number_share.*config/nationalsim.yaml"):
+        build_phone_book(
+            fraud_on_world,
+            run_seed=101,
+            phone_config={"recycled_number_share": None},
+        )
+
+
+def test_missing_split_raises(fraud_on_world: InteractiveWorldOutput) -> None:
+    """Missing range_name in the world's effective settings raises ValueError.
+
+    Recreates an execution path where the simulation split was not recorded in effective settings.
+    Catches a bug where an unconfigured split silently defaults to 'training' rather than raising.
+    """
+    from dataclasses import replace
+
+    bad_effective_config = {
+        "world_configs": fraud_on_world.effective_config["world_configs"],
+        "settings": {
+            k: v for k, v in fraud_on_world.effective_config["settings"].items() if k != "range_name"
+        },
+    }
+    bad_world = replace(fraud_on_world, effective_config=bad_effective_config)
+    with pytest.raises(ValueError, match="range_name"):
+        build_phone_book(bad_world, run_seed=101)
+
+
+def test_stress_split_world_draws_from_stress_range(
+    fraud_on_world: InteractiveWorldOutput,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stress-split world draws the shared phone share strictly from the stress range bounds.
+
+    Recreates a stress-testing simulation run where mule identifier sharing rates must follow
+    the wider stress evaluation bounds rather than baseline training bounds. Catches a bug
+    where the phone book generator hardcodes the 'training' partition or ignores effective ranges.
+    """
+    from dataclasses import replace
+
+    import world.phone_book as phone_book_module
+    from world.config_reader import get_parameter_entry
+
+    world_ranges = fraud_on_world.effective_config["world_configs"]["world_ranges"]
+    entry = get_parameter_entry(world_ranges, "identifier_shared_across_mule_accounts_share")
+    training_bounds = entry["training"]
+    stress_bounds = entry["stress"]
+
+    # Verify that the stress range actually differs from the training range
+    assert stress_bounds != training_bounds
+
+    drawn_values: list[float] = []
+    real_draw_in_range = phone_book_module.draw_in_range
+
+    def spy_draw(
+        entry: dict[str, Any],
+        rng: Any,
+        range_name: str = "training",
+        param_name: str = "unnamed_parameter",
+    ) -> float:
+        val = real_draw_in_range(entry, rng, range_name=range_name, param_name=param_name)
+        if param_name == "identifier_shared_across_mule_accounts_share":
+            assert range_name == "stress"
+            drawn_values.append(val)
+        return val
+
+    monkeypatch.setattr(phone_book_module, "draw_in_range", spy_draw)
+
+    stress_effective = dict(fraud_on_world.effective_config)
+    stress_effective["settings"] = dict(fraud_on_world.effective_config["settings"])
+    stress_effective["settings"]["range_name"] = "stress"
+    stress_world = replace(fraud_on_world, effective_config=stress_effective)
+
+    build_phone_book(stress_world, run_seed=101)
+
+    assert len(drawn_values) == 1
+    drawn_share = drawn_values[0]
+    assert float(stress_bounds[0]) <= drawn_share <= float(stress_bounds[1])
+

@@ -13,7 +13,8 @@ from typing import Any
 import numpy as np
 
 from core.config_validator import load_yaml
-from world.config_reader import draw_in_range, get_parameter_entry, read_world_ranges
+from world.config_reader import draw_in_range, get_parameter_entry
+from world.interactive_records import InteractiveWorldOutput
 
 REPO_ROOT: Path = Path(__file__).resolve().parent.parent
 NATIONALSIM_CONFIG_PATH: Path = REPO_ROOT / "config" / "nationalsim.yaml"
@@ -169,16 +170,28 @@ def _load_default_phone_config() -> dict[str, Any]:
         raise ValueError(f"Missing configuration file '{NATIONALSIM_CONFIG_PATH}'.")
     raw = load_yaml(NATIONALSIM_CONFIG_PATH)
     ns = raw.get("nationalsim", {})
-    recycle_min_days_block = ns.get("recycle_min_days", {})
-    recycled_share_block = ns.get("recycled_number_share", {})
+    recycle_min_days_block = ns.get("recycle_min_days")
+    if (
+        not isinstance(recycle_min_days_block, dict)
+        or "value" not in recycle_min_days_block
+        or recycle_min_days_block["value"] is None
+    ):
+        raise ValueError("Missing 'recycle_min_days' in config/nationalsim.yaml.")
+    recycled_share_block = ns.get("recycled_number_share")
+    if (
+        not isinstance(recycled_share_block, dict)
+        or "value" not in recycled_share_block
+        or recycled_share_block["value"] is None
+    ):
+        raise ValueError("Missing 'recycled_number_share' in config/nationalsim.yaml.")
     return {
-        "recycle_min_days": int(recycle_min_days_block.get("value", 90)),
-        "recycled_number_share": float(recycled_share_block.get("value", 0.05)),
+        "recycle_min_days": int(recycle_min_days_block["value"]),
+        "recycled_number_share": float(recycled_share_block["value"]),
     }
 
 
 def build_phone_book(
-    output: Any,
+    output: InteractiveWorldOutput,
     run_seed: int,
     phone_config: dict[str, Any] | None = None,
 ) -> PhoneBook:
@@ -192,7 +205,7 @@ def build_phone_book(
         member share a single line, causing unintended collateral registry matches).
 
     Inputs:
-        output: Completed InteractiveWorldOutput (or World) structure from the simulation run.
+        output: Completed InteractiveWorldOutput structure from the simulation run.
         run_seed: Master integer seed of the world run.
         phone_config: Optional configuration overrides for recycling and sharing rates.
 
@@ -203,9 +216,9 @@ def build_phone_book(
         1. Initializes an independent NumPy random generator using run_seed and PHONE_BOOK_SALT
            via SeedSequence to ensure frozen anchors (children 0-3) remain completely untouched.
         2. Resolves configuration bounds for recycle quarantine days, recycled number share,
-           and shared mule account share from config/nationalsim.yaml and config/world_ranges.yaml.
+           and shared mule account share from config/nationalsim.yaml and world effective ranges.
         3. Collects all person account holders from output.world.people in deterministic order.
-        4. Identifies mule accounts from hidden truth roles if available, distinguishing genuine
+        4. Identifies mule accounts from hidden truth roles, distinguishing genuine
            accounts from illicit mule accounts.
         5. Assigns baseline unique synthetic phone numbers formatted as 'sim-0000000001'.
         6. Allocates shared household phone numbers: a configured share of mule accounts share
@@ -216,7 +229,7 @@ def build_phone_book(
         8. Indexes records by account identifier and phone number, returning a frozen PhoneBook.
 
     Errors and side effects:
-        Raises ValueError if run_seed is invalid or output does not contain person accounts.
+        Raises ValueError if required configurations or split settings are missing.
         Does not mutate output, RNG streams, or world ledgers.
 
     Limits:
@@ -226,29 +239,35 @@ def build_phone_book(
     seed_sequence = np.random.SeedSequence([int(run_seed), PHONE_BOOK_SALT])
     rng = np.random.default_rng(seed_sequence)
 
-    # 2. Resolve configuration parameters
+    # 2. Resolve configuration parameters without silent fallbacks
     default_cfg = _load_default_phone_config()
     cfg = dict(default_cfg)
     if phone_config is not None:
         cfg.update(phone_config)
 
-    recycle_min_days: int = int(cfg.get("recycle_min_days", 90))
-    recycled_number_share: float = float(cfg.get("recycled_number_share", 0.05))
+    if "recycle_min_days" not in cfg or cfg["recycle_min_days"] is None:
+        raise ValueError("Missing 'recycle_min_days' in config/nationalsim.yaml.")
+    recycle_min_days: int = int(cfg["recycle_min_days"])
 
-    # Resolve shared mule account share from config or world_ranges
+    if "recycled_number_share" not in cfg or cfg["recycled_number_share"] is None:
+        raise ValueError("Missing 'recycled_number_share' in config/nationalsim.yaml.")
+    recycled_number_share: float = float(cfg["recycled_number_share"])
+
+    # Resolve shared mule account share from config override or world effective ranges
     if "identifier_shared_across_mule_accounts_share" in cfg:
         shared_mule_share = float(cfg["identifier_shared_across_mule_accounts_share"])
-    elif "shared_mule_share" in cfg:
-        shared_mule_share = float(cfg["shared_mule_share"])
     else:
-        world_ranges = None
-        if hasattr(output, "effective_config") and isinstance(output.effective_config, dict):
-            world_ranges = output.effective_config.get("world_configs", {}).get("world_ranges")
-        if world_ranges is None:
-            world_ranges = read_world_ranges()
-        range_name = "training"
-        if hasattr(output, "effective_config") and isinstance(output.effective_config, dict):
-            range_name = output.effective_config.get("settings", {}).get("range_name", "training")
+        effective = output.effective_config
+        if "world_configs" not in effective or "world_ranges" not in effective["world_configs"]:
+            raise ValueError("Missing 'world_ranges' in output.effective_config['world_configs'].")
+        world_ranges = effective["world_configs"]["world_ranges"]
+
+        if "settings" not in effective or "range_name" not in effective["settings"]:
+            raise ValueError("Missing 'range_name' in output.effective_config['settings'].")
+        range_name = effective["settings"]["range_name"]
+        if not range_name:
+            raise ValueError("Empty 'range_name' in output.effective_config['settings'].")
+
         param_entry = get_parameter_entry(world_ranges, "identifier_shared_across_mule_accounts_share")
         shared_mule_share = draw_in_range(
             param_entry,
@@ -257,29 +276,24 @@ def build_phone_book(
             param_name="identifier_shared_across_mule_accounts_share",
         )
 
-    # 3. Extract person account holders
-    world = getattr(output, "world", output)
-    people = getattr(world, "people", [])
-    person_account_ids: list[str] = [p.account_id for p in people]
+    # 3. Extract person account holders from typed world structures
+    person_account_ids: list[str] = [p.account_id for p in output.world.people]
 
-    # Include mid-run opened person accounts if present
-    result = getattr(output, "result", None)
-    if result is not None and hasattr(result, "opened_accounts"):
-        for opened_item in result.opened_accounts:
-            # opened_item structure: (minute, account_id, owner_kind, ...)
-            if len(opened_item) >= 3 and opened_item[2] == "person":
-                acc_id = opened_item[1]
-                if acc_id not in person_account_ids:
-                    person_account_ids.append(acc_id)
+    # Include mid-run opened person accounts if present.
+    # opened_accounts definition from InteractiveRunResult:
+    # tuple: (minute, account_id, owner_kind, opening_stream, bank_index, opening_balance_paise)
+    for opened_item in output.result.opened_accounts:
+        minute, account_id, owner_kind, opening_stream, bank_index, opening_balance_paise = opened_item
+        if owner_kind == "person" and account_id not in person_account_ids:
+            person_account_ids.append(account_id)
 
     person_account_ids.sort()
 
-    # 4. Identify mule accounts versus genuine accounts
+    # 4. Identify mule accounts versus genuine accounts from typed truth facts
     mule_account_ids: set[str] = set()
-    if result is not None and hasattr(result, "truth") and hasattr(result.truth, "roles"):
-        for role_span in result.truth.roles:
-            if role_span.role in ("mule", "collector", "cash_out"):
-                mule_account_ids.add(role_span.account_id)
+    for role_span in output.result.truth.roles:
+        if role_span.role in ("mule", "collector", "cash_out"):
+            mule_account_ids.add(role_span.account_id)
 
     genuine_accounts: list[str] = [acc for acc in person_account_ids if acc not in mule_account_ids]
     mule_person_accounts: list[str] = [acc for acc in person_account_ids if acc in mule_account_ids]
