@@ -36,6 +36,7 @@ from nationalsim.hold_flow import (
     classify_hold_outcome,
     compute_hold_latency,
     decide_one_hop_forwarding,
+    is_night_hour,
 )
 from world.config_reader import draw_in_range, get_parameter_entry
 from world.fast_mode import FastRunSettings
@@ -188,6 +189,7 @@ def run_two_pass_replay(
     gang_configs: Sequence[GangConfig] | None = None,
     code_version: str | None = None,
     nationalsim_config_path: Path | None = None,
+    configs: Any = None,
 ) -> HoldReplayResult:
     """Execute the full two-pass administrative hold replay pipeline.
 
@@ -242,6 +244,7 @@ def run_two_pass_replay(
         runner_settings=active_runner_settings,
         fraud_inputs=active_fraud_inputs,
         gang_configs=active_gangs,
+        configs=configs,
         code_version=code_version,
     )
 
@@ -379,6 +382,7 @@ def run_two_pass_replay(
         runner_settings=active_runner_settings,
         fraud_inputs=fraud_inputs_pass2,
         gang_configs=active_gangs,
+        configs=configs,
         code_version=code_version,
     )
 
@@ -511,3 +515,72 @@ def run_two_pass_replay(
         forwarded_holds=forwarded_holds,
         forwarded_outcomes=forwarded_outcomes,
     )
+
+
+def measure_hold_latencies_by_window(replay_result: HoldReplayResult) -> dict[str, list[int]]:
+    """Group measured hold operational latencies by diurnal window and weekday vs weekend.
+
+    What it is for:
+        Partitions the empirical hold response times into day vs night and weekday vs weekend
+        buckets to support statistical evaluation and showcase chart rendering in Round 3.
+
+    Inputs:
+        replay_result: Completed HoldReplayResult containing Pass 1 output and primary holds.
+            Example: replay = run_two_pass_replay(settings, ...); measure_hold_latencies_by_window(replay)
+
+    What it returns:
+        Dictionary mapping partition names ('day', 'night', 'weekday', 'weekend') to lists of integer
+        latencies in minutes.
+
+    How it works:
+        1. Extract victim complaints from Pass 1 output using build_label_events.
+        2. Index complaints by label_id to resolve arrival minute for each primary hold.
+        3. Load hold configuration to obtain night hours window boundaries.
+        4. Resolve simulation starting calendar date from Pass 1 plan clock.
+        5. For each primary hold, compute measured latency (landing_minute - arrival_minute).
+        6. Convert complaint arrival minute into timezone-aware IST datetime.
+        7. Evaluate diurnal status using is_night_hour: route to 'night' if true, else 'day'.
+        8. Evaluate weekly status using weekday(): route to 'weekend' if >= 5, else 'weekday'.
+        9. Return populated bucket dictionary.
+
+    Errors and side effects:
+        None. Inspects immutable output records.
+
+    Limits:
+        Evaluates primary holds; does not partition unplaced forwarded directives.
+    """
+    groups: dict[str, list[int]] = {
+        "day": [],
+        "night": [],
+        "weekday": [],
+        "weekend": [],
+    }
+
+    if not replay_result.primary_holds:
+        return groups
+
+    complaints = build_label_events(replay_result.pass1_output)
+    complaints_by_id = {c.label_id: c for c in complaints}
+    hold_cfg = load_hold_configuration()
+    start_date = replay_result.pass1_output.plan.clock.start_date
+
+    for hold in replay_result.primary_holds:
+        complaint = complaints_by_id.get(hold.complaint_id)
+        if complaint is None:
+            continue
+
+        latency_minutes = hold.landing_minute - complaint.arrival_minute
+        arrival_dt = world_minute_to_ist(complaint.arrival_minute, start_date)
+
+        if is_night_hour(arrival_dt.hour, hold_cfg["night_hours"]):
+            groups["night"].append(latency_minutes)
+        else:
+            groups["day"].append(latency_minutes)
+
+        if arrival_dt.weekday() >= 5:
+            groups["weekend"].append(latency_minutes)
+        else:
+            groups["weekday"].append(latency_minutes)
+
+    return groups
+

@@ -7,6 +7,8 @@ applied classification with lien registration in pass-2 encumbrance log, bank ro
 single-hop forwarding termination, and fraud-off backward compatibility under Amendment A-029.
 """
 
+import statistics
+
 from nationalsim.hold_flow import (
     HoldOutcome,
     HoldRequest,
@@ -17,7 +19,9 @@ from nationalsim.hold_flow import (
 from showcase.level_12_support_b import get_showcase_b_settings
 from showcase.level_12_support_c import load_showcase_c_fixture
 from world.fast_mode import FastRunSettings
+from world.gang_config import BlockStep, GangBudget, GangConfig
 from world.hold_replay import (
+    measure_hold_latencies_by_window,
     reconstruct_account_balance,
     run_two_pass_replay,
 )
@@ -25,6 +29,7 @@ from world.interactive_records import FraudInputs, RunnerSettings
 from world.interactive_runner import run_interactive_world
 from world.ledger import Ledger
 from world.outside_events import OutsideEvent
+from world.world_configs import read_world_configs
 
 
 def test_two_pass_replay_is_deterministic_on_same_seed() -> None:
@@ -355,3 +360,74 @@ def test_fraud_off_output_is_unchanged() -> None:
     replay_events = replay.pass2_output.result.run_result.events
     assert len(baseline_events) == len(replay_events)
     assert baseline_events == replay_events
+
+
+def test_hold_latency_medians_higher_at_night_and_weekends() -> None:
+    """Proves that empirical hold latency medians are higher at night and weekends matching multipliers.
+
+    What it is for:
+        Validates that simulated hold response latencies accurately reflect diurnal off-hours
+        emergency staffing and weekend slowdowns across the simulated banking network.
+
+    Inputs:
+        None. Runs two-pass replay on seed 102 with full victim complaint reporting.
+
+    What it returns:
+        None. Asserts night median > day median and weekend median > weekday median.
+
+    How it works:
+        1. Configure seed 102 with large scam syndicate and victim complaint share at 1.0.
+        2. Execute run_two_pass_replay.
+        3. Measure and group hold latencies by temporal window using measure_hold_latencies_by_window.
+        4. Assert that day, night, weekday, and weekend buckets each contain measured samples.
+        5. Calculate medians dynamically using statistics.median (never hardcoded).
+        6. Assert night median exceeds day median and weekend median exceeds weekday median.
+
+    Errors and side effects:
+        Raises AssertionError if night or weekend medians fail to exceed baseline daytime medians.
+
+    Limits:
+        Evaluates empirical sample medians across simulated victim complaints.
+    """
+    budget = GangBudget(money_paise=50_000_000, time_minutes=500_000, max_risk=0.99)
+    steps = (
+        BlockStep("acquire", (("count", 6),)),
+        BlockStep("scam", (("receiving_mules", 2), ("victims_per_receiving_mule", 12))),
+    )
+    gang = GangConfig("g_large", 1, budget, None, steps, 1440)
+
+    configs = read_world_configs()
+    configs.world_ranges["parameters"]["victim_complaint_share"]["training"] = [1.0, 1.0]
+
+    base_settings, code_version = get_showcase_b_settings()
+    settings = FastRunSettings(
+        102, base_settings.n_people, base_settings.n_shops, base_settings.n_days, base_settings.range_name
+    )
+
+    replay = run_two_pass_replay(
+        fast_settings=settings,
+        runner_settings=RunnerSettings(fraud_enabled=True),
+        gang_configs=(gang,),
+        code_version=code_version,
+        configs=configs,
+    )
+
+    groups = measure_hold_latencies_by_window(replay)
+
+    assert len(groups["day"]) > 0, "Expected at least one daytime hold"
+    assert len(groups["night"]) > 0, "Expected at least one night hold"
+    assert len(groups["weekday"]) > 0, "Expected at least one weekday hold"
+    assert len(groups["weekend"]) > 0, "Expected at least one weekend hold"
+
+    med_day = statistics.median(groups["day"])
+    med_night = statistics.median(groups["night"])
+    med_weekday = statistics.median(groups["weekday"])
+    med_weekend = statistics.median(groups["weekend"])
+
+    assert med_night > med_day, (
+        f"Night median latency ({med_night}) must exceed day median ({med_day})"
+    )
+    assert med_weekend > med_weekday, (
+        f"Weekend median latency ({med_weekend}) must exceed weekday median ({med_weekday})"
+    )
+
