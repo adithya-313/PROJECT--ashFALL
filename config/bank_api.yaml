@@ -4,7 +4,7 @@
 
 bank_api:
   label: policy
-  reason: "Commercial bank endpoints and API authentication configuration for Level 14a."
+  reason: "Commercial bank endpoints and API authentication configuration for Level 14a and 14b."
   derived_from: "config/nationalsim.yaml"
   issue_ids_v2: [14-2, 14-9]
   banks:
@@ -12,3 +12,27 @@ bank_api:
     - bank_1
     - bank_2
   api_key_secret_bytes: 32
+
+  signature_max_age_seconds:
+    label: policy
+    value: 300
+    reason: "allowed |now - timestamp| on the wall clock, both directions"
+    derived_from: "finding 14-4"
+
+  nonce_retention_seconds:
+    label: policy
+    value: 900
+    reason: "must be >= 2 x signature_max_age_seconds to prevent replay attacks"
+    derived_from: "replay window policy"
+
+  idempotency_lifetime_hours:
+    label: policy
+    value: 24
+    reason: "24-hour idempotency key retention window"
+    derived_from: "API SLA"
+
+  max_request_body_bytes:
+    label: policy
+    value: 65536
+    reason: "maximum request body size 64KB"
+    derived_from: "payload limit policy"
