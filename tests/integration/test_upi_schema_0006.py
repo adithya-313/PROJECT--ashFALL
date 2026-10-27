@@ -41,8 +41,14 @@ async def test_0006_applies_on_top_of_0004_and_old_rows_still_read(empty_schema,
         """
     )
 
-    # 3. Apply migration 0006 from real migrations directory
-    count_0006 = await apply_pending_migrations(connection, MIGRATIONS_DIR)
+    # 3. Apply migration 0006 from temporary migrations directory containing files up to 0006
+    copied_dir_0006 = tmp_path / "migrations_up_to_0006"
+    copied_dir_0006.mkdir()
+    for f in sorted(MIGRATIONS_DIR.glob("*.sql")):
+        if f.name <= "0006_add_upi_columns_and_bank_isolation.sql":
+            shutil.copy(f, copied_dir_0006 / f.name)
+
+    count_0006 = await apply_pending_migrations(connection, copied_dir_0006)
     assert count_0006 == 1
 
     # 4. Verify both existing rows read back with new UPI columns NULL
