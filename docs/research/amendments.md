@@ -345,3 +345,28 @@ No model code exists yet (models start in Level 18; `world/` is simulator code).
 | Why | Using coverage parameters as reference ranges avoids applying a second error rate or artificial filtering on top of Level 12's emergent victim complaint and bank reporting dynamics (X8). |
 | Results exist? | No model results. Measured coverage values across synthetic world runs only. |
 
+## A-029
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-10-26 |
+| Issue IDs | None |
+| Issue IDs v2 | 13-2, 13-3, 13-16, 13-17 |
+| Files | `config/nationalsim.yaml`, `nationalsim/hold_flow.py` (new), `world/hold_replay.py` (new), `docs/research/amendments.md` |
+| What changed | Level 13c two-pass hold replay and 1930 administrative hold flow. (a) Two-pass replay: Pass 1 runs the fraud-on world normally and generates victim complaints via `world/label_builder.py`. Each complaint produces at most one hold request keyed by `complaint_id`. Pass 2 re-runs the exact same seed with administrative holds injected as `OutsideEvent(kind="lien")` at their computed landing minutes. (b) Complaints are derived exclusively from Pass 1; complaints are not recomputed after Pass 2. (c) Reinterpretation of `hold_missed_share`: while the parameter text in `config/world_ranges.yaml` describes `hold_missed_share` as "too late because money left", Level 13c separates computed balance depletion from bank operational failure. `too_late` is COMPUTED from reconstructed pass-2 account balances at the landing minute (`balance <= 0`), and `hold_missed_share` is used strictly for "the bank never acts" (administrative inaction where no lien is placed). (d) Outcome classification: evaluated from pass-2 state at the landing minute into four exhaustive outcomes: `applied` (lien placed and full requested funds encumbered, `balance >= amount`), `partial` (lien placed and partial funds encumbered, `0 < balance < amount`), `too_late` (money already left the account before lien landed, `balance <= 0`), and `missed` (bank never acted, no lien placed). (e) Naive one-hop forwarding: receiving banks inspect only their own ledgers. For funds that departed the held account prior to hold landing, the bank issues exactly one new hold request to the institution that received that payment. Forwarding stops at exactly one hop (never transitive). Forwarded holds receive their own latency and evaluated pass-2 outcomes, but are not placed as liens in pass 2 (which would require a third pass). (f) Time-of-day and weekend latency multipliers: `config/nationalsim.yaml` defines `night_hours` ([22, 6] IST), `night_multiplier` (2.0), and `weekend_multiplier` (1.5) under label `assumption` and `derived_from: policy`, scaling latency alongside bank `hold_delay_factor` and adding `unreachable_1930_extra_delay_minutes` when unreachable. |
+| Why | Accurately models the operational 1930 national cybercrime reporting hotline and inter-bank administrative hold flow while preserving deterministic two-pass world replay, cleanly separating computed balance depletion (`too_late`) from bank inaction (`missed`), and establishing a transparent baseline for single-hop payment tracebacks without unconstrained multi-hop lien recursion. |
+| Results exist? | No model results. |
+
+## A-030
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-10-27 |
+| Issue IDs | None |
+| Issue IDs v2 | 13-14, 14-13 |
+| Files | `migrations/0005_create_national_outbox.sql` (new), `tests/integration/test_national_outbox_table.py` (new), `tests/integration/test_migration_runner.py`, `config/issues_v2.yaml`, `docs/research/amendments.md` |
+| What changed | Level 13c national outbox table and migration sequencing. (a) Dedicated national outbox table: `national_outbox` is created via `migrations/0005_create_national_outbox.sql` for registry events and 1930 hold requests. The existing Level 7 `outbox` table (`migrations/0001`) has `transaction_id UUID NOT NULL REFERENCES transactions(transaction_id)` and a schema envelope locked at version "1", making it structurally impossible to use for national events that have no associated transaction. (b) Reassignment of migration 0005: Migration 0005 was previously reserved in the plan for Level 14 UPI event-time columns. Under Architect Decision, 0005 is reassigned to `national_outbox`, and Level 14's UPI columns are moved to migration 0006. References in `config/issues_v2.yaml` are updated accordingly. (c) Redpanda / Kafka ACL limitation: Redpanda in local development has no ACLs configured. Bank-level message segregation ("a bank cannot consume another bank's messages") is enforced at the bank consumer layer by verifying that the message key equals `<run_id>:<bank_id>` and counting/logging foreign messages without reading their payloads. In a production deployment, broker-level ACLs (e.g. Kafka SASL/SCRAM or mTLS per-principal topic/partition ACLs) would be required to enforce transport-level isolation. |
+| Why | Prevents invalid foreign key constraints on non-transactional national events, preserves Level 7 outbox table immutability, reserves clean migration sequencing for UPI columns, and documents development vs production security boundaries for multi-tenant bank messaging. |
+| Results exist? | No model results. |
+
+

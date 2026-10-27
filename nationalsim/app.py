@@ -177,6 +177,90 @@ def validate_nationalsim_settings(
     return raw_delay, banks_dict
 
 
+def validate_hold_settings(
+    settings: dict[str, Any],
+    file_name: str = "config/nationalsim.yaml",
+) -> tuple[tuple[int, int], float, float]:
+    """Validate 1930 administrative hold latency parameters without silent defaults.
+
+    What it is for:
+        Enforces strict schema and value boundaries for night hours, night multiplier,
+        and weekend multiplier used in calculating 1930 administrative hold latencies.
+
+    Inputs:
+        settings: Mapping containing 'night_hours', 'night_multiplier', and 'weekend_multiplier'.
+            For example:
+                {
+                    "night_hours": [22, 6],
+                    "night_multiplier": 2.0,
+                    "weekend_multiplier": 1.5,
+                }
+        file_name: Name of the configuration source file for descriptive errors.
+            Defaults to 'config/nationalsim.yaml'.
+
+    What it returns:
+        A tuple of ((night_start_hour, night_end_hour), night_multiplier, weekend_multiplier).
+
+    How it works:
+        1. Ensure 'night_hours' is present, unpack dictionary 'value' if wrapped, and verify
+           it is a 2-element sequence of integers in the range [0, 23] with no booleans.
+        2. Ensure 'night_multiplier' is present, unpack dictionary 'value' if wrapped, and verify
+           it is a strictly positive float or integer (not boolean).
+        3. Ensure 'weekend_multiplier' is present, unpack dictionary 'value' if wrapped, and verify
+           it is a strictly positive float or integer (not boolean).
+
+    Errors and side effects:
+        Raises ValueError naming the missing or invalid parameter and file_name.
+
+    Limits:
+        Validates in-memory settings dictionary; hours are in 24-hour clock space.
+    """
+    if "night_hours" not in settings:
+        raise ValueError(f"Missing key 'night_hours' in {file_name}.")
+    raw_night_hours = settings["night_hours"]
+    if isinstance(raw_night_hours, dict):
+        if "value" not in raw_night_hours:
+            raise ValueError(f"Missing key 'night_hours.value' in {file_name}.")
+        raw_night_hours = raw_night_hours["value"]
+
+    if not isinstance(raw_night_hours, (list, tuple)) or len(raw_night_hours) != 2:
+        raise ValueError(
+            f"Invalid 'night_hours' in {file_name}: must be a 2-element list or tuple of integers [start, end], "
+            f"got {raw_night_hours!r}."
+        )
+    h_start, h_end = raw_night_hours[0], raw_night_hours[1]
+    if isinstance(h_start, bool) or not isinstance(h_start, int) or not (0 <= h_start <= 23):
+        raise ValueError(f"Invalid night start hour in {file_name}: must be integer between 0 and 23, got {h_start!r}.")
+    if isinstance(h_end, bool) or not isinstance(h_end, int) or not (0 <= h_end <= 23):
+        raise ValueError(f"Invalid night end hour in {file_name}: must be integer between 0 and 23, got {h_end!r}.")
+
+    if "night_multiplier" not in settings:
+        raise ValueError(f"Missing key 'night_multiplier' in {file_name}.")
+    raw_night_mult = settings["night_multiplier"]
+    if isinstance(raw_night_mult, dict):
+        if "value" not in raw_night_mult:
+            raise ValueError(f"Missing key 'night_multiplier.value' in {file_name}.")
+        raw_night_mult = raw_night_mult["value"]
+    if isinstance(raw_night_mult, bool) or not isinstance(raw_night_mult, (int, float)) or raw_night_mult <= 0:
+        raise ValueError(
+            f"Invalid 'night_multiplier' in {file_name}: must be a positive number, got {raw_night_mult!r}."
+        )
+
+    if "weekend_multiplier" not in settings:
+        raise ValueError(f"Missing key 'weekend_multiplier' in {file_name}.")
+    raw_wknd_mult = settings["weekend_multiplier"]
+    if isinstance(raw_wknd_mult, dict):
+        if "value" not in raw_wknd_mult:
+            raise ValueError(f"Missing key 'weekend_multiplier.value' in {file_name}.")
+        raw_wknd_mult = raw_wknd_mult["value"]
+    if isinstance(raw_wknd_mult, bool) or not isinstance(raw_wknd_mult, (int, float)) or raw_wknd_mult <= 0:
+        raise ValueError(
+            f"Invalid 'weekend_multiplier' in {file_name}: must be a positive number, got {raw_wknd_mult!r}."
+        )
+
+    return (int(h_start), int(h_end)), float(raw_night_mult), float(raw_wknd_mult)
+
+
 def load_nationalsim_config(
     config_path: Path | str = "config/nationalsim.yaml",
 ) -> tuple[timedelta, dict[str, Any]]:
@@ -198,7 +282,8 @@ def load_nationalsim_config(
         1. Locate and read the YAML file from disk.
         2. Ensure the top-level 'nationalsim' key exists.
         3. Validate listing delay and bank participation mappings using validate_nationalsim_settings.
-        4. Return the delay as a timedelta and the bank settings dictionary.
+        4. Validate 1930 administrative hold settings using validate_hold_settings.
+        5. Return the delay as a timedelta and the bank settings dictionary.
 
     Errors and side effects:
         Raises ValueError if the file is missing or if listing_delay_minutes or banks
@@ -222,6 +307,7 @@ def load_nationalsim_config(
         raise ValueError(f"Section 'nationalsim' in {file_name} must be a mapping.")
 
     delay_minutes, banks_dict = validate_nationalsim_settings(ns_section, file_name=file_name)
+    validate_hold_settings(ns_section, file_name=file_name)
     return timedelta(minutes=delay_minutes), banks_dict
 
 

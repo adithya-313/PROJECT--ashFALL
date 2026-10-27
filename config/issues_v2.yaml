@@ -146,7 +146,7 @@ issues:
       - {kind: test, file: tests/unit/test_event_clock.py, name: test_world_minute_to_ist_at_zero}
       - {kind: test, file: tests/unit/test_event_clock.py, name: test_round_trip_conversion_holds}
       - {kind: test, file: tests/unit/test_event_clock.py, name: test_replay_clock_at_speed_1_and_speed_100}
-    later_work: ["Level 14: event-time columns in migration 0005 and bank APIs", "Level 15: event-time window expiry in feature store", "Level 16: label cutoff and observation windows in event time"]
+    later_work: ["Level 14: event-time columns in migration 0006 and bank APIs", "Level 15: event-time window expiry in feature store", "Level 16: label cutoff and observation windows in event time"]
   X2:
     title: "The complaint path was defined twice"
     origin: revision_2
@@ -463,17 +463,23 @@ issues:
   13-2:
     title: "Raw identifiers could leak through logs, topics and traces"
     origin: revision_2
-    status: planned
+    status: built
     levels: [13]
     parts: [13c]
-    later_work: ["Level 13c: Scan five places; redact at logging and tracing"]
+    evidence:
+      - {kind: test, file: tests/unit/test_redaction.py, name: test_each_raw_identifier_pattern_is_redacted}
+      - {kind: test, file: tests/unit/test_redaction.py, name: test_structlog_log_line_containing_account_id_is_emitted_redacted}
+      - {kind: test, file: tests/unit/test_redaction.py, name: test_span_attribute_containing_fingerprint_is_exported_redacted}
+      - {kind: test, file: tests/unit/test_raw_identifier_scan.py, name: test_planting_one_raw_account_id_in_fake_log_line_is_found}
   13-3:
     title: "Forwarding holds risked a duplicate tracer in the mock banks"
     origin: revision_2
-    status: planned
+    status: built
     levels: [13, 23]
     parts: [13c]
-    later_work: ["Level 13c: Naive one-hop forwarding as the declared baseline"]
+    evidence:
+      - {kind: test, file: tests/unit/nationalsim/test_hold_flow.py, name: test_forwarding_is_exactly_one_hop}
+      - {kind: test, file: tests/unit/world/test_hold_replay.py, name: test_forwarding_sends_one_request_to_receiving_bank_and_stops_there}
   13-5:
     title: "DPIP and the I4C registry were conflated"
     origin: revision_2
@@ -549,17 +555,23 @@ issues:
   13-16:
     title: "Hold delay was about to be defined twice"
     origin: revision_2
-    status: planned
+    status: built
     levels: [13]
     parts: [13c]
-    later_work: ["Level 13c: Reuse hold_delay_factor"]
+    evidence:
+      - {kind: amendment, id: A-029}
+      - {kind: test, file: tests/unit/nationalsim/test_hold_flow.py, name: test_latency_formula_exact_minutes_day_night_weekday_weekend}
+      - {kind: test, file: tests/unit/world/test_hold_replay.py, name: test_hold_latency_medians_higher_at_night_and_weekends}
   13-17:
     title: "too_late needs ledger state when the hold lands"
     origin: revision_2
-    status: planned
+    status: built
     levels: [13]
     parts: [13c]
-    later_work: ["Level 13c: Computed from the encumbrance overlay"]
+    evidence:
+      - {kind: amendment, id: A-029}
+      - {kind: test, file: tests/unit/nationalsim/test_hold_flow.py, name: test_outcome_classification_covers_applied_too_late_missed_with_shortfall}
+      - {kind: test, file: tests/unit/world/test_hold_replay.py, name: test_constructed_case_money_leaves_before_hold_lands_is_too_late}
   14-2:
     title: "A cross-bank payment's two sides had no shared key"
     origin: revision_2
@@ -622,7 +634,7 @@ issues:
     status: planned
     levels: [14]
     parts: [14a]
-    later_work: ["Level 14a: Migration 0005"]
+    later_work: ["Level 14a: Migration 0006"]
   14-14:
     title: "Outbox schema \"1\" is locked; processed_events expects UUIDs"
     origin: revision_2
