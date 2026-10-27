@@ -1,5 +1,6 @@
 # Ignore environment files
 .env
+envs/nationalsim.env
 # Ignore Python artifacts
 __pycache__/
 *.py[cod]

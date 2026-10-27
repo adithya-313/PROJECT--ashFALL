@@ -320,3 +320,53 @@ No model code exists yet (models start in Level 18; `world/` is simulator code).
 | What changed | Level 12h. Partly replaces A-013 (where it says the check runs on validation worlds only). (a) The trivial-world check GATES on every training and validation world: a world whose best single signal reaches AUPRC 0.90 or more fails, and the response is to fix the world, never the threshold. (b) It also runs on every test and stress world as REPORT-ONLY: results are recorded, with held-out gangs reported per family, and are never used to tune the world or the threshold. Looking at test worlds is allowed; changing anything because of what was seen there is not. (c) If a report-only run shows a family or signal at or above 0.90, the response is fixed in advance: report the family, the signal and the separation; any fix to a mechanism must be justified without the test result (for example "the mechanism was unrealistic"), and that reason is written in a new amendment; after a fix, test and stress worlds are regenerated from fresh seed ranges, so the worlds that were looked at are never the worlds that are scored. This route is open only because no model exists yet; it closes when Level 18 starts. (d) The six candidate signals are fixed before any result: routine life, pass-through, dwell, devices per account, payer count and payer regions, each computed per account from world events in the evaluation package, scored in both directions. Mules are accounts holding a mule role in the truth; genuine accounts hold no gang role at any time (victims included). |
 | Why | Rule 17 forbids tuning on test and stress worlds, not looking at them. Recording the response in advance stops a report-only result from quietly turning into tuning. The signals and the scoring are fixed before any result exists. No model code exists yet for the new engine (models start in Level 18); `models/` and `scripts/fraud_*` hold only v1 PaySim work, excluded by `earlier_work_note`. |
 | Results exist? | No model results. |
+
+## A-027
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-10-25 |
+| Issue IDs | None |
+| Issue IDs v2 | 13-11, 13-12, 13-14, 13-15 |
+| Files | `docs/interfaces/national_systems.md`, `docs/interfaces/time.md`, `config/nationalsim.yaml`, `docs/research/amendments.md` |
+| What changed | Level 13a. (a) National mock systems contracts updated in Revision 2: all currency amounts specified in integer paise; hold requests carry complaint_id and payment_id; timestamps follow docs/interfaces/time.md (IST aware, Ground Rule 30); identifier hashes use HMAC-SHA256 keyed per run. (b) nationalsim listing delay: `listing_delay_minutes` in `config/nationalsim.yaml` represents the registry's own internal processing time between ingestion receipt and visibility to screening, separate from Level 12's `registry_report_delay_minutes` (which delays report arrival from bank confirmation). (c) `registry_entry_delay_days` (N2 in `config/world_ranges.yaml`) is not used by nationalsim, because using it would delay the same gap twice. It stays as a parameter in `config/world_ranges.yaml` and the reconciliation is open. (d) DPIP Phase-2 transaction scoring is declared out of scope and is not built. |
+| Why | Establishes explicit paise and event-time standards for national systems mocks, distinguishes bank reporting delay from registry listing delay, avoids double-counting delay across world ranges and nationalsim, and clarifies that Phase-2 scores are not implemented. |
+| Results exist? | No model results. |
+
+## A-028
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-10-26 |
+| Issue IDs | None |
+| Issue IDs v2 | N2, 13-5 |
+| Files | `evaluation/registry_coverage.py` (new), `tests/unit/evaluation/test_registry_coverage.py` (new), `docs/research/amendments.md` |
+| What changed | Level 13b registry coverage evaluation. Coverage is emergent from Level 12 reports: for each mule depth (1, 2, 3+), reported mules / all mules is computed directly from the world's registry reports and truth roles. The configured ranges in `config/world_ranges.yaml` (`registry_coverage_layer1_mule_share` and `registry_coverage_deeper_mule_share`) serve as reference ranges beside the measured values rather than an active filter or sampling mask. Pass rule requires layer-1 coverage > deeper coverage. |
+| Why | Using coverage parameters as reference ranges avoids applying a second error rate or artificial filtering on top of Level 12's emergent victim complaint and bank reporting dynamics (X8). |
+| Results exist? | No model results. Measured coverage values across synthetic world runs only. |
+
+## A-029
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-10-26 |
+| Issue IDs | None |
+| Issue IDs v2 | 13-2, 13-3, 13-16, 13-17 |
+| Files | `config/nationalsim.yaml`, `nationalsim/hold_flow.py` (new), `world/hold_replay.py` (new), `docs/research/amendments.md` |
+| What changed | Level 13c two-pass hold replay and 1930 administrative hold flow. (a) Two-pass replay: Pass 1 runs the fraud-on world normally and generates victim complaints via `world/label_builder.py`. Each complaint produces at most one hold request keyed by `complaint_id`. Pass 2 re-runs the exact same seed with administrative holds injected as `OutsideEvent(kind="lien")` at their computed landing minutes. (b) Complaints are derived exclusively from Pass 1; complaints are not recomputed after Pass 2. (c) Reinterpretation of `hold_missed_share`: while the parameter text in `config/world_ranges.yaml` describes `hold_missed_share` as "too late because money left", Level 13c separates computed balance depletion from bank operational failure. `too_late` is COMPUTED from reconstructed pass-2 account balances at the landing minute (`balance <= 0`), and `hold_missed_share` is used strictly for "the bank never acts" (administrative inaction where no lien is placed). (d) Outcome classification: evaluated from pass-2 state at the landing minute into four exhaustive outcomes: `applied` (lien placed and full requested funds encumbered, `balance >= amount`), `partial` (lien placed and partial funds encumbered, `0 < balance < amount`), `too_late` (money already left the account before lien landed, `balance <= 0`), and `missed` (bank never acted, no lien placed). (e) Naive one-hop forwarding: receiving banks inspect only their own ledgers. For funds that departed the held account prior to hold landing, the bank issues exactly one new hold request to the institution that received that payment. Forwarding stops at exactly one hop (never transitive). Forwarded holds receive their own latency and evaluated pass-2 outcomes, but are not placed as liens in pass 2 (which would require a third pass). (f) Time-of-day and weekend latency multipliers: `config/nationalsim.yaml` defines `night_hours` ([22, 6] IST), `night_multiplier` (2.0), and `weekend_multiplier` (1.5) under label `assumption` and `derived_from: policy`, scaling latency alongside bank `hold_delay_factor` and adding `unreachable_1930_extra_delay_minutes` when unreachable. |
+| Why | Accurately models the operational 1930 national cybercrime reporting hotline and inter-bank administrative hold flow while preserving deterministic two-pass world replay, cleanly separating computed balance depletion (`too_late`) from bank inaction (`missed`), and establishing a transparent baseline for single-hop payment tracebacks without unconstrained multi-hop lien recursion. |
+| Results exist? | No model results. |
+
+## A-030
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-10-27 |
+| Issue IDs | None |
+| Issue IDs v2 | 13-14, 14-13 |
+| Files | `migrations/0005_create_national_outbox.sql` (new), `tests/integration/test_national_outbox_table.py` (new), `tests/integration/test_migration_runner.py`, `config/issues_v2.yaml`, `docs/research/amendments.md` |
+| What changed | Level 13c national outbox table and migration sequencing. (a) Dedicated national outbox table: `national_outbox` is created via `migrations/0005_create_national_outbox.sql` for registry events and 1930 hold requests. The existing Level 7 `outbox` table (`migrations/0001`) has `transaction_id UUID NOT NULL REFERENCES transactions(transaction_id)` and a schema envelope locked at version "1", making it structurally impossible to use for national events that have no associated transaction. (b) Reassignment of migration 0005: Migration 0005 was previously reserved in the plan for Level 14 UPI event-time columns. Under Architect Decision, 0005 is reassigned to `national_outbox`, and Level 14's UPI columns are moved to migration 0006. References in `config/issues_v2.yaml` are updated accordingly. (c) Redpanda / Kafka ACL limitation: Redpanda in local development has no ACLs configured. Bank-level message segregation ("a bank cannot consume another bank's messages") is enforced at the bank consumer layer by verifying that the message key equals `<run_id>:<bank_id>` and counting/logging foreign messages without reading their payloads. In a production deployment, broker-level ACLs (e.g. Kafka SASL/SCRAM or mTLS per-principal topic/partition ACLs) would be required to enforce transport-level isolation. |
+| Why | Prevents invalid foreign key constraints on non-transactional national events, preserves Level 7 outbox table immutability, reserves clean migration sequencing for UPI columns, and documents development vs production security boundaries for multi-tenant bank messaging. |
+| Results exist? | No model results. |
+
+

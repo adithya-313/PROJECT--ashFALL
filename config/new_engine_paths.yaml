@@ -52,3 +52,4 @@ new_engine_paths:
     - scenarios/
     - evaluation/
     - patterns/
+    - nationalsim/

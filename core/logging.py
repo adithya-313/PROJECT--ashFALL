@@ -12,6 +12,8 @@ from typing import Any, Optional
 
 import structlog
 
+from core.redaction import redact_log_processor
+
 # Context variable holding the current request ID for the active async call stack.
 # Initialized with default=None when outside of an active HTTP request context.
 request_id_ctx_var: ContextVar[Optional[str]] = ContextVar("request_id", default=None)
@@ -80,6 +82,7 @@ def configure_logging(log_level: str) -> None:
             inject_environment,  # type: ignore[list-item]
             inject_request_id,  # type: ignore[list-item]
             inject_trace_id,  # type: ignore[list-item]
+            redact_log_processor,  # type: ignore[list-item]
             structlog.processors.JSONRenderer(),
         ],
         logger_factory=structlog.stdlib.LoggerFactory(),
