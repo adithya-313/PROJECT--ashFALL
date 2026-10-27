@@ -52,6 +52,8 @@ class AppConfig(BaseSettings):
     kafka_bootstrap_servers: str = "localhost:19092"
     # The Kafka topic the outbox relay publishes transaction events to.
     kafka_outbox_topic: str = "transactions.created"
+    # The Kafka topic the outbox relay publishes schema-2 UPI payment events to.
+    kafka_upi_topic: str = "upi.payments"
     # Outbox relay tuning: how long to wait between checks when there is nothing to send, how many events to send
     # per round, and the longest wait between retries after a Kafka failure (the wait doubles up to this cap).
     relay_poll_interval_seconds: float = 1.0
