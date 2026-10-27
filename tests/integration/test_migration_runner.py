@@ -43,15 +43,19 @@ async def test_fresh_schema_applies_all_migrations_in_order(empty_schema):
 
     applied_count = await apply_pending_migrations(connection)
 
-    # All files applied (we expect 6 today), and the tracking table lists exactly those names.
-    assert applied_count == len(real_filenames) == 6
+    # All files applied (we expect 7 today), and the tracking table lists exactly those names.
+    assert applied_count == len(real_filenames) == 7
     assert await applied_filenames(connection) == real_filenames
     assert real_filenames == sorted(real_filenames)
 
     # The tables were created inside THIS schema, not in public.
     tables = await table_names_in_schema(connection, schema_name)
-    expected_tables = {"transactions", "outbox", "processed_events", "demo_event_counts", "outbox_dead_letter",
-                       "national_outbox", "bank_api_keys", "schema_migrations"}
+    expected_tables = {
+        "transactions", "outbox", "processed_events", "demo_event_counts", "outbox_dead_letter",
+        "national_outbox", "bank_api_keys", "schema_migrations",
+        "bank_request_nonces", "bank_idempotency_keys", "bank_decision_requests",
+        "bank_account_events", "bank_complaints", "bank_feedback",
+    }
     assert expected_tables <= tables
 
 
@@ -62,9 +66,9 @@ async def test_second_run_applies_nothing(empty_schema):
     first_count = await apply_pending_migrations(connection)
     second_count = await apply_pending_migrations(connection)
 
-    assert first_count == len(find_migration_files()) == 6
+    assert first_count == len(find_migration_files()) == 7
     assert second_count == 0
-    assert len(await applied_filenames(connection)) == 6
+    assert len(await applied_filenames(connection)) == 7
 
 
 async def test_failed_migration_is_not_recorded(empty_schema, tmp_path):
