@@ -27,6 +27,7 @@ from core.issue_register_v2 import (
     REGISTER_PATH,
     check_config_tags,
     check_register,
+    check_test_evidence,
     count_statuses,
 )
 
@@ -112,14 +113,16 @@ def test_real_register_passes() -> None:
         partial 11 to 11, planned 48 to 43).
         Level 13b moved 13-5, 13-9 and 13-10 to built (built 38 to 41, partial 11 to 11, planned 43 to 40).
         Level 13c moved 13-2, 13-3, 13-16 and 13-17 to built (built 41 to 45, partial 11 to 11, planned 40 to 36).
+        Level 14a moved 14-2, 14-13, 14-14, 14-15 to built, and 14-8, 14-9, 14-11, 14-12 to partial (built 45 to 49,
+        partial 11 to 15, planned 36 to 28).
     """
     register = real_register()
     assert check_register(register, REPO_ROOT) == []
     issues = register["issues"]
     assert len(EXPECTED_V2_IDS) == 77
     assert len(issues) == 93
-    # Level 13c
-    assert count_statuses(issues) == {"built": 45, "partial": 11, "planned": 36, "deferred": 1}
+    # Level 14a
+    assert count_statuses(issues) == {"built": 49, "partial": 15, "planned": 28, "deferred": 1}
 
 
 def test_missing_id_is_rejected() -> None:
@@ -484,4 +487,34 @@ def test_doc_evidence_directory_and_text() -> None:
     file_item["text"] = "nonexistent_anchor_phrase"
     errs_file = errors_of(broken_file_text)
     assert "12-13: text 'nonexistent_anchor_phrase' not found in world/edge_cases.py" in errs_file
+
+
+def test_test_evidence_supports_both_sync_and_async_defs(tmp_path: Path) -> None:
+    """
+    WHAT: Proves that check_test_evidence accepts both synchronous 'def test_...' and
+    asynchronous 'async def test_...' functions, and rejects missing or non-matching names.
+
+    WHY: Architect Ruling A2: integration tests using async fixtures are written as async def.
+    The checker must accept both sync and async def while remaining strict on non-existent functions.
+    """
+    sample_file = tmp_path / "test_sample.py"
+    sample_file.write_text(
+        "def test_sync_case():\n    pass\n\nasync def test_async_case():\n    pass\n",
+        encoding="utf-8",
+    )
+
+    # 1. Synchronous def matches
+    sync_item = {"file": str(sample_file.relative_to(tmp_path)), "name": "test_sync_case"}
+    assert check_test_evidence("14-2", sync_item, tmp_path) == []
+
+    # 2. Asynchronous async def matches
+    async_item = {"file": str(sample_file.relative_to(tmp_path)), "name": "test_async_case"}
+    assert check_test_evidence("14-2", async_item, tmp_path) == []
+
+    # 3. Non-existent test name fails loudly
+    missing_item = {"file": str(sample_file.relative_to(tmp_path)), "name": "test_missing_case"}
+    errs = check_test_evidence("14-2", missing_item, tmp_path)
+    assert len(errs) == 1
+    assert "test function test_missing_case not found" in errs[0]
+
 

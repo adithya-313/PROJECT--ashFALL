@@ -23,9 +23,10 @@ Run it with:  python -m api.services.outbox_relay
 
 import asyncio
 import signal
-from typing import NamedTuple
+from typing import Any, Mapping, NamedTuple
 
 import asyncpg
+import orjson
 from aiokafka import AIOKafkaProducer
 from aiokafka.errors import (
     CorruptRecordException,
@@ -90,19 +91,51 @@ async def fetch_unprocessed_batch(conn: asyncpg.Connection, batch_size: int) -> 
     )
 
 
+def choose_topic(row: asyncpg.Record | Mapping[str, Any], explicit_topic: str | None = None) -> str:
+    """
+    Select the Kafka destination topic for an outbox event row.
+
+    Rules:
+      1. If explicit_topic is provided (such as in showcase runs using isolated throwaway topics),
+         it is returned directly.
+      2. Otherwise, row["payload"] is parsed with orjson. If the payload is a dictionary whose
+         schema_version == "2", config.kafka_upi_topic ("upi.payments") is returned.
+      3. For schema_version "1" or any other schema version, config.kafka_outbox_topic ("transactions.created")
+         is returned.
+      4. THE ONE ALLOWED FALLBACK: If row["payload"] fails to parse as valid JSON (for example due to corrupt
+         or malformed stored data), it keeps the old default topic (config.kafka_outbox_topic), exactly as
+         Level 7 behaved prior to schema versioning.
+    """
+    if explicit_topic is not None:
+        return explicit_topic
+
+    payload_raw = row["payload"]
+    try:
+        parsed = orjson.loads(payload_raw)
+        if isinstance(parsed, dict) and parsed.get("schema_version") == "2":
+            return config.kafka_upi_topic
+    except (orjson.JSONDecodeError, TypeError):
+        # Documented fallback: non-parseable payload keeps the old default topic (Level 7 behavior)
+        return config.kafka_outbox_topic
+
+    return config.kafka_outbox_topic
+
+
 async def publish_event(producer: AIOKafkaProducer, row: asyncpg.Record, topic: str | None = None) -> None:
     """
     Send one event to Kafka and wait for the broker's confirmation.
 
-    topic is optional: by default the event goes to config.kafka_outbox_topic. A different topic can be given, for
+    topic is optional: by default choose_topic selects config.kafka_upi_topic for schema "2" events
+    and config.kafka_outbox_topic for schema "1" events. A different topic can be given, for
     example by the showcases, which publish to a throwaway topic.
 
     The message key is the event_id (so a consumer can spot repeats), and the value is the stored JSON payload exactly
     as the API wrote it. send_and_wait returns only after the broker acknowledged the message (acks="all"), and raises
     an error if it could not.
     """
+    target_topic = choose_topic(row, topic)
     await producer.send_and_wait(
-        topic or config.kafka_outbox_topic,
+        target_topic,
         value=row["payload"].encode("utf-8"),  # asyncpg hands jsonb back as JSON text
         key=str(row["event_id"]).encode("utf-8"),
     )
