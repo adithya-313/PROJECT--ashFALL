@@ -369,4 +369,17 @@ No model code exists yet (models start in Level 18; `world/` is simulator code).
 | Why | Prevents invalid foreign key constraints on non-transactional national events, preserves Level 7 outbox table immutability, reserves clean migration sequencing for UPI columns, and documents development vs production security boundaries for multi-tenant bank messaging. |
 | Results exist? | No model results. |
 
+## A-031
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-10-27 |
+| Issue IDs | None |
+| Issue IDs v2 | 14-2, 14-8, 14-9, 14-11, 14-12, 14-13, 14-14, 14-15, K3 |
+| Files | `migrations/0006_add_upi_columns_and_bank_isolation.sql` (new), `api/v1/bank_scope.py` (new), `api/v1/bank_keys.py` (new), `api/v1/upi_outbox.py` (new), `config/bank_api.yaml` (new), `api/services/outbox_relay.py`, `core/config.py`, `config/issues_v2.yaml`, `docs/research/amendments.md` |
+| What changed | Level 14a schema migration, bank isolation, and UPI outbox. (a) 0006 not 0005: Following A-030 which assigned 0005 to `national_outbox`, Level 14 UPI columns, constraints, bank_api_keys table, and RLS policies are applied in `migrations/0006_add_upi_columns_and_bank_isolation.sql`. (b) Non-superuser role and RLS bypass: PostgreSQL superusers bypass Row Level Security policies by engine design. Application and test pool connections connect as the superuser (`postgres`), so tenant isolation is enforced by switching to a non-superuser role (`ashfall_bank_api`) via `SET LOCAL ROLE` and setting `app.bank_id` transaction-locally via `set_config('app.bank_id', bank_id, true)`. (c) Outbox schema "2" and topic routing: UPI payment events use envelope schema_version "2" (`upi.payment.recorded`) and are routed to `config.kafka_upi_topic` (`upi.payments`). The Level 7 consumer (`api.services.idempotent_consumer.parse_event`) strictly asserts `schema_version == "1"` and crashes on any other version, requiring dedicated topic separation for schema "2". (d) UPI idempotency via `(bank_id, payment_id, side)`: Each side of a UPI transfer is uniquely keyed in `transactions` by `uq_transactions_bank_payment_side`. Replayed payment sides return `was_replay=True` with the existing `transaction_id` and do not emit duplicate outbox events. Event IDs are derived deterministically using UUIDv5 with a permanent dedicated namespace. (e) Outbox least-privilege isolation: Outbox rows are not bank-isolated and lack a `bank_id` column. The `ashfall_bank_api` role is granted `INSERT` on `outbox` to stage events alongside transactions in atomic blocks, but is explicitly denied `SELECT` on `outbox` so that commercial banks can never read queued outbox events staged by other banks. |
+| Why | Establishes PostgreSQL row-level security that cannot be bypassed on pooled connections, ensures clean backward compatibility with locked Level 7 consumer schemas, guarantees idempotency for cross-bank transfers, and enforces least-privilege security boundaries across tenant banks. |
+| Results exist? | No model results. Integration test and unit test evidence only. |
+
+
 

@@ -82,12 +82,13 @@ issues:
     origin: revision_2
     status: partial
     levels: [12, 14, 16, 23, 32]
-    parts: [12a]
+    parts: [12a, 14a]
     evidence:
       - {kind: config, file: config/interactive_runner.yaml, name: interactive_runner}
       - {kind: test, file: tests/unit/world/test_run_identity.py, name: test_payment_ids_are_unique_and_well_formed}
       - {kind: test, file: tests/unit/world/test_interactive_events.py, name: test_lines_have_v1_fields_plus_two_ids_and_nothing_revealing}
       - {kind: test, file: tests/unit/world/test_interactive_runner_fraud_on.py, name: test_split_world_has_genuine_splits_and_same_ids_on_both_paths}
+      - {kind: test, file: tests/integration/test_upi_schema_0006.py, name: test_same_bank_payment_side_is_unique}
     later_work: ["Level 14: payment_id, bank_id and side on the bank side (finding 14-2)", "Level 16: carry payment_id through labels", "Level 23: carry payment_id through the money tracer", "Level 32: carry payment_id through later levels"]
   K4:
     title: "The world has no database"
@@ -575,10 +576,13 @@ issues:
   14-2:
     title: "A cross-bank payment's two sides had no shared key"
     origin: revision_2
-    status: planned
+    status: built
     levels: [14]
     parts: [14a]
-    later_work: ["Level 14a: payment_id, bank_id, side"]
+    evidence:
+      - {kind: test, file: tests/integration/test_upi_schema_0006.py, name: test_same_bank_payment_side_is_unique}
+      - {kind: test, file: tests/integration/test_upi_outbox_writer.py, name: test_same_side_sent_twice_is_replay}
+      - {kind: test, file: tests/integration/test_upi_outbox_writer.py, name: test_cross_bank_payment}
   14-4:
     title: "Signature freshness against simulated time would reject replays"
     origin: revision_2
@@ -596,17 +600,24 @@ issues:
   14-8:
     title: "No payee type or channel for features"
     origin: revision_2
-    status: planned
+    status: partial
     levels: [14]
     parts: [14a, 14c]
-    later_work: ["Level 14a: Columns and projection"]
+    evidence:
+      - {kind: test, file: tests/integration/test_upi_schema_0006.py, name: test_0006_applies_on_top_of_0004_and_old_rows_still_read}
+      - {kind: test, file: tests/integration/test_migration_runner.py, name: test_transactions_table_column_count_is_locked}
+    later_work: ["Level 14c: projection fills payee_type and channel"]
   14-9:
     title: "Idempotency, keys and error handling underspecified"
     origin: revision_2
-    status: planned
+    status: partial
     levels: [14]
     parts: [14a, 14b]
-    later_work: ["Level 14a: Per-bank scope and 409; hashed keys with rotation; fuzzing"]
+    evidence:
+      - {kind: test, file: tests/integration/test_bank_isolation.py, name: test_rotation_old_and_new_key_work_until_revoked}
+      - {kind: test, file: tests/integration/test_bank_isolation.py, name: test_revoked_key_resolves_to_none}
+      - {kind: test, file: tests/integration/test_bank_isolation.py, name: test_malformed_and_wrong_secret_keys_resolve_to_none}
+    later_work: ["Level 14b: per-bank idempotency 409, signing, fuzzing"]
   14-10:
     title: "Failed-payment visibility depends on the failure domain"
     origin: revision_2
@@ -617,38 +628,52 @@ issues:
   14-11:
     title: "Idempotency, keys and error handling underspecified"
     origin: revision_2
-    status: planned
+    status: partial
     levels: [14]
     parts: [14a, 14b]
-    later_work: ["Level 14a: Per-bank scope and 409; hashed keys with rotation; fuzzing"]
+    evidence:
+      - {kind: test, file: tests/integration/test_bank_isolation.py, name: test_rotation_old_and_new_key_work_until_revoked}
+      - {kind: test, file: tests/integration/test_bank_isolation.py, name: test_revoked_key_resolves_to_none}
+      - {kind: test, file: tests/integration/test_bank_isolation.py, name: test_malformed_and_wrong_secret_keys_resolve_to_none}
+    later_work: ["Level 14b: per-bank idempotency 409, signing, fuzzing"]
   14-12:
     title: "Idempotency, keys and error handling underspecified"
     origin: revision_2
-    status: planned
+    status: partial
     levels: [14]
     parts: [14a, 14b]
-    later_work: ["Level 14a: Per-bank scope and 409; hashed keys with rotation; fuzzing"]
+    evidence:
+      - {kind: test, file: tests/integration/test_bank_isolation.py, name: test_rotation_old_and_new_key_work_until_revoked}
+      - {kind: test, file: tests/integration/test_bank_isolation.py, name: test_revoked_key_resolves_to_none}
+      - {kind: test, file: tests/integration/test_bank_isolation.py, name: test_malformed_and_wrong_secret_keys_resolve_to_none}
+    later_work: ["Level 14b: per-bank idempotency 409, signing, fuzzing"]
   14-13:
     title: "chk_source rejects UPI rows; \"migration 0002\" already used"
     origin: revision_2
-    status: planned
+    status: built
     levels: [14]
     parts: [14a]
-    later_work: ["Level 14a: Migration 0006"]
+    evidence:
+      - {kind: test, file: tests/integration/test_upi_schema_0006.py, name: test_0006_applies_on_top_of_0004_and_old_rows_still_read}
+      - {kind: test, file: tests/integration/test_upi_schema_0006.py, name: test_world_row_requires_its_fields}
   14-14:
     title: "Outbox schema \"1\" is locked; processed_events expects UUIDs"
     origin: revision_2
-    status: planned
+    status: built
     levels: [14]
     parts: [14a]
-    later_work: ["Level 14a: Schema \"2\"; UUIDv5 IDs"]
+    evidence:
+      - {kind: test, file: tests/integration/test_upi_outbox_writer.py, name: test_cross_bank_payment}
+      - {kind: test, file: tests/unit/test_upi_relay_topic.py, name: test_v2_payload_routes_to_kafka_upi_topic}
   14-15:
     title: "Outbox schema \"1\" is locked; processed_events expects UUIDs"
     origin: revision_2
-    status: planned
+    status: built
     levels: [14]
     parts: [14a]
-    later_work: ["Level 14a: Schema \"2\"; UUIDv5 IDs"]
+    evidence:
+      - {kind: test, file: tests/integration/test_upi_outbox_writer.py, name: test_cross_bank_payment}
+      - {kind: test, file: tests/unit/test_upi_relay_topic.py, name: test_v2_payload_routes_to_kafka_upi_topic}
   14-16:
     title: "Level 11's \"signed envelope\" is not actually signed"
     origin: revision_2

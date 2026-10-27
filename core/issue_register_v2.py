@@ -462,7 +462,7 @@ def check_test_evidence(issue_id: str, item: dict[str, Any], root: Path) -> list
     name = str(item.get("name", ""))
     if not path.is_file():
         return [f"{issue_id}: file {item.get('file')} not found"]
-    pattern = rf"^\s*def {re.escape(name)}\("
+    pattern = rf"^\s*(?:async\s+)?def {re.escape(name)}\("
     if not name or not re.search(pattern, path.read_text(encoding="utf-8"), flags=re.MULTILINE):
         return [f"{issue_id}: test function {name} not found in {item.get('file')}"]
     return []
