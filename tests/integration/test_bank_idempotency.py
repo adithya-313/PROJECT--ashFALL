@@ -8,6 +8,8 @@ import pytest
 
 from api.v1.bank_scope import bank_scoped_transaction
 from api.v1.idempotency import (
+    IdempotencyResult,
+    IdempotencyStateError,
     Outcome,
     claim_idempotency_key,
     hash_request,
@@ -176,3 +178,18 @@ async def test_claim_inside_failed_transaction_leaves_no_row(db_pool):
         async with bank_scoped_transaction(conn, "bank_0"):
             res_after = await claim_idempotency_key(conn, "bank_0", key_rollback, req_hash, clock.now_ist())
             assert res_after.outcome == Outcome.NEW
+
+
+async def test_storing_a_response_for_an_unclaimed_key_raises(db_pool):
+    """Attempting to store a response for an idempotency key that was never claimed raises IdempotencyStateError."""
+    async with db_pool.acquire() as conn:
+        async with bank_scoped_transaction(conn, "bank_0"):
+            with pytest.raises(IdempotencyStateError, match="Expected exactly 1 row updated"):
+                await store_idempotent_response(
+                    conn,
+                    bank_id="bank_0",
+                    key="unclaimed_key_xyz",
+                    status=200,
+                    body_dict={"result": "ok"},
+                )
+

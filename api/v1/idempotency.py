@@ -29,6 +29,10 @@ class IdempotencyResult:
     stored_body: Any | None
 
 
+class IdempotencyStateError(Exception):
+    """Raised when an idempotency operation encounters an impossible or corrupted database state."""
+
+
 def hash_request(method: str, path: str, body_bytes: bytes) -> str:
     """
     Computes SHA-256 digest over the HTTP method, path, and request body.
@@ -112,7 +116,12 @@ async def claim_idempotency_key(
     )
 
     if existing is None:
-        return IdempotencyResult(outcome=Outcome.NEW, stored_status=None, stored_body=None)
+        # This state is logically impossible: the INSERT on conflict DO NOTHING was bypassed because
+        # a row with PK (bank_id, idempotency_key) already exists. Under bank isolation and row-level
+        # locking (FOR UPDATE), the conflicting row must exist and be visible to this transaction.
+        raise IdempotencyStateError(
+            f"Idempotency row for bank {bank_id!r} key {key!r} conflicted on insert but was not found on select"
+        )
 
     stored_expires_at = existing["expires_at"]
     if stored_expires_at <= now:
@@ -171,7 +180,7 @@ async def store_idempotent_response(
         body_dict: Response payload dictionary or structure to cache.
     """
     body_json = orjson.dumps(body_dict).decode("utf-8")
-    await conn.execute(
+    result_status = await conn.execute(
         """
         UPDATE bank_idempotency_keys
         SET response_status = $3,
@@ -183,3 +192,7 @@ async def store_idempotent_response(
         status,
         body_json,
     )
+    if result_status != "UPDATE 1":
+        raise IdempotencyStateError(
+            f"Expected exactly 1 row updated for bank {bank_id!r} key {key!r}, got {result_status!r}"
+        )
