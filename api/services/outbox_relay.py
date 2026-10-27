@@ -106,15 +106,15 @@ def choose_topic(row: asyncpg.Record | Mapping[str, Any], explicit_topic: str | 
          or malformed stored data), it keeps the old default topic (config.kafka_outbox_topic), exactly as
          Level 7 behaved prior to schema versioning.
     """
-    if explicit_topic:
+    if explicit_topic is not None:
         return explicit_topic
 
+    payload_raw = row["payload"]
     try:
-        payload_raw = row["payload"]
         parsed = orjson.loads(payload_raw)
         if isinstance(parsed, dict) and parsed.get("schema_version") == "2":
             return config.kafka_upi_topic
-    except Exception:
+    except (orjson.JSONDecodeError, TypeError):
         # Documented fallback: non-parseable payload keeps the old default topic (Level 7 behavior)
         return config.kafka_outbox_topic
 

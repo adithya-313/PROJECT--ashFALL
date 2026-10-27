@@ -99,3 +99,24 @@ async def test_invalid_json_payload_routes_to_default_topic() -> None:
     topic, _, _ = producer.sent[0]
     assert topic == config.kafka_outbox_topic
     assert choose_topic(row) == config.kafka_outbox_topic
+
+
+def test_row_without_payload_raises_key_error() -> None:
+    """A row missing the required 'payload' key raises KeyError (no silent fallback)."""
+    row = {
+        "id": 6,
+        "event_id": "aa112233-4455-6677-8899-aabbccddeeff",
+    }
+    with pytest.raises(KeyError):
+        choose_topic(row)
+
+
+def test_empty_string_explicit_topic_is_used_as_given() -> None:
+    """An explicit_topic of empty string ('') is used directly and not treated as falsy."""
+    row = {
+        "id": 7,
+        "event_id": "bb112233-4455-6677-8899-aabbccddeeff",
+        "payload": '{"schema_version": "2", "event_type": "upi.payment.recorded"}',
+    }
+    assert choose_topic(row, explicit_topic="") == ""
+
