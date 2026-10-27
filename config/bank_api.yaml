@@ -1,0 +1,14 @@
+# =====================================================================
+# BANK API: configuration for commercial bank UPI APIs and authentication
+# =====================================================================
+
+bank_api:
+  label: policy
+  reason: "Commercial bank endpoints and API authentication configuration for Level 14a."
+  derived_from: "config/nationalsim.yaml"
+  issue_ids_v2: [14-2, 14-9]
+  banks:
+    - bank_0
+    - bank_1
+    - bank_2
+  api_key_secret_bytes: 32
