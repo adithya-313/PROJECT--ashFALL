@@ -30,6 +30,13 @@ bank_feed:
     derived_from: "Level 14c plan task 4"
     issue_ids_v2: [14-8, X3]
 
+  decision_timeout_seconds:
+    label: policy
+    value: 2.0
+    derived_from: "config/nationalsim.yaml client_timeout_seconds"
+    reason: "a slow fraud check must not hold up a payment longer than a bank call to the national systems may"
+    issue_ids_v2: [14-8, 14-10]
+
   failed_payment_visibility:
     label: policy
     reason: "in a switch outage (npci_central) or a sender-side/app/customer failure the request never reached the receiving bank."

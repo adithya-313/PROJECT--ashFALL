@@ -293,6 +293,8 @@ NEW_CODE_FILES: list[str] = [
     "tests/unit/world/test_bank_feed_config.py",
     "world/bank_feed.py",
     "tests/unit/world/test_bank_feed.py",
+    "world/bank_connectors.py",
+    "tests/unit/world/test_bank_connectors.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [

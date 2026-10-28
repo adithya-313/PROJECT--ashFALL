@@ -35,6 +35,7 @@ class BankFeedConfig:
     bank_ids_by_index: dict[int, str]
     payee_type_by_account_prefix: dict[str, str]
     channel_value: str
+    decision_timeout_seconds: float
     failed_payment_visibility: dict[str, dict[str, bool]]
     device_event_kind_map: dict[str, str]
     unmapped_gang_device_kinds: tuple[str, ...]
@@ -99,10 +100,15 @@ def load_bank_feed_config(path: Path | str | None = None) -> BankFeedConfig:
         raise ValueError("payee_type_by_account_prefix must define a non-empty mapping")
     payee_type_by_account_prefix = {str(prefix): str(ptype) for prefix, ptype in raw_prefix_mapping.items()}
 
-    # 4. Extract default channel identifier token.
+    # 4. Extract default channel identifier token and decision timeout.
     channel_token = feed_data.get("channel_value", {}).get("value")
     if not isinstance(channel_token, str) or not channel_token:
         raise ValueError("channel_value.value must be a non-empty string")
+
+    raw_decision_timeout = feed_data.get("decision_timeout_seconds", {}).get("value")
+    if not isinstance(raw_decision_timeout, (int, float)) or raw_decision_timeout <= 0:
+        raise ValueError("decision_timeout_seconds.value must be a positive number")
+    decision_timeout_seconds = float(raw_decision_timeout)
 
     # 5. Extract and validate failed_payment_visibility against world FAILURE_DOMAINS.
     raw_visibility = feed_data.get("failed_payment_visibility", {}).get("domains", {})
@@ -164,6 +170,7 @@ def load_bank_feed_config(path: Path | str | None = None) -> BankFeedConfig:
         bank_ids_by_index=bank_ids_by_index,
         payee_type_by_account_prefix=payee_type_by_account_prefix,
         channel_value=channel_token,
+        decision_timeout_seconds=decision_timeout_seconds,
         failed_payment_visibility=failed_payment_visibility,
         device_event_kind_map=device_event_kind_map,
         unmapped_gang_device_kinds=unmapped_gang_device_kinds,
