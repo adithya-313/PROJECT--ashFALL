@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Literal, cast, get_args
 
-from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from api.v1.bank_scope import load_known_banks
 from api.v1.signing import DEFAULT_CONFIG_PATH
@@ -106,10 +106,34 @@ AccountEventKind = Literal[
 FeedbackOutcome = Literal["confirmed_fraud", "not_fraud", "customer_dispute"]
 
 
+def _reject_nul_characters(value: Any) -> None:
+    """Recursively checks that no string in a request structure contains a NUL character ('\x00')."""
+    if isinstance(value, str):
+        if "\x00" in value:
+            raise ValueError("String contains NUL character")
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            if isinstance(key, str) and "\x00" in key:
+                raise ValueError("Key contains NUL character")
+            _reject_nul_characters(item)
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            _reject_nul_characters(item)
+    elif isinstance(value, BaseModel):
+        for item in value.__dict__.values():
+            _reject_nul_characters(item)
+
+
 class ApiModel(BaseModel):
     """Base of every /v1 model: unknown fields are an error, so a typo or a smuggled field is never ignored."""
 
     model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_nul(cls, data: Any) -> Any:
+        _reject_nul_characters(data)
+        return data
 
 
 class DecisionRequest(ApiModel):

@@ -441,3 +441,37 @@ async def test_complaint_naming_too_many_payments_is_422(env: EndpointEnv) -> No
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "invalid_body"
+
+
+async def test_nul_character_in_body_is_422_not_500(env: EndpointEnv) -> None:
+    """NUL character in top-level field, list item, or nested details is refused with 422, writing no rows."""
+    # 1. Top-level string field (note in feedback)
+    fb = feedback_payload()
+    fb["note"] = "scam\x00note"
+    resp_top = await post_json(env, "bank_0", "/v1/feedback", fb, "idem_nul_top_001")
+    assert resp_top.status_code == 422
+    assert resp_top.json()["error"]["code"] == "invalid_body"
+    assert await env.connection.fetchval("SELECT count(*) FROM bank_feedback") == 0
+
+    # 2. List item (payment_ids item in complaint)
+    cmp_body = complaint_payload(payment_ids=["pmt_ep_001", "pmt_ep_\x00bad"])
+    resp_list = await post_json(env, "bank_0", "/v1/complaints", cmp_body, "idem_nul_list_001")
+    assert resp_list.status_code == 422
+    assert resp_list.json()["error"]["code"] == "invalid_body"
+    assert await env.connection.fetchval("SELECT count(*) FROM bank_complaints") == 0
+
+    # 3. Nested details value (nested dict in account-events)
+    evt = account_event_payload()
+    evt["details"] = {"device": {"os_version": "android\x00build"}}
+    resp_nested = await post_json(env, "bank_0", "/v1/account-events", evt, "idem_nul_nested_001")
+    assert resp_nested.status_code == 422
+    assert resp_nested.json()["error"]["code"] == "invalid_body"
+    assert await env.connection.fetchval("SELECT count(*) FROM bank_account_events") == 0
+
+
+async def test_nul_character_in_risk_path_is_422(env: EndpointEnv) -> None:
+    """An account id in the risk path containing a NUL character (%00) is refused with 422 invalid_account_id."""
+    response = await get_signed(env, "bank_0", "/v1/accounts/acc%00test/risk")
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_account_id"

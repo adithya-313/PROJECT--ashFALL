@@ -98,7 +98,7 @@ async def run_unsigned_fuzz_pass(client: httpx.AsyncClient, cases: list[Any]) ->
                     err = data.get("error")
                     if isinstance(err, dict):
                         error_code = err.get("code")
-            except Exception:
+            except (ValueError, orjson.JSONDecodeError):
                 pass
             raise AssertionError(
                 f"Unsigned fuzz request returned unexpected status: method={case.method} "
@@ -163,7 +163,7 @@ async def run_signed_fuzz_pass(
                     err = data.get("error")
                     if isinstance(err, dict):
                         error_code = err.get("code")
-            except Exception:
+            except (ValueError, orjson.JSONDecodeError):
                 pass
             raise AssertionError(
                 f"Signed fuzz request failed with server error: method={case.method} "

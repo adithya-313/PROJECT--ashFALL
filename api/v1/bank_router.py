@@ -181,13 +181,8 @@ async def run_idempotent_post(request: Request, ctx: BankRequestContext, handler
                     content=claim.stored_body,
                     headers={"Idempotent-Replayed": "true"},
                 )
-            try:
-                status, body = await handler(scoped)
-                await store_idempotent_response(scoped, ctx.bank_id, ctx.idempotency_key, status, body)
-            except asyncpg.DataError as error:
-                raise ApiError(
-                    422, "invalid_body", "Request data cannot be stored: invalid characters or format"
-                ) from error
+            status, body = await handler(scoped)
+            await store_idempotent_response(scoped, ctx.bank_id, ctx.idempotency_key, status, body)
     return ORJSONResponse(status_code=status, content=body)
 
 
@@ -397,22 +392,21 @@ async def get_account_risk(account_id: str, request: Request) -> ORJSONResponse:
     give the same 404 answer and nothing leaks about other banks.
     """
     ctx = await get_bank_context(request)
+    if "\x00" in account_id:
+        raise ApiError(422, "invalid_account_id", "Account id contains invalid characters")
     if len(account_id) > POLICY.max_identifier_length or not IDENTIFIER_REGEX.fullmatch(account_id):
         raise ApiError(422, "invalid_account_id", "Account id is not a valid identifier")
 
     pool: asyncpg.Pool = request.app.state.db_pool
-    try:
-        async with pool.acquire() as connection:
-            async with bank_scoped_transaction(connection, ctx.bank_id) as scoped:
-                account_known = await scoped.fetchval(
-                    """
-                    SELECT EXISTS (SELECT 1 FROM transactions WHERE account_id = $1)
-                        OR EXISTS (SELECT 1 FROM bank_account_events WHERE account_id = $1)
-                    """,
-                    account_id,
-                )
-    except asyncpg.DataError as error:
-        raise ApiError(422, "invalid_account_id", "Account id contains invalid characters") from error
+    async with pool.acquire() as connection:
+        async with bank_scoped_transaction(connection, ctx.bank_id) as scoped:
+            account_known = await scoped.fetchval(
+                """
+                SELECT EXISTS (SELECT 1 FROM transactions WHERE account_id = $1)
+                    OR EXISTS (SELECT 1 FROM bank_account_events WHERE account_id = $1)
+                """,
+                account_id,
+            )
     if not account_known:
         raise ApiError(404, "account_not_found", "Account not found")
     response = RiskResponse(account_id=account_id, risk="unscored", mode=POLICY.default_bank_mode)
