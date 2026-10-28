@@ -4,10 +4,11 @@
 #          - duplicate complaint_id written twice produces exactly one outbox row and one message
 #          - bank_1 consumer receives only bank_1's messages while bank_0's message is counted foreign and unread
 #          - message key on the wire exactly equals "<run_id>:<bank_id>"
+import time
 import uuid
 
 import pytest
-from aiokafka import AIOKafkaConsumer
+from aiokafka import AIOKafkaConsumer, TopicPartition
 
 from api.services.outbox_relay import start_producer
 from core.config import config
@@ -222,6 +223,28 @@ async def test_key_on_wire_equals_run_id_colon_bank_id(isolated_schema) -> None:
         payload={"event_id": str(uuid.uuid4()), "status": "active"},
     )
 
+    # A consumer with no group id gets every partition of the topic assigned to it and commits nothing. Subscribing
+    # by name also makes the broker answer for a topic that does not exist yet (it is created empty on this stack).
+    offset_probe = AIOKafkaConsumer(
+        topic,
+        bootstrap_servers=config.kafka_bootstrap_servers,
+        group_id=None,
+        enable_auto_commit=False,
+    )
+
+    # 1. Before publishing, remember where each partition ends. Everything at or after these offsets is new, so the
+    #    old messages that earlier test runs left on the topic are never read (a topic with no partitions yet
+    #    simply means "start at offset 0").
+    await offset_probe.start()
+    try:
+        offsets_before_publish: dict[TopicPartition, int] = {}
+        partition_ids = offset_probe.partitions_for_topic(topic)
+        if partition_ids:
+            topic_partitions = [TopicPartition(topic, partition_id) for partition_id in sorted(partition_ids)]
+            offsets_before_publish = dict(await offset_probe.end_offsets(topic_partitions))
+    finally:
+        await offset_probe.stop()
+
     producer = await start_producer()
     try:
         published = await relay_national_outbox(connection, producer)
@@ -229,25 +252,29 @@ async def test_key_on_wire_equals_run_id_colon_bank_id(isolated_schema) -> None:
     finally:
         await producer.stop()
 
-    # Raw inspection of the record key on the Kafka wire
+    # 2. Raw inspection of the record key on the Kafka wire: assign the partitions, jump each one to the offset
+    #    remembered above, and keep reading until the key is found or 10 seconds have passed.
     raw_consumer = AIOKafkaConsumer(
         topic,
         bootstrap_servers=config.kafka_bootstrap_servers,
-        group_id=f"raw-inspector-{uuid.uuid4().hex[:12]}",
-        auto_offset_reset="earliest",
+        group_id=None,
         enable_auto_commit=False,
     )
     await raw_consumer.start()
     found_wire_key = None
     try:
-        batches = await raw_consumer.getmany(timeout_ms=3000, max_records=100)
-        for records in batches.values():
-            for record in records:
-                if record.key:
-                    k = record.key.decode("utf-8")
-                    if k == f"{run_id}:{bank_id}":
-                        found_wire_key = k
-                        break
+        for assigned_partition in raw_consumer.assignment():
+            raw_consumer.seek(assigned_partition, offsets_before_publish.get(assigned_partition, 0))
+        deadline = time.monotonic() + 10.0
+        while found_wire_key is None and time.monotonic() < deadline:
+            batches = await raw_consumer.getmany(timeout_ms=1000, max_records=500)
+            for records in batches.values():
+                for record in records:
+                    if record.key:
+                        k = record.key.decode("utf-8")
+                        if k == f"{run_id}:{bank_id}":
+                            found_wire_key = k
+                            break
     finally:
         await raw_consumer.stop()
 
