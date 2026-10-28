@@ -18,10 +18,14 @@ import pytest
 
 from core.event_clock import IST, world_minute_to_ist
 from world.bank_feed import (
+    BANK_VISIBLE_ACCOUNT_EVENT_FIELDS,
+    BANK_VISIBLE_COMPLAINT_FIELDS,
     BANK_VISIBLE_PAYMENT_FIELDS,
+    BankFeed,
     ProjectionLeakError,
     check_bank_visible,
     project_payment,
+    project_run,
 )
 from world.bank_feed_config import load_bank_feed_config
 from world.device_runtime import DeviceStamp
@@ -29,6 +33,7 @@ from world.failures import FAILURE_DOMAINS, PaymentEvent
 from world.fast_mode import FastRunSettings
 from world.interactive_records import InteractiveWorldOutput, RunnerSettings
 from world.interactive_runner import run_interactive_world
+from world.label_records import LabelEvent
 
 CLOCK_START = datetime(2026, 9, 1, 0, 0, 0, tzinfo=timezone.utc)
 
@@ -236,3 +241,127 @@ def test_full_world_schema_and_counts(tiny_world_output: InteractiveWorldOutput,
 
     assert total_debits == expected_debits
     assert total_credits == expected_credits
+
+
+def test_device_event_mapping_and_counts_on_tiny_world(tiny_world_output: InteractiveWorldOutput) -> None:
+    """Verifies mapping of device events including phone_change and checks total projected plus dropped counts."""
+    feed = project_run(tiny_world_output)
+    assert isinstance(feed, BankFeed)
+
+    total_projected = sum(len(events) for events in feed.account_events_by_bank.values())
+    total_dropped = sum(feed.dropped_device_events_by_kind.values())
+    total_raw_device_events = len(tiny_world_output.result.applied_device_events)
+
+    assert total_raw_device_events == 32
+    assert total_projected + total_dropped == 32
+
+    # Verify that at least one phone_change was mapped to device_binding_change with clean details.
+    all_account_events = [ev for bank_events in feed.account_events_by_bank.values() for ev in bank_events]
+    binding_events = [ev for ev in all_account_events if ev.kind == "device_binding_change"]
+    assert len(binding_events) >= 1
+
+    for ev in binding_events:
+        assert "platform" in ev.details
+        assert "fingerprint_before" in ev.details
+        assert "fingerprint_after" in ev.details
+        assert "os_generation_before" in ev.details
+        assert "os_generation_after" in ev.details
+        assert "counts_as_new_device" not in ev.details
+        assert "device_id" not in ev.details
+
+
+def test_opened_account_drops_owner_kind(tiny_world_output: InteractiveWorldOutput) -> None:
+    """Verifies that mid-run opened accounts become account_opened events with owner_kind and stream dropped."""
+    from dataclasses import replace
+
+    synthetic_opened = (300, "acc_person_000999", "person", "new_stream", 1, 500000)
+    modified_result = replace(tiny_world_output.result, opened_accounts=[synthetic_opened])
+    modified_output = replace(tiny_world_output, result=modified_result)
+
+    feed = project_run(modified_output)
+    bank_1_events = feed.account_events_by_bank["bank_1"]
+    open_events = [ev for ev in bank_1_events if ev.account_id == "acc_person_000999"]
+
+    assert len(open_events) == 1
+    ev = open_events[0]
+    assert ev.kind == "account_opened"
+    assert ev.bank_id == "bank_1"
+    assert ev.event_id == f"{tiny_world_output.result.run_id}-open-acc_person_000999"
+    assert ev.details == {}
+
+    ev_dict = asdict(ev)
+    assert "owner_kind" not in ev_dict
+    assert "opening_stream" not in ev_dict
+    check_bank_visible(ev_dict, BANK_VISIBLE_ACCOUNT_EVENT_FIELDS)
+
+
+def test_constructed_label_event_becomes_complaint_for_complainant_bank(
+    tiny_world_output: InteractiveWorldOutput,
+) -> None:
+    """Verifies that a LabelEvent transforms into a BankFeedComplaint for complainant bank with kind dropped."""
+    label_ev = LabelEvent(
+        label_id="test-run-L0001",
+        kind="complaint",
+        arrival_minute=5000,
+        complainant_account="acc_person_000001",
+        complainant_bank_index=0,
+        reported_account="acc_shop_0001",
+        reported_bank_index=1,
+        payment_ids=("test-run-000001", "test-run-000002"),
+        claimed_type="investment",
+    )
+
+    feed = project_run(tiny_world_output, label_events=[label_ev])
+
+    # The complaint must appear strictly at complainant bank_0, never reported bank_1.
+    assert len(feed.complaints_by_bank["bank_0"]) == 1
+    assert len(feed.complaints_by_bank["bank_1"]) == 0
+
+    complaint = feed.complaints_by_bank["bank_0"][0]
+    assert complaint.bank_id == "bank_0"
+    assert complaint.complaint_id == "test-run-L0001"
+    assert complaint.complainant_account == "acc_person_000001"
+    assert complaint.reported_account == "acc_shop_0001"
+    assert complaint.reported_bank_id == "bank_1"
+    assert complaint.payment_ids == ("test-run-000001", "test-run-000002")
+    assert complaint.claimed_type == "investment"
+
+    c_dict = asdict(complaint)
+    assert "kind" not in c_dict
+    check_bank_visible(c_dict, BANK_VISIBLE_COMPLAINT_FIELDS)
+
+
+def test_project_run_is_deterministic(tiny_world_output: InteractiveWorldOutput) -> None:
+    """Verifies that repeated invocations of project_run yield bitwise identical BankFeed structures."""
+    feed1 = project_run(tiny_world_output)
+    feed2 = project_run(tiny_world_output)
+    assert feed1 == feed2
+
+
+def test_no_record_in_any_bank_list_belongs_to_another_bank(tiny_world_output: InteractiveWorldOutput) -> None:
+    """Ensures that no record inside any bank-specific tuple contains a mismatched foreign bank_id."""
+    label_ev = LabelEvent(
+        label_id="test-run-L0002",
+        kind="complaint",
+        arrival_minute=6000,
+        complainant_account="acc_person_000001",
+        complainant_bank_index=0,
+        reported_account="acc_shop_0001",
+        reported_bank_index=1,
+        payment_ids=("test-run-000001",),
+        claimed_type="phishing",
+    )
+    feed = project_run(tiny_world_output, label_events=[label_ev])
+
+    for bank_id, payments in feed.payments_by_bank.items():
+        for payment in payments:
+            assert payment.bank_id == bank_id
+
+    for bank_id, account_events in feed.account_events_by_bank.items():
+        for acct_ev in account_events:
+            assert acct_ev.bank_id == bank_id
+
+    for bank_id, complaints in feed.complaints_by_bank.items():
+        for complaint in complaints:
+            assert complaint.bank_id == bank_id
+

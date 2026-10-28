@@ -11,13 +11,15 @@ episode purposes, switch outage details unseen by receiving banks, and device fl
 """
 
 from dataclasses import asdict, dataclass
-from datetime import datetime
-from typing import Any
+from datetime import date, datetime
+from typing import Any, Sequence
 
 from core.event_clock import world_minute_to_ist
-from world.bank_feed_config import BankFeedConfig
+from world.bank_feed_config import BankFeedConfig, load_bank_feed_config
 from world.device_runtime import DeviceStamp
 from world.failures import PaymentEvent
+from world.interactive_records import InteractiveWorldOutput
+from world.label_records import LabelEvent
 
 
 class ProjectionLeakError(ValueError):
@@ -78,6 +80,86 @@ BANK_VISIBLE_PAYMENT_FIELDS: frozenset[str] = frozenset(
     }
 )
 
+BANK_VISIBLE_ACCOUNT_EVENT_FIELDS: frozenset[str] = frozenset(
+    {
+        "bank_id",
+        "event_id",
+        "account_id",
+        "kind",
+        "event_time",
+        "details",
+    }
+)
+
+BANK_VISIBLE_COMPLAINT_FIELDS: frozenset[str] = frozenset(
+    {
+        "bank_id",
+        "complaint_id",
+        "complainant_account",
+        "reported_account",
+        "reported_bank_id",
+        "payment_ids",
+        "claimed_type",
+        "received_at",
+    }
+)
+
+
+@dataclass(frozen=True)
+class BankFeedAccountEvent:
+    """
+    WHAT: Bank-visible account security and lifecycle event, such as a device binding change or opening.
+    It encapsulates bank, event ID, account, event kind, aware timestamp, and sanitized hardware details.
+
+    WHY: Ground rule 29 and issue 14-10 require that banks receive device updates through an authentic
+    account-event feed without internal simulation novelty flags or internal device identifiers.
+    """
+
+    bank_id: str
+    event_id: str
+    account_id: str
+    kind: str
+    event_time: datetime
+    details: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class BankFeedComplaint:
+    """
+    WHAT: Bank-visible customer fraud complaint filed against a suspected mule or merchant account.
+    It encapsulates the complainant bank, complaint identifier, involved accounts, counterparty bank,
+    referenced payment identifiers, claimed scam classification, and receipt timestamp.
+
+    WHY: Banks only observe complaints initiated by their own customers or reported against counterparties,
+    with simulation-internal label classifications stripped to match production banking interfaces.
+    """
+
+    bank_id: str
+    complaint_id: str
+    complainant_account: str
+    reported_account: str
+    reported_bank_id: str
+    payment_ids: tuple[str, ...]
+    claimed_type: str
+    received_at: datetime
+
+
+@dataclass(frozen=True)
+class BankFeed:
+    """
+    WHAT: Container holding projected, tenant-isolated feeds for all commercial banks in a simulation run.
+    It organizes payment sides, account lifecycle events, and fraud complaints by bank identifier,
+    alongside counters of unmapped or dropped device events.
+
+    WHY: Provides the complete bank-side external data interface for Level 14c without exposing
+    internal simulation models or cross-bank confidential account records.
+    """
+
+    payments_by_bank: dict[str, tuple[BankFeedPaymentSide, ...]]
+    account_events_by_bank: dict[str, tuple[BankFeedAccountEvent, ...]]
+    complaints_by_bank: dict[str, tuple[BankFeedComplaint, ...]]
+    dropped_device_events_by_kind: dict[str, int]
+
 
 def check_bank_visible(record: dict[str, Any], allowed: frozenset[str]) -> None:
     """
@@ -103,7 +185,7 @@ def project_payment(
     event: PaymentEvent,
     payment_id: str,
     stamp: DeviceStamp | None,
-    clock_start: datetime,
+    clock_start: date,
     config: BankFeedConfig,
 ) -> list[BankFeedPaymentSide]:
     """
@@ -210,3 +292,191 @@ def project_payment(
         sides.append(credit_record)
 
     return sides
+
+
+def project_run(
+    output: InteractiveWorldOutput,
+    label_events: Sequence[LabelEvent] = (),
+) -> BankFeed:
+    """
+    WHAT: Projects an entire interactive simulation run into tenant-isolated BankFeed event streams.
+    It compiles payment sides, account security lifecycle events, mid-run account openings, and
+    external fraud complaints, grouping them by commercial bank identifier and ordering by time.
+
+    WHY: Serves as the primary batch feed adapter converting world simulation outputs into authentic
+    per-bank telemetry feeds, strictly verifying that every record conforms to bank-visible schemas.
+
+    Chronological Ordering and Tie-Break Rules:
+        - Payment sides: Sorted by (event_time, payment_id, side), placing 'debit' before 'credit'.
+        - Account events: Sorted by (event_time, event_id), breaking timestamp ties by event_id.
+        - Complaints: Sorted by (received_at, complaint_id), breaking ties by complaint_id.
+
+    Args:
+        output: Complete InteractiveWorldOutput containing world ledgers, plan, and run results.
+        label_events: Optional sequence of LabelEvent complaints filed during or after the simulation run.
+
+    Returns:
+        Immutable BankFeed instance containing per-bank event tuples and unmapped device event counts.
+
+    Raises:
+        ValueError: If an account, bank index, or unmapped event kind violates validation rules.
+    """
+    config = load_bank_feed_config()
+    clock_start = output.plan.clock.start_date
+    run_id = output.result.run_id
+
+    # 1. Initialize per-bank accumulator lists and unmapped kind counters.
+    all_bank_ids = set(config.bank_ids_by_index.values())
+    payments_by_bank: dict[str, list[BankFeedPaymentSide]] = {b: [] for b in all_bank_ids}
+    account_events_by_bank: dict[str, list[BankFeedAccountEvent]] = {b: [] for b in all_bank_ids}
+    complaints_by_bank: dict[str, list[BankFeedComplaint]] = {b: [] for b in all_bank_ids}
+    dropped_device_events_by_kind: dict[str, int] = {k: 0 for k in config.unmapped_gang_device_kinds}
+
+    # 2. Build account-to-bank and person-to-account lookups for rapid O(1) resolution.
+    account_to_bank: dict[str, str] = {}
+    for ledger in output.world.ledgers:
+        b_id = config.bank_ids_by_index[ledger.bank_index]
+        for acc in ledger.accounts:
+            account_to_bank[acc] = b_id
+
+    for opened in output.result.opened_accounts:
+        op_acc = opened[1]
+        op_b_idx = opened[4]
+        account_to_bank[op_acc] = config.bank_ids_by_index[op_b_idx]
+
+    people_by_id = {p.person_id: p for p in output.world.people}
+
+    # 3. Project all payment events into debit and credit sides across banks.
+    for idx, event in enumerate(output.result.run_result.events):
+        pid = output.result.payment_ids[idx]
+        stamp = output.result.run_result.event_sender_devices[idx]
+        sides = project_payment(event, pid, stamp, clock_start, config)
+        for side in sides:
+            payments_by_bank[side.bank_id].append(side)
+
+    # 4. Project genuine citizen device events.
+    device_position = 0
+    for dev_ev in output.result.applied_device_events:
+        if dev_ev.person_id not in people_by_id:
+            raise ValueError(f"Device event references unknown person '{dev_ev.person_id}'")
+        person = people_by_id[dev_ev.person_id]
+        account_id = person.account_id
+        bank_id = config.bank_ids_by_index[person.bank_index]
+
+        if dev_ev.kind not in config.device_event_kind_map:
+            dropped_device_events_by_kind[dev_ev.kind] = dropped_device_events_by_kind.get(dev_ev.kind, 0) + 1
+            continue
+
+        target_kind = config.device_event_kind_map[dev_ev.kind]
+        event_time = world_minute_to_ist(dev_ev.minute, clock_start)
+        event_id = f"{run_id}-dev-{device_position:06d}"
+        device_position += 1
+
+        details = {
+            "platform": dev_ev.platform,
+            "fingerprint_before": dev_ev.fingerprint_before,
+            "fingerprint_after": dev_ev.fingerprint_after,
+            "os_generation_before": dev_ev.os_generation_before,
+            "os_generation_after": dev_ev.os_generation_after,
+        }
+        acct_ev = BankFeedAccountEvent(
+            bank_id=bank_id,
+            event_id=event_id,
+            account_id=account_id,
+            kind=target_kind,
+            event_time=event_time,
+            details=details,
+        )
+        check_bank_visible(asdict(acct_ev), BANK_VISIBLE_ACCOUNT_EVENT_FIELDS)
+        account_events_by_bank[bank_id].append(acct_ev)
+
+    # 5. Project applied gang device events (only mapped kinds with an associated account).
+    for gang_ev in output.result.applied_gang_device_events:
+        if gang_ev.account_id is None or gang_ev.kind not in config.device_event_kind_map:
+            dropped_device_events_by_kind[gang_ev.kind] = dropped_device_events_by_kind.get(gang_ev.kind, 0) + 1
+            continue
+
+        if gang_ev.account_id not in account_to_bank:
+            raise ValueError(f"Gang device event references unknown account '{gang_ev.account_id}'")
+        bank_id = account_to_bank[gang_ev.account_id]
+        target_kind = config.device_event_kind_map[gang_ev.kind]
+        event_time = world_minute_to_ist(gang_ev.minute, clock_start)
+        event_id = f"{run_id}-dev-{device_position:06d}"
+        device_position += 1
+
+        details = {
+            "platform": gang_ev.platform,
+            "fingerprint": gang_ev.fingerprint,
+            "os_generation": gang_ev.os_generation,
+        }
+        acct_ev = BankFeedAccountEvent(
+            bank_id=bank_id,
+            event_id=event_id,
+            account_id=gang_ev.account_id,
+            kind=target_kind,
+            event_time=event_time,
+            details=details,
+        )
+        check_bank_visible(asdict(acct_ev), BANK_VISIBLE_ACCOUNT_EVENT_FIELDS)
+        account_events_by_bank[bank_id].append(acct_ev)
+
+    # 6. Project mid-run opened accounts into account_opened events.
+    for opened in output.result.opened_accounts:
+        op_minute = opened[0]
+        op_account_id = opened[1]
+        op_bank_index = opened[4]
+        bank_id = config.bank_ids_by_index[op_bank_index]
+        event_time = world_minute_to_ist(op_minute, clock_start)
+        event_id = f"{run_id}-open-{op_account_id}"
+
+        acct_ev = BankFeedAccountEvent(
+            bank_id=bank_id,
+            event_id=event_id,
+            account_id=op_account_id,
+            kind="account_opened",
+            event_time=event_time,
+            details={},
+        )
+        check_bank_visible(asdict(acct_ev), BANK_VISIBLE_ACCOUNT_EVENT_FIELDS)
+        account_events_by_bank[bank_id].append(acct_ev)
+
+    # 7. Project customer fraud complaints into complainant bank records.
+    for label_ev in label_events:
+        complainant_bank_id = config.bank_ids_by_index[label_ev.complainant_bank_index]
+        reported_bank_id = config.bank_ids_by_index[label_ev.reported_bank_index]
+        received_at = world_minute_to_ist(label_ev.arrival_minute, clock_start)
+
+        complaint = BankFeedComplaint(
+            bank_id=complainant_bank_id,
+            complaint_id=label_ev.label_id,
+            complainant_account=label_ev.complainant_account,
+            reported_account=label_ev.reported_account,
+            reported_bank_id=reported_bank_id,
+            payment_ids=tuple(label_ev.payment_ids),
+            claimed_type=label_ev.claimed_type,
+            received_at=received_at,
+        )
+        check_bank_visible(asdict(complaint), BANK_VISIBLE_COMPLAINT_FIELDS)
+        complaints_by_bank[complainant_bank_id].append(complaint)
+
+    # 8. Sort per-bank collections chronologically with stable tie-breaks and freeze into tuples.
+    sorted_payments = {
+        b: tuple(sorted(payments_by_bank[b], key=lambda s: (s.event_time, s.payment_id, s.side)))
+        for b in sorted(all_bank_ids)
+    }
+    sorted_account_events = {
+        b: tuple(sorted(account_events_by_bank[b], key=lambda e: (e.event_time, e.event_id)))
+        for b in sorted(all_bank_ids)
+    }
+    sorted_complaints = {
+        b: tuple(sorted(complaints_by_bank[b], key=lambda c: (c.received_at, c.complaint_id)))
+        for b in sorted(all_bank_ids)
+    }
+
+    return BankFeed(
+        payments_by_bank=sorted_payments,
+        account_events_by_bank=sorted_account_events,
+        complaints_by_bank=sorted_complaints,
+        dropped_device_events_by_kind=dropped_device_events_by_kind,
+    )
+

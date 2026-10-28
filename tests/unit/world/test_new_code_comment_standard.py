@@ -288,6 +288,11 @@ NEW_CODE_FILES: list[str] = [
     # Level 12h world sanity report against PaySim genuine rows and test suite.
     "evaluation/sanity_report.py",
     "tests/unit/evaluation/test_sanity_report.py",
+    # Level 14c bank-feed projection modules and test suites.
+    "world/bank_feed_config.py",
+    "tests/unit/world/test_bank_feed_config.py",
+    "world/bank_feed.py",
+    "tests/unit/world/test_bank_feed.py",
 ]
 
 NEW_FUNCTIONS_IN_OLD_FILES: list[tuple[str, str]] = [
