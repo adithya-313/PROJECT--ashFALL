@@ -24,7 +24,7 @@ from core.event_clock import IST, ManualClock
 from tests.integration.conftest import get_test_database_url
 
 pytest_plugins = ["tests.integration.conftest"]
-pytestmark = pytest.mark.anyio
+pytestmark = [pytest.mark.anyio, pytest.mark.needs_stack]
 
 FUZZ_BANK_ID = "bank_0"
 FUZZ_SECRET = "test_fuzz_secret_32_characters_minimum!"
