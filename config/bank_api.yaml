@@ -37,11 +37,15 @@ bank_api:
     reason: "maximum request body size 64KB"
     derived_from: "payload limit policy"
 
-  default_bank_mode:
+  bank_modes:
     label: policy
-    value: shadow
-    reason: "every bank starts in shadow mode (scores are recorded, never acted on) until Level 14c makes the mode per bank; must be shadow or live"
-    derived_from: "Level 14b round 2a plan"
+    value:
+      bank_0: shadow
+      bank_1: shadow
+      bank_2: shadow
+    reason: 'shadow = the answer is recorded and ignored, live = the bank may act only on "allow" until Level 19 (issue 14-6)'
+    derived_from: "Level 14c plan task 5"
+    issue_ids_v2: [14-6]
 
   max_amount_paise:
     label: policy

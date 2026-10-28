@@ -18,6 +18,7 @@ from pydantic import SecretStr
 
 from api.main import app
 from api.v1.bank_keys import issue_api_key
+from api.v1.models import POLICY
 from api.v1.signing import sign_outgoing
 from core.config import config
 from core.event_clock import IST, ManualClock
@@ -475,3 +476,37 @@ async def test_nul_character_in_risk_path_is_422(env: EndpointEnv) -> None:
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "invalid_account_id"
+
+
+async def test_per_bank_mode_evaluation_and_storage(
+    env: EndpointEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When bank_1 is set to live mode, decisions for bank_1 report and store 'live' while bank_0 reports 'shadow'."""
+    # Patch the loaded policy bank_modes mapping for bank_1 to live, restoring automatically after test.
+    monkeypatch.setitem(POLICY.bank_modes, "bank_1", "live")
+
+    # 1. Request decision for bank_0 (remains shadow)
+    b0_payload = decision_payload(payment_id="pmt_mode_b0")
+    b0_resp = await post_json(env, "bank_0", "/v1/decisions", b0_payload, "idem_mode_b0")
+    assert b0_resp.status_code == 200
+    assert b0_resp.json()["mode"] == "shadow"
+
+    b0_row = await env.connection.fetchrow(
+        "SELECT mode FROM bank_decision_requests WHERE payment_id = 'pmt_mode_b0'"
+    )
+    assert b0_row is not None
+    assert b0_row["mode"] == "shadow"
+
+    # 2. Request decision for bank_1 (operating in live mode)
+    b1_payload = decision_payload(payment_id="pmt_mode_b1")
+    b1_payload["sender_account_id"] = "acc_bank1_a"
+    b1_resp = await post_json(env, "bank_1", "/v1/decisions", b1_payload, "idem_mode_b1")
+    assert b1_resp.status_code == 200
+    assert b1_resp.json()["mode"] == "live"
+
+    b1_row = await env.connection.fetchrow(
+        "SELECT mode FROM bank_decision_requests WHERE payment_id = 'pmt_mode_b1'"
+    )
+    assert b1_row is not None
+    assert b1_row["mode"] == "live"
+

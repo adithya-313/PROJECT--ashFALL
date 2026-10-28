@@ -29,6 +29,7 @@ from api.v1.models import (
     POLICY,
     AccountEventRequest,
     AccountEventResponse,
+    BankMode,
     ComplaintRequest,
     ComplaintResponse,
     DecisionRequest,
@@ -54,6 +55,13 @@ DECISION_UNIQUE_CONSTRAINT = "uq_bank_decision_requests_bank_payment"
 COMPLAINT_UNIQUE_CONSTRAINT = "uq_bank_complaints_bank_complaint"
 FEEDBACK_UNIQUE_CONSTRAINT = "uq_bank_feedback_bank_feedback"
 DECISION_REASON = "scoring is not enabled until Level 19"
+
+
+def get_bank_mode(bank_id: str) -> BankMode:
+    """Returns the configured operating mode (shadow or live) for the specified bank identifier."""
+    if bank_id not in POLICY.bank_modes:
+        raise ValueError(f"No bank mode configured for bank {bank_id!r}")
+    return POLICY.bank_modes[bank_id]
 
 
 def get_transport_clock(request: Request) -> Clock:
@@ -197,6 +205,7 @@ async def post_decision(request: Request) -> ORJSONResponse:
     ctx = await get_bank_context(request)
     decision_request = parse_body(ctx, DecisionRequest)
     request_json = orjson.dumps(decision_request.model_dump(mode="json")).decode("utf-8")
+    mode = get_bank_mode(ctx.bank_id)
 
     async def handler(connection: asyncpg.Connection) -> tuple[int, dict[str, Any]]:
         try:
@@ -208,7 +217,7 @@ async def post_decision(request: Request) -> ORJSONResponse:
                 ctx.bank_id,
                 decision_request.payment_id,
                 request_json,
-                POLICY.default_bank_mode,
+                mode,
             )
         except asyncpg.UniqueViolationError as error:
             if error.constraint_name != DECISION_UNIQUE_CONSTRAINT:
@@ -219,7 +228,7 @@ async def post_decision(request: Request) -> ORJSONResponse:
         response = DecisionResponse(
             payment_id=decision_request.payment_id,
             decision="unscored",
-            mode=POLICY.default_bank_mode,
+            mode=mode,
             reason=DECISION_REASON,
         )
         return 200, response.model_dump(mode="json")
@@ -411,5 +420,6 @@ async def get_account_risk(account_id: str, request: Request) -> ORJSONResponse:
             )
     if not account_known:
         raise ApiError(404, "account_not_found", "Account not found")
-    response = RiskResponse(account_id=account_id, risk="unscored", mode=POLICY.default_bank_mode)
+    mode = get_bank_mode(ctx.bank_id)
+    response = RiskResponse(account_id=account_id, risk="unscored", mode=mode)
     return ORJSONResponse(status_code=200, content=response.model_dump(mode="json"))
