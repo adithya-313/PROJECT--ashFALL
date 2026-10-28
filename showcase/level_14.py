@@ -1,30 +1,43 @@
 # File: showcase/level_14.py
-# Purpose: Level 14 showcase: Commercial bank UPI APIs, database isolation, and RLS (Part 14a).
+# Purpose: Level 14 showcase: Commercial bank UPI APIs, database isolation, and RLS (Parts 14a, 14b).
 import subprocess
 import sys
 import uuid
-from datetime import datetime, timezone
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 import asyncpg
+import httpx
 import orjson
+from pydantic import SecretStr
 
 import showcase.level_07 as level_07
+from api.main import app
 from api.services.outbox_relay import choose_topic
 from api.v1.bank_keys import issue_api_key, resolve_bank_for_key
 from api.v1.bank_scope import bank_scoped_transaction
+from api.v1.signing import load_bank_api_policy, sign_outgoing
 from api.v1.upi_outbox import (
     EVENT_TYPE_UPI_PAYMENT_RECORDED,
     UPI_SCHEMA_VERSION,
     UpiPaymentSide,
     record_upi_side,
 )
+from core.config import config
+from core.event_clock import IST, ManualClock
 from showcase.framework import CheckDefinition, CheckOutcome, NotRun
 from showcase.isolation import Workspace, get_showcase_database_url
 from showcase.preconditions import check_database
+from tests.contract.test_bank_api_fuzz import (
+    generate_fuzz_cases,
+    run_signed_fuzz_pass,
+    run_unsigned_fuzz_pass,
+)
 
 LEVEL_NUMBER = 14
-LEVEL_TITLE = "Commercial bank UPI APIs and isolation (built: part 14a)"
+LEVEL_TITLE = "Commercial bank UPI APIs and isolation (built: parts 14a, 14b)"
 NEEDS_DATABASE = True
 
 WHAT_YOU_SAW = (
@@ -32,7 +45,10 @@ WHAT_YOU_SAW = (
     "isolation. Part 14a establishes schema migration 0006 with UPI columns and hashed API keys, enforces "
     "bank-scoped transaction isolation using a non-superuser role (ashfall_bank_api), proves that cross-bank reads "
     "and writes are refused, verifies connection pool safety without state bleed across bank transactions, and "
-    "records cross-bank payments into transactional outbox with UUIDv5 identities and routing to upi.payments."
+    "records cross-bank payments into transactional outbox with UUIDv5 identities and routing to upi.payments. "
+    "Part 14b implements authenticated, signed, and idempotent bank REST APIs, raw percent-encoded path signing, "
+    "replay protection with transport clock isolation, and comprehensive schemathesis fuzzing rejecting malformed "
+    "requests with 4xx while preventing unhandled 500 server crashes."
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -41,7 +57,11 @@ REQUIRED_FILES = [
     REPO_ROOT / "api" / "v1" / "bank_scope.py",
     REPO_ROOT / "api" / "v1" / "bank_keys.py",
     REPO_ROOT / "api" / "v1" / "upi_outbox.py",
+    REPO_ROOT / "api" / "v1" / "request_auth.py",
+    REPO_ROOT / "api" / "v1" / "bank_router.py",
+    REPO_ROOT / "api" / "v1" / "signing.py",
     REPO_ROOT / "migrations" / "0006_add_upi_columns_and_bank_isolation.sql",
+    REPO_ROOT / "tests" / "contract" / "test_bank_api_fuzz.py",
 ]
 
 
@@ -390,11 +410,350 @@ async def check_5_replay_idempotency_edge(workspace: Workspace) -> CheckOutcome:
     )
 
 
+@asynccontextmanager
+async def _in_process_bank_app(workspace: Workspace, bank_id: str = "bank_1"):
+    db_url = get_showcase_database_url()
+    pool = await asyncpg.create_pool(
+        dsn=db_url,
+        min_size=1,
+        max_size=3,
+        server_settings={"search_path": workspace.schema_name},
+    )
+    assert pool is not None
+
+    secret_key_attr = f"bank_signing_secret_{bank_id}"
+    old_secret = getattr(config, secret_key_attr, None)
+    secret_text = f"showcase_secret_{bank_id}_32_characters_min!"
+    setattr(config, secret_key_attr, SecretStr(secret_text))
+
+    # Issue API key for bank_id in workspace schema
+    _, api_key = await issue_api_key(workspace.connection, bank_id)
+
+    clock = ManualClock(datetime(2026, 10, 28, 12, 0, 0, tzinfo=IST))
+    saved_state: dict[str, Any] = {}
+    for name in ("db_pool", "transport_clock"):
+        if hasattr(app.state, name):
+            saved_state[name] = getattr(app.state, name)
+    app.state.db_pool = pool
+    app.state.transport_clock = clock
+
+    transport = httpx.ASGITransport(app=app)
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            yield client, api_key, clock, pool
+    finally:
+        for name in ("db_pool", "transport_clock"):
+            if name in saved_state:
+                setattr(app.state, name, saved_state[name])
+            else:
+                delattr(app.state, name)
+        if old_secret is not None:
+            setattr(config, secret_key_attr, old_secret)
+        await pool.close()
+
+
+def _make_signed_headers(
+    bank_id: str,
+    api_key: str,
+    method: str,
+    path: str,
+    body: bytes,
+    clock: ManualClock,
+    idempotency_key: str | None = None,
+) -> dict[str, str]:
+    nonce = f"sc14_{uuid.uuid4().hex}"
+    headers = sign_outgoing(
+        bank_id=bank_id,
+        method=method,
+        path=path,
+        body_bytes=body,
+        clock=clock,
+        nonce=nonce,
+    )
+    headers["X-Ashfall-Key"] = api_key
+    if body:
+        headers["Content-Type"] = "application/json"
+    if idempotency_key is not None:
+        headers["Idempotency-Key"] = idempotency_key
+    return headers
+
+
+async def check_6_post_transaction_and_get_risk_normal(workspace: Workspace) -> CheckOutcome:
+    """
+    Check 6 (normal): signed POST /v1/transactions creates a row and an outbox event;
+    then a signed GET /v1/accounts/{account_id}/risk returns 200 "unscored".
+    """
+    async with _in_process_bank_app(workspace, "bank_1") as (client, api_key, clock, _pool):
+        payment_id = f"pmt_sc14_norm_{uuid.uuid4().hex[:12]}"
+        account_id = f"acc_sc14_norm_{uuid.uuid4().hex[:12]}"
+        body_dict = {
+            "payment_id": payment_id,
+            "side": "debit",
+            "account_id": account_id,
+            "counterparty_bank_id": "bank_0",
+            "sender_bank_id": "bank_1",
+            "receiver_bank_id": "bank_0",
+            "amount_paise": 50000,
+            "event_time": "2026-10-28T12:00:00+05:30",
+            "status": "success",
+        }
+        body_bytes = orjson.dumps(body_dict)
+        headers = _make_signed_headers(
+            "bank_1",
+            api_key,
+            "POST",
+            "/v1/transactions",
+            body_bytes,
+            clock,
+            idempotency_key=f"idem_sc14_{uuid.uuid4().hex}",
+        )
+        post_resp = await client.post("/v1/transactions", content=body_bytes, headers=headers)
+        assert post_resp.status_code == 201
+        post_data = post_resp.json()
+        assert "transaction_id" in post_data
+        assert "event_id" in post_data
+
+        tx_count = await workspace.connection.fetchval(
+            f"SELECT count(*) FROM {workspace.schema_name}.transactions WHERE payment_id = $1", payment_id
+        )
+        outbox_count = await workspace.connection.fetchval(
+            f"SELECT count(*) FROM {workspace.schema_name}.outbox WHERE event_id = $1", post_data["event_id"]
+        )
+        assert tx_count == 1
+        assert outbox_count == 1
+
+        risk_path = f"/v1/accounts/{account_id}/risk"
+        risk_headers = _make_signed_headers("bank_1", api_key, "GET", risk_path, b"", clock)
+        risk_resp = await client.get(risk_path, headers=risk_headers)
+        assert risk_resp.status_code == 200
+        risk_data = risk_resp.json()
+        assert risk_data["account_id"] == account_id
+        assert risk_data["risk"] == "unscored"
+
+        return CheckOutcome(
+            key_number=(
+                f"tx_id={post_data['transaction_id']}, risk={risk_data['risk']}, "
+                f"tx_rows={tx_count}, outbox_rows={outbox_count}"
+            ),
+            evidence={
+                "transaction_id": post_data["transaction_id"],
+                "event_id": post_data["event_id"],
+                "account_id": account_id,
+                "risk_response": risk_data,
+                "tx_rows": tx_count,
+                "outbox_rows": outbox_count,
+            },
+        )
+
+
+async def check_7_idempotency_same_key_same_body_edge(workspace: Workspace) -> CheckOutcome:
+    """
+    Check 7 (edge): same request twice with one idempotency key -> one DB row (count = 1).
+    """
+    async with _in_process_bank_app(workspace, "bank_1") as (client, api_key, clock, _pool):
+        idem_key = f"idem_sc14_rep_{uuid.uuid4().hex[:12]}"
+        payment_id = f"pmt_sc14_rep_{uuid.uuid4().hex[:12]}"
+        body_dict = {
+            "payment_id": payment_id,
+            "side": "debit",
+            "account_id": f"acc_sc14_rep_{uuid.uuid4().hex[:8]}",
+            "counterparty_bank_id": "bank_0",
+            "sender_bank_id": "bank_1",
+            "receiver_bank_id": "bank_0",
+            "amount_paise": 25000,
+            "event_time": "2026-10-28T12:00:00+05:30",
+            "status": "success",
+        }
+        body_bytes = orjson.dumps(body_dict)
+        headers1 = _make_signed_headers(
+            "bank_1", api_key, "POST", "/v1/transactions", body_bytes, clock, idempotency_key=idem_key
+        )
+        resp1 = await client.post("/v1/transactions", content=body_bytes, headers=headers1)
+        assert resp1.status_code == 201
+        data1 = resp1.json()
+
+        headers2 = _make_signed_headers(
+            "bank_1", api_key, "POST", "/v1/transactions", body_bytes, clock, idempotency_key=idem_key
+        )
+        resp2 = await client.post("/v1/transactions", content=body_bytes, headers=headers2)
+        assert resp2.status_code == 201
+        assert resp2.headers.get("Idempotent-Replayed") == "true"
+        data2 = resp2.json()
+        assert data2["transaction_id"] == data1["transaction_id"]
+
+        tx_count = await workspace.connection.fetchval(
+            f"SELECT count(*) FROM {workspace.schema_name}.transactions WHERE payment_id = $1", payment_id
+        )
+        idem_count = await workspace.connection.fetchval(
+            f"SELECT count(*) FROM {workspace.schema_name}.bank_idempotency_keys WHERE idempotency_key = $1", idem_key
+        )
+        assert tx_count == 1
+        assert idem_count == 1
+
+        return CheckOutcome(
+            key_number=f"tx_rows={tx_count}, idem_rows={idem_count}, replayed=true",
+            evidence={
+                "first_status": resp1.status_code,
+                "second_status": resp2.status_code,
+                "replayed_header": resp2.headers.get("Idempotent-Replayed"),
+                "tx_rows": tx_count,
+                "idem_rows": idem_count,
+            },
+        )
+
+
+async def check_8_idempotency_different_body_conflict_edge(workspace: Workspace) -> CheckOutcome:
+    """
+    Check 8 (edge): same key with different body -> 409 idempotency_key_reused.
+    """
+    async with _in_process_bank_app(workspace, "bank_1") as (client, api_key, clock, _pool):
+        idem_key = f"idem_sc14_conf_{uuid.uuid4().hex[:12]}"
+        payment_id = f"pmt_sc14_conf_{uuid.uuid4().hex[:12]}"
+        body1 = orjson.dumps({
+            "payment_id": payment_id,
+            "side": "debit",
+            "account_id": f"acc_sc14_conf_{uuid.uuid4().hex[:8]}",
+            "counterparty_bank_id": "bank_0",
+            "sender_bank_id": "bank_1",
+            "receiver_bank_id": "bank_0",
+            "amount_paise": 10000,
+            "event_time": "2026-10-28T12:00:00+05:30",
+            "status": "success",
+        })
+        headers1 = _make_signed_headers(
+            "bank_1", api_key, "POST", "/v1/transactions", body1, clock, idempotency_key=idem_key
+        )
+        resp1 = await client.post("/v1/transactions", content=body1, headers=headers1)
+        assert resp1.status_code == 201
+
+        # Reusing same idempotency key with different body
+        body2 = orjson.dumps({
+            "payment_id": payment_id,
+            "side": "debit",
+            "account_id": f"acc_sc14_conf_{uuid.uuid4().hex[:8]}",
+            "counterparty_bank_id": "bank_0",
+            "sender_bank_id": "bank_1",
+            "receiver_bank_id": "bank_0",
+            "amount_paise": 99999,
+            "event_time": "2026-10-28T12:00:00+05:30",
+            "status": "success",
+        })
+        headers2 = _make_signed_headers(
+            "bank_1", api_key, "POST", "/v1/transactions", body2, clock, idempotency_key=idem_key
+        )
+        resp2 = await client.post("/v1/transactions", content=body2, headers=headers2)
+        assert resp2.status_code == 409
+        data2 = resp2.json()
+        assert data2["error"]["code"] == "idempotency_key_reused"
+
+        return CheckOutcome(
+            key_number=(
+                f"first_status={resp1.status_code}, second_status={resp2.status_code}, "
+                f"error_code={data2['error']['code']}"
+            ),
+            evidence={
+                "first_status": resp1.status_code,
+                "second_status": resp2.status_code,
+                "error": data2["error"],
+            },
+        )
+
+
+async def check_9_fresh_signature_historical_event_edge(workspace: Workspace) -> CheckOutcome:
+    """
+    Check 9 (edge): replay with 2020 event_time and fresh signature is accepted; stale signature refused.
+    """
+    async with _in_process_bank_app(workspace, "bank_1") as (client, api_key, clock, _pool):
+        old_event_time = "2020-01-01T10:00:00+05:30"
+        payment_id_old = f"pmt_sc14_old_{uuid.uuid4().hex[:12]}"
+        body_old = orjson.dumps({
+            "payment_id": payment_id_old,
+            "side": "debit",
+            "account_id": f"acc_sc14_old_{uuid.uuid4().hex[:8]}",
+            "counterparty_bank_id": "bank_0",
+            "sender_bank_id": "bank_1",
+            "receiver_bank_id": "bank_0",
+            "amount_paise": 15000,
+            "event_time": old_event_time,
+            "status": "success",
+        })
+        headers_fresh = _make_signed_headers(
+            "bank_1",
+            api_key,
+            "POST",
+            "/v1/transactions",
+            body_old,
+            clock,
+            idempotency_key=f"idem_sc14_{uuid.uuid4().hex}",
+        )
+        resp_fresh = await client.post("/v1/transactions", content=body_old, headers=headers_fresh)
+        assert resp_fresh.status_code == 201
+
+        stale_clock = ManualClock(clock.now_ist() - timedelta(seconds=301))
+        headers_stale = _make_signed_headers(
+            "bank_1",
+            api_key,
+            "POST",
+            "/v1/transactions",
+            body_old,
+            stale_clock,
+            idempotency_key=f"idem_sc14_{uuid.uuid4().hex}",
+        )
+        resp_stale = await client.post("/v1/transactions", content=body_old, headers=headers_stale)
+        assert resp_stale.status_code == 401
+        data_stale = resp_stale.json()
+        assert data_stale["error"]["code"] == "stale_signature"
+
+        return CheckOutcome(
+            key_number=(
+                f"fresh_status={resp_fresh.status_code}, stale_status={resp_stale.status_code}, "
+                f"stale_error={data_stale['error']['code']}"
+            ),
+            evidence={
+                "fresh_status": resp_fresh.status_code,
+                "stale_status": resp_stale.status_code,
+                "stale_error": data_stale["error"],
+            },
+        )
+
+
+async def check_10_fuzz_endpoints_negative(workspace: Workspace, quick: bool = False) -> CheckOutcome:
+    """
+    Check 10 (negative): malformed and unsigned requests get clear 4xx, never 5xx
+    (call generate_fuzz_cases, run_unsigned_fuzz_pass, run_signed_fuzz_pass with
+    max_examples=10 in quick mode, configured value otherwise; evidence: request count and status histogram).
+    """
+    async with _in_process_bank_app(workspace, "bank_1") as (client, api_key, clock, _pool):
+        max_examples = 10 if quick else load_bank_api_policy().fuzz_max_examples_per_endpoint
+        cases = generate_fuzz_cases(max_examples=max_examples)
+        unsigned_hist = await run_unsigned_fuzz_pass(client, cases)
+        signed_hist = await run_signed_fuzz_pass(client, clock, "bank_1", api_key, cases)
+        total_requests = len(cases) * 2
+
+        return CheckOutcome(
+            key_number=(
+                f"fuzz_cases={len(cases)}, total_requests={total_requests}, "
+                f"unsigned={unsigned_hist}, signed={signed_hist}"
+            ),
+            evidence={
+                "quick_mode": quick,
+                "max_examples_per_endpoint": max_examples,
+                "fuzz_cases_count": len(cases),
+                "total_requests_executed": total_requests,
+                "unsigned_status_histogram": {str(k): v for k, v in unsigned_hist.items()},
+                "signed_status_histogram": {str(k): v for k, v in signed_hist.items()},
+            },
+        )
+
+
 def get_checks(quick: bool = False) -> list[CheckDefinition]:
     """
     Return the Level 14 verification checks.
-    Tagged with part='a' for selective Level 14a showcase execution.
+    Tagged with part='a' and part='b' for selective Level 14 showcase execution.
     """
+    async def run_check_10(workspace: Workspace) -> CheckOutcome:
+        return await check_10_fuzz_endpoints_negative(workspace, quick=quick)
+
     return [
         CheckDefinition(
             name="1. bank_1 key reads bank_2 account yields 0 rows and cross-bank insert refused",
@@ -449,5 +808,65 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
             likely_cause="ON CONFLICT handling or replay detection in record_upi_side failed.",
             where_to_look="api/v1/upi_outbox.py",
             part="a",
+        ),
+        CheckDefinition(
+            name="6. signed POST /v1/transactions creates record and outbox event, and GET risk returns unscored",
+            kind="normal",
+            proves=(
+                "Signed POST /v1/transactions creates a database row and outbox event; "
+                "subsequent signed GET /v1/accounts/{account_id}/risk returns 200 unscored."
+            ),
+            run=check_6_post_transaction_and_get_risk_normal,
+            likely_cause="POST /v1/transactions handler or GET /v1/accounts/{account_id}/risk query failed.",
+            where_to_look="api/v1/bank_router.py, api/v1/upi_outbox.py",
+            part="b",
+        ),
+        CheckDefinition(
+            name="7. replaying same request with same idempotency key creates exactly one database row",
+            kind="edge",
+            proves=(
+                "Submitting the same signed request twice with the same idempotency key yields a replay "
+                "and exactly one database row."
+            ),
+            run=check_7_idempotency_same_key_same_body_edge,
+            likely_cause="Idempotency replay detection or response cache failed in bank_router.",
+            where_to_look="api/v1/bank_router.py, api/v1/bank_idempotency.py",
+            part="b",
+        ),
+        CheckDefinition(
+            name="8. reusing same idempotency key with different body is refused with 409 conflict",
+            kind="edge",
+            proves=(
+                "Reusing an existing idempotency key with a differing payload is rejected "
+                "with 409 idempotency_key_reused."
+            ),
+            run=check_8_idempotency_different_body_conflict_edge,
+            likely_cause="Payload hash comparison or 409 conflict raising failed in bank_router.",
+            where_to_look="api/v1/bank_router.py, api/v1/bank_idempotency.py",
+            part="b",
+        ),
+        CheckDefinition(
+            name="9. replay with 2020 event_time and fresh signature accepted, stale signature refused",
+            kind="edge",
+            proves=(
+                "A historical transaction with 2020 event_time is accepted with a fresh signature, "
+                "but rejected with 401 when signature is stale."
+            ),
+            run=check_9_fresh_signature_historical_event_edge,
+            likely_cause="Transport clock verification mixed event_time with transport timestamp.",
+            where_to_look="api/v1/request_auth.py, api/v1/signing.py",
+            part="b",
+        ),
+        CheckDefinition(
+            name="10. malformed and unsigned fuzz requests yield 4xx, never 5xx server errors",
+            kind="negative",
+            proves=(
+                "Unsigned requests are rejected with 401/413 and signed fuzz requests "
+                "never produce 5xx server crashes."
+            ),
+            run=run_check_10,
+            likely_cause="Unhandled exception in bank_router or missing authentication guard.",
+            where_to_look="api/v1/bank_router.py, api/v1/request_auth.py, tests/contract/test_bank_api_fuzz.py",
+            part="b",
         ),
     ]

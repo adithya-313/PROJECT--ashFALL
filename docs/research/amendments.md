@@ -381,5 +381,17 @@ No model code exists yet (models start in Level 18; `world/` is simulator code).
 | Why | Establishes PostgreSQL row-level security that cannot be bypassed on pooled connections, ensures clean backward compatibility with locked Level 7 consumer schemas, guarantees idempotency for cross-bank transfers, and enforces least-privilege security boundaries across tenant banks. |
 | Results exist? | No model results. Integration test and unit test evidence only. |
 
+## A-032
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-10-28 |
+| Issue IDs | None |
+| Issue IDs v2 | 14-4, 14-9, 14-11, 14-12, 14-16, X3 |
+| Files | `api/v1/request_auth.py`, `api/v1/bank_router.py`, `api/v1/signing.py`, `api/v1/webhooks.py`, `config/bank_api.yaml`, `requirements-test.txt`, `tests/contract/test_bank_api_fuzz.py`, `tests/integration/test_bank_endpoints.py`, `tests/integration/test_bank_idempotency.py`, `tests/integration/test_bank_request_auth.py`, `showcase/level_14.py`, `config/issues_v2.yaml`, `docs/research/amendments.md` |
+| What changed | Level 14b bank REST API endpoints, raw-path HMAC signing, fuzzing, CI coverage, and showcase part b. (a) Authentication before body parsing: Bank authentication runs before request body deserialization. Requests with missing or invalid credentials receive a structured 401 response (`missing_auth_headers`, `invalid_key`, `bad_signature`, `stale_signature`, `nonce_reused`), never 422 `unprocessable_entity`. (b) Structured error contract: All API errors conform to RFC 7807 intent returning JSON with `{"error": {"code": "...", "message": "..."}}`. (c) Signing secret separate from API key: The HMAC signing secret (`bank_signing_secret_<bank_id>`) is distinct from the hashed bearer API key stored in PostgreSQL (`bank_api_keys`). Compromise of a stored key hash cannot forge cryptographic request signatures. (d) Raw request path signing: Signing and signature verification canonicalize against the ASGI `scope["raw_path"]` bytes, preserving raw percent-encoded characters (such as `%20`) so that URL-encoding differences do not create signature bypass or verification mismatch. (e) Webhook delivery deferred to 14c: Transactional outbox records events for delivery, but the background webhook relay loop is deferred to Level 14c when full event coverage across simulated commercial banks is operational. (f) Schemathesis pin: Schemathesis is pinned to version 4.32.7 in `requirements-test.txt` for deterministic and reproducible property-based API contract fuzzing. (g) Level 13 wire-key tests: Fixed a test field mismatch in Level 13 wire-key tests where `target_account_id` was asserted instead of `account_id`. (h) CI coverage: `.github/workflows/ci.yml` is updated to run the full suite of Level 14 integration and contract fuzz tests against real PostgreSQL in the `integration-tests` job. (i) Default bank mode: Commercial bank API mode defaults to "shadow" in `config/bank_api.yaml` until Level 14c flips it to active decision routing. |
+| Why | Guarantees secure, authenticated, and idempotent REST interfaces for commercial bank participants, enforces authentication prior to potentially hostile payload parsing, preserves URL encoding integrity across proxy hops, eliminates unhandled 5xx exceptions under adversarial and randomized inputs, and ensures comprehensive CI verification. |
+| Results exist? | No model results. Integration tests, property-based fuzz tests, and showcase verification only. |
+
 
 
