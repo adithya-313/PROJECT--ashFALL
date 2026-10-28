@@ -3,7 +3,6 @@
 import re
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any
 
 import asyncpg
 from fastapi import Request
@@ -19,6 +18,7 @@ from api.v1.signing import (
     sign,
     signatures_match,
 )
+from core.event_clock import Clock
 
 HEADER_KEY = "X-Ashfall-Key"
 HEADER_TIMESTAMP = "X-Ashfall-Timestamp"
@@ -67,7 +67,7 @@ def make_auth_error_response(error: BankAuthError) -> JSONResponse:
 async def authenticate_bank_request(
     request: Request,
     pool: asyncpg.Pool,
-    clock: Any,
+    clock: Clock,
 ) -> BankRequestContext:
     """
     Authenticates an incoming bank HTTP request.

@@ -36,3 +36,27 @@ bank_api:
     value: 65536
     reason: "maximum request body size 64KB"
     derived_from: "payload limit policy"
+
+  default_bank_mode:
+    label: policy
+    value: shadow
+    reason: "every bank starts in shadow mode (scores are recorded, never acted on) until Level 14c makes the mode per bank; must be shadow or live"
+    derived_from: "Level 14b round 2a plan"
+
+  max_amount_paise:
+    label: policy
+    value: 1000000000000
+    reason: "upper guard on a payment amount (10 billion rupees) so a huge number can never overflow a BIGINT column"
+    derived_from: "input validation policy"
+
+  max_payment_ids_per_complaint:
+    label: policy
+    value: 50
+    reason: "one complaint may name at most 50 payments, which keeps a single request small and bounded"
+    derived_from: "payload limit policy"
+
+  max_identifier_length:
+    label: policy
+    value: 128
+    reason: "longest allowed payment, account, event or complaint identifier, matching the idempotency key limit"
+    derived_from: "input validation policy"

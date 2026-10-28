@@ -5,11 +5,11 @@ import hmac
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from api.v1.bank_scope import UnknownBankError, load_known_banks
 from core.config import config
 from core.config_validator import load_yaml
+from core.event_clock import Clock
 
 SIGNATURE_SCHEME = "ASHFALL-HMAC-SHA256-v1"
 DEFAULT_CONFIG_PATH = Path("config/bank_api.yaml")
@@ -185,7 +185,7 @@ def sign_outgoing(
     method: str,
     path: str,
     body_bytes: bytes,
-    clock: Any,
+    clock: Clock,
     nonce: str,
 ) -> dict[str, str]:
     """
