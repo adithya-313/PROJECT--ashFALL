@@ -11,7 +11,17 @@ import asyncpg
 from pydantic import BaseModel
 
 from api.v1.bank_scope import UnknownBankError, load_known_banks
-from world.failures import FAILURE_DOMAINS
+
+# Same values as world/failures.py FAILURE_DOMAINS and migration 0006's CHECK;
+# kept separate because the bank API must not depend on the simulator (ground
+# rule 29; the API image does not contain world/).
+UPI_FAILURE_DOMAINS: tuple[str, ...] = (
+    "npci_central",
+    "sender_bank",
+    "receiver_bank",
+    "app_or_network",
+    "customer",
+)
 
 # UPI payment event constants
 UPI_SCHEMA_VERSION: str = "2"
@@ -133,8 +143,8 @@ def validate_side(upi_side: UpiPaymentSide) -> None:
         raise ValueError(f"status must be 'success' or 'failed', got {upi_side.status!r}")
 
     # 5. Failure domain validation
-    if upi_side.failure_domain is not None and upi_side.failure_domain not in FAILURE_DOMAINS:
-        raise ValueError(f"failure_domain must be one of {FAILURE_DOMAINS}, got {upi_side.failure_domain!r}")
+    if upi_side.failure_domain is not None and upi_side.failure_domain not in UPI_FAILURE_DOMAINS:
+        raise ValueError(f"failure_domain must be one of {UPI_FAILURE_DOMAINS}, got {upi_side.failure_domain!r}")
 
     # 6. Status/domain correlation
     if upi_side.status == "failed" and upi_side.failure_domain is None:
