@@ -193,6 +193,10 @@ def sign_outgoing(
 
     Used by mock banks, test suites, and downstream webhook dispatches.
     Uses the exact same canonical request format and HMAC-SHA256 scheme in both directions.
+
+    Note:
+        The `path` parameter must be the exact percent-encoded path that will be sent
+        on the wire (e.g. '/v1/accounts/acc%201/risk', not a decoded form containing literal spaces).
     """
     secret_bytes = get_signing_secret(bank_id)
     now_dt = clock.now_ist()

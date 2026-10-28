@@ -496,3 +496,37 @@ async def test_get_without_idempotency_key_succeeds(auth_setup):
 
     assert resp.status_code == 200
     assert resp.json()["bank_id"] == "bank_0"
+
+
+async def test_missing_raw_path_raises_bad_request_path(auth_setup):
+    """If raw_path is missing from ASGI scope, authenticate_bank_request raises 400 bad_request_path."""
+    app = auth_setup["app"]
+    clock = auth_setup["clock"]
+    key = auth_setup["key_bank_0"]
+
+    headers = make_signed_headers(
+        key=key,
+        secret=SECRET_BANK_0,
+        method="GET",
+        path="/api/v1/test-get",
+        body=b"",
+        clock=clock,
+        nonce="raw_path_nonce_12",
+        idempotency_key=None,
+    )
+
+    class DropRawPathTransport(httpx.ASGITransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            async def wrapped_app(scope, receive, send):
+                scope.pop("raw_path", None)
+                await self.app(scope, receive, send)
+
+            transport = httpx.ASGITransport(app=wrapped_app)
+            return await transport.handle_async_request(request)
+
+    async with httpx.AsyncClient(transport=DropRawPathTransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/api/v1/test-get", headers=headers)
+
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "bad_request_path"
+

@@ -64,6 +64,34 @@ def make_auth_error_response(error: BankAuthError) -> JSONResponse:
     )
 
 
+def raw_request_path(request: Request) -> str:
+    """
+    Extracts and decodes the raw ASGI request path as ASCII.
+
+    Signatures and idempotency hashes must cover the exact wire-format
+    raw path rather than a decoded path so that alternate encodings of
+    the same decoded text do not collide or produce valid signatures across
+    different paths.
+
+    Args:
+        request: The incoming HTTP request containing the ASGI scope.
+
+    Returns:
+        The raw request path decoded as an ASCII string.
+
+    Raises:
+        BankAuthError: 400 'bad_request_path' if raw_path is missing from scope,
+            is not bytes, or cannot be decoded as ASCII.
+    """
+    raw_path = request.scope.get("raw_path")
+    if not isinstance(raw_path, bytes):
+        raise BankAuthError(400, "bad_request_path", "Missing raw request path in scope")
+    try:
+        return raw_path.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise BankAuthError(400, "bad_request_path", "Raw request path is not valid ASCII") from exc
+
+
 async def authenticate_bank_request(
     request: Request,
     pool: asyncpg.Pool,
@@ -141,10 +169,11 @@ async def authenticate_bank_request(
         raise BankAuthError(503, "signing_not_configured", "Signing secret not configured") from exc
 
     # 7. Rebuild canonical request and compare signature
+    path = raw_request_path(request)
     raw_query = request.url.query or ""
     canonical = build_canonical_request(
         method=request.method,
-        path=request.url.path,
+        path=path,
         query=raw_query,
         timestamp=ts,
         nonce=nonce,

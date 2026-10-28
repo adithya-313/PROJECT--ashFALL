@@ -221,12 +221,31 @@ async def test_account_risk_contract(env: EndpointEnv) -> None:
 
 async def test_account_risk_for_an_invalid_id_is_422(env: EndpointEnv) -> None:
     """An account id with characters outside the identifier alphabet is refused with 422 after authentication."""
-    # The server checks the signature over the decoded path (request.url.path), so the test signs the path with a
-    # real space; httpx then sends it as %20 on the wire.
-    response = await get_signed(env, "bank_0", "/v1/accounts/bad id/risk")
+    # The server checks the signature over the raw wire path (request.scope["raw_path"]), so the test signs the
+    # encoded path with %20.
+    response = await get_signed(env, "bank_0", "/v1/accounts/bad%20id/risk")
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "invalid_account_id"
+
+
+async def test_signature_for_encoded_path_does_not_verify_for_a_different_encoding(
+    env: EndpointEnv,
+) -> None:
+    """A signature generated for one raw path encoding does not verify for a different encoding."""
+    # 1. Signing the decoded path with literal space does not verify when sent as %20 on the wire
+    headers_decoded = signed_headers(env, "bank_0", "GET", "/v1/accounts/bad id/risk", b"")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        resp_decoded = await client.get("/v1/accounts/bad%20id/risk", headers=headers_decoded)
+    assert resp_decoded.status_code == 401
+    assert resp_decoded.json()["error"]["code"] == "bad_signature"
+
+    # 2. Signing the percent-encoded path does not verify if requested with a different raw form (e.g. +)
+    headers_encoded = signed_headers(env, "bank_0", "GET", "/v1/accounts/bad%20id/risk", b"")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        resp_diff = await client.get("/v1/accounts/bad+id/risk", headers=headers_encoded)
+    assert resp_diff.status_code == 401
+    assert resp_diff.json()["error"]["code"] == "bad_signature"
 
 
 async def test_same_key_same_body_creates_one_record(env: EndpointEnv) -> None:

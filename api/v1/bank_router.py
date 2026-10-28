@@ -39,7 +39,7 @@ from api.v1.models import (
     TransactionResponse,
     TransactionSideRequest,
 )
-from api.v1.request_auth import BankRequestContext, authenticate_bank_request
+from api.v1.request_auth import BankRequestContext, authenticate_bank_request, raw_request_path
 from api.v1.upi_outbox import UpiPaymentSide, record_upi_side, validate_side
 from core.event_clock import Clock, WallClock
 
@@ -164,7 +164,8 @@ async def run_idempotent_post(request: Request, ctx: BankRequestContext, handler
     if ctx.idempotency_key is None:
         raise ApiError(400, "bad_idempotency_key", "Missing Idempotency-Key header on POST")
     pool: asyncpg.Pool = request.app.state.db_pool
-    request_hash = hash_request(request.method, request.url.path, ctx.body_bytes)
+    path = raw_request_path(request)
+    request_hash = hash_request(request.method, path, ctx.body_bytes)
     now = get_transport_clock(request).now_ist()
 
     async with pool.acquire() as connection:

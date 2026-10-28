@@ -47,6 +47,10 @@ def build_signed_webhook(
     Returns:
         (body_bytes, headers): the exact bytes to send, and the headers to send them with.
 
+    Note:
+        The path signed by sign_outgoing (WEBHOOK_PATH) must be the exact percent-encoded
+        path that will be sent on the wire.
+
     Raises:
         UnknownBankError: If bank_id is not a configured bank.
         SigningNotConfiguredError: If the bank has no signing secret configured.
