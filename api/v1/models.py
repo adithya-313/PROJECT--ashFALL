@@ -174,6 +174,8 @@ class TransactionSideRequest(ApiModel):
     failure_domain: Identifier | None = None
     payee_type: Identifier | None = None
     channel: Identifier | None = None
+    sender_device_fingerprint: Identifier | None = None
+    sender_os_generation: Annotated[int, Field(strict=True, ge=0)] | None = None
 
 
 class TransactionResponse(ApiModel):

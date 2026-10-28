@@ -255,6 +255,8 @@ async def post_transaction(request: Request) -> ORJSONResponse:
         failure_domain=side_request.failure_domain,
         payee_type=side_request.payee_type,
         channel=side_request.channel,
+        sender_device_fingerprint=side_request.sender_device_fingerprint,
+        sender_os_generation=side_request.sender_os_generation,
     )
     try:
         validate_side(upi_side)
