@@ -26,6 +26,9 @@ from api.middleware.logging_middleware import RequestLoggingMiddleware
 from api.middleware.request_id import RequestIDMiddleware
 from api.models.health import HealthResponse
 from api.routers import scoring
+from api.v1.bank_router import router as bank_router
+from api.v1.errors import ApiError, handle_api_error, handle_bank_auth_error
+from api.v1.request_auth import BankAuthError
 from core.config import config
 from core.gpu_monitor import poll_gpu_metrics
 from core.logging import configure_logging, get_logger
@@ -110,6 +113,11 @@ Instrumentator().instrument(app).expose(app)
 
 # Register routers. Each router owns its own prefix (defined in the router file).
 app.include_router(scoring.router)
+app.include_router(bank_router)
+
+# Bank endpoints raise these two exceptions; the handlers turn both into the standard error body.
+app.add_exception_handler(ApiError, handle_api_error)  # type: ignore[arg-type]
+app.add_exception_handler(BankAuthError, handle_bank_auth_error)  # type: ignore[arg-type]
 
 
 @app.get("/health", response_model=HealthResponse)

@@ -159,10 +159,11 @@ issues:
     origin: revision_2
     status: partial
     levels: [12, 14, 15]
-    parts: [12a]
+    parts: [12a, 14b]
     evidence:
       - {kind: test, file: tests/unit/world/test_interactive_runner_switch.py, name: test_fraud_off_adds_ids_and_device_events_in_memory}
-    later_work: ["Level 14: POST /v1/account-events to receive account events", "Level 15: features read the runner device stream"]
+      - {kind: test, file: tests/integration/test_bank_endpoints.py, name: test_account_events_contract}
+    later_work: ["Level 15: features read the runner device stream"]
   X4:
     title: "Who holds the hashing secret was unspecified"
     origin: revision_2
@@ -586,10 +587,12 @@ issues:
   14-4:
     title: "Signature freshness against simulated time would reject replays"
     origin: revision_2
-    status: planned
+    status: built
     levels: [14]
     parts: [14b]
-    later_work: ["Level 14b: Wall-clock transport time"]
+    evidence:
+      - {kind: test, file: tests/integration/test_bank_endpoints.py, name: test_fast_replay_old_event_time_fresh_signature_accepted}
+      - {kind: test, file: tests/integration/test_bank_endpoints.py, name: test_stale_signature_refused}
   14-6:
     title: "Live mode had nowhere to send held payments before Level 22"
     origin: revision_2
@@ -610,14 +613,15 @@ issues:
   14-9:
     title: "Idempotency, keys and error handling underspecified"
     origin: revision_2
-    status: partial
+    status: built
     levels: [14]
     parts: [14a, 14b]
     evidence:
       - {kind: test, file: tests/integration/test_bank_isolation.py, name: test_rotation_old_and_new_key_work_until_revoked}
       - {kind: test, file: tests/integration/test_bank_isolation.py, name: test_revoked_key_resolves_to_none}
       - {kind: test, file: tests/integration/test_bank_isolation.py, name: test_malformed_and_wrong_secret_keys_resolve_to_none}
-    later_work: ["Level 14b: per-bank idempotency 409, signing, fuzzing"]
+      - {kind: test, file: tests/integration/test_bank_idempotency.py, name: test_same_key_with_different_hash_yields_conflict}
+      - {kind: test, file: tests/integration/test_bank_endpoints.py, name: test_same_key_different_body_returns_409}
   14-10:
     title: "Failed-payment visibility depends on the failure domain"
     origin: revision_2
@@ -628,25 +632,27 @@ issues:
   14-11:
     title: "Idempotency, keys and error handling underspecified"
     origin: revision_2
-    status: partial
+    status: built
     levels: [14]
     parts: [14a, 14b]
     evidence:
       - {kind: test, file: tests/integration/test_bank_isolation.py, name: test_rotation_old_and_new_key_work_until_revoked}
       - {kind: test, file: tests/integration/test_bank_isolation.py, name: test_revoked_key_resolves_to_none}
       - {kind: test, file: tests/integration/test_bank_isolation.py, name: test_malformed_and_wrong_secret_keys_resolve_to_none}
-    later_work: ["Level 14b: per-bank idempotency 409, signing, fuzzing"]
+      - {kind: test, file: tests/integration/test_bank_idempotency.py, name: test_same_key_with_different_hash_yields_conflict}
+      - {kind: test, file: tests/integration/test_bank_endpoints.py, name: test_same_key_different_body_returns_409}
   14-12:
     title: "Idempotency, keys and error handling underspecified"
     origin: revision_2
-    status: partial
+    status: built
     levels: [14]
     parts: [14a, 14b]
     evidence:
       - {kind: test, file: tests/integration/test_bank_isolation.py, name: test_rotation_old_and_new_key_work_until_revoked}
       - {kind: test, file: tests/integration/test_bank_isolation.py, name: test_revoked_key_resolves_to_none}
       - {kind: test, file: tests/integration/test_bank_isolation.py, name: test_malformed_and_wrong_secret_keys_resolve_to_none}
-    later_work: ["Level 14b: per-bank idempotency 409, signing, fuzzing"]
+      - {kind: test, file: tests/integration/test_bank_idempotency.py, name: test_same_key_with_different_hash_yields_conflict}
+      - {kind: test, file: tests/integration/test_bank_endpoints.py, name: test_same_key_different_body_returns_409}
   14-13:
     title: "chk_source rejects UPI rows; \"migration 0002\" already used"
     origin: revision_2
@@ -677,10 +683,13 @@ issues:
   14-16:
     title: "Level 11's \"signed envelope\" is not actually signed"
     origin: revision_2
-    status: planned
+    status: built
     levels: [14]
     parts: [14b]
-    later_work: ["Level 14b: Signing built in 14b"]
+    evidence:
+      - {kind: test, file: tests/unit/test_bank_signing.py, name: test_tampering_any_parameter_changes_signature}
+      - {kind: test, file: tests/integration/test_bank_request_auth.py, name: test_good_request_authenticates_successfully}
+      - {kind: test, file: tests/integration/test_bank_request_auth.py, name: test_step_7_bad_signature}
   15-1:
     title: "Velocity already uses event time; a 7-day window needs its own expiry"
     origin: revision_2

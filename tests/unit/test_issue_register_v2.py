@@ -115,14 +115,16 @@ def test_real_register_passes() -> None:
         Level 13c moved 13-2, 13-3, 13-16 and 13-17 to built (built 41 to 45, partial 11 to 11, planned 40 to 36).
         Level 14a moved 14-2, 14-13, 14-14, 14-15 to built, and 14-8, 14-9, 14-11, 14-12 to partial (built 45 to 49,
         partial 11 to 15, planned 36 to 28).
+        Level 14b moved 14-4 and 14-16 (planned) and 14-9, 14-11, 14-12 (partial) to built (built 49 to 54,
+        partial 15 to 12, planned 28 to 26).
     """
     register = real_register()
     assert check_register(register, REPO_ROOT) == []
     issues = register["issues"]
     assert len(EXPECTED_V2_IDS) == 77
     assert len(issues) == 93
-    # Level 14a
-    assert count_statuses(issues) == {"built": 49, "partial": 15, "planned": 28, "deferred": 1}
+    # Level 14b
+    assert count_statuses(issues) == {"built": 54, "partial": 12, "planned": 26, "deferred": 1}
 
 
 def test_missing_id_is_rejected() -> None:

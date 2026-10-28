@@ -17,7 +17,7 @@ Note on WORKER_COUNT:
   appear here to avoid creating two sources of truth for the same variable.
 """
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -72,6 +72,12 @@ class AppConfig(BaseSettings):
     enable_model_v2: bool = False
     enable_gnn_ensemble: bool = False
     enable_research_agent_internet: bool = False
+
+    # Bank HMAC request signing secrets (Level 14b). Stored securely as SecretStr
+    # so they are never printed, logged, or serialized to JSON in plain text.
+    bank_signing_secret_bank_0: SecretStr | None = None
+    bank_signing_secret_bank_1: SecretStr | None = None
+    bank_signing_secret_bank_2: SecretStr | None = None
 
     # SettingsConfigDict tells pydantic-settings where to look for values.
     # env_file=".env" reads variables from a .env file if it exists.

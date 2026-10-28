@@ -286,7 +286,16 @@ jobs:
             tests/integration/test_migration_runner.py \
             tests/integration/test_showcase_isolation.py \
             tests/integration/test_showcase_kafka_tools.py \
-            tests/contract/test_orjson_in_response.py tests/integration/test_pool_initialization.py \
+            tests/contract/test_orjson_in_response.py \
+            tests/integration/test_pool_initialization.py \
+            tests/integration/test_upi_schema_0006.py \
+            tests/integration/test_bank_isolation.py \
+            tests/integration/test_upi_outbox_writer.py \
+            tests/integration/test_bank_api_tables_0007.py \
+            tests/integration/test_bank_request_auth.py \
+            tests/integration/test_bank_idempotency.py \
+            tests/integration/test_bank_endpoints.py \
+            tests/contract/test_bank_api_fuzz.py \
             -q -rs -p no:cacheprovider 2>&1 | tee "$RUNNER_TEMP/integration.log"
           code=${PIPESTATUS[0]}
           if [ "$code" -ne 0 ]; then
