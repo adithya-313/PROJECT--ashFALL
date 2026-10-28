@@ -37,7 +37,7 @@ from tests.contract.test_bank_api_fuzz import (
 )
 
 LEVEL_NUMBER = 14
-LEVEL_TITLE = "Commercial bank UPI APIs and isolation (built: parts 14a, 14b)"
+LEVEL_TITLE = "Commercial bank UPI APIs and isolation (built: parts 14a, 14b, 14c)"
 NEEDS_DATABASE = True
 
 WHAT_YOU_SAW = (
@@ -48,19 +48,29 @@ WHAT_YOU_SAW = (
     "records cross-bank payments into transactional outbox with UUIDv5 identities and routing to upi.payments. "
     "Part 14b implements authenticated, signed, and idempotent bank REST APIs, raw percent-encoded path signing, "
     "replay protection with transport clock isolation, and comprehensive schemathesis fuzzing rejecting malformed "
-    "requests with 4xx while preventing unhandled 500 server crashes."
+    "requests with 4xx while preventing unhandled 500 server crashes. Part 14c implements bank-feed projection "
+    "from world records, mock bank connectors with shadow and live modes, in-process and signed HTTP parity, "
+    "R7 visibility rules preserving failed payment boundaries, outbox relay to Kafka with schema version 2, "
+    "and strict refusal of boundary leaks such as transaction purpose."
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REQUIRED_FILES = [
     REPO_ROOT / "config" / "bank_api.yaml",
+    REPO_ROOT / "config" / "bank_feed.yaml",
+    REPO_ROOT / "world" / "bank_feed.py",
+    REPO_ROOT / "world" / "bank_feed_config.py",
+    REPO_ROOT / "world" / "bank_connectors.py",
     REPO_ROOT / "api" / "v1" / "bank_scope.py",
     REPO_ROOT / "api" / "v1" / "bank_keys.py",
+    REPO_ROOT / "api" / "v1" / "bank_service.py",
+    REPO_ROOT / "api" / "v1" / "bank_clients.py",
     REPO_ROOT / "api" / "v1" / "upi_outbox.py",
     REPO_ROOT / "api" / "v1" / "request_auth.py",
     REPO_ROOT / "api" / "v1" / "bank_router.py",
     REPO_ROOT / "api" / "v1" / "signing.py",
     REPO_ROOT / "migrations" / "0006_add_upi_columns_and_bank_isolation.sql",
+    REPO_ROOT / "migrations" / "0008_add_sender_device_columns.sql",
     REPO_ROOT / "tests" / "contract" / "test_bank_api_fuzz.py",
 ]
 
@@ -749,10 +759,20 @@ async def check_10_fuzz_endpoints_negative(workspace: Workspace, quick: bool = F
 def get_checks(quick: bool = False) -> list[CheckDefinition]:
     """
     Return the Level 14 verification checks.
-    Tagged with part='a' and part='b' for selective Level 14 showcase execution.
+    Tagged with part='a', part='b', and part='c' for selective Level 14 showcase execution.
     """
+    from showcase.level_14_support_c import (
+        check_11_http_connectors_and_outbox_relay_normal,
+        check_12_shadow_mode_parity_edge,
+        check_13_r7_visibility_edge,
+        check_14_boundary_purpose_leak_negative,
+    )
+
     async def run_check_10(workspace: Workspace) -> CheckOutcome:
         return await check_10_fuzz_endpoints_negative(workspace, quick=quick)
+
+    async def run_check_11(workspace: Workspace) -> CheckOutcome:
+        return await check_11_http_connectors_and_outbox_relay_normal(workspace, quick=quick)
 
     return [
         CheckDefinition(
@@ -868,5 +888,56 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
             likely_cause="Unhandled exception in bank_router or missing authentication guard.",
             where_to_look="api/v1/bank_router.py, api/v1/request_auth.py, tests/contract/test_bank_api_fuzz.py",
             part="b",
+        ),
+        CheckDefinition(
+            name="11. world simulation through APIs over HTTP with outbox relay to Kafka",
+            kind="normal",
+            proves=(
+                "A world runs through commercial bank APIs over SignedHttpBankClient with full fidelity, "
+                "relaying transactional outbox to Kafka schema-2 topic."
+            ),
+            run=run_check_11,
+            likely_cause="SignedHttpBankClient, run_world_through_banks, or outbox relay to Kafka failed.",
+            where_to_look="api/v1/bank_clients.py, world/bank_connectors.py, api/services/outbox_relay.py",
+            part="c",
+        ),
+        CheckDefinition(
+            name="12. shadow mode leaves bank behaviour unchanged matching allow_all simulation",
+            kind="edge",
+            proves=(
+                "Shadow mode records decisions under mode 'shadow' while leaving simulation output "
+                "identical to a plain allow_all run."
+            ),
+            run=check_12_shadow_mode_parity_edge,
+            likely_cause="Shadow mode interfered with simulation or decision requests did not record mode='shadow'.",
+            where_to_look="world/bank_connectors.py, api/v1/bank_router.py",
+            part="c",
+        ),
+        CheckDefinition(
+            name="13. R7 failed payment visibility preserves failure domain boundary rules",
+            kind="edge",
+            proves=(
+                "npci_central failure produces debit row only; receiver_bank failure produces both debit "
+                "and credit sides."
+            ),
+            run=check_13_r7_visibility_edge,
+            likely_cause=(
+                "R7 failed payment visibility rules violated: "
+                "npci_central or receiver_bank side projection incorrect."
+            ),
+            where_to_look="world/bank_feed.py, api/v1/upi_outbox.py",
+            part="c",
+        ),
+        CheckDefinition(
+            name="14. non-bank-visible purpose field rejected by projection and API schema boundaries",
+            kind="negative",
+            proves=(
+                "A record carrying 'purpose' is rejected by check_bank_visible and POST /v1/transactions "
+                "returns 422 with 0 rows stored."
+            ),
+            run=check_14_boundary_purpose_leak_negative,
+            likely_cause="Boundary checks did not reject bank-invisible 'purpose' field in projection or API schema.",
+            where_to_look="world/bank_feed.py, api/v1/bank_router.py",
+            part="c",
         ),
     ]
