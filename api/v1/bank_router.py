@@ -29,8 +29,12 @@ from api.v1.models import (
     POLICY,
     AccountEventRequest,
     AccountEventResponse,
+    ComplaintRequest,
+    ComplaintResponse,
     DecisionRequest,
     DecisionResponse,
+    FeedbackRequest,
+    FeedbackResponse,
     RiskResponse,
     TransactionResponse,
     TransactionSideRequest,
@@ -99,6 +103,26 @@ def parse_body(ctx: BankRequestContext, model_class: type[ModelT]) -> ModelT:
             if location not in locations:
                 locations.append(location)
         raise ApiError(422, "invalid_body", "Request body is invalid; check: " + ", ".join(locations)) from error
+
+
+def as_duplicate_record_error(error: asyncpg.UniqueViolationError, constraint_name: str) -> ApiError:
+    """
+    Turns a violation of one named business-id constraint into the 409 "duplicate_record" error.
+
+    Args:
+        error: The unique violation the database raised.
+        constraint_name: The one constraint that means "this business id already exists".
+
+    Returns:
+        The ApiError to raise.
+
+    Raises:
+        asyncpg.UniqueViolationError: The same error again, if it came from any other constraint (that would be a
+            real fault, not a duplicate id).
+    """
+    if error.constraint_name != constraint_name:
+        raise error
+    return ApiError(409, "duplicate_record", "A record with this id already exists")
 
 
 def request_schema(model_class: type[BaseModel]) -> dict[str, Any]:
@@ -279,6 +303,81 @@ async def post_account_event(request: Request) -> ORJSONResponse:
         duplicate = inserted_id is None
         response = AccountEventResponse(event_id=event_request.event_id, duplicate=duplicate)
         return (200 if duplicate else 201), response.model_dump(mode="json")
+
+    return await run_idempotent_post(request, ctx, handler)
+
+
+@router.post(
+    "/complaints",
+    status_code=201,
+    response_model=ComplaintResponse,
+    openapi_extra=request_schema(ComplaintRequest),
+)
+async def post_complaint(request: Request) -> ORJSONResponse:
+    """
+    Stores a fraud complaint the bank received from its customer. The same complaint id under a different
+    idempotency key is a 409 "duplicate_record".
+    """
+    ctx = await get_bank_context(request)
+    complaint = parse_body(ctx, ComplaintRequest)
+
+    async def handler(connection: asyncpg.Connection) -> tuple[int, dict[str, Any]]:
+        try:
+            await connection.execute(
+                """
+                INSERT INTO bank_complaints (
+                    bank_id, complaint_id, complainant_account, reported_account, reported_bank_id,
+                    payment_ids, claimed_type, received_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                """,
+                ctx.bank_id,
+                complaint.complaint_id,
+                complaint.complainant_account,
+                complaint.reported_account,
+                complaint.reported_bank_id,
+                complaint.payment_ids,
+                complaint.claimed_type,
+                complaint.received_at,
+            )
+        except asyncpg.UniqueViolationError as error:
+            raise as_duplicate_record_error(error, COMPLAINT_UNIQUE_CONSTRAINT) from error
+        return 201, ComplaintResponse(complaint_id=complaint.complaint_id).model_dump(mode="json")
+
+    return await run_idempotent_post(request, ctx, handler)
+
+
+@router.post(
+    "/feedback",
+    status_code=201,
+    response_model=FeedbackResponse,
+    openapi_extra=request_schema(FeedbackRequest),
+)
+async def post_feedback(request: Request) -> ORJSONResponse:
+    """
+    Stores the outcome a bank learned about a payment after the fact. The same feedback id under a different
+    idempotency key is a 409 "duplicate_record".
+    """
+    ctx = await get_bank_context(request)
+    feedback = parse_body(ctx, FeedbackRequest)
+
+    async def handler(connection: asyncpg.Connection) -> tuple[int, dict[str, Any]]:
+        try:
+            await connection.execute(
+                """
+                INSERT INTO bank_feedback (bank_id, feedback_id, payment_id, outcome, note, event_time)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                """,
+                ctx.bank_id,
+                feedback.feedback_id,
+                feedback.payment_id,
+                feedback.outcome,
+                feedback.note,
+                feedback.event_time,
+            )
+        except asyncpg.UniqueViolationError as error:
+            raise as_duplicate_record_error(error, FEEDBACK_UNIQUE_CONSTRAINT) from error
+        return 201, FeedbackResponse(feedback_id=feedback.feedback_id).model_dump(mode="json")
 
     return await run_idempotent_post(request, ctx, handler)
 

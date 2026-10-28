@@ -331,3 +331,94 @@ async def test_transaction_side_bank_must_match_authenticated_bank(env: Endpoint
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "invalid_body"
     assert await env.connection.fetchval("SELECT count(*) FROM transactions") == 0
+
+
+def complaint_payload(complaint_id: str = "cmp_ep_001", **overrides: Any) -> dict[str, Any]:
+    """A valid complaint naming two payments; tests change single fields through overrides."""
+    payload: dict[str, Any] = {
+        "complaint_id": complaint_id,
+        "complainant_account": "acc_victim_01",
+        "reported_account": "acc_mule_01",
+        "reported_bank_id": "bank_1",
+        "payment_ids": ["pmt_ep_001", "pmt_ep_002"],
+        "claimed_type": "investment",
+        "received_at": RECENT_EVENT_TIME,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def feedback_payload(feedback_id: str = "fb_ep_001") -> dict[str, Any]:
+    """A valid feedback record."""
+    return {
+        "feedback_id": feedback_id,
+        "payment_id": "pmt_ep_001",
+        "outcome": "confirmed_fraud",
+        "note": "Customer confirmed the payment was a scam",
+        "event_time": RECENT_EVENT_TIME,
+    }
+
+
+async def test_complaints_contract(env: EndpointEnv) -> None:
+    """POST /v1/complaints answers 201 with the complaint id and stores one row holding both payment ids."""
+    response = await post_json(env, "bank_0", "/v1/complaints", complaint_payload(), "idem_complaint_00001")
+
+    assert response.status_code == 201
+    assert response.json() == {"complaint_id": "cmp_ep_001"}
+    row = await env.connection.fetchrow("SELECT bank_id, complaint_id, payment_ids, claimed_type FROM bank_complaints")
+    assert row["bank_id"] == "bank_0"
+    assert row["complaint_id"] == "cmp_ep_001"
+    assert list(row["payment_ids"]) == ["pmt_ep_001", "pmt_ep_002"]
+    assert row["claimed_type"] == "investment"
+
+
+async def test_feedback_contract(env: EndpointEnv) -> None:
+    """POST /v1/feedback answers 201 with the feedback id and stores one row."""
+    response = await post_json(env, "bank_0", "/v1/feedback", feedback_payload(), "idem_feedback_000001")
+
+    assert response.status_code == 201
+    assert response.json() == {"feedback_id": "fb_ep_001"}
+    row = await env.connection.fetchrow("SELECT bank_id, feedback_id, outcome FROM bank_feedback")
+    assert (row["bank_id"], row["feedback_id"], row["outcome"]) == ("bank_0", "fb_ep_001", "confirmed_fraud")
+
+
+async def test_duplicate_business_id_under_a_new_key_returns_409(env: EndpointEnv) -> None:
+    """The same complaint id, or feedback id, under a different idempotency key is a 409 duplicate_record."""
+    first_complaint = await post_json(env, "bank_0", "/v1/complaints", complaint_payload(), "idem_complaint_00001")
+    second_complaint = await post_json(env, "bank_0", "/v1/complaints", complaint_payload(), "idem_complaint_00002")
+    first_feedback = await post_json(env, "bank_0", "/v1/feedback", feedback_payload(), "idem_feedback_000001")
+    second_feedback = await post_json(env, "bank_0", "/v1/feedback", feedback_payload(), "idem_feedback_000002")
+
+    assert first_complaint.status_code == 201
+    assert second_complaint.status_code == 409
+    assert second_complaint.json()["error"]["code"] == "duplicate_record"
+    assert first_feedback.status_code == 201
+    assert second_feedback.status_code == 409
+    assert second_feedback.json()["error"]["code"] == "duplicate_record"
+    assert await env.connection.fetchval("SELECT count(*) FROM bank_complaints") == 1
+    assert await env.connection.fetchval("SELECT count(*) FROM bank_feedback") == 1
+
+
+async def test_complaint_with_empty_payment_ids_is_422(env: EndpointEnv) -> None:
+    """A complaint that names no payment is refused with 422 naming payment_ids, and nothing is stored."""
+    response = await post_json(
+        env, "bank_0", "/v1/complaints", complaint_payload(payment_ids=[]), "idem_complaint_00001"
+    )
+
+    assert response.status_code == 422
+    error = response.json()["error"]
+    assert error["code"] == "invalid_body"
+    assert "payment_ids" in error["message"]
+    assert await env.connection.fetchval("SELECT count(*) FROM bank_complaints") == 0
+
+
+async def test_complaint_naming_too_many_payments_is_422(env: EndpointEnv) -> None:
+    """A complaint with more payment ids than the policy allows (50) is refused with 422."""
+    too_many = [f"pmt_many_{index:03d}" for index in range(51)]
+
+    response = await post_json(
+        env, "bank_0", "/v1/complaints", complaint_payload(payment_ids=too_many), "idem_complaint_00001"
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_body"
