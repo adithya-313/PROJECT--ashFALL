@@ -60,3 +60,9 @@ bank_api:
     value: 128
     reason: "longest allowed payment, account, event or complaint identifier, matching the idempotency key limit"
     derived_from: "input validation policy"
+
+  fuzz_max_examples_per_endpoint:
+    label: policy
+    value: 50
+    reason: "laptop run time"
+

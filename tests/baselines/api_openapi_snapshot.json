@@ -1,5 +1,90 @@
 {
   "component_schemas": {
+    "AccountEventResponse": {
+      "additionalProperties": false,
+      "description": "The result of recording an account event; duplicate is true when the event id was already stored.",
+      "properties": {
+        "duplicate": {
+          "title": "Duplicate",
+          "type": "boolean"
+        },
+        "event_id": {
+          "title": "Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "event_id",
+        "duplicate"
+      ],
+      "title": "AccountEventResponse",
+      "type": "object"
+    },
+    "ComplaintResponse": {
+      "additionalProperties": false,
+      "description": "The result of storing a complaint.",
+      "properties": {
+        "complaint_id": {
+          "title": "Complaint Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "complaint_id"
+      ],
+      "title": "ComplaintResponse",
+      "type": "object"
+    },
+    "DecisionResponse": {
+      "additionalProperties": false,
+      "description": "The answer to a decision request.",
+      "properties": {
+        "decision": {
+          "const": "unscored",
+          "title": "Decision",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "shadow",
+            "live"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "payment_id": {
+          "title": "Payment Id",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "payment_id",
+        "decision",
+        "mode",
+        "reason"
+      ],
+      "title": "DecisionResponse",
+      "type": "object"
+    },
+    "FeedbackResponse": {
+      "additionalProperties": false,
+      "description": "The result of storing feedback.",
+      "properties": {
+        "feedback_id": {
+          "title": "Feedback Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "feedback_id"
+      ],
+      "title": "FeedbackResponse",
+      "type": "object"
+    },
     "HTTPValidationError": {
       "properties": {
         "detail": {
@@ -29,6 +114,36 @@
         "environment"
       ],
       "title": "HealthResponse",
+      "type": "object"
+    },
+    "RiskResponse": {
+      "additionalProperties": false,
+      "description": "The risk of one account (always \"unscored\" until Level 19).",
+      "properties": {
+        "account_id": {
+          "title": "Account Id",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "shadow",
+            "live"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "risk": {
+          "const": "unscored",
+          "title": "Risk",
+          "type": "string"
+        }
+      },
+      "required": [
+        "account_id",
+        "risk",
+        "mode"
+      ],
+      "title": "RiskResponse",
       "type": "object"
     },
     "ScoreResponse": {
@@ -103,6 +218,31 @@
         "geo_coordinates"
       ],
       "title": "TransactionRequest",
+      "type": "object"
+    },
+    "TransactionResponse": {
+      "additionalProperties": false,
+      "description": "The result of recording one transaction side.",
+      "properties": {
+        "event_id": {
+          "title": "Event Id",
+          "type": "string"
+        },
+        "transaction_id": {
+          "title": "Transaction Id",
+          "type": "string"
+        },
+        "was_replay": {
+          "title": "Was Replay",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "transaction_id",
+        "event_id",
+        "was_replay"
+      ],
+      "title": "TransactionResponse",
       "type": "object"
     },
     "ValidationError": {
@@ -210,6 +350,36 @@
           }
         }
       },
+      "methods": [
+        "post"
+      ]
+    },
+    "/v1/account-events": {
+      "methods": [
+        "post"
+      ]
+    },
+    "/v1/accounts/{account_id}/risk": {
+      "methods": [
+        "get"
+      ]
+    },
+    "/v1/complaints": {
+      "methods": [
+        "post"
+      ]
+    },
+    "/v1/decisions": {
+      "methods": [
+        "post"
+      ]
+    },
+    "/v1/feedback": {
+      "methods": [
+        "post"
+      ]
+    },
+    "/v1/transactions": {
       "methods": [
         "post"
       ]

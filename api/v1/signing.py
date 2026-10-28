@@ -27,6 +27,7 @@ class BankApiPolicy:
     nonce_retention_seconds: int
     idempotency_lifetime_hours: int
     max_request_body_bytes: int
+    fuzz_max_examples_per_endpoint: int = 50
 
 
 def load_bank_api_policy(config_path: str | Path = DEFAULT_CONFIG_PATH) -> BankApiPolicy:
@@ -67,6 +68,7 @@ def load_bank_api_policy(config_path: str | Path = DEFAULT_CONFIG_PATH) -> BankA
     nonce_retention = _extract_int("nonce_retention_seconds")
     idem_hours = _extract_int("idempotency_lifetime_hours")
     max_body = _extract_int("max_request_body_bytes")
+    fuzz_max = _extract_int("fuzz_max_examples_per_endpoint")
 
     if nonce_retention < 2 * sig_max_age:
         raise ValueError(
@@ -79,6 +81,7 @@ def load_bank_api_policy(config_path: str | Path = DEFAULT_CONFIG_PATH) -> BankA
         nonce_retention_seconds=nonce_retention,
         idempotency_lifetime_hours=idem_hours,
         max_request_body_bytes=max_body,
+        fuzz_max_examples_per_endpoint=fuzz_max,
     )
 
 

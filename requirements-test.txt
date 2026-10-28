@@ -11,3 +11,6 @@ hypothesis==6.168.3
 pandas==2.3.3
 # psutil: world/machine_limits.py reads free memory on Windows, Linux and macOS.
 psutil==7.2.2
+# schemathesis: tests/contract/test_bank_api_fuzz.py fuzzes the /v1 commercial bank API endpoints.
+schemathesis==4.32.7
+
