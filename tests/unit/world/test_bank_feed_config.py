@@ -59,6 +59,19 @@ def test_visibility_table_missing_one_domain_is_rejected(tmp_path: Path) -> None
         load_bank_feed_config(corrupted_path)
 
 
+def test_visibility_table_sender_false_is_rejected(tmp_path: Path) -> None:
+    """Ensures that configuring sender=false for any failure domain raises a ValueError."""
+    raw_data = load_yaml(DEFAULT_BANK_FEED_CONFIG_PATH)
+    # Set sender visibility to false for one failure domain.
+    raw_data["bank_feed"]["failed_payment_visibility"]["domains"]["customer"]["sender"] = False
+
+    corrupted_path = tmp_path / "sender_false_feed.yaml"
+    corrupted_path.write_text(yaml.safe_dump(raw_data), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="the sending bank always sees its own attempt"):
+        load_bank_feed_config(corrupted_path)
+
+
 def test_unknown_bank_in_feed_mapping_is_rejected(tmp_path: Path) -> None:
     """Ensures that assigning an unregistered bank identifier in bank_ids_by_index raises a ValueError."""
     raw_data = load_yaml(DEFAULT_BANK_FEED_CONFIG_PATH)

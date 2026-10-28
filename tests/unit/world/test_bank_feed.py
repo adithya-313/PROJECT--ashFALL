@@ -10,7 +10,7 @@ WHY: Guarantees that tenant commercial banks receive only approved transaction s
 protecting against simulation state leakage while ensuring exact ledger balances across banks.
 """
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -21,16 +21,20 @@ from world.bank_feed import (
     BANK_VISIBLE_ACCOUNT_EVENT_FIELDS,
     BANK_VISIBLE_COMPLAINT_FIELDS,
     BANK_VISIBLE_PAYMENT_FIELDS,
+    GANG_DEVICE_DETAIL_FIELDS,
+    GENUINE_DEVICE_DETAIL_FIELDS,
     BankFeed,
     ProjectionLeakError,
     check_bank_visible,
     project_payment,
     project_run,
+    resolve_bank_id,
 )
 from world.bank_feed_config import load_bank_feed_config
 from world.device_runtime import DeviceStamp
 from world.failures import FAILURE_DOMAINS, PaymentEvent
 from world.fast_mode import FastRunSettings
+from world.gang_devices import GangDeviceEvent
 from world.interactive_records import InteractiveWorldOutput, RunnerSettings
 from world.interactive_runner import run_interactive_world
 from world.label_records import LabelEvent
@@ -261,6 +265,7 @@ def test_device_event_mapping_and_counts_on_tiny_world(tiny_world_output: Intera
     assert len(binding_events) >= 1
 
     for ev in binding_events:
+        assert set(ev.details.keys()) == GENUINE_DEVICE_DETAIL_FIELDS
         assert "platform" in ev.details
         assert "fingerprint_before" in ev.details
         assert "fingerprint_after" in ev.details
@@ -364,4 +369,173 @@ def test_no_record_in_any_bank_list_belongs_to_another_bank(tiny_world_output: I
     for bank_id, complaints in feed.complaints_by_bank.items():
         for complaint in complaints:
             assert complaint.bank_id == bank_id
+
+
+def test_debit_and_credit_side_device_stamp_projection(bank_config: Any) -> None:
+    """Verifies that the debit side carries the client device stamp while the credit side always sets both None."""
+    stamp = DeviceStamp("fp_android_v3_abcdef12", 4, False)
+    event = PaymentEvent(
+        minute=200,
+        from_account="acc_person_000001",
+        to_account="acc_person_000002",
+        amount_paise=30000,
+        from_bank_index=0,
+        to_bank_index=1,
+        status="success",
+        reason=None,
+        failure_domain=None,
+    )
+
+    # 1. Payment with active device stamp: debit has stamp fields, credit has None.
+    sides = project_payment(event, "p-stamp-1", stamp, CLOCK_START, bank_config)
+    assert len(sides) == 2
+    debit, credit = sides[0], sides[1]
+    assert debit.sender_device_fingerprint == "fp_android_v3_abcdef12"
+    assert debit.sender_os_generation == 4
+    assert credit.sender_device_fingerprint is None
+    assert credit.sender_os_generation is None
+
+    # 2. Payment with None device stamp: debit side sets fingerprint and generation to None.
+    sides_none = project_payment(event, "p-stamp-2", None, CLOCK_START, bank_config)
+    assert sides_none[0].sender_device_fingerprint is None
+    assert sides_none[0].sender_os_generation is None
+
+
+def test_counterparty_bank_id_cross_bank_direction(bank_config: Any) -> None:
+    """Verifies counterparty_bank_id orientation: beneficiary on debit side and originator on credit side."""
+    event = PaymentEvent(
+        minute=210,
+        from_account="acc_person_000001",
+        to_account="acc_person_000002",
+        amount_paise=45000,
+        from_bank_index=0,
+        to_bank_index=1,
+        status="success",
+        reason=None,
+        failure_domain=None,
+    )
+    sides = project_payment(event, "p-cp-1", None, CLOCK_START, bank_config)
+    assert len(sides) == 2
+    debit, credit = sides[0], sides[1]
+
+    # Debit side (posted at sender bank_0) references receiver bank_1 as counterparty.
+    assert debit.bank_id == "bank_0"
+    assert debit.counterparty_bank_id == "bank_1"
+    assert debit.sender_bank_id == "bank_0"
+    assert debit.receiver_bank_id == "bank_1"
+
+    # Credit side (posted at receiver bank_1) references sender bank_0 as counterparty.
+    assert credit.bank_id == "bank_1"
+    assert credit.counterparty_bank_id == "bank_0"
+    assert credit.sender_bank_id == "bank_0"
+    assert credit.receiver_bank_id == "bank_1"
+
+
+def test_gang_device_events_projection_and_filtering(tiny_world_output: InteractiveWorldOutput) -> None:
+    """Verifies projection of mapped gang events, dropped counter tracking, and unknown account validation."""
+    gang_sim_swap = GangDeviceEvent(
+        minute=200,
+        device_id="dev_ext_000001",
+        account_id="acc_person_000001",
+        kind="sim_swap",
+        platform="android",
+        os_generation=3,
+        fingerprint="fp_android_v3_gang1234",
+    )
+    gang_acquired = GangDeviceEvent(
+        minute=150,
+        device_id="dev_ext_000002",
+        account_id=None,
+        kind="device_acquired",
+        platform="android",
+        os_generation=3,
+        fingerprint="fp_android_v3_gang5678",
+    )
+    gang_emulator = GangDeviceEvent(
+        minute=250,
+        device_id="dev_ext_000001",
+        account_id="acc_person_000001",
+        kind="emulator_enabled",
+        platform="android",
+        os_generation=3,
+        fingerprint="fp_android_v3_gang1234",
+    )
+
+    modified_result = replace(
+        tiny_world_output.result,
+        applied_gang_device_events=[gang_sim_swap, gang_acquired, gang_emulator],
+    )
+    modified_output = replace(tiny_world_output, result=modified_result)
+    feed = project_run(modified_output)
+
+    # 1. Verify sim_swap on known account is projected at the account's bank (bank_0).
+    sim_swap_events = [ev for ev in feed.account_events_by_bank["bank_0"] if ev.kind == "sim_swap"]
+    assert len(sim_swap_events) == 1
+    ev = sim_swap_events[0]
+    assert ev.account_id == "acc_person_000001"
+    assert set(ev.details.keys()) == GANG_DEVICE_DETAIL_FIELDS
+    assert ev.details["platform"] == "android"
+    assert ev.details["fingerprint"] == "fp_android_v3_gang1234"
+    assert ev.details["os_generation"] == 3
+
+    # 2. Verify device_acquired and emulator_enabled are not projected but counted in dropped events.
+    assert feed.dropped_device_events_by_kind["device_acquired"] == 1
+    assert feed.dropped_device_events_by_kind["emulator_enabled"] == 1
+
+    # 3. Verify sim_swap on unknown account raises a descriptive ValueError.
+    bad_gang_ev = GangDeviceEvent(
+        minute=200,
+        device_id="dev_ext_000001",
+        account_id="acc_unknown_999999",
+        kind="sim_swap",
+        platform="android",
+        os_generation=3,
+        fingerprint="fp_android_v3_gang1234",
+    )
+    bad_output = replace(
+        tiny_world_output,
+        result=replace(tiny_world_output.result, applied_gang_device_events=[bad_gang_ev]),
+    )
+    with pytest.raises(ValueError, match="Gang device event references unknown account 'acc_unknown_999999'"):
+        project_run(bad_output)
+
+
+def test_details_dict_extra_key_raises_projection_leak_error() -> None:
+    """Verifies that unauthorized keys such as counts_as_new_device in account event details raise a leak error."""
+    leaked_details = {
+        "platform": "android",
+        "fingerprint": "fp_android_v3_12345678",
+        "os_generation": 3,
+        "counts_as_new_device": True,
+    }
+    with pytest.raises(ProjectionLeakError) as exc_info:
+        check_bank_visible(leaked_details, GANG_DEVICE_DETAIL_FIELDS)
+    assert "counts_as_new_device" in str(exc_info.value)
+
+
+def test_unknown_bank_index_raises_value_error_not_key_error(bank_config: Any) -> None:
+    """Verifies that out-of-range bank indexes raise a descriptive ValueError rather than a bare KeyError."""
+    event = PaymentEvent(
+        minute=100,
+        from_account="acc_person_000001",
+        to_account="acc_person_000002",
+        amount_paise=1000,
+        from_bank_index=999,
+        to_bank_index=0,
+        status="success",
+        reason=None,
+        failure_domain=None,
+    )
+    with pytest.raises(ValueError) as exc_info:
+        project_payment(event, "p-err", None, CLOCK_START, bank_config)
+    # Check that error is not a KeyError and names the violating index and valid options.
+    assert not issubclass(exc_info.type, KeyError)
+    assert "Unknown bank index 999; expected one of [0, 1, 2]" in str(exc_info.value)
+
+    # Also verify direct resolve_bank_id helper behavior.
+    with pytest.raises(ValueError) as helper_exc:
+        resolve_bank_id(42, bank_config)
+    assert not issubclass(helper_exc.type, KeyError)
+    assert "Unknown bank index 42; expected one of [0, 1, 2]" in str(helper_exc.value)
+
 

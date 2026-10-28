@@ -104,6 +104,48 @@ BANK_VISIBLE_COMPLAINT_FIELDS: frozenset[str] = frozenset(
     }
 )
 
+GENUINE_DEVICE_DETAIL_FIELDS: frozenset[str] = frozenset(
+    {
+        "platform",
+        "fingerprint_before",
+        "fingerprint_after",
+        "os_generation_before",
+        "os_generation_after",
+    }
+)
+
+GANG_DEVICE_DETAIL_FIELDS: frozenset[str] = frozenset(
+    {
+        "platform",
+        "fingerprint",
+        "os_generation",
+    }
+)
+
+
+def resolve_bank_id(bank_index: int, config: BankFeedConfig) -> str:
+    """
+    WHAT: Resolves an integer simulation bank index to its registered commercial bank identifier.
+    It verifies that bank_index exists in config.bank_ids_by_index and returns the mapped bank ID.
+
+    WHY: Prevents bare KeyErrors and provides descriptive error messages identifying both the
+    violating bank index and all valid recognized bank indexes across all projection pathways.
+
+    Args:
+        bank_index: Integer simulation bank index to resolve.
+        config: Loaded BankFeedConfig providing the bank index mapping table.
+
+    Returns:
+        Mapped commercial bank identifier string (e.g. 'bank_0').
+
+    Raises:
+        ValueError: If bank_index is not found, naming the index and all known indexes.
+    """
+    if bank_index not in config.bank_ids_by_index:
+        known_indexes = sorted(config.bank_ids_by_index.keys())
+        raise ValueError(f"Unknown bank index {bank_index}; expected one of {known_indexes}")
+    return config.bank_ids_by_index[bank_index]
+
 
 @dataclass(frozen=True)
 class BankFeedAccountEvent:
@@ -210,13 +252,8 @@ def project_payment(
         ValueError: If a bank index is unknown, an account prefix is unrecognized, or status is invalid.
     """
     # 1. Resolve commercial bank identifiers from integer simulation bank indexes.
-    if event.from_bank_index not in config.bank_ids_by_index:
-        raise ValueError(f"Unknown sender bank index: {event.from_bank_index}")
-    if event.to_bank_index not in config.bank_ids_by_index:
-        raise ValueError(f"Unknown receiver bank index: {event.to_bank_index}")
-
-    sender_bank_id = config.bank_ids_by_index[event.from_bank_index]
-    receiver_bank_id = config.bank_ids_by_index[event.to_bank_index]
+    sender_bank_id = resolve_bank_id(event.from_bank_index, config)
+    receiver_bank_id = resolve_bank_id(event.to_bank_index, config)
 
     # 2. Derive bank-visible payee classification from beneficiary account prefix.
     resolved_payee_type: str | None = None
@@ -335,14 +372,14 @@ def project_run(
     # 2. Build account-to-bank and person-to-account lookups for rapid O(1) resolution.
     account_to_bank: dict[str, str] = {}
     for ledger in output.world.ledgers:
-        b_id = config.bank_ids_by_index[ledger.bank_index]
+        b_id = resolve_bank_id(ledger.bank_index, config)
         for acc in ledger.accounts:
             account_to_bank[acc] = b_id
 
     for opened in output.result.opened_accounts:
         op_acc = opened[1]
         op_b_idx = opened[4]
-        account_to_bank[op_acc] = config.bank_ids_by_index[op_b_idx]
+        account_to_bank[op_acc] = resolve_bank_id(op_b_idx, config)
 
     people_by_id = {p.person_id: p for p in output.world.people}
 
@@ -361,7 +398,7 @@ def project_run(
             raise ValueError(f"Device event references unknown person '{dev_ev.person_id}'")
         person = people_by_id[dev_ev.person_id]
         account_id = person.account_id
-        bank_id = config.bank_ids_by_index[person.bank_index]
+        bank_id = resolve_bank_id(person.bank_index, config)
 
         if dev_ev.kind not in config.device_event_kind_map:
             dropped_device_events_by_kind[dev_ev.kind] = dropped_device_events_by_kind.get(dev_ev.kind, 0) + 1
@@ -379,6 +416,7 @@ def project_run(
             "os_generation_before": dev_ev.os_generation_before,
             "os_generation_after": dev_ev.os_generation_after,
         }
+        check_bank_visible(details, GENUINE_DEVICE_DETAIL_FIELDS)
         acct_ev = BankFeedAccountEvent(
             bank_id=bank_id,
             event_id=event_id,
@@ -409,6 +447,7 @@ def project_run(
             "fingerprint": gang_ev.fingerprint,
             "os_generation": gang_ev.os_generation,
         }
+        check_bank_visible(details, GANG_DEVICE_DETAIL_FIELDS)
         acct_ev = BankFeedAccountEvent(
             bank_id=bank_id,
             event_id=event_id,
@@ -425,7 +464,7 @@ def project_run(
         op_minute = opened[0]
         op_account_id = opened[1]
         op_bank_index = opened[4]
-        bank_id = config.bank_ids_by_index[op_bank_index]
+        bank_id = resolve_bank_id(op_bank_index, config)
         event_time = world_minute_to_ist(op_minute, clock_start)
         event_id = f"{run_id}-open-{op_account_id}"
 
@@ -442,8 +481,8 @@ def project_run(
 
     # 7. Project customer fraud complaints into complainant bank records.
     for label_ev in label_events:
-        complainant_bank_id = config.bank_ids_by_index[label_ev.complainant_bank_index]
-        reported_bank_id = config.bank_ids_by_index[label_ev.reported_bank_index]
+        complainant_bank_id = resolve_bank_id(label_ev.complainant_bank_index, config)
+        reported_bank_id = resolve_bank_id(label_ev.reported_bank_index, config)
         received_at = world_minute_to_ist(label_ev.arrival_minute, clock_start)
 
         complaint = BankFeedComplaint(

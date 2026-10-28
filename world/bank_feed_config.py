@@ -124,6 +124,11 @@ def load_bank_feed_config(path: Path | str | None = None) -> BankFeedConfig:
             or "receiver" not in visibility_entry
         ):
             raise ValueError(f"Visibility entry for domain '{domain_name}' must specify 'sender' and 'receiver'")
+        if not visibility_entry["sender"]:
+            raise ValueError(
+                f"failed_payment_visibility for '{domain_name}' has sender=false: "
+                "the sending bank always sees its own attempt"
+            )
         failed_payment_visibility[domain_name] = {
             "sender": bool(visibility_entry["sender"]),
             "receiver": bool(visibility_entry["receiver"]),
