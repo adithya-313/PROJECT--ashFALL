@@ -10,6 +10,7 @@ WHY: Asserts that account state mutations are strictly idempotent, bounded in me
 and respect point-in-time causality constraints.
 """
 
+import random
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -18,6 +19,7 @@ import pytest
 
 from features.account_keys import (
     load_account_features_settings,
+    marks_key,
     side_records_key,
     side_times_key,
 )
@@ -305,8 +307,8 @@ def test_trim_removes_hash_entry_no_orphans(redis_client: fakeredis.FakeRedis) -
     assert redis_client.zscore(st_key, mem_1) is not None
     assert redis_client.hexists(sr_key, mem_1) is True
 
-    # Apply event 8 days later -> advances last_event and triggers trimming of rec_1
-    t2 = BASE_TIME + timedelta(days=8)
+    # Apply event 9 days later -> advances last_event beyond (retention + lateness = 8d) and trims rec_1
+    t2 = BASE_TIME + timedelta(days=9)
     rec_2 = _make_payment_side(RUN_A, BANK_0, ACC_1, f"{RUN_A}-000002", "debit", t2, t2)
     apply_payment_side(redis_client, rec_2, settings)
 
@@ -377,3 +379,154 @@ def test_apply_account_event_integration(redis_client: fakeredis.FakeRedis) -> N
     assert snapshot.account_events[0].kind == "device_binding_change"
     assert snapshot.first_event_time == BASE_TIME
     assert snapshot.last_event_time == BASE_TIME
+
+
+def test_late_events_within_allowed_lateness_not_pruned(redis_client: fakeredis.FakeRedis) -> None:
+    """
+    Verifies that an event older than retention (7d) but within allowed_lateness (86400s)
+    is NOT pruned and returns 'stored'.
+    """
+    settings = load_account_features_settings()
+    st_key = side_times_key(RUN_A, BANK_0, ACC_1)
+    sr_key = side_records_key(RUN_A, BANK_0, ACC_1)
+
+    # 1. Base event at BASE_TIME
+    rec_base = _make_payment_side(RUN_A, BANK_0, ACC_1, f"{RUN_A}-000001", "debit", BASE_TIME, BASE_TIME)
+    apply_payment_side(redis_client, rec_base, settings)
+
+    # 2. Latest event at BASE_TIME + 7 days + 12 hours (older than 7d retention, but within 7d + 1d = 8d)
+    t_latest = BASE_TIME + timedelta(days=7, hours=12)
+    rec_latest = _make_payment_side(RUN_A, BANK_0, ACC_1, f"{RUN_A}-000002", "debit", t_latest, t_latest)
+    apply_payment_side(redis_client, rec_latest, settings)
+
+    # 3. Base event must still exist in both structures (not pruned)
+    mem_base = record_member(rec_base)
+    assert redis_client.zscore(st_key, mem_base) is not None
+    assert redis_client.hexists(sr_key, mem_base) is True
+
+
+def test_events_older_than_cutoff_pruned_atomically(redis_client: fakeredis.FakeRedis) -> None:
+    """
+    Verifies that events older than cutoff = last_event - (retention + allowed_lateness)
+    are pruned from BOTH the zset and the hash.
+    """
+    settings = load_account_features_settings()
+    st_key = side_times_key(RUN_A, BANK_0, ACC_1)
+    sr_key = side_records_key(RUN_A, BANK_0, ACC_1)
+
+    t1 = BASE_TIME
+    rec_1 = _make_payment_side(RUN_A, BANK_0, ACC_1, f"{RUN_A}-000001", "debit", t1, t1)
+    apply_payment_side(redis_client, rec_1, settings)
+    mem_1 = record_member(rec_1)
+
+    # Apply event 9 days later (> 8 days = retention + allowed_lateness)
+    t2 = BASE_TIME + timedelta(days=9)
+    rec_2 = _make_payment_side(RUN_A, BANK_0, ACC_1, f"{RUN_A}-000002", "debit", t2, t2)
+    apply_payment_side(redis_client, rec_2, settings)
+
+    # rec_1 must be pruned from BOTH zset and hash
+    assert redis_client.zscore(st_key, mem_1) is None
+    assert redis_client.hexists(sr_key, mem_1) is False
+
+
+def test_key_ttl_equals_retention_plus_lateness_plus_margin(redis_client: fakeredis.FakeRedis) -> None:
+    """Verifies that key TTL equals retention + allowed_lateness + key_expiry_margin."""
+    settings = load_account_features_settings()
+    expected_ttl = (
+        settings.retention_seconds
+        + settings.allowed_lateness_seconds
+        + settings.key_expiry_margin_seconds
+    )
+    assert settings.expiry_seconds == expected_ttl
+
+    rec = _make_payment_side(RUN_A, BANK_0, ACC_1, f"{RUN_A}-000001", "debit", BASE_TIME, BASE_TIME)
+    apply_payment_side(redis_client, rec, settings)
+
+    for k in (
+        side_times_key(RUN_A, BANK_0, ACC_1),
+        side_records_key(RUN_A, BANK_0, ACC_1),
+        marks_key(RUN_A, BANK_0, ACC_1),
+    ):
+        ttl = redis_client.ttl(k)
+        assert ttl == expected_ttl
+
+
+def test_shuffle_order_independence() -> None:
+    """
+    Fix 3 / Architect Decision 7: Shuffling >=20 mixed records produces byte-identical
+    Redis state across 3 fixed seeds (42, 1337, 2026) and matches chronological order.
+    """
+    settings = load_account_features_settings()
+
+    # Build a fixed batch of 24 mixed records
+    records: list[PaymentSideRecord | AccountEventRecord] = []
+    for i in range(16):
+        t = BASE_TIME + timedelta(hours=i * 5)
+        side = "debit" if i % 2 == 0 else "credit"
+        records.append(
+            _make_payment_side(
+                RUN_A,
+                BANK_0,
+                ACC_1,
+                f"{RUN_A}-pmt-{i:04d}",
+                side,
+                event_time=t,
+                arrival_time=t + timedelta(minutes=(i % 3) * 10),
+                amount_paise=10000 * (i + 1),
+            )
+        )
+    for j in range(8):
+        t = BASE_TIME + timedelta(hours=j * 11)
+        kind = "device_binding_change" if j % 2 == 0 else "sim_swap"
+        records.append(
+            _make_account_event(
+                RUN_A,
+                BANK_0,
+                ACC_1,
+                f"{RUN_A}-dev-{j:04d}",
+                kind=kind,
+                event_time=t,
+                arrival_time=t + timedelta(minutes=(j % 2) * 15),
+            )
+        )
+
+    def _canonical_dump(client: fakeredis.FakeRedis) -> bytes:
+        dump_parts: list[bytes] = []
+        keys_obj: Any = client.keys()
+        assert isinstance(keys_obj, list)
+        for k in sorted(keys_obj):
+            k_type = client.type(k)
+            dump_parts.append(k + b":" + k_type)
+            if k_type == b"zset":
+                items: Any = client.zrange(k, 0, -1, withscores=True)
+                assert isinstance(items, list)
+                for member, score in items:
+                    dump_parts.append(b" " + member + b"=" + str(score).encode("utf-8"))
+            elif k_type == b"hash":
+                entries: Any = client.hgetall(k)
+                assert isinstance(entries, dict)
+                for field in sorted(entries):
+                    dump_parts.append(b" " + field + b"=" + entries[field])
+        return b"\n".join(dump_parts)
+
+    def _apply_batch(client: fakeredis.FakeRedis, batch: list[Any]) -> None:
+        for item in batch:
+            if isinstance(item, PaymentSideRecord):
+                apply_payment_side(client, item, settings)
+            else:
+                apply_account_event(client, item, settings)
+
+    # Chronological baseline
+    r_chrono = fakeredis.FakeRedis()
+    _apply_batch(r_chrono, records)
+    dump_chrono = _canonical_dump(r_chrono)
+    assert len(dump_chrono) > 0
+
+    # Test 3 fixed seeds
+    for seed in (42, 1337, 2026):
+        shuffled = list(records)
+        random.Random(seed).shuffle(shuffled)
+        r_shuffled = fakeredis.FakeRedis()
+        _apply_batch(r_shuffled, shuffled)
+        dump_shuffled = _canonical_dump(r_shuffled)
+        assert dump_shuffled == dump_chrono, f"State diverged under seed {seed}"

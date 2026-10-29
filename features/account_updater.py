@@ -19,15 +19,11 @@ Every operation performed on Redis by this module is inherently idempotent:
   3. Watermarks in the marks ZSET use conditional modifiers: 'first_event' uses LT (minimum),
      'last_event' uses GT (maximum), and 'arrival_watermark' uses GT (maximum). Re-applying
      the same or earlier records leaves watermark scores strictly unchanged.
-  4. Trimming deletes keys strictly older than (last_event - retention). Re-executing trim on
-     the same state performs no additional deletions.
+  4. Trimming deletes keys strictly older than (last_event - (retention + allowed_lateness))
+     atomically via registered Lua script.
 Therefore, duplicate delivery of payment sides or account events causes zero state divergence.
-
-SINGLE-WRITER-PER-ACCOUNT GUARANTEE:
-Schema-2 UPI payments are partitioned across Kafka topics using the key f"{bank_id}:{account_id}"
-(see api/services/outbox_relay.py choose_message_key). Consequently, all events for a given account
-are consumed by a single worker thread, eliminating race conditions between the insertion pipeline
-and the trimming phase.
+Kafka gives no per-account ordering here; state is correct in any order because every write is
+idempotent (see the shuffle test).
 """
 
 import logging
@@ -51,6 +47,47 @@ from features.account_records import (
 from features.velocity import to_unix_seconds
 
 logger = logging.getLogger(__name__)
+
+# Atomic trim script: fetches expired members from ZSET, deletes from HASH, prunes from ZSET.
+TRIM_LUA_SCRIPT: str = """local expired = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
+if #expired > 0 then
+    redis.call('HDEL', KEYS[2], unpack(expired))
+    redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
+end
+return #expired"""
+
+
+def _trim_expired(
+    client: Any,
+    times_key: str,
+    records_key: str,
+    cutoff_arg: str,
+) -> int:
+    """Atomic trim using registered Lua script on Redis; falls back to pipeline if evalsha unsupported."""
+    script = getattr(client, "_account_trim_script", None)
+    if script is None:
+        script = client.register_script(TRIM_LUA_SCRIPT)
+        try:
+            client._account_trim_script = script
+        except Exception:
+            pass
+
+    try:
+        count = script(keys=[times_key, records_key], args=[cutoff_arg], client=client)
+        return int(count) if count is not None else 0
+    except Exception as exc:
+        if "unknown command" in str(exc).lower() and "eval" in str(exc).lower():
+            # In-memory test environment (fakeredis without lupa extension)
+            expired = client.zrangebyscore(times_key, "-inf", cutoff_arg)
+            if expired:
+                members = [
+                    m.decode("utf-8") if isinstance(m, bytes) else str(m)
+                    for m in expired
+                ]
+                client.hdel(records_key, *members)
+                client.zremrangebyscore(times_key, "-inf", cutoff_arg)
+            return len(expired)
+        raise
 
 
 def apply_payment_side(
@@ -98,19 +135,13 @@ def apply_payment_side(
     pipeline.expire(m_key, ttl_seconds)
     pipeline.execute()
 
-    # Trim records older than (last_event - retention)
+    # Trim records older than (last_event - (retention + allowed_lateness))
     last_event_unix = client.zscore(m_key, "last_event")
     if last_event_unix is not None:
-        cutoff = float(last_event_unix) - cfg.retention_seconds
-        # Find members strictly older than cutoff score (< cutoff)
-        expired_members = client.zrangebyscore(st_key, "-inf", f"({cutoff}")
-        if expired_members:
-            trim_pipe = client.pipeline(transaction=True)
-            trim_pipe.zrem(st_key, *expired_members)
-            trim_pipe.hdel(sr_key, *expired_members)
-            trim_pipe.execute()
+        cutoff = float(last_event_unix) - (cfg.retention_seconds + cfg.allowed_lateness_seconds)
+        _trim_expired(client, st_key, sr_key, f"({cutoff}")
 
-        # Check if this incoming record is older than retention
+        # Check if this incoming record is older than retention horizon
         if event_unix < cutoff:
             logger.info(
                 "Payment side %s for account %s is older than retention horizon (event=%s, cutoff=%s)",
@@ -169,16 +200,11 @@ def apply_account_event(
     pipeline.expire(m_key, ttl_seconds)
     pipeline.execute()
 
-    # Trim events older than (last_event - retention)
+    # Trim events older than (last_event - (retention + allowed_lateness))
     last_event_unix = client.zscore(m_key, "last_event")
     if last_event_unix is not None:
-        cutoff = float(last_event_unix) - cfg.retention_seconds
-        expired_members = client.zrangebyscore(et_key, "-inf", f"({cutoff}")
-        if expired_members:
-            trim_pipe = client.pipeline(transaction=True)
-            trim_pipe.zrem(et_key, *expired_members)
-            trim_pipe.hdel(er_key, *expired_members)
-            trim_pipe.execute()
+        cutoff = float(last_event_unix) - (cfg.retention_seconds + cfg.allowed_lateness_seconds)
+        _trim_expired(client, et_key, er_key, f"({cutoff}")
 
         if event_unix < cutoff:
             logger.info(

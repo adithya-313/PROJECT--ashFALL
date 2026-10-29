@@ -49,8 +49,9 @@ def test_settings_load_from_yaml() -> None:
     assert isinstance(settings, AccountFeaturesSettings)
     assert settings.windows_seconds == (3600, 86400, 604800)
     assert settings.retention_seconds == 604800
+    assert settings.allowed_lateness_seconds == 86400
     assert settings.key_expiry_margin_seconds == 86400
-    assert settings.expiry_seconds == 604800 + 86400
+    assert settings.expiry_seconds == 604800 + 86400 + 86400
     assert settings.key_prefix == "acctf"
     assert settings.run_id_hex_length == 16
     assert settings.account_event_batch_size == 500

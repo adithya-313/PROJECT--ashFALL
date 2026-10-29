@@ -16,6 +16,12 @@ account_features:
     reason: "The largest window; anything older can never be read by any feature."
     derived_from: "Level 15 plan, M1 inflow group: 7 days"
 
+  allowed_lateness_seconds:
+    label: policy
+    value: 86400
+    reason: "events may arrive up to one simulated day late; anything later is outside the window the trim keeps"
+    derived_from: "Level 15 architect decision 3 (trim cutoff = newest event time − (retention + allowed lateness))"
+
   key_expiry_margin_seconds:
     label: policy
     value: 86400

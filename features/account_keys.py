@@ -29,6 +29,7 @@ class AccountFeaturesSettings:
     Attributes:
         windows_seconds: Sliding look-back window intervals (e.g. 1h, 24h, 7d).
         retention_seconds: Maximum look-back horizon; older records are pruned.
+        allowed_lateness_seconds: Maximum duration events may arrive late before being pruned.
         key_expiry_margin_seconds: Additional TTL margin added to retention for key expiry.
         key_prefix: Root Redis namespace prefix for account feature keys.
         run_id_hex_length: Required character length of simulation run identifiers.
@@ -38,6 +39,7 @@ class AccountFeaturesSettings:
 
     windows_seconds: tuple[int, ...]
     retention_seconds: int
+    allowed_lateness_seconds: int
     key_expiry_margin_seconds: int
     key_prefix: str
     run_id_hex_length: int
@@ -46,8 +48,8 @@ class AccountFeaturesSettings:
 
     @property
     def expiry_seconds(self) -> int:
-        """Total Redis TTL in seconds: retention horizon plus wall-clock housekeeping margin."""
-        return self.retention_seconds + self.key_expiry_margin_seconds
+        """Total Redis TTL in seconds: retention horizon + allowed lateness + housekeeping margin."""
+        return self.retention_seconds + self.allowed_lateness_seconds + self.key_expiry_margin_seconds
 
 
 def load_account_features_settings(config_path: Path | None = None) -> AccountFeaturesSettings:
@@ -90,6 +92,9 @@ def load_account_features_settings(config_path: Path | None = None) -> AccountFe
     # Retention seconds
     retention_seconds = int(block["retention_seconds"]["value"])
 
+    # Allowed lateness seconds
+    allowed_lateness_seconds = int(block.get("allowed_lateness_seconds", {}).get("value", 86400))
+
     # Key expiry margin
     key_expiry_margin_seconds = int(block["key_expiry_margin_seconds"]["value"])
 
@@ -115,6 +120,7 @@ def load_account_features_settings(config_path: Path | None = None) -> AccountFe
     return AccountFeaturesSettings(
         windows_seconds=windows_seconds,
         retention_seconds=retention_seconds,
+        allowed_lateness_seconds=allowed_lateness_seconds,
         key_expiry_margin_seconds=key_expiry_margin_seconds,
         key_prefix=key_prefix,
         run_id_hex_length=run_id_hex_length,
