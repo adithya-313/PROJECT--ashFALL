@@ -2,8 +2,8 @@
 # Purpose: Level 15 showcase: Live mule features and account state (Part 15a).
 """
 WHAT: Verification checks for Level 15 part a (Account Feature Updater).
-Proves default empty snapshot handling, multi-run tenant isolation,
-and idempotent replay consistency across duplicate and shuffled events.
+Proves window counts over normal accounts, default empty snapshot handling,
+late event arrival isolation, multi-run tenant isolation, and idempotent replay consistency.
 
 WHY: Satisfies Level 15 showcase requirements ensuring streaming feature storage
 is resilient, leak-free, and isolated across simulation runs and banks.
@@ -126,9 +126,104 @@ def make_showcase_record(
     )
 
 
-async def check_15a_1_empty_history(workspace: Any) -> CheckOutcome:
+async def check_15a_1_normal_window_counts(workspace: Any) -> CheckOutcome:
     """
-    Check 15a-1 (edge): read an account that was never written -> equals empty_snapshot();
+    Check 15a-1 (normal): normal account gets correct window counts: apply a fixed set of credits
+    and debits spread over 8 days for one account. At fixed decision_time, count_sides_in_window
+    for 1h, 24h and 7d must equal expected counts worked out from the fixed timestamps.
+    """
+    client = _get_redis().Redis.from_url(host_side_redis_url())
+    settings = get_default_settings()
+    run_id = uuid.uuid4().hex[:16]
+    bank_id = "bank_0"
+    account_id = "acc_showcase_normal"
+
+    decision_time = datetime(2026, 10, 29, 12, 0, 0, tzinfo=timezone.utc)
+    arrival_time = decision_time
+
+    # Fixed events spread over 8 days relative to decision_time
+    events_spec: list[tuple[timedelta, str, int]] = [
+        (timedelta(minutes=15), "debit", 10000),      # inside 1h, 24h, 7d
+        (timedelta(minutes=30), "credit", 15000),     # inside 1h, 24h, 7d
+        (timedelta(minutes=45), "debit", 20000),      # inside 1h, 24h, 7d
+        (timedelta(hours=1), "debit", 25000),         # lower boundary of 1h (excluded from 1h, inside 24h, 7d)
+        (timedelta(hours=6), "debit", 30000),         # outside 1h, inside 24h, 7d
+        (timedelta(hours=12), "credit", 35000),       # outside 1h, inside 24h, 7d
+        (timedelta(hours=18), "debit", 40000),        # outside 1h, inside 24h, 7d
+        (timedelta(hours=24), "debit", 45000),        # lower boundary of 24h (excluded from 24h, inside 7d)
+        (timedelta(days=3), "debit", 50000),          # outside 1h, 24h, inside 7d
+        (timedelta(days=5), "credit", 55000),         # outside 1h, 24h, inside 7d
+        (timedelta(days=7), "debit", 60000),          # lower boundary of 7d (excluded from 7d)
+        (timedelta(days=8), "debit", 65000),          # outside 7d (> 7d retention)
+    ]
+
+    try:
+        for idx, (offset, side, amt) in enumerate(events_spec):
+            t = decision_time - offset
+            rec = make_showcase_record(
+                run_id=run_id,
+                bank_id=bank_id,
+                account_id=account_id,
+                payment_id=f"{run_id}-spec-{idx:03d}",
+                side=side,
+                event_time=t,
+                arrival_time=arrival_time,
+                amount_paise=amt,
+            )
+            apply_payment_side(client, rec, settings)
+
+        snap = read_account_snapshot(
+            client, run_id, bank_id, account_id, decision_time, arrival_time, settings
+        )
+
+        cnt_1h_debit = count_sides_in_window(snap, "debit", decision_time, 3600, settings)
+        cnt_1h_credit = count_sides_in_window(snap, "credit", decision_time, 3600, settings)
+        cnt_24h_debit = count_sides_in_window(snap, "debit", decision_time, 86400, settings)
+        cnt_24h_credit = count_sides_in_window(snap, "credit", decision_time, 86400, settings)
+        cnt_7d_debit = count_sides_in_window(snap, "debit", decision_time, 604800, settings)
+        cnt_7d_credit = count_sides_in_window(snap, "credit", decision_time, 604800, settings)
+
+        # 1h look-back: (decision_time - 3600s, decision_time]
+        # Debits inside: T-15m, T-45m (2 events). T-1h is on boundary (excluded). Expected = 2.
+        # Credits inside: T-30m (1 event). Expected = 1.
+        assert cnt_1h_debit == 2, f"Expected 2 1h debits, got {cnt_1h_debit}"
+        assert cnt_1h_credit == 1, f"Expected 1 1h credit, got {cnt_1h_credit}"
+
+        # 24h look-back: (decision_time - 86400s, decision_time]
+        # Debits inside: T-15m, T-45m, T-1h, T-6h, T-18h (5 events). T-24h is on boundary (excluded). Expected = 5.
+        # Credits inside: T-30m, T-12h (2 events). Expected = 2.
+        assert cnt_24h_debit == 5, f"Expected 5 24h debits, got {cnt_24h_debit}"
+        assert cnt_24h_credit == 2, f"Expected 2 24h credits, got {cnt_24h_credit}"
+
+        # 7d look-back: (decision_time - 604800s, decision_time]
+        # Debits inside: T-15m, T-45m, T-1h, T-6h, T-18h, T-24h, T-3d (7 events). T-7d is on boundary (excluded).
+        # T-8d is older than 7d. Expected = 7.
+        # Credits inside: T-30m, T-12h, T-5d (3 events). Expected = 3.
+        assert cnt_7d_debit == 7, f"Expected 7 7d debits, got {cnt_7d_debit}"
+        assert cnt_7d_credit == 3, f"Expected 3 7d credits, got {cnt_7d_credit}"
+
+        windows_checked = 3
+        return CheckOutcome(
+            key_number=str(windows_checked),
+            evidence={
+                "windows_checked": windows_checked,
+                "counts": {
+                    "1h": {"debit": cnt_1h_debit, "credit": cnt_1h_credit},
+                    "24h": {"debit": cnt_24h_debit, "credit": cnt_24h_credit},
+                    "7d": {"debit": cnt_7d_debit, "credit": cnt_7d_credit},
+                },
+            },
+        )
+    finally:
+        for pat in (namespace_pattern(run_id, bank_id),):
+            for k in client.scan_iter(match=pat):
+                client.delete(k)
+        client.close()
+
+
+async def check_15a_2_empty_history(workspace: Any) -> CheckOutcome:
+    """
+    Check 15a-2 (edge): read an account that was never written -> equals empty_snapshot();
     count_sides_in_window is 0 for every configured window. Key number: fields checked.
     """
     client = _get_redis().Redis.from_url(host_side_redis_url())
@@ -174,9 +269,100 @@ async def check_15a_1_empty_history(workspace: Any) -> CheckOutcome:
         client.close()
 
 
-async def check_15a_2_two_runs_separate_state(workspace: Any) -> CheckOutcome:
+async def check_15a_3_late_event_lands_in_right_window(workspace: Any) -> CheckOutcome:
     """
-    Check 15a-2 (negative): two FIXED run ids, same bank_id and account_id, different records ->
+    Check 15a-3 (edge): late event lands in the right window: apply events at t1 and t3,
+    record 1h count at decision times just after t1 and t3; apply late event at t2 (arrival after t3).
+    Count at t1 must be unchanged; count at t3 must include t2.
+    """
+    client = _get_redis().Redis.from_url(host_side_redis_url())
+    settings = get_default_settings()
+    run_id = uuid.uuid4().hex[:16]
+    bank_id = "bank_0"
+    account_id = "acc_showcase_late"
+
+    base_time = datetime(2026, 10, 29, 10, 0, 0, tzinfo=timezone.utc)
+    t1 = base_time
+    t3 = base_time + timedelta(hours=2)
+    a1 = t1
+    a3 = t3
+
+    # Apply t1 and t3
+    rec_t1 = make_showcase_record(
+        run_id, bank_id, account_id, f"{run_id}-t1", "debit", t1, a1, 10000
+    )
+    rec_t3 = make_showcase_record(
+        run_id, bank_id, account_id, f"{run_id}-t3", "debit", t3, a3, 20000
+    )
+
+    dec_1 = t1 + timedelta(minutes=5)
+    dec_3 = t3 + timedelta(minutes=5)
+
+    try:
+        apply_payment_side(client, rec_t1, settings)
+        apply_payment_side(client, rec_t3, settings)
+
+        # Baseline count at dec_1 (1h window: t1 is inside)
+        snap_1_before = read_account_snapshot(
+            client, run_id, bank_id, account_id, dec_1, a3, settings
+        )
+        cnt_1_before = count_sides_in_window(snap_1_before, "debit", dec_1, 3600, settings)
+        assert cnt_1_before == 1
+
+        # Baseline count at dec_3 (1h window: t3 is inside, t1 is 2h old so outside)
+        snap_3_before = read_account_snapshot(
+            client, run_id, bank_id, account_id, dec_3, a3, settings
+        )
+        cnt_3_before = count_sides_in_window(snap_3_before, "debit", dec_3, 3600, settings)
+        assert cnt_3_before == 1
+
+        # Apply late event at t2 with arrival_time after t3's arrival
+        t2 = base_time + timedelta(hours=1, minutes=45)
+        a2 = t3 + timedelta(minutes=30)
+        rec_t2_late = make_showcase_record(
+            run_id, bank_id, account_id, f"{run_id}-t2-late", "debit", t2, a2, 30000
+        )
+        apply_payment_side(client, rec_t2_late, settings)
+
+        # Re-query with arrival_cutoff after a2
+        query_cutoff = a2 + timedelta(minutes=1)
+
+        # Count at t1 must be unchanged (earlier window)
+        snap_1_after = read_account_snapshot(
+            client, run_id, bank_id, account_id, dec_1, query_cutoff, settings
+        )
+        cnt_1_after = count_sides_in_window(snap_1_after, "debit", dec_1, 3600, settings)
+        earlier_changed = abs(cnt_1_after - cnt_1_before)
+        assert earlier_changed == 0
+        assert cnt_1_after == 1
+
+        # Count at t3 must include t2 (1h window now has t3 and t2)
+        snap_3_after = read_account_snapshot(
+            client, run_id, bank_id, account_id, dec_3, query_cutoff, settings
+        )
+        cnt_3_after = count_sides_in_window(snap_3_after, "debit", dec_3, 3600, settings)
+        assert cnt_3_after == 2
+
+        return CheckOutcome(
+            key_number=str(earlier_changed),
+            evidence={
+                "cnt_1_before": cnt_1_before,
+                "cnt_1_after": cnt_1_after,
+                "cnt_3_before": cnt_3_before,
+                "cnt_3_after": cnt_3_after,
+                "earlier_window_counts_changed": earlier_changed,
+            },
+        )
+    finally:
+        for pat in (namespace_pattern(run_id, bank_id),):
+            for k in client.scan_iter(match=pat):
+                client.delete(k)
+        client.close()
+
+
+async def check_15a_4_two_runs_separate_state(workspace: Any) -> CheckOutcome:
+    """
+    Check 15a-4 (negative): two FIXED run ids, same bank_id and account_id, different records ->
     each run's snapshot contains only its own records. Key number: cross-run records seen (must be 0).
     """
     client = _get_redis().Redis.from_url(host_side_redis_url())
@@ -251,9 +437,9 @@ async def check_15a_2_two_runs_separate_state(workspace: Any) -> CheckOutcome:
         client.close()
 
 
-async def check_15a_3_replay_twice_identical(workspace: Any) -> CheckOutcome:
+async def check_15a_5_replay_twice_identical(workspace: Any) -> CheckOutcome:
     """
-    Check 15a-3 (consistency): apply a fixed list of >=20 mixed records (payment sides and
+    Check 15a-5 (consistency): apply a fixed list of >=20 mixed records (payment sides and
     account events, including one duplicate and one late record), dump, apply the whole list again,
     dump -> identical; then for 3 FIXED seeds apply random.Random(seed).shuffle order to a fresh
     namespace and compare -> identical. Key number: keys compared.
@@ -395,34 +581,51 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
     """
     return [
         CheckDefinition(
-            name="15a-1 empty history gets defined defaults",
+            name="15a-1 normal account gets correct window counts",
+            kind="normal",
+            proves="Window counts for 1h, 24h, and 7d match exact manual arithmetic over an 8-day transaction history.",
+            run=check_15a_1_normal_window_counts,
+            likely_cause="Window duration calculation or boundary inequality in count_sides_in_window was incorrect.",
+            where_to_look="features/account_reader.py",
+            part="a",
+        ),
+        CheckDefinition(
+            name="15a-2 empty history gets defined defaults",
             kind="edge",
             proves=(
                 "Reading an unwritten account returns empty_snapshot() and "
                 "count_sides_in_window is 0 for every configured window."
             ),
-            run=check_15a_1_empty_history,
+            run=check_15a_2_empty_history,
             likely_cause="Reader returned populated snapshot or non-zero count for unwritten account.",
             where_to_look="features/account_reader.py",
             part="a",
         ),
         CheckDefinition(
-            name="15a-2 two runs keep separate state",
-            kind="negative",
-            proves=(
-                "Two fixed run IDs writing to identical bank and account IDs "
-                "remain strictly isolated in Redis."
+            name="15a-3 late event lands in the right window",
+            kind="edge",
+            proves="A late-arriving event updates the containing window without mutating earlier window counts.",
+            run=check_15a_3_late_event_lands_in_right_window,
+            likely_cause=(
+                "Decision time filtering or arrival cutoff logic leaked future events into historical queries."
             ),
-            run=check_15a_2_two_runs_separate_state,
+            where_to_look="features/account_reader.py, features/account_updater.py",
+            part="a",
+        ),
+        CheckDefinition(
+            name="15a-4 two runs keep separate state",
+            kind="negative",
+            proves="Two fixed run IDs writing to identical bank and account IDs remain strictly isolated in Redis.",
+            run=check_15a_4_two_runs_separate_state,
             likely_cause="Key namespacing omitted run_id or reader leaked records across runs.",
             where_to_look="features/account_keys.py, features/account_reader.py",
             part="a",
         ),
         CheckDefinition(
-            name="15a-3 replay twice gives identical state",
+            name="15a-5 replay twice gives identical state",
             kind="consistency",
             proves="Applying mixed records twice and across shuffled seeds produces byte-identical Redis state.",
-            run=check_15a_3_replay_twice_identical,
+            run=check_15a_5_replay_twice_identical,
             likely_cause="Updates appended duplicates or diverged under arrival order.",
             where_to_look="features/account_updater.py",
             part="a",
