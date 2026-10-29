@@ -20,6 +20,8 @@ from features.account_reader import read_account_snapshot
 from features.account_records import InvalidAccountEventError
 from features.account_stream import apply_account_events_since, run_payment_updater
 
+pytestmark = pytest.mark.anyio
+
 RUN_ID = "66db9aa439b092ee"
 NOW_UTC = datetime(2026, 10, 28, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -57,7 +59,6 @@ def redis_client() -> fakeredis.FakeRedis:
     return fakeredis.FakeRedis()
 
 
-@pytest.mark.asyncio
 async def test_run_payment_updater_invalid_message_reraises(redis_client: fakeredis.FakeRedis) -> None:
     """Verifies that an invalid message encountered by run_payment_updater is re-raised."""
     bad_msg = FakeConsumerMessage("upi.payments", 0, 100, b"not valid json")
@@ -75,7 +76,6 @@ async def test_run_payment_updater_invalid_message_reraises(redis_client: fakere
     mock_consumer.stop.assert_awaited_once()
 
 
-@pytest.mark.asyncio
 async def test_apply_account_events_since_applies_in_id_order_and_returns_last_id(
     redis_client: fakeredis.FakeRedis,
 ) -> None:
@@ -127,7 +127,6 @@ async def test_apply_account_events_since_applies_in_id_order_and_returns_last_i
     assert f"{RUN_ID}-dev-000002" in event_ids
 
 
-@pytest.mark.asyncio
 async def test_apply_account_events_since_empty_returns_after_id(
     redis_client: fakeredis.FakeRedis,
 ) -> None:
