@@ -25,13 +25,13 @@ class EndpointPolicy:
     Policy numbers of the /v1 endpoints, read from config/bank_api.yaml.
 
     Fields:
-        default_bank_mode: Mode every bank runs in until Level 14c makes it per bank ("shadow" or "live").
+        bank_modes: Operating mode (shadow or live) per commercial bank.
         max_amount_paise: Largest accepted payment amount in paise.
         max_payment_ids_per_complaint: Most payment ids one complaint may name.
         max_identifier_length: Longest accepted identifier (payment, account, event or complaint id).
     """
 
-    default_bank_mode: BankMode
+    bank_modes: dict[str, BankMode]
     max_amount_paise: int
     max_payment_ids_per_complaint: int
     max_identifier_length: int
@@ -57,7 +57,7 @@ def _read_positive_int(block: dict[str, Any], key: str) -> int:
 
 def load_endpoint_policy(config_path: str | Path = DEFAULT_CONFIG_PATH) -> EndpointPolicy:
     """
-    WHAT: Reads and validates the four endpoint policy settings from config/bank_api.yaml.
+    WHAT: Reads and validates the endpoint policy settings from config/bank_api.yaml.
 
     WHY: The limits that shape request validation live in config, not in code, and a wrong value must stop the
     service at start-up rather than let a bad request through later.
@@ -69,16 +69,34 @@ def load_endpoint_policy(config_path: str | Path = DEFAULT_CONFIG_PATH) -> Endpo
         The validated EndpointPolicy.
 
     Raises:
-        ValueError: If a setting is missing, is not a positive integer (or, for the mode, is not shadow or live).
+        ValueError: If a setting is missing, is not a positive integer, or bank_modes is invalid.
     """
     data = load_yaml(config_path)
     block = data["bank_api"]
-    mode = _read_policy_value(block, "default_bank_mode")
-    if mode not in BANK_MODES:
-        raise ValueError(f"Bank API policy setting default_bank_mode must be one of {BANK_MODES}, got {mode!r}")
+    raw_bank_modes = _read_policy_value(block, "bank_modes")
+    if not isinstance(raw_bank_modes, dict):
+        raise ValueError("Bank API policy setting bank_modes must be a mapping of bank_id to mode")
+
+    banks_list = block.get("banks")
+    if not isinstance(banks_list, (list, tuple)):
+        raise ValueError("Bank API configuration missing 'banks' list")
+    expected_banks = set(banks_list)
+    if set(raw_bank_modes.keys()) != expected_banks:
+        raise ValueError(
+            f"bank_modes must match configured banks exactly: expected {sorted(expected_banks)}, "
+            f"got {sorted(raw_bank_modes.keys())}"
+        )
+
+    validated_bank_modes: dict[str, BankMode] = {}
+    for bank_id, mode_val in raw_bank_modes.items():
+        if mode_val not in BANK_MODES:
+            raise ValueError(
+                f"Bank API policy setting bank_modes[{bank_id!r}] must be one of {BANK_MODES}, got {mode_val!r}"
+            )
+        validated_bank_modes[bank_id] = cast(BankMode, mode_val)
+
     return EndpointPolicy(
-        # The check above proved mode is one of the two allowed strings; cast only tells the type checker so.
-        default_bank_mode=cast(BankMode, mode),
+        bank_modes=validated_bank_modes,
         max_amount_paise=_read_positive_int(block, "max_amount_paise"),
         max_payment_ids_per_complaint=_read_positive_int(block, "max_payment_ids_per_complaint"),
         max_identifier_length=_read_positive_int(block, "max_identifier_length"),
@@ -174,6 +192,8 @@ class TransactionSideRequest(ApiModel):
     failure_domain: Identifier | None = None
     payee_type: Identifier | None = None
     channel: Identifier | None = None
+    sender_device_fingerprint: Identifier | None = None
+    sender_os_generation: Annotated[int, Field(strict=True, ge=0)] | None = None
 
 
 class TransactionResponse(ApiModel):

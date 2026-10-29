@@ -71,6 +71,8 @@ class UpiPaymentSide:
     failure_domain: str | None = None
     payee_type: str | None = None
     channel: str | None = None
+    sender_device_fingerprint: str | None = None
+    sender_os_generation: int | None = None
 
 
 class UpiEventData(BaseModel):
@@ -87,6 +89,8 @@ class UpiEventData(BaseModel):
     failure_domain: str | None = None
     payee_type: str | None = None
     channel: str | None = None
+    sender_device_fingerprint: str | None = None
+    sender_os_generation: int | None = None
 
 
 class UpiEventPayload(BaseModel):
@@ -173,6 +177,17 @@ def validate_side(upi_side: UpiPaymentSide) -> None:
             f"For credit side, bank_id ({upi_side.bank_id}) must match receiver_bank_id ({upi_side.receiver_bank_id})"
         )
 
+    # 9. Device fields are debit-only and os_generation must be non-negative
+    if upi_side.side == "credit":
+        if upi_side.sender_device_fingerprint is not None or upi_side.sender_os_generation is not None:
+            raise ValueError(
+                "Device fields (sender_device_fingerprint, sender_os_generation) are not allowed on credit side"
+            )
+    if upi_side.sender_os_generation is not None and (
+        not isinstance(upi_side.sender_os_generation, int) or upi_side.sender_os_generation < 0
+    ):
+        raise ValueError(f"sender_os_generation must be a non-negative integer, got {upi_side.sender_os_generation!r}")
+
 
 def make_upi_event_id(payment_id: str, side: str) -> uuid.UUID:
     """
@@ -217,12 +232,14 @@ async def record_upi_side(conn: asyncpg.Connection, upi_side: UpiPaymentSide) ->
             INSERT INTO transactions (
                 source, account_id, amount, payment_id, bank_id, side,
                 counterparty_vpa, counterparty_bank_id, amount_paise,
-                event_time, status, failure_domain, payee_type, channel
+                event_time, status, failure_domain, payee_type, channel,
+                sender_device_fingerprint, sender_os_generation
             )
             VALUES (
                 'world', $1, $2, $3, $4, $5,
                 $6, $7, $8,
-                $9, $10, $11, $12, $13
+                $9, $10, $11, $12, $13,
+                $14, $15
             )
             ON CONFLICT ON CONSTRAINT uq_transactions_bank_payment_side DO NOTHING
             RETURNING transaction_id, created_at
@@ -240,6 +257,8 @@ async def record_upi_side(conn: asyncpg.Connection, upi_side: UpiPaymentSide) ->
             upi_side.failure_domain,
             upi_side.payee_type,
             upi_side.channel,
+            upi_side.sender_device_fingerprint,
+            upi_side.sender_os_generation,
         )
 
         if row is not None:
@@ -269,6 +288,8 @@ async def record_upi_side(conn: asyncpg.Connection, upi_side: UpiPaymentSide) ->
                     failure_domain=upi_side.failure_domain,
                     payee_type=upi_side.payee_type,
                     channel=upi_side.channel,
+                    sender_device_fingerprint=upi_side.sender_device_fingerprint,
+                    sender_os_generation=upi_side.sender_os_generation,
                 ),
             )
 

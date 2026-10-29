@@ -117,14 +117,16 @@ def test_real_register_passes() -> None:
         partial 11 to 15, planned 36 to 28).
         Level 14b moved 14-4 and 14-16 (planned) and 14-9, 14-11, 14-12 (partial) to built (built 49 to 54,
         partial 15 to 12, planned 28 to 26).
+        Level 14c moved 14-6, 14-10 and R7 (planned) and 14-8 (partial) to built, and K2 from planned to partial
+        (built 54 to 58, partial 12 to 12, planned 26 to 22).
     """
     register = real_register()
     assert check_register(register, REPO_ROOT) == []
     issues = register["issues"]
     assert len(EXPECTED_V2_IDS) == 77
     assert len(issues) == 93
-    # Level 14b
-    assert count_statuses(issues) == {"built": 54, "partial": 12, "planned": 26, "deferred": 1}
+    # Level 14c
+    assert count_statuses(issues) == {"built": 58, "partial": 12, "planned": 22, "deferred": 1}
 
 
 def test_missing_id_is_rejected() -> None:
@@ -305,7 +307,8 @@ def test_test_function_that_does_not_exist_is_rejected() -> None:
 
 def test_planned_without_later_work_is_rejected() -> None:
     """
-    WHAT: Removes the later_work list from the planned entry "K2" and checks the checker demands it.
+    WHAT: Sets entry "K2" status to "planned", removes its later_work list, and checks the checker demands it.
+    The test forces K2 to "planned" itself so it no longer depends on K2's real status (K2 became partial in Level 14c).
 
     WHY: A planned item with no later_work has no owner and no level, so nothing would ever build it.
 
@@ -313,10 +316,11 @@ def test_planned_without_later_work_is_rejected() -> None:
         None.
 
     Example:
-        K2 normally lists 1 note, "Level 4: ..."; with the list removed the message is
+        K2 lists 1 note, "Level 4: ..."; with status forced to planned and later_work removed, the message is
         "K2: planned needs a non-empty later_work".
     """
     register = real_register()
+    register["issues"]["K2"]["status"] = "planned"
     del register["issues"]["K2"]["later_work"]
     assert "K2: planned needs a non-empty later_work" in errors_of(register)
 
