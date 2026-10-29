@@ -152,7 +152,7 @@ Every account feature structure is namespaced under a tenant-isolated prefix:
 | Lifecycle Payloads | `event_records` | HASH | Field: `event_id`, Value: Canonical serialized JSON record |
 | Withdrawal Times | `withdrawal_times` | ZSET | Member: `withdrawal_id`, Score: Unix seconds of `event_time` |
 | Withdrawal Payloads | `withdrawal_records` | HASH | Field: `withdrawal_id`, Value: Canonical serialized JSON record |
-| Watermarks & Marks | `marks` | ZSET | Members: `first_event` (LT), `last_event` (GT), `arrival_watermark` (GT), `last_active_day` (GT), `opened_at` (LT) |
+| Watermarks & Marks | `marks` | ZSET | Members: `first_event` (LT), `last_event` (GT), `arrival_watermark` (GT) |
 
 ### 5.1 TTL Expiration Rule
 Every key write refreshes the Redis expiration TTL to:
@@ -203,16 +203,18 @@ Cash withdrawals from ATM or branch channels are stored in `bank_withdrawals` an
 - Failed withdrawals (or failed payment sides) increment `failed_attempt_count` only; their amounts are strictly excluded from `withdrawal_paise`, `credit_paise`, or `debit_paise` (Issue R7).
 
 ### 7.3 Long-Lived Key Layout & TTL
-Summary keys use an extended retention TTL ($62\text{ days horizon} + 1\text{ day lateness} + 1\text{ day margin} = 64\text{ days} = 5,529,600\text{ seconds}$):
+Summary keys use an extended retention TTL ($62\text{ days horizon} + 1\text{ day lateness} + 1\text{ day margin} = 64\text{ days} = 5,529,600\text{ seconds}$), while lifetime keys receive no expiry (they live as long as the run's namespace):
 
-| Structure | Key Suffix | Redis Type | Contents |
-|---|---|---|---|
-| Days Index | `days_index` | ZSET | Member: `day`, Score: `day` (IST date ordinal) |
-| Day Totals | `day_totals_{day}` | HASH | Aggregated counts and paise amounts for that IST day |
-| Day Seen Set | `day_seen_{day}` | HASH | Set of processed `record_member` keys to guarantee update idempotency |
-| Counterparty Days | `cp_days_{direction}_{token}` | ZSET | Member: `day`, Score: `day` for distinct counterparty active days |
-| Counterparty Index | `cp_index_{direction}` | ZSET | Member: `counterparty`, Score: latest `day` (ZADD GT) |
-| Device Fingerprints | `fingerprints` | ZSET | Member: `fingerprint`, Score: $\max(\text{event\_time}, \text{arrival\_time})$ (ZADD LT) |
+| Structure | Key Suffix | Redis Type | Contents | TTL Policy |
+|---|---|---|---|---|
+| Days Index | `days_index` | ZSET | Member: `day`, Score: `day` (IST date ordinal) | Summary TTL (64d) |
+| Day Totals | `day_totals_{day}` | HASH | Aggregated counts and paise amounts for that IST day | Summary TTL (64d) |
+| Day Seen Set | `day_seen_{day}` | HASH | Set of processed `record_member` keys to guarantee update idempotency | Summary TTL (64d) |
+| Counterparty Days | `cp_days_{direction}_{token}` | ZSET | Member: `day`, Score: `day` for distinct counterparty active days | Summary TTL (64d) |
+| Counterparty Index | `cp_index_{direction}` | ZSET | Member: `counterparty`, Score: latest `day` (ZADD GT) | Summary TTL (64d) |
+| Active Days | `active_days` | ZSET | Member: `day`, Score: `day` for closed money activity days | No TTL (Lifetime) |
+| Account Opening | `opened_at` | ZSET | Member: `opened_at`, Score: Unix seconds of `event_time` (ZADD LT) | No TTL (Lifetime) |
+| Device Fingerprints | `fingerprints` | ZSET | Member: `fingerprint`, Score: $\max(\text{event\_time}, \text{arrival\_time})$ (ZADD LT) | No TTL (Lifetime) |
 
 ### 7.4 Generated Key List Verbatim
 Generated via the key builders in `features/account_keys.py`:
@@ -232,13 +234,20 @@ Long-lived Summaries:
   day_seen:             acctf:66db9aa439b092ee:bank_0:acc_101:day_seen_20742
   counterparty_days:    acctf:66db9aa439b092ee:bank_0:acc_101:cp_days_inbound_91ba9265940ec8cc
   counterparty_index:   acctf:66db9aa439b092ee:bank_0:acc_101:cp_index_inbound
+
+Lifetime Keys (No TTL):
+  active_days:          acctf:66db9aa439b092ee:bank_0:acc_101:active_days
+  opened_at:            acctf:66db9aa439b092ee:bank_0:acc_101:opened_at
   fingerprints:         acctf:66db9aa439b092ee:bank_0:acc_101:fingerprints
 ```
 
-### 7.5 Lifetime Values (Never Trimmed)
-- `last_active_day`: Tracked in `marks` ZSET via `ZADD GT` with day ordinal.
-- `opened_at`: Recorded strictly from `account_opened` lifecycle event via `ZADD LT` in `marks` ZSET. Account age is derived from this point, not from the first time an active payment is observed.
-- `fingerprints`: Recorded in `fingerprints` ZSET with score $\max(\text{event\_time}, \text{arrival\_time})$ using `ZADD LT`. When querying, only fingerprints with score $\le \min(\text{decision\_time}, \text{arrival\_cutoff})$ are visible. If the count exceeds `fingerprint_warning_count` (10), a warning is logged, but no entries are dropped.
+### 7.5 Lifetime Values (No TTL Expiry)
+Lifetime keys live as long as the run's namespace; a run's keys are removed by namespace cleanup, never by a short TTL.
+- `active_days`: Tracks distinct closed calendar days where money activity occurred (payment sides and cash withdrawals). Account lifecycle events (device changes, SIM swaps, account opening) are not money activity and never write to `active_days`.
+- `last_active_day`: Derived dynamically on read as the largest day in `active_days` whose closed threshold ($\text{day\_end\_ist} + \text{allowed\_lateness}$) is $\le \min(\text{decision\_time}, \text{arrival\_cutoff})$; `None` if no closed active day exists.
+- `history_days_available`: Measures whole calendar days from the START of the earliest closed active day to `decision_time`, capped at `summary_horizon_days` (62 days); returns 0 if no closed active day exists. It deliberately does not measure account opening age, ensuring an old account early in a run still evaluates as "too new to know" (warm-up).
+- `opened_at`: Recorded in dedicated lifetime ZSET `opened_at` with member `"opened_at"` and score `event_time` (ZADD LT) from the `account_opened` event.
+- `fingerprints`: Recorded in dedicated lifetime ZSET `fingerprints` with score $\max(\text{event\_time}, \text{arrival\_time})$ using `ZADD LT`. When querying, only fingerprints with score $\le \min(\text{decision\_time}, \text{arrival\_cutoff})$ are visible. If the count exceeds `fingerprint_warning_count` (10), a warning is logged, but no entries are dropped.
 
 ### 7.6 Warm-up Period
 The system enforces `routine_life_warm_up_days: 62` (two monthly cycles plus weekend/holiday slack). Before an account or world reaches 62 days of elapsed history, routine-life features yield "not enough history" / empty defaults.

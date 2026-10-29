@@ -263,9 +263,27 @@ def withdrawal_records_key(run_id: str, bank_id: str, account_id: str) -> str:
 def marks_key(run_id: str, bank_id: str, account_id: str) -> str:
     """
     Redis key for the sorted set (ZSET) holding watermark timestamps for the account.
-    Members: 'first_event', 'last_event', 'arrival_watermark', 'last_active_day', 'opened_at'.
+    Members: 'first_event', 'last_event', 'arrival_watermark'.
     """
     return _build_key(run_id, bank_id, account_id, "marks")
+
+
+def active_days_key(run_id: str, bank_id: str, account_id: str) -> str:
+    """
+    Redis key for the sorted set (ZSET) tracking lifetime money activity days (payment sides and withdrawals).
+    Score: IST day ordinal integer; Member: IST day ordinal integer string.
+    Lifetime key: lives as long as the run's namespace; removed by namespace cleanup, never by a short TTL.
+    """
+    return _build_key(run_id, bank_id, account_id, "active_days")
+
+
+def opened_at_key(run_id: str, bank_id: str, account_id: str) -> str:
+    """
+    Redis key for the sorted set (ZSET) tracking the account opening timestamp from account_opened event.
+    Score: Unix epoch seconds of event_time; Member: 'opened_at'.
+    Lifetime key: lives as long as the run's namespace; removed by namespace cleanup, never by a short TTL.
+    """
+    return _build_key(run_id, bank_id, account_id, "opened_at")
 
 
 def days_index_key(run_id: str, bank_id: str, account_id: str) -> str:
@@ -316,6 +334,7 @@ def fingerprints_key(run_id: str, bank_id: str, account_id: str) -> str:
     """
     Redis key for the sorted set (ZSET) tracking mobile device fingerprints observed on an account.
     Score: Unix epoch seconds of earliest availability max(event_time, arrival_time); Member: fingerprint string.
+    Lifetime key: lives as long as the run's namespace; removed by namespace cleanup, never by a short TTL.
     """
     return _build_key(run_id, bank_id, account_id, "fingerprints")
 

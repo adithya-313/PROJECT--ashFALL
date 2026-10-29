@@ -4,7 +4,7 @@
 """
 WHAT: Provides long-lived per-account behavioral summaries stored in Redis alongside the 7-day
 raw window: closed-day transaction totals, counterparty interaction calendar days, and lifetime
-metrics (opened_at, last_active_day, device fingerprints).
+metrics (opened_at, active_days, device fingerprints).
 
 WHY: Certain fraud and money mule patterns (routine monthly salary/bill rhythms, account dormancy,
 device novelty across account lifetime) require longer memory than the 7-day raw sliding window.
@@ -25,6 +25,15 @@ CLOSED-DAY RULE AND FUTURE-LEAK GUARANTEE (Architect Decision A, Section 22):
       the 7-day raw window (Level 15a), which is exact.
   This ensures that summary readers only ever observe days that are permanently sealed and immutable.
 
+LIFETIME ACTIVE DAYS AND KEYS (FIX 1, FIX 2):
+  Lifetime money activity is tracked in active_days ZSET for closed payment sides and withdrawals.
+  Account lifecycle events (device changes, account opening) are not money activity and never write active_days.
+  last_active_day is derived on read as the most recent closed active day.
+  history_days_available measures transaction history held by this bank from the start of the
+  earliest closed active day.
+  Lifetime keys (opened_at, fingerprints, active_days) live as long as the run's namespace;
+  a run's keys are removed by namespace cleanup, never by a short TTL.
+
 CONSERVATIVE DEVICE NOVELTY (R5):
   Device fingerprints are scored with available_from = max(event_time, arrival_time).
   A fingerprint counts as seen at decision_time if and only if available_from <= decision_time
@@ -39,6 +48,7 @@ from typing import Any
 
 from features.account_keys import (
     AccountFeaturesSettings,
+    active_days_key,
     counterparty_days_key,
     counterparty_index_key,
     day_seen_key,
@@ -46,7 +56,7 @@ from features.account_keys import (
     days_index_key,
     fingerprints_key,
     get_default_settings,
-    marks_key,
+    opened_at_key,
 )
 from features.account_records import (
     AccountEventRecord,
@@ -54,6 +64,7 @@ from features.account_records import (
     WithdrawalRecord,
     record_member,
 )
+from features.velocity import to_unix_seconds
 
 logger = logging.getLogger(__name__)
 
@@ -61,13 +72,7 @@ logger = logging.getLogger(__name__)
 IST: timezone = timezone(timedelta(hours=5, minutes=30))
 
 
-def _to_unix_seconds(timestamp: datetime) -> float:
-    """Converts a timezone-aware or naive UTC datetime to Unix epoch timestamp in seconds."""
-    if timestamp.tzinfo is None:
-        timestamp = timestamp.replace(tzinfo=timezone.utc)
-    return timestamp.timestamp()
-
-# Atomic day totals Lua script: checks seen set, increments totals, indexes day, marks last active day.
+# Atomic day totals Lua script: checks seen set, increments totals, indexes day, records active days.
 DAY_TOTALS_LUA_SCRIPT: str = """local member = ARGV[1]
 local is_seen = redis.call('HEXISTS', KEYS[1], member)
 if is_seen == 1 then
@@ -76,7 +81,7 @@ end
 
 redis.call('HSET', KEYS[1], member, '1')
 redis.call('ZADD', KEYS[3], tonumber(ARGV[2]), ARGV[2])
-redis.call('ZADD', KEYS[4], 'GT', tonumber(ARGV[2]), 'last_active_day')
+redis.call('ZADD', KEYS[4], tonumber(ARGV[2]), ARGV[2])
 
 local is_failed = ARGV[4]
 if is_failed == '1' then
@@ -204,15 +209,18 @@ def _record_fingerprints(
     arrival_time: datetime,
     settings: AccountFeaturesSettings,
 ) -> None:
-    """Records device fingerprints with available_from score in Redis and enforces warning checks."""
+    """
+    Records device fingerprints with available_from score in Redis and enforces warning checks.
+    Lifetime key: lives as long as the run's namespace; removed by namespace cleanup, never by a short TTL.
+    """
     fp_key = fingerprints_key(run_id, bank_id, account_id)
     available_from = max(event_time, arrival_time)
-    available_from_unix = _to_unix_seconds(available_from)
+    available_from_unix = to_unix_seconds(available_from)
 
     pipeline = client.pipeline(transaction=True)
     for fp in fingerprints:
         pipeline.zadd(fp_key, {fp: available_from_unix}, lt=True)
-    pipeline.expire(fp_key, settings.summary_expiry_seconds)
+    # Lifetime keys get NO EXPIRE: they live as long as the run's namespace.
     pipeline.execute()
 
     total_fps = client.zcard(fp_key)
@@ -242,17 +250,18 @@ def update_account_summaries(
 
     KEY LOGIC:
         1. If record is AccountEventRecord:
-           - Records opened_at watermark on account_opened event.
+           - Records opened_at on the dedicated opened_at ZSET for account_opened event (lifetime, no expiry).
            - Extracts and indexes device fingerprints (fingerprint, fingerprint_before, fingerprint_after).
-           - Updates last_active_day on the marks ZSET.
+           - Account events do NOT record active days (device and opening events are not money activity).
         2. If record is PaymentSideRecord or WithdrawalRecord:
+           - In debit PaymentSideRecord: records sender_device_fingerprint BEFORE closed-day check
+             (fingerprints have their own available_from arrival rule).
            - Evaluates closed-day write condition: arrival_time <= (end_of_day + allowed_lateness).
              If violated, logs warning and returns 'too_late_for_summary'.
-           - Executes DAY_TOTALS_LUA_SCRIPT to idempotently record member in day seen set and increment totals.
+           - Executes DAY_TOTALS_LUA_SCRIPT to idempotently record member in day seen set, increment totals,
+             and record active_days for money activity.
            - Executes DAY_TOTALS_TRIM_LUA_SCRIPT to prune days older than summary_horizon_days.
-           - If PaymentSideRecord:
-             - Indexes sender_device_fingerprint on debit sides.
-             - If success: indexes counterparty days and counterparty index (G1).
+           - If PaymentSideRecord and success: indexes counterparty days and counterparty index (G1).
 
     RETURN VALUE:
         'stored' if summaries were updated successfully, or
@@ -262,16 +271,11 @@ def update_account_summaries(
 
     # 1. AccountEventRecord handling
     if isinstance(record, AccountEventRecord):
-        m_key = marks_key(record.run_id, record.bank_id, record.account_id)
-        day = to_day_number(record.event_time)
-
-        pipe = client.pipeline(transaction=True)
-        pipe.zadd(m_key, {"last_active_day": day}, gt=True)
         if record.kind == "account_opened":
-            event_unix = _to_unix_seconds(record.event_time)
-            pipe.zadd(m_key, {"opened_at": event_unix}, lt=True)
-        pipe.expire(m_key, cfg.expiry_seconds)
-        pipe.execute()
+            op_key = opened_at_key(record.run_id, record.bank_id, record.account_id)
+            event_unix = to_unix_seconds(record.event_time)
+            client.zadd(op_key, {"opened_at": event_unix}, lt=True)
+            # Lifetime key: NO EXPIRE
 
         # Extract device fingerprints from event details
         fps: list[str] = []
@@ -296,6 +300,22 @@ def update_account_summaries(
     day = to_day_number(record.event_time)
     closed_thresh = day_closed_threshold(day, cfg.allowed_lateness_seconds)
 
+    # FIX 3: Record debit device fingerprint BEFORE the closed-day early return.
+    # Fingerprints have their own arrival rule (available_from = max(event_time, arrival_time)),
+    # so the day summary lateness rule must not drop them.
+    if isinstance(record, PaymentSideRecord) and record.side == "debit":
+        if record.sender_device_fingerprint and record.sender_device_fingerprint.strip():
+            _record_fingerprints(
+                client,
+                record.run_id,
+                record.bank_id,
+                record.account_id,
+                [record.sender_device_fingerprint.strip()],
+                record.event_time,
+                record.arrival_time,
+                cfg,
+            )
+
     # Closed-day rule: arrival_time must be within day end + allowed_lateness_seconds
     if record.arrival_time > closed_thresh:
         logger.info(
@@ -308,11 +328,11 @@ def update_account_summaries(
         )
         return "too_late_for_summary"
 
-    # Day totals update via Lua script
+    # Day totals and active days update via Lua script
     seen_k = day_seen_key(record.run_id, record.bank_id, record.account_id, day)
     totals_k = day_totals_key(record.run_id, record.bank_id, record.account_id, day)
     index_k = days_index_key(record.run_id, record.bank_id, record.account_id)
-    m_k = marks_key(record.run_id, record.bank_id, record.account_id)
+    act_k = active_days_key(record.run_id, record.bank_id, record.account_id)
 
     member = record_member(record)
     is_failed = "1" if record.status == "failed" else "0"
@@ -322,7 +342,7 @@ def update_account_summaries(
 
     totals_script = client.register_script(DAY_TOTALS_LUA_SCRIPT)
     totals_script(
-        keys=[seen_k, totals_k, index_k, m_k],
+        keys=[seen_k, totals_k, index_k, act_k],
         args=[member, str(day), ttl_str, is_failed, record_type, amount_paise],
         client=client,
     )
@@ -336,20 +356,8 @@ def update_account_summaries(
         client=client,
     )
 
-    # Payment-specific counterparty and fingerprint updates
+    # Counterparty days and counterparty index (G1) for successful payment sides
     if isinstance(record, PaymentSideRecord):
-        if record.side == "debit" and record.sender_device_fingerprint:
-            _record_fingerprints(
-                client,
-                record.run_id,
-                record.bank_id,
-                record.account_id,
-                [record.sender_device_fingerprint],
-                record.event_time,
-                record.arrival_time,
-                cfg,
-            )
-
         if record.status == "success" and record.counterparty_vpa:
             counterparty = f"{record.counterparty_bank_id}:{record.counterparty_vpa}"
             direction = record.side
@@ -507,33 +515,46 @@ def read_lifetime(
     """
     PURPOSE:
         Reads lifetime metrics (last_active_day, opened_at, visible device fingerprints).
-
-    INPUTS:
-        client: Redis or FakeRedis client.
-        run_id: Simulation run identifier.
-        bank_id: Tenant commercial bank identifier.
-        account_id: Customer account identifier.
-        decision_time: Upper boundary timestamp for decision scoring.
-        arrival_cutoff: Upper boundary timestamp for watermark arrival.
-        settings: Optional AccountFeaturesSettings.
+        Lifetime keys live as long as the run's namespace; removed by namespace cleanup, never by a short TTL.
 
     KEY LOGIC:
-        A fingerprint is visible if and only if its available_from score is <= decision_time
-        AND <= arrival_cutoff.
+        - last_active_day: the largest day in active_days whose closed threshold
+          (day end + allowed lateness) <= min(decision_time, arrival_cutoff); None if there is none.
+        - opened_at: read from dedicated opened_at ZSET.
+        - fingerprints: read from fingerprints ZSET with score <= min(decision_time, arrival_cutoff).
 
     RETURN VALUE:
         LifetimeSummary instance. If no data exists, returns defined empty defaults:
         LifetimeSummary(last_active_day=None, opened_at=None, fingerprints=()).
     """
-    m_k = marks_key(run_id, bank_id, account_id)
-    last_act = client.zscore(m_k, "last_active_day")
-    last_active_day = int(last_act) if last_act is not None else None
+    cfg = settings if settings is not None else get_default_settings()
 
-    op_at = client.zscore(m_k, "opened_at")
+    if decision_time.tzinfo is None:
+        decision_time = decision_time.replace(tzinfo=timezone.utc)
+    if arrival_cutoff.tzinfo is None:
+        arrival_cutoff = arrival_cutoff.replace(tzinfo=timezone.utc)
+
+    # 1. Closed active days -> last_active_day (largest closed active day)
+    act_k = active_days_key(run_id, bank_id, account_id)
+    raw_days = client.zrange(act_k, 0, -1)
+    closed_active_days: list[int] = []
+    if raw_days:
+        for d_bytes in raw_days:
+            d_val = int(d_bytes.decode("utf-8") if isinstance(d_bytes, bytes) else str(d_bytes))
+            thresh = day_closed_threshold(d_val, cfg.allowed_lateness_seconds)
+            if thresh <= decision_time and thresh <= arrival_cutoff:
+                closed_active_days.append(d_val)
+
+    last_active_day = max(closed_active_days) if closed_active_days else None
+
+    # 2. Account opened timestamp from dedicated lifetime ZSET
+    op_k = opened_at_key(run_id, bank_id, account_id)
+    op_at = client.zscore(op_k, "opened_at")
     opened_at = datetime.fromtimestamp(float(op_at), tz=timezone.utc) if op_at is not None else None
 
+    # 3. Visible device fingerprints
     fp_k = fingerprints_key(run_id, bank_id, account_id)
-    max_score = min(_to_unix_seconds(decision_time), _to_unix_seconds(arrival_cutoff))
+    max_score = min(to_unix_seconds(decision_time), to_unix_seconds(arrival_cutoff))
     raw_fps = client.zrangebyscore(fp_k, "-inf", max_score)
 
     fingerprints = tuple(
@@ -549,28 +570,45 @@ def read_lifetime(
 
 
 def history_days_available(
-    first_event_time: datetime | None,
+    client: Any,
+    run_id: str,
+    bank_id: str,
+    account_id: str,
     decision_time: datetime,
-    horizon: int,
+    arrival_cutoff: datetime,
+    settings: AccountFeaturesSettings | None = None,
 ) -> int:
     """
-    PURPOSE:
-        Computes the whole calendar days of history this bank has for the account, capped at horizon.
-
-    INPUTS:
-        first_event_time: Earliest event timestamp observed in AccountSnapshot, or None if unwritten.
-        decision_time: Decision scoring evaluation timestamp.
-        horizon: Upper cap in whole days (summary_horizon_days).
-
-    KEY LOGIC:
-        Computes elapsed seconds between first_event_time and decision_time, divides by 86400 (whole days),
-        and caps at horizon. If first_event_time is None or in the future, returns 0.
-
-    RETURN VALUE:
-        Integer count of available history days in range [0, horizon].
+    how much transaction history this bank holds for the account; deliberately not account age,
+    so an old account early in a run still reads as 'too new to know' (architect: warm-up)
     """
-    if first_event_time is None or decision_time < first_event_time:
+    cfg = settings if settings is not None else get_default_settings()
+
+    if decision_time.tzinfo is None:
+        decision_time = decision_time.replace(tzinfo=timezone.utc)
+    if arrival_cutoff.tzinfo is None:
+        arrival_cutoff = arrival_cutoff.replace(tzinfo=timezone.utc)
+
+    act_k = active_days_key(run_id, bank_id, account_id)
+    raw_days = client.zrange(act_k, 0, -1)
+    if not raw_days:
         return 0
-    delta_seconds = (decision_time - first_event_time).total_seconds()
+
+    closed_active_days: list[int] = []
+    for d_bytes in raw_days:
+        d_val = int(d_bytes.decode("utf-8") if isinstance(d_bytes, bytes) else str(d_bytes))
+        thresh = day_closed_threshold(d_val, cfg.allowed_lateness_seconds)
+        if thresh <= decision_time and thresh <= arrival_cutoff:
+            closed_active_days.append(d_val)
+
+    if not closed_active_days:
+        return 0
+
+    earliest_day = min(closed_active_days)
+    d = date.fromordinal(earliest_day)
+    day_start_ist = datetime(d.year, d.month, d.day, 0, 0, 0, tzinfo=IST)
+    delta_seconds = (decision_time - day_start_ist).total_seconds()
+    if delta_seconds <= 0:
+        return 0
     whole_days = int(delta_seconds // 86400)
-    return min(horizon, max(0, whole_days))
+    return min(whole_days, cfg.summary_horizon_days)

@@ -21,10 +21,16 @@ import fakeredis
 import pytest
 
 from features.account_keys import (
+    active_days_key,
     day_seen_key,
     day_totals_key,
     days_index_key,
+    fingerprints_key,
     load_account_features_settings,
+    marks_key,
+    opened_at_key,
+    side_records_key,
+    side_times_key,
 )
 from features.account_reader import read_account_snapshot
 from features.account_records import (
@@ -41,7 +47,7 @@ from features.account_summaries import (
     to_day_number,
     update_account_summaries,
 )
-from features.account_updater import apply_payment_side
+from features.account_updater import apply_account_event, apply_payment_side
 
 RUN_ID = "66db9aa439b092ee"
 BANK_0 = "bank_0"
@@ -63,12 +69,13 @@ def _make_payment(
     status: str = "success",
     counterparty_vpa: str = "cp_acc_002",
     sender_device_fingerprint: str | None = None,
+    account_id: str = ACC_1,
 ) -> PaymentSideRecord:
     """Helper constructing a valid PaymentSideRecord."""
     return PaymentSideRecord(
         run_id=RUN_ID,
         bank_id=BANK_0,
-        account_id=ACC_1,
+        account_id=account_id,
         payment_id=payment_id,
         side=side,
         counterparty_bank_id="bank_1",
@@ -92,12 +99,13 @@ def _make_withdrawal(
     arrival_time: datetime,
     amount_paise: int = 20000,
     status: str = "success",
+    account_id: str = ACC_1,
 ) -> WithdrawalRecord:
     """Helper constructing a valid WithdrawalRecord."""
     return WithdrawalRecord(
         run_id=RUN_ID,
         bank_id=BANK_0,
-        account_id=ACC_1,
+        account_id=account_id,
         withdrawal_id=withdrawal_id,
         channel="atm",
         amount_paise=amount_paise,
@@ -115,12 +123,13 @@ def _make_event(
     event_time: datetime,
     arrival_time: datetime,
     details: dict[str, Any] | None = None,
+    account_id: str = ACC_1,
 ) -> AccountEventRecord:
     """Helper constructing a valid AccountEventRecord."""
     return AccountEventRecord(
         run_id=RUN_ID,
         bank_id=BANK_0,
-        account_id=ACC_1,
+        account_id=account_id,
         event_id=event_id,
         kind=kind,
         event_time=event_time,
@@ -512,25 +521,203 @@ def test_9_shuffle_order_independence() -> None:
     assert dumps[1] == dumps[2]
 
 
-# 10. history_days_available: first seen 10 days before decision -> 10; long ago -> capped at horizon; no data -> 0
-def test_10_history_days_available() -> None:
-    """Verifies history_days_available bounds, caps, and empty history handling."""
-    horizon = 62
-    now = datetime(2026, 10, 20, 12, 0, tzinfo=timezone.utc)
+# 10. history_days_available reads real state: first payment 10 days before decision -> 10; no data -> 0
+def test_10_history_days_available(redis_client: fakeredis.FakeRedis) -> None:
+    """Verifies history_days_available bounds, caps, and empty history handling on real state."""
+    settings = load_account_features_settings()
+    acc_id = "acc_test_10"
+    decision = datetime(2026, 10, 25, 12, 0, tzinfo=IST)
+    arrival_cutoff = decision
 
-    # 10 days before decision -> 10
-    t_10d = now - timedelta(days=10)
-    assert history_days_available(t_10d, now, horizon) == 10
+    # Case A: No data -> 0
+    assert history_days_available(redis_client, RUN_ID, BANK_0, acc_id, decision, arrival_cutoff, settings) == 0
 
-    # Long ago (100 days) -> capped at horizon 62
-    t_100d = now - timedelta(days=100)
-    assert history_days_available(t_100d, now, horizon) == 62
+    # Case B: First payment was 10 days before decision on closed day -> history_days_available == 10
+    # Day is Oct 15 (start of day is Oct 15 00:00 IST). Decision is Oct 25 12:00 IST.
+    # Whole days elapsed from start of Oct 15 to Oct 25 12:00 is (10 days + 12 hours) // 86400 = 10 days.
+    t_10d = datetime(2026, 10, 15, 10, 0, tzinfo=IST)
+    p = _make_payment(f"{RUN_ID}-p-10d", t_10d, t_10d, account_id=acc_id)
+    update_account_summaries(redis_client, p, settings)
 
-    # Exactly at decision moment -> 0
-    assert history_days_available(now, now, horizon) == 0
+    assert history_days_available(redis_client, RUN_ID, BANK_0, acc_id, decision, arrival_cutoff, settings) == 10
 
-    # No data (None) -> 0
-    assert history_days_available(None, now, horizon) == 0
 
-    # Future first event (clock skew or anomaly) -> 0
-    assert history_days_available(now + timedelta(days=1), now, horizon) == 0
+# 11. A starting account whose account_opened is dated 5 years back and whose first payment was 10 days before decision
+def test_account_opened_five_years_back_first_payment_ten_days_back(redis_client: fakeredis.FakeRedis) -> None:
+    """
+    Verifies that an account opened 5 years ago whose first payment was 10 days before decision
+    yields history_days_available == 10, proving history measures transaction activity held by bank,
+    not account opening age.
+    """
+    settings = load_account_features_settings()
+    acc_id = "acc_aged_01"
+    decision = datetime(2026, 10, 25, 12, 0, tzinfo=IST)
+    arrival_cutoff = decision
+
+    # Account opened 5 years back
+    t_open = datetime(2021, 10, 15, 10, 0, tzinfo=timezone.utc)
+    ev_open = _make_event(f"{RUN_ID}-ev-open-5y", "account_opened", t_open, t_open, account_id=acc_id)
+    update_account_summaries(redis_client, ev_open, settings)
+
+    # First payment 10 days before decision (Oct 15 10:00 IST)
+    t_pmt = datetime(2026, 10, 15, 10, 0, tzinfo=IST)
+    p = _make_payment(f"{RUN_ID}-p-10d-aged", t_pmt, t_pmt, account_id=acc_id)
+    update_account_summaries(redis_client, p, settings)
+
+    days = history_days_available(redis_client, RUN_ID, BANK_0, acc_id, decision, arrival_cutoff, settings)
+    assert days == 10
+
+
+# 12. An account with 70 days of payments -> history_days_available == 62
+def test_account_with_seventy_days_of_payments_capped_at_horizon(redis_client: fakeredis.FakeRedis) -> None:
+    """Verifies that 70 days of payments caps history_days_available at summary_horizon_days (62)."""
+    settings = load_account_features_settings()
+    acc_id = "acc_70d_01"
+    decision = datetime(2026, 10, 25, 12, 0, tzinfo=IST)
+    arrival_cutoff = decision
+
+    # Earliest payment 70 days before decision
+    t_70d = decision - timedelta(days=70)
+    p_early = _make_payment(f"{RUN_ID}-p-70d", t_70d, t_70d, account_id=acc_id)
+    update_account_summaries(redis_client, p_early, settings)
+
+    # Recent payment to confirm multiple payments
+    t_recent = decision - timedelta(days=5)
+    p_recent = _make_payment(f"{RUN_ID}-p-recent", t_recent, t_recent, account_id=acc_id)
+    update_account_summaries(redis_client, p_recent, settings)
+
+    days = history_days_available(redis_client, RUN_ID, BANK_0, acc_id, decision, arrival_cutoff, settings)
+    assert days == 62
+
+
+# 13. A payment whose day has not closed does not count in last_active_day or history_days_available
+def test_unclosed_payment_not_in_last_active_day_or_history_days(redis_client: fakeredis.FakeRedis) -> None:
+    """Verifies an unclosed payment is excluded from last_active_day and history_days_available."""
+    settings = load_account_features_settings()
+    acc_id = "acc_unclosed_01"
+    # Payment on Oct 10 10:00 IST
+    t_pmt = datetime(2026, 10, 10, 10, 0, tzinfo=IST)
+    p = _make_payment(f"{RUN_ID}-p-unclosed", t_pmt, t_pmt, account_id=acc_id)
+    update_account_summaries(redis_client, p, settings)
+
+    # Decision on same day (Oct 10 15:00 IST) -> day is unclosed (closes at Oct 12 00:00:00 IST)
+    decision_same_day = datetime(2026, 10, 10, 15, 0, tzinfo=IST)
+    life = read_lifetime(redis_client, RUN_ID, BANK_0, acc_id, decision_same_day, decision_same_day, settings)
+    assert life.last_active_day is None
+
+    days = history_days_available(redis_client, RUN_ID, BANK_0, acc_id, decision_same_day, decision_same_day, settings)
+    assert days == 0
+
+
+# 14. A device event on a later day does not change last_active_day
+def test_device_event_on_later_day_does_not_change_last_active_day(redis_client: fakeredis.FakeRedis) -> None:
+    """Verifies account lifecycle events do not write active_days and do not alter last_active_day."""
+    settings = load_account_features_settings()
+    acc_id = "acc_dev_later_01"
+
+    # Payment on Oct 1
+    t_pmt = datetime(2026, 10, 1, 10, 0, tzinfo=IST)
+    p = _make_payment(f"{RUN_ID}-p-d1", t_pmt, t_pmt, account_id=acc_id)
+    update_account_summaries(redis_client, p, settings)
+
+    # Device binding change on Oct 10 (later day)
+    t_dev = datetime(2026, 10, 10, 10, 0, tzinfo=IST)
+    ev_dev = _make_event(
+        f"{RUN_ID}-dev-later", "device_binding_change", t_dev, t_dev,
+        details={"fingerprint_after": "fp_dev_later"},
+        account_id=acc_id,
+    )
+    update_account_summaries(redis_client, ev_dev, settings)
+
+    # Decision on Oct 15 (both days closed)
+    decision = datetime(2026, 10, 15, 12, 0, tzinfo=IST)
+    life = read_lifetime(redis_client, RUN_ID, BANK_0, acc_id, decision, decision, settings)
+    # Must be Oct 1 payment day, NOT Oct 10 device event day!
+    assert life.last_active_day == to_day_number(t_pmt)
+
+
+# 15. After applying records, client.ttl() on opened_at, fingerprints and active_days returns -1
+def test_lifetime_keys_have_no_expiry_raw_keys_keep_positive_ttl(redis_client: fakeredis.FakeRedis) -> None:
+    """Verifies lifetime keys (opened_at, fingerprints, active_days) have no TTL (-1), while raw keys have TTL."""
+    settings = load_account_features_settings()
+    acc_id = "acc_ttl_01"
+    t_now = datetime(2026, 10, 1, 10, 0, tzinfo=IST)
+
+    # 1. Apply payment side via raw updater (which calls update_account_summaries)
+    p = _make_payment(
+        f"{RUN_ID}-p-ttl", t_now, t_now,
+        side="debit", sender_device_fingerprint="fp_ttl_1", account_id=acc_id,
+    )
+    apply_payment_side(redis_client, p, settings)
+
+    # 2. Apply account_opened via raw updater (which calls update_account_summaries)
+    ev = _make_event(f"{RUN_ID}-open-ttl", "account_opened", t_now - timedelta(days=30), t_now, account_id=acc_id)
+    apply_account_event(redis_client, ev, settings)
+
+    # Lifetime keys: NO EXPIRE (ttl == -1)
+    act_k = active_days_key(RUN_ID, BANK_0, acc_id)
+    op_k = opened_at_key(RUN_ID, BANK_0, acc_id)
+    fp_k = fingerprints_key(RUN_ID, BANK_0, acc_id)
+
+    assert redis_client.ttl(act_k) == -1
+    assert redis_client.ttl(op_k) == -1
+    assert redis_client.ttl(fp_k) == -1
+
+    # Raw-window keys: positive TTL
+    st_k = side_times_key(RUN_ID, BANK_0, acc_id)
+    sr_k = side_records_key(RUN_ID, BANK_0, acc_id)
+    m_k = marks_key(RUN_ID, BANK_0, acc_id)
+
+    ttl_st: Any = redis_client.ttl(st_k)
+    ttl_sr: Any = redis_client.ttl(sr_k)
+    ttl_m: Any = redis_client.ttl(m_k)
+
+    assert ttl_st > 0
+    assert ttl_sr > 0
+    assert ttl_m > 0
+
+
+# 16. A debit side arriving too late for summaries still adds its fingerprint (visible once available_from <= decision)
+def test_late_debit_side_excluded_from_summaries_still_records_fingerprint(
+    redis_client: fakeredis.FakeRedis,
+) -> None:
+    """
+    Verifies debit payment arriving after closed-day threshold returns
+    too_late_for_summary but records fingerprint.
+    """
+    settings = load_account_features_settings()
+    acc_id = "acc_late_fp_01"
+    # Event occurred on Oct 1
+    t_event = datetime(2026, 10, 1, 10, 0, tzinfo=IST)
+    # Arrived on Oct 5 (past day end + allowed lateness of Oct 3 00:00:00 IST)
+    t_arrival = datetime(2026, 10, 5, 10, 0, tzinfo=IST)
+
+    p_late = _make_payment(
+        f"{RUN_ID}-p-late-fp", t_event, t_arrival,
+        side="debit", sender_device_fingerprint="fp_late_survivor",
+        account_id=acc_id,
+    )
+    result = update_account_summaries(redis_client, p_late, settings)
+    assert result == "too_late_for_summary"
+
+    # Summary day totals must be empty
+    decision = datetime(2026, 10, 10, 12, 0, tzinfo=IST)
+    totals = read_day_totals(redis_client, RUN_ID, BANK_0, acc_id, decision, decision, settings)
+    assert len(totals) == 0
+
+    # Fingerprint available_from = max(t_event, t_arrival) = t_arrival (Oct 5 10:00 IST)
+    # Query before arrival: not visible
+    life_before = read_lifetime(
+        redis_client, RUN_ID, BANK_0, acc_id,
+        decision_time=decision, arrival_cutoff=datetime(2026, 10, 4, 12, 0, tzinfo=IST),
+        settings=settings,
+    )
+    assert "fp_late_survivor" not in life_before.fingerprints
+
+    # Query after arrival: visible!
+    life_after = read_lifetime(
+        redis_client, RUN_ID, BANK_0, acc_id,
+        decision_time=decision, arrival_cutoff=datetime(2026, 10, 6, 12, 0, tzinfo=IST),
+        settings=settings,
+    )
+    assert "fp_late_survivor" in life_after.fingerprints

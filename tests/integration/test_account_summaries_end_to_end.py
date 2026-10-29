@@ -21,7 +21,13 @@ import redis
 from api.services.outbox_relay import relay_one_batch
 from api.v1.upi_outbox import UpiPaymentSide, record_upi_side
 from core.config import config
-from features.account_keys import load_account_features_settings, namespace_pattern
+from features.account_keys import (
+    active_days_key,
+    fingerprints_key,
+    load_account_features_settings,
+    namespace_pattern,
+    opened_at_key,
+)
 from features.account_reader import read_account_snapshot
 from features.account_stream import (
     apply_account_events_since,
@@ -291,11 +297,23 @@ async def test_account_summaries_and_cash_out_end_to_end(isolated_schema: tuple[
         assert set(lifetime.fingerprints) >= {"fp_sum_alpha", "fp_sum_beta"}
 
         available_days = history_days_available(
-            lifetime.opened_at,
+            redis_client,
+            run_id,
+            bank_id,
+            account_id,
             future_decision,
-            settings.summary_horizon_days,
+            future_decision,
+            settings,
         )
-        assert available_days == settings.summary_horizon_days
+        assert available_days == 2
+
+        # Verify lifetime keys have no expiry (-1)
+        act_k = active_days_key(run_id, bank_id, account_id)
+        op_k = opened_at_key(run_id, bank_id, account_id)
+        fp_k = fingerprints_key(run_id, bank_id, account_id)
+        assert redis_client.ttl(act_k) == -1
+        assert redis_client.ttl(op_k) == -1
+        assert redis_client.ttl(fp_k) == -1
 
     finally:
         await producer.stop()
