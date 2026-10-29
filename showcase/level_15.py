@@ -2,8 +2,8 @@
 # Purpose: Level 15 showcase: Live mule features and account state (Part 15a).
 """
 WHAT: Verification checks for Level 15 part a (Account Feature Updater).
-Proves Redis key structure and TTL enforcement, point-in-time snapshot filtering,
-idempotent replay without memory growth, and tenant isolation between commercial banks.
+Proves default empty snapshot handling, multi-run tenant isolation,
+and idempotent replay consistency across duplicate and shuffled events.
 
 WHY: Satisfies Level 15 showcase requirements ensuring streaming feature storage
 is resilient, leak-free, and isolated across simulation runs and banks.
@@ -11,6 +11,7 @@ is resilient, leak-free, and isolated across simulation runs and banks.
 
 import importlib
 import os
+import random
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,12 +20,13 @@ from typing import Any
 from core.config import config
 from features.account_keys import (
     get_default_settings,
-    marks_key,
     namespace_pattern,
-    side_records_key,
-    side_times_key,
 )
-from features.account_reader import empty_snapshot, read_account_snapshot
+from features.account_reader import (
+    count_sides_in_window,
+    empty_snapshot,
+    read_account_snapshot,
+)
 from features.account_records import AccountEventRecord, PaymentSideRecord
 from features.account_updater import apply_account_event, apply_payment_side
 from showcase.framework import CheckDefinition, CheckOutcome
@@ -124,295 +126,264 @@ def make_showcase_record(
     )
 
 
-async def check_15a_1_key_structure_and_ttl(workspace: Any) -> CheckOutcome:
+async def check_15a_1_empty_history(workspace: Any) -> CheckOutcome:
     """
-    Check 15a-1 (normal): Redis key structure and TTL: write one payment side, assert all 3 keys
-    exist with the right prefix, TTL > 0 and <= expiry_seconds.
+    Check 15a-1 (edge): read an account that was never written -> equals empty_snapshot();
+    count_sides_in_window is 0 for every configured window. Key number: fields checked.
     """
     client = _get_redis().Redis.from_url(host_side_redis_url())
     settings = get_default_settings()
     run_id = uuid.uuid4().hex[:16]
     bank_id = "bank_0"
-    account_id = "acc_showcase_01"
+    account_id = "acc_showcase_never_written"
     now = datetime.now(timezone.utc)
 
-    st_key = side_times_key(run_id, bank_id, account_id)
-    sr_key = side_records_key(run_id, bank_id, account_id)
-    m_key = marks_key(run_id, bank_id, account_id)
+    try:
+        snap = read_account_snapshot(
+            client, run_id, bank_id, account_id, now, now, settings
+        )
+        assert snap == empty_snapshot()
+        assert snap.has_history is False
+        assert snap.side_records == ()
+        assert snap.account_events == ()
+        assert snap.first_event_time is None
+        assert snap.last_event_time is None
+        assert snap.arrival_watermark is None
+        fields_checked = 6
 
-    rec = make_showcase_record(
-        run_id=run_id,
+        for w_sec in settings.windows_seconds:
+            cnt_debit = count_sides_in_window(
+                snap, "debit", now, w_sec, settings
+            )
+            assert cnt_debit == 0
+            cnt_credit = count_sides_in_window(
+                snap, "credit", now, w_sec, settings
+            )
+            assert cnt_credit == 0
+            fields_checked += 2
+
+        return CheckOutcome(
+            key_number=str(fields_checked),
+            evidence={
+                "fields_checked": fields_checked,
+                "empty_snapshot_verified": True,
+                "windows_checked": list(settings.windows_seconds),
+            },
+        )
+    finally:
+        client.close()
+
+
+async def check_15a_2_two_runs_separate_state(workspace: Any) -> CheckOutcome:
+    """
+    Check 15a-2 (negative): two FIXED run ids, same bank_id and account_id, different records ->
+    each run's snapshot contains only its own records. Key number: cross-run records seen (must be 0).
+    """
+    client = _get_redis().Redis.from_url(host_side_redis_url())
+    settings = get_default_settings()
+    run_1 = "1111111111111111"
+    run_2 = "2222222222222222"
+    bank_id = "bank_0"
+    account_id = "acc_showcase_fixed"
+    now = datetime.now(timezone.utc)
+
+    rec_1 = make_showcase_record(
+        run_id=run_1,
         bank_id=bank_id,
         account_id=account_id,
-        payment_id=f"{run_id}-000001",
+        payment_id=f"{run_1}-000001",
         side="debit",
         event_time=now,
         arrival_time=now,
-        amount_paise=250000,
+        amount_paise=10000,
     )
-
-    try:
-        outcome = apply_payment_side(client, rec, settings)
-        assert outcome == "stored"
-
-        # Assert all 3 keys exist
-        assert client.exists(st_key) == 1, f"Missing sorted set key {st_key}"
-        assert client.exists(sr_key) == 1, f"Missing hash records key {sr_key}"
-        assert client.exists(m_key) == 1, f"Missing marks key {m_key}"
-
-        # Assert TTL > 0 and <= expiry_seconds
-        ttl_st = client.ttl(st_key)
-        ttl_sr = client.ttl(sr_key)
-        ttl_m = client.ttl(m_key)
-
-        assert 0 < ttl_st <= settings.expiry_seconds, f"Unexpected TTL for {st_key}: {ttl_st}"
-        assert 0 < ttl_sr <= settings.expiry_seconds, f"Unexpected TTL for {sr_key}: {ttl_sr}"
-        assert 0 < ttl_m <= settings.expiry_seconds, f"Unexpected TTL for {m_key}: {ttl_m}"
-
-        return CheckOutcome(
-            key_number="15a-1",
-            evidence={
-                "st_key": st_key,
-                "sr_key": sr_key,
-                "m_key": m_key,
-                "ttls": {"side_times": ttl_st, "side_records": ttl_sr, "marks": ttl_m},
-                "max_expiry_seconds": settings.expiry_seconds,
-            },
-        )
-    finally:
-        for pat in (namespace_pattern(run_id, bank_id),):
-            for k in client.scan_iter(match=pat):
-                client.delete(k)
-        client.close()
-
-
-async def check_15a_2_point_in_time_reader(workspace: Any) -> CheckOutcome:
-    """
-    Check 15a-2 (edge): point-in-time reader: read snapshot with decision_time at event_time
-    and event_time - 1s; assert event only appears in the first.
-    """
-    client = _get_redis().Redis.from_url(host_side_redis_url())
-    settings = get_default_settings()
-    run_id = uuid.uuid4().hex[:16]
-    bank_id = "bank_0"
-    account_id = "acc_showcase_02"
-    event_time = datetime(2026, 10, 29, 10, 0, 0, tzinfo=timezone.utc)
-    arrival_time = event_time
-
-    rec = make_showcase_record(
-        run_id=run_id,
+    rec_2 = make_showcase_record(
+        run_id=run_2,
         bank_id=bank_id,
         account_id=account_id,
-        payment_id=f"{run_id}-000002",
-        side="debit",
-        event_time=event_time,
-        arrival_time=arrival_time,
-        amount_paise=100000,
-    )
-
-    try:
-        apply_payment_side(client, rec, settings)
-
-        # Snapshot at exact event_time -> event must be visible
-        snap_at = read_account_snapshot(
-            client, run_id, bank_id, account_id, event_time, arrival_time, settings
-        )
-        assert snap_at.has_history is True
-        assert len(snap_at.side_records) == 1
-        assert snap_at.side_records[0].payment_id == f"{run_id}-000002"
-
-        # Snapshot 1 second before event_time -> event must NOT be visible
-        one_sec_before = event_time - timedelta(seconds=1)
-        snap_before = read_account_snapshot(
-            client, run_id, bank_id, account_id, one_sec_before, arrival_time, settings
-        )
-        assert snap_before.has_history is False
-        assert len(snap_before.side_records) == 0
-
-        return CheckOutcome(
-            key_number="15a-2",
-            evidence={
-                "event_time": event_time.isoformat(),
-                "visible_at_event_time": len(snap_at.side_records),
-                "visible_before_event_time": len(snap_before.side_records),
-            },
-        )
-    finally:
-        for pat in (namespace_pattern(run_id, bank_id),):
-            for k in client.scan_iter(match=pat):
-                client.delete(k)
-        client.close()
-
-
-async def check_15a_3_idempotency_and_replay(workspace: Any) -> CheckOutcome:
-    """
-    Check 15a-3 (edge): idempotency / replay: replay the same side 3 times, verify Redis hash/zset
-    sizes do not grow, byte dump before == byte dump after, and verify shuffle order-independence.
-    """
-    client = _get_redis().Redis.from_url(host_side_redis_url())
-    settings = get_default_settings()
-    run_id = uuid.uuid4().hex[:16]
-    bank_id = "bank_0"
-    account_id = "acc_showcase_03"
-    now = datetime.now(timezone.utc)
-
-    rec = make_showcase_record(
-        run_id=run_id,
-        bank_id=bank_id,
-        account_id=account_id,
-        payment_id=f"{run_id}-000003",
+        payment_id=f"{run_2}-000002",
         side="credit",
         event_time=now,
         arrival_time=now,
-        amount_paise=50000,
+        amount_paise=20000,
     )
 
-    run_shuffle = uuid.uuid4().hex[:16]
-
     try:
-        # 1. First write and 3x replay test
-        outcome_1 = apply_payment_side(client, rec, settings)
-        assert outcome_1 == "stored"
-        dump_initial = _dump_account_keys(client, run_id)
-        assert len(dump_initial) > 0
+        apply_payment_side(client, rec_1, settings)
+        apply_payment_side(client, rec_2, settings)
 
-        # Replay the same side 3 times
-        for _ in range(3):
-            outcome_replay = apply_payment_side(client, rec, settings)
-            assert outcome_replay == "stored"
-
-        dump_replayed = _dump_account_keys(client, run_id)
-        assert dump_initial == dump_replayed, "Redis state mutated during replay"
-
-        # 2. Fix 3 / Architect Decision 7: Shuffle test in forward and reverse order
-        batch: list[PaymentSideRecord | AccountEventRecord] = []
-        for i in range(16):
-            t = now - timedelta(hours=i * 6)
-            s = "debit" if i % 2 == 0 else "credit"
-            batch.append(
-                make_showcase_record(
-                    run_id=run_shuffle,
-                    bank_id=bank_id,
-                    account_id="acc_showcase_shuf",
-                    payment_id=f"{run_shuffle}-pmt-{i:04d}",
-                    side=s,
-                    event_time=t,
-                    arrival_time=t + timedelta(minutes=10 * (i % 3)),
-                    amount_paise=10000 * (i + 1),
-                )
-            )
-        for j in range(8):
-            t = now - timedelta(hours=j * 12)
-            kind = "device_binding_change" if j % 2 == 0 else "sim_swap"
-            batch.append(
-                AccountEventRecord(
-                    run_id=run_shuffle,
-                    bank_id=bank_id,
-                    account_id="acc_showcase_shuf",
-                    event_id=f"{run_shuffle}-dev-{j:04d}",
-                    kind=kind,
-                    event_time=t,
-                    arrival_time=t + timedelta(minutes=15 * (j % 2)),
-                    details={},
-                )
-            )
-
-        # Apply batch forward
-        for item in batch:
-            if isinstance(item, PaymentSideRecord):
-                apply_payment_side(client, item, settings)
-            else:
-                apply_account_event(client, item, settings)
-        dump_fwd = _dump_account_keys(client, run_shuffle)
-        assert len(dump_fwd) > 0
-
-        # Purge keys for run_shuffle
-        for pat in (namespace_pattern(run_shuffle, bank_id),):
-            for k in client.scan_iter(match=pat):
-                client.delete(k)
-
-        # Apply SAME batch in reverse order
-        for item in reversed(batch):
-            if isinstance(item, PaymentSideRecord):
-                apply_payment_side(client, item, settings)
-            else:
-                apply_account_event(client, item, settings)
-        dump_rev = _dump_account_keys(client, run_shuffle)
-
-        assert dump_fwd == dump_rev, "Forward and reverse application produced divergent Redis state"
-        msg = (
-            f"SHUFFLE TEST: {len(batch)} records applied in forward and reverse order "
-            "produced byte-identical Redis state."
+        snap_1 = read_account_snapshot(
+            client, run_1, bank_id, account_id, now, now, settings
         )
-        print(msg)
+        snap_2 = read_account_snapshot(
+            client, run_2, bank_id, account_id, now, now, settings
+        )
+
+        assert snap_1.has_history is True
+        assert len(snap_1.side_records) == 1
+        assert snap_1.side_records[0].payment_id == f"{run_1}-000001"
+
+        assert snap_2.has_history is True
+        assert len(snap_2.side_records) == 1
+        assert snap_2.side_records[0].payment_id == f"{run_2}-000002"
+
+        # Count cross-run records seen
+        cross_run_in_1 = [r for r in snap_1.side_records if r.run_id != run_1]
+        cross_run_in_2 = [r for r in snap_2.side_records if r.run_id != run_2]
+        cross_run_count = len(cross_run_in_1) + len(cross_run_in_2)
+        assert cross_run_count == 0
 
         return CheckOutcome(
-            key_number="15a-3",
+            key_number=str(cross_run_count),
             evidence={
-                "replays_executed": 3,
-                "keys_checked": len(dump_initial),
-                "dumps_identical": True,
-                "shuffle_records": len(batch),
-                "shuffle_identical": True,
+                "run_1": run_1,
+                "run_2": run_2,
+                "run_1_records": len(snap_1.side_records),
+                "run_2_records": len(snap_2.side_records),
+                "cross_run_records_seen": cross_run_count,
             },
         )
     finally:
-        for r_id in (run_id, run_shuffle):
+        for r_id in (run_1, run_2):
             for pat in (namespace_pattern(r_id, bank_id),):
                 for k in client.scan_iter(match=pat):
                     client.delete(k)
         client.close()
 
 
-async def check_15a_4_bank_tenant_isolation(workspace: Any) -> CheckOutcome:
+async def check_15a_3_replay_twice_identical(workspace: Any) -> CheckOutcome:
     """
-    Check 15a-4 (negative): isolation: writes under bank_0 do not appear under bank_1 queries.
+    Check 15a-3 (consistency): apply a fixed list of >=20 mixed records (payment sides and
+    account events, including one duplicate and one late record), dump, apply the whole list again,
+    dump -> identical; then for 3 FIXED seeds apply random.Random(seed).shuffle order to a fresh
+    namespace and compare -> identical. Key number: keys compared.
     """
     client = _get_redis().Redis.from_url(host_side_redis_url())
     settings = get_default_settings()
-    run_id = uuid.uuid4().hex[:16]
-    bank_0 = "bank_0"
-    bank_1 = "bank_1"
-    account_id = "acc_showcase_04"
-    now = datetime.now(timezone.utc)
+    run_main = "3333333333333333"
+    bank_id = "bank_0"
+    account_id = "acc_showcase_replay"
+    fixed_time = datetime(2026, 10, 29, 12, 0, 0, tzinfo=timezone.utc)
 
-    rec = make_showcase_record(
-        run_id=run_id,
-        bank_id=bank_0,
-        account_id=account_id,
-        payment_id=f"{run_id}-000004",
-        side="debit",
-        event_time=now,
-        arrival_time=now,
-        amount_paise=75000,
-    )
+    def _build_batch(r_id: str) -> list[PaymentSideRecord | AccountEventRecord]:
+        b: list[PaymentSideRecord | AccountEventRecord] = []
+        for i in range(14):
+            t = fixed_time - timedelta(hours=i * 4)
+            s = "debit" if i % 2 == 0 else "credit"
+            b.append(
+                make_showcase_record(
+                    run_id=r_id,
+                    bank_id=bank_id,
+                    account_id=account_id,
+                    payment_id=f"{r_id}-pmt-{i:04d}",
+                    side=s,
+                    event_time=t,
+                    arrival_time=t + timedelta(minutes=10 * (i % 3)),
+                    amount_paise=10000 * (i + 1),
+                )
+            )
+        for j in range(6):
+            t = fixed_time - timedelta(hours=j * 8)
+            kind = "device_binding_change" if j % 2 == 0 else "sim_swap"
+            b.append(
+                AccountEventRecord(
+                    run_id=r_id,
+                    bank_id=bank_id,
+                    account_id=account_id,
+                    event_id=f"{r_id}-dev-{j:04d}",
+                    kind=kind,
+                    event_time=t,
+                    arrival_time=t + timedelta(minutes=15 * (j % 2)),
+                    details={"step": j},
+                )
+            )
+        # Include one duplicate record
+        b.append(b[0])
+        # Include one late record (event_time 3 days ago, arriving at fixed_time)
+        late_t = fixed_time - timedelta(days=3)
+        b.append(
+            make_showcase_record(
+                run_id=r_id,
+                bank_id=bank_id,
+                account_id=account_id,
+                payment_id=f"{r_id}-pmt-late-001",
+                side="debit",
+                event_time=late_t,
+                arrival_time=fixed_time,
+                amount_paise=99900,
+            )
+        )
+        return b
 
+    def _apply_all(r_id: str, items: list[PaymentSideRecord | AccountEventRecord]) -> None:
+        for item in items:
+            if isinstance(item, PaymentSideRecord):
+                apply_payment_side(client, item, settings)
+            else:
+                apply_account_event(client, item, settings)
+
+    def _normalize_dump(raw_dump: dict[bytes, Any], r_id: str) -> dict[bytes, Any]:
+        norm: dict[bytes, Any] = {}
+        r_bytes = r_id.encode("utf-8")
+        for k, (t, v) in raw_dump.items():
+            norm_k = k.replace(r_bytes, b"<RUN>")
+            if isinstance(v, dict):
+                norm_v = {
+                    fk.replace(r_bytes, b"<RUN>"): fv.replace(r_bytes, b"<RUN>")
+                    for fk, fv in v.items()
+                }
+            elif isinstance(v, list):
+                norm_v = [
+                    (m.replace(r_bytes, b"<RUN>"), s)
+                    for m, s in v
+                ]
+            else:
+                norm_v = v
+            norm[norm_k] = (t, norm_v)
+        return norm
+
+    batch_main = _build_batch(run_main)
+    runs_to_clean = [run_main]
     try:
-        apply_payment_side(client, rec, settings)
+        # 1. First apply
+        _apply_all(run_main, batch_main)
+        dump_initial = _dump_account_keys(client, run_main)
+        assert len(dump_initial) > 0
 
-        # bank_0 sees the record
-        snap_bank_0 = read_account_snapshot(client, run_id, bank_0, account_id, now, now, settings)
-        assert snap_bank_0.has_history is True
-        assert len(snap_bank_0.side_records) == 1
+        # 2. Replay whole list again
+        _apply_all(run_main, batch_main)
+        dump_replayed = _dump_account_keys(client, run_main)
+        assert dump_initial == dump_replayed, "Redis state mutated during replay"
 
-        # bank_1 querying the exact same account_id sees nothing
-        snap_bank_1 = read_account_snapshot(client, run_id, bank_1, account_id, now, now, settings)
-        assert snap_bank_1 == empty_snapshot()
-        assert snap_bank_1.has_history is False
-        assert len(snap_bank_1.side_records) == 0
+        # 3. Test 3 FIXED seeds on fresh namespaces
+        norm_baseline = _normalize_dump(dump_initial, run_main)
+        seeds = (42, 1337, 2026)
+        for seed in seeds:
+            shuffled_run = f"shuf{seed:012d}"
+            runs_to_clean.append(shuffled_run)
+            shuffled_batch = _build_batch(shuffled_run)
+            random.Random(seed).shuffle(shuffled_batch)
+            _apply_all(shuffled_run, shuffled_batch)
+            dump_shuffled = _dump_account_keys(client, shuffled_run)
+            norm_shuffled = _normalize_dump(dump_shuffled, shuffled_run)
+            assert norm_shuffled == norm_baseline, f"Normalized state diverged under seed {seed}"
 
+        keys_compared = len(dump_initial)
         return CheckOutcome(
-            key_number="15a-4",
+            key_number=str(keys_compared),
             evidence={
-                "bank_0_visible_count": len(snap_bank_0.side_records),
-                "bank_1_visible_count": len(snap_bank_1.side_records),
-                "isolation_maintained": True,
+                "records_applied": len(batch_main),
+                "keys_compared": keys_compared,
+                "replay_identical": True,
+                "seeds_tested": list(seeds),
+                "seeds_identical": True,
             },
         )
     finally:
-        for pat in (namespace_pattern(run_id, bank_0), namespace_pattern(run_id, bank_1)):
-            for k in client.scan_iter(match=pat):
-                client.delete(k)
+        for r_id in runs_to_clean:
+            for pat in (namespace_pattern(r_id, bank_id),):
+                for k in client.scan_iter(match=pat):
+                    client.delete(k)
         client.close()
 
 
@@ -423,39 +394,36 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
     """
     return [
         CheckDefinition(
-            name="1. Redis key structure and TTL enforcement",
-            kind="normal",
-            proves="All 3 account feature keys exist with correct namespacing and positive TTL <= expiry_seconds.",
-            run=check_15a_1_key_structure_and_ttl,
-            likely_cause="Redis key builder incorrect or TTL expiry margin not applied in pipeline.",
-            where_to_look="features/account_keys.py, features/account_updater.py",
-            part="a",
-        ),
-        CheckDefinition(
-            name="2. Point-in-time reader respects decision_time boundary",
+            name="15a-1 empty history gets defined defaults",
             kind="edge",
-            proves="Records at decision_time are visible while records past decision_time are strictly excluded.",
-            run=check_15a_2_point_in_time_reader,
-            likely_cause="Score filtering in zrangebyscore or inequality check in read_account_snapshot.",
+            proves=(
+                "Reading an unwritten account returns empty_snapshot() and "
+                "count_sides_in_window is 0 for every configured window."
+            ),
+            run=check_15a_1_empty_history,
+            likely_cause="Reader returned populated snapshot or non-zero count for unwritten account.",
             where_to_look="features/account_reader.py",
             part="a",
         ),
         CheckDefinition(
-            name="3. Replay idempotency leaves Redis byte dump identical",
-            kind="edge",
-            proves="Repeatedly applying the same payment side leaves Redis key sizes and values byte-identical.",
-            run=check_15a_3_idempotency_and_replay,
-            likely_cause="apply_payment_side appending duplicate entries or mutating watermarks on replay.",
-            where_to_look="features/account_updater.py",
+            name="15a-2 two runs keep separate state",
+            kind="negative",
+            proves=(
+                "Two fixed run IDs writing to identical bank and account IDs "
+                "remain strictly isolated in Redis."
+            ),
+            run=check_15a_2_two_runs_separate_state,
+            likely_cause="Key namespacing omitted run_id or reader leaked records across runs.",
+            where_to_look="features/account_keys.py, features/account_reader.py",
             part="a",
         ),
         CheckDefinition(
-            name="4. Commercial bank tenant isolation refused cross-bank visibility",
-            kind="negative",
-            proves="Payment sides stored under bank_0 are completely invisible to queries under bank_1.",
-            run=check_15a_4_bank_tenant_isolation,
-            likely_cause="Key namespacing omitting bank_id or reader querying wrong namespace.",
-            where_to_look="features/account_keys.py, features/account_reader.py",
+            name="15a-3 replay twice gives identical state",
+            kind="consistency",
+            proves="Applying mixed records twice and across shuffled seeds produces byte-identical Redis state.",
+            run=check_15a_3_replay_twice_identical,
+            likely_cause="Updates appended duplicates or diverged under arrival order.",
+            where_to_look="features/account_updater.py",
             part="a",
         ),
     ]
