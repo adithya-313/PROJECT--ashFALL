@@ -11,6 +11,7 @@ every Redis key under {prefix}:{run_id}:{bank_id}:{account_id}:<suffix> ensures 
 between runs, banks, or customer accounts, and prevents key collision with Level 4 velocity keys.
 """
 
+import hashlib
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -45,11 +46,19 @@ class AccountFeaturesSettings:
     run_id_hex_length: int
     account_event_batch_size: int
     account_event_overlap_rows: int
+    summary_horizon_days: int = 62
+    routine_life_warm_up_days: int = 62
+    fingerprint_warning_count: int = 10
 
     @property
     def expiry_seconds(self) -> int:
         """Total Redis TTL in seconds: retention horizon + allowed lateness + housekeeping margin."""
         return self.retention_seconds + self.allowed_lateness_seconds + self.key_expiry_margin_seconds
+
+    @property
+    def summary_expiry_seconds(self) -> int:
+        """Total Redis TTL for long-lived summary structures: horizon + lateness + housekeeping margin."""
+        return (self.summary_horizon_days * 86400) + self.allowed_lateness_seconds + self.key_expiry_margin_seconds
 
 
 def load_account_features_settings(config_path: Path | None = None) -> AccountFeaturesSettings:
@@ -115,6 +124,10 @@ def load_account_features_settings(config_path: Path | None = None) -> AccountFe
     account_event_batch_size = int(block["account_event_batch_size"]["value"])
     account_event_overlap_rows = int(block.get("account_event_overlap_rows", {}).get("value", 200))
 
+    summary_horizon_days = int(block.get("summary_horizon_days", {}).get("value", 62))
+    routine_life_warm_up_days = int(block.get("routine_life_warm_up_days", {}).get("value", 62))
+    fingerprint_warning_count = int(block.get("fingerprint_warning_count", {}).get("value", 10))
+
     return AccountFeaturesSettings(
         windows_seconds=windows_seconds,
         retention_seconds=retention_seconds,
@@ -124,6 +137,9 @@ def load_account_features_settings(config_path: Path | None = None) -> AccountFe
         run_id_hex_length=run_id_hex_length,
         account_event_batch_size=account_event_batch_size,
         account_event_overlap_rows=account_event_overlap_rows,
+        summary_horizon_days=summary_horizon_days,
+        routine_life_warm_up_days=routine_life_warm_up_days,
+        fingerprint_warning_count=fingerprint_warning_count,
     )
 
 
@@ -247,9 +263,61 @@ def withdrawal_records_key(run_id: str, bank_id: str, account_id: str) -> str:
 def marks_key(run_id: str, bank_id: str, account_id: str) -> str:
     """
     Redis key for the sorted set (ZSET) holding watermark timestamps for the account.
-    Members: 'first_event', 'last_event', 'arrival_watermark'.
+    Members: 'first_event', 'last_event', 'arrival_watermark', 'last_active_day', 'opened_at'.
     """
     return _build_key(run_id, bank_id, account_id, "marks")
+
+
+def days_index_key(run_id: str, bank_id: str, account_id: str) -> str:
+    """
+    Redis key for the sorted set (ZSET) indexing active summary calendar days for an account.
+    Score: IST day ordinal integer; Member: IST day ordinal integer string.
+    """
+    return _build_key(run_id, bank_id, account_id, "days_index")
+
+
+def day_totals_key(run_id: str, bank_id: str, account_id: str, day: int) -> str:
+    """
+    Redis key for the hash (HASH) storing aggregate transaction totals for a single IST calendar day.
+    Fields: credit_count, credit_paise, debit_count, debit_paise, withdrawal_count, withdrawal_paise,
+    failed_attempt_count.
+    """
+    return _build_key(run_id, bank_id, account_id, f"day_totals_{day}")
+
+
+def day_seen_key(run_id: str, bank_id: str, account_id: str, day: int) -> str:
+    """
+    Redis key for the set (SET) tracking seen member identifiers for a single IST calendar day.
+    Members: 'payment_id:side' or 'withdrawal_id'.
+    """
+    return _build_key(run_id, bank_id, account_id, f"day_seen_{day}")
+
+
+def counterparty_days_key(run_id: str, bank_id: str, account_id: str, direction: str, counterparty: str) -> str:
+    """
+    Redis key for the sorted set (ZSET) tracking active days for a specific counterparty in a direction.
+    Score: IST day ordinal integer; Member: IST day ordinal integer string.
+    """
+    _validate_key_component("direction", direction)
+    counterparty_token = hashlib.sha256(counterparty.encode("utf-8")).hexdigest()[:16]
+    return _build_key(run_id, bank_id, account_id, f"cp_days_{direction}_{counterparty_token}")
+
+
+def counterparty_index_key(run_id: str, bank_id: str, account_id: str, direction: str) -> str:
+    """
+    Redis key for the sorted set (ZSET) indexing all counterparties for an account in a given direction.
+    Score: latest IST day ordinal integer (ZADD GT); Member: opaque counterparty string ('bank:vpa').
+    """
+    _validate_key_component("direction", direction)
+    return _build_key(run_id, bank_id, account_id, f"cp_index_{direction}")
+
+
+def fingerprints_key(run_id: str, bank_id: str, account_id: str) -> str:
+    """
+    Redis key for the sorted set (ZSET) tracking mobile device fingerprints observed on an account.
+    Score: Unix epoch seconds of earliest availability max(event_time, arrival_time); Member: fingerprint string.
+    """
+    return _build_key(run_id, bank_id, account_id, "fingerprints")
 
 
 def namespace_pattern(run_id: str, bank_id: str) -> str:

@@ -47,6 +47,7 @@ from features.account_records import (
     record_member,
     serialize_record,
 )
+from features.account_summaries import update_account_summaries
 from features.velocity import to_unix_seconds
 
 logger = logging.getLogger(__name__)
@@ -151,6 +152,7 @@ def apply_payment_side(
     pipeline.execute()
 
     # Trim records older than (last_event - (retention + allowed_lateness))
+    is_older_than_retention = False
     last_event_unix = client.zscore(m_key, "last_event")
     if last_event_unix is not None:
         cutoff = float(last_event_unix) - (cfg.retention_seconds + cfg.allowed_lateness_seconds)
@@ -165,8 +167,14 @@ def apply_payment_side(
                 event_unix,
                 cutoff,
             )
-            return "older_than_retention"
+            is_older_than_retention = True
 
+    # Summaries are written after the raw-window write; both are repeat-safe,
+    # so a crash between them is repaired by redelivery.
+    update_account_summaries(client, record, cfg)
+
+    if is_older_than_retention:
+        return "older_than_retention"
     return "stored"
 
 
@@ -216,6 +224,7 @@ def apply_account_event(
     pipeline.execute()
 
     # Trim events older than (last_event - (retention + allowed_lateness))
+    is_older_than_retention = False
     last_event_unix = client.zscore(m_key, "last_event")
     if last_event_unix is not None:
         cutoff = float(last_event_unix) - (cfg.retention_seconds + cfg.allowed_lateness_seconds)
@@ -229,8 +238,14 @@ def apply_account_event(
                 event_unix,
                 cutoff,
             )
-            return "older_than_retention"
+            is_older_than_retention = True
 
+    # Summaries are written after the raw-window write; both are repeat-safe,
+    # so a crash between them is repaired by redelivery.
+    update_account_summaries(client, record, cfg)
+
+    if is_older_than_retention:
+        return "older_than_retention"
     return "stored"
 
 
@@ -280,6 +295,7 @@ def apply_withdrawal(
     pipeline.execute()
 
     # Trim withdrawals older than (last_event - (retention + allowed_lateness))
+    is_older_than_retention = False
     last_event_unix = client.zscore(m_key, "last_event")
     if last_event_unix is not None:
         cutoff = float(last_event_unix) - (cfg.retention_seconds + cfg.allowed_lateness_seconds)
@@ -293,6 +309,12 @@ def apply_withdrawal(
                 event_unix,
                 cutoff,
             )
-            return "older_than_retention"
+            is_older_than_retention = True
 
+    # Summaries are written after the raw-window write; both are repeat-safe,
+    # so a crash between them is repaired by redelivery.
+    update_account_summaries(client, record, cfg)
+
+    if is_older_than_retention:
+        return "older_than_retention"
     return "stored"

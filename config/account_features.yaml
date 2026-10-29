@@ -54,3 +54,21 @@ account_features:
     reason: "re-read the tail of committed events so out-of-order transaction commits are not skipped"
     derived_from: "Level 15 architect decision 5"
 
+  summary_horizon_days:
+    label: policy
+    value: 62
+    reason: "Defines the summary look-back horizon in whole days for routine-life and counterparty features."
+    derived_from: "two monthly cycles plus slack, because pay dates shift around weekends and holidays"
+
+  routine_life_warm_up_days:
+    label: policy
+    value: 62
+    reason: "Minimum history duration required before routine-life features mean anything."
+    derived_from: "a world must run at least one horizon before routine-life features mean anything"
+
+  fingerprint_warning_count:
+    label: assumption
+    value: 10
+    reason: "Threshold of distinct device fingerprints above which a warning is logged naming the account."
+    derived_from: "real accounts have few devices; more is itself a signal and is reported, never dropped"
+
