@@ -327,6 +327,7 @@ async def check_15a_3_replay_twice_identical(workspace: Any) -> CheckOutcome:
         r_bytes = r_id.encode("utf-8")
         for k, (t, v) in raw_dump.items():
             norm_k = k.replace(r_bytes, b"<RUN>")
+            norm_v: Any
             if isinstance(v, dict):
                 norm_v = {
                     fk.replace(r_bytes, b"<RUN>"): fv.replace(r_bytes, b"<RUN>")
