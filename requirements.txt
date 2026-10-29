@@ -60,8 +60,8 @@ mypy==1.10.0
 
 # --- Test dependencies ---
 
-# pytest — the test runner. Discovers and executes all test_*.py files.
-pytest==8.3.5
+# pytest — the test runner. Discovers and executes all test_*.py files. Raised to 8.4.2 so schemathesis (>=8.4,<10) can install.
+pytest==8.4.2
 
 # anyio with trio backend — provides the @pytest.mark.anyio decorator used in async tests.
 # The [trio] extra installs the trio event loop which anyio's pytest plugin can use.

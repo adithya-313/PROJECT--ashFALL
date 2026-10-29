@@ -1,0 +1,95 @@
+# =====================================================================
+# BANK FEED: configuration for projecting world simulation records to
+# bank-visible event feeds.
+# =====================================================================
+
+bank_feed:
+  bank_ids_by_index:
+    label: policy
+    reason: "Maps integer simulation bank indices to registered commercial bank identifiers."
+    derived_from: "config/bank_api.yaml"
+    issue_ids_v2: [K2, 14-8, 14-10]
+    mapping:
+      0: bank_0
+      1: bank_1
+      2: bank_2
+
+  payee_type_by_account_prefix:
+    label: policy
+    reason: "Maps simulation account prefixes to bank-visible payee classification (person or merchant)."
+    derived_from: "world/interactive_state.py"
+    issue_ids_v2: [K2, 14-8]
+    mapping:
+      acc_person_: person
+      acc_shop_: merchant
+
+  channel_value:
+    label: assumption
+    value: upi_app
+    reason: "the world records no channel; every simulated payment is app-initiated UPI. A real per-payment channel is a known gap."
+    derived_from: "Level 14c plan task 4"
+    issue_ids_v2: [14-8, X3]
+
+  decision_timeout_seconds:
+    label: policy
+    value: 2.0
+    derived_from: "config/nationalsim.yaml client_timeout_seconds"
+    reason: "a slow fraud check must not hold up a payment longer than a bank call to the national systems may"
+    issue_ids_v2: [14-8, 14-10]
+
+  failed_payment_visibility:
+    label: policy
+    reason: "in a switch outage (npci_central) or a sender-side/app/customer failure the request never reached the receiving bank."
+    derived_from: "Level 14c plan task 4 (R7)"
+    issue_ids_v2: [R7, 14-8, 14-10]
+    domains:
+      npci_central:
+        sender: true
+        receiver: false
+      sender_bank:
+        sender: true
+        receiver: false
+      receiver_bank:
+        sender: true
+        receiver: true
+      app_or_network:
+        sender: true
+        receiver: false
+      customer:
+        sender: true
+        receiver: false
+
+  device_event_kind_map:
+    label: policy
+    reason: "Maps world simulation device and gang event kinds to standardized bank API account-event kinds."
+    derived_from: "api/v1/models.py"
+    issue_ids_v2: [K2, 14-8, 14-10]
+    mapping:
+      phone_change: device_binding_change
+      reinstall: app_reinstall
+      os_update: os_update
+      sim_swap: sim_swap
+
+  unmapped_gang_device_kinds:
+    label: policy
+    reason: "no bank-visible account-event kind exists"
+    derived_from: "world/gang_devices.py"
+    issue_ids_v2: [K2, 14-8, 14-10]
+    kinds:
+      - device_acquired
+      - linked_number_switch
+      - emulator_enabled
+      - remote_access_enabled
+
+  allowed_account_event_kinds:
+    label: policy
+    reason: "The 6 allowed account-event kinds accepted by the commercial bank API."
+    derived_from: "api/v1/models.py"
+    issue_ids_v2: [14-8, 14-10]
+    kinds:
+      - device_binding_change
+      - sim_swap
+      - app_reinstall
+      - os_update
+      - account_opened
+      - account_reactivated

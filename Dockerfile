@@ -21,10 +21,11 @@ COPY api/ api/
 COPY core/ core/
 COPY infra/ infra/
 
-# The nationalsim Compose service reuses this image and needs its code and its settings file.
-# Copy only that one config file, not the whole config/ folder.
+# The nationalsim and api Compose services reuse this image and need their code and settings files.
+# Copy only those two config files (nationalsim.yaml and bank_api.yaml), not the whole config/ folder.
 COPY nationalsim/ nationalsim/
 COPY config/nationalsim.yaml config/nationalsim.yaml
+COPY config/bank_api.yaml config/bank_api.yaml
 
 # PYTHONPATH=/app ensures "from core.config import config" and "api.main:app" resolve.
 ENV PYTHONPATH=/app

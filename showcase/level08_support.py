@@ -14,7 +14,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 # Only these tracked folders and files are copied for check 2 (enough to import the API and run the baseline tests).
 COPY_FOLDERS = ["api", "core", "features", "scripts", "tests", "reports/model", "reports/calibration"]
-COPY_FILES = ["docker-compose.yml", "pyproject.toml", ".env.example"]
+COPY_FILES = ["docker-compose.yml", "pyproject.toml", ".env.example", "config/bank_api.yaml"]
 RESPONSE_FILE = "api/routers/scoring.py"
 DVC_TIMEOUT = 180
 

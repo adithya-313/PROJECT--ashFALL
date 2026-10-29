@@ -18,6 +18,9 @@ EXPECTED_TRANSACTION_COLUMNS = [
     "id", "transaction_id", "source", "account_id", "merchant_id", "amount", "device_fingerprint",
     "geo_coordinates", "txn_type", "old_balance_orig", "new_balance_orig", "old_balance_dest",
     "new_balance_dest", "fraud_score", "model_version", "details", "created_at",
+    "payment_id", "bank_id", "side", "counterparty_vpa", "counterparty_bank_id", "amount_paise",
+    "event_time", "status", "failure_domain", "payee_type", "channel",
+    "sender_device_fingerprint", "sender_os_generation",
 ]
 
 
@@ -41,15 +44,19 @@ async def test_fresh_schema_applies_all_migrations_in_order(empty_schema):
 
     applied_count = await apply_pending_migrations(connection)
 
-    # All files applied (we expect 5 today), and the tracking table lists exactly those names.
-    assert applied_count == len(real_filenames) == 5
+    # All files applied (we expect 8 today), and the tracking table lists exactly those names.
+    assert applied_count == len(real_filenames) == 8
     assert await applied_filenames(connection) == real_filenames
     assert real_filenames == sorted(real_filenames)
 
     # The tables were created inside THIS schema, not in public.
     tables = await table_names_in_schema(connection, schema_name)
-    expected_tables = {"transactions", "outbox", "processed_events", "demo_event_counts", "outbox_dead_letter",
-                       "national_outbox", "schema_migrations"}
+    expected_tables = {
+        "transactions", "outbox", "processed_events", "demo_event_counts", "outbox_dead_letter",
+        "national_outbox", "bank_api_keys", "schema_migrations",
+        "bank_request_nonces", "bank_idempotency_keys", "bank_decision_requests",
+        "bank_account_events", "bank_complaints", "bank_feedback",
+    }
     assert expected_tables <= tables
 
 
@@ -60,9 +67,9 @@ async def test_second_run_applies_nothing(empty_schema):
     first_count = await apply_pending_migrations(connection)
     second_count = await apply_pending_migrations(connection)
 
-    assert first_count == len(find_migration_files()) == 5
+    assert first_count == len(find_migration_files()) == 8
     assert second_count == 0
-    assert len(await applied_filenames(connection)) == 5
+    assert len(await applied_filenames(connection)) == 8
 
 
 async def test_failed_migration_is_not_recorded(empty_schema, tmp_path):
@@ -86,7 +93,7 @@ async def test_failed_migration_is_not_recorded(empty_schema, tmp_path):
 
 
 async def test_transactions_table_column_count_is_locked(isolated_schema):
-    """The transactions table has exactly the 17 locked columns, in order."""
+    """The transactions table has exactly the 28 locked columns, in order."""
     connection, schema_name = isolated_schema
 
     rows = await connection.fetch(
@@ -99,7 +106,7 @@ async def test_transactions_table_column_count_is_locked(isolated_schema):
     )
     column_names = [row["column_name"] for row in rows]
 
-    assert len(column_names) == 17
+    assert len(column_names) == 30
     assert column_names == EXPECTED_TRANSACTION_COLUMNS
 
 

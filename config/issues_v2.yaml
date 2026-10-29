@@ -74,20 +74,24 @@ issues:
   K2:
     title: "events-v1 carries simulator-only fields"
     origin: revision_2
-    status: planned
+    status: partial
     levels: [4, 14, 16, 18, 27, 29, 43]
+    parts: [14c]
+    evidence:
+      - {kind: test, file: tests/unit/world/test_bank_feed.py, name: test_full_world_schema_and_counts}
     later_work: ["Level 4: World-side only; bank-feed projection; ground rule 29"]
   K3:
     title: "No unique payment identity; transfer_id repeats for split legs"
     origin: revision_2
     status: partial
     levels: [12, 14, 16, 23, 32]
-    parts: [12a]
+    parts: [12a, 14a]
     evidence:
       - {kind: config, file: config/interactive_runner.yaml, name: interactive_runner}
       - {kind: test, file: tests/unit/world/test_run_identity.py, name: test_payment_ids_are_unique_and_well_formed}
       - {kind: test, file: tests/unit/world/test_interactive_events.py, name: test_lines_have_v1_fields_plus_two_ids_and_nothing_revealing}
       - {kind: test, file: tests/unit/world/test_interactive_runner_fraud_on.py, name: test_split_world_has_genuine_splits_and_same_ids_on_both_paths}
+      - {kind: test, file: tests/integration/test_upi_schema_0006.py, name: test_same_bank_payment_side_is_unique}
     later_work: ["Level 14: payment_id, bank_id and side on the bank side (finding 14-2)", "Level 16: carry payment_id through labels", "Level 23: carry payment_id through the money tracer", "Level 32: carry payment_id through later levels"]
   K4:
     title: "The world has no database"
@@ -158,10 +162,12 @@ issues:
     origin: revision_2
     status: partial
     levels: [12, 14, 15]
-    parts: [12a]
+    parts: [12a, 14b, 14c]
     evidence:
       - {kind: test, file: tests/unit/world/test_interactive_runner_switch.py, name: test_fraud_off_adds_ids_and_device_events_in_memory}
-    later_work: ["Level 14: POST /v1/account-events to receive account events", "Level 15: features read the runner device stream"]
+      - {kind: test, file: tests/integration/test_bank_endpoints.py, name: test_account_events_contract}
+      - {kind: test, file: tests/unit/world/test_bank_feed.py, name: test_device_event_mapping_and_counts_on_tiny_world}
+    later_work: ["Level 15: features read the runner device stream"]
   X4:
     title: "Who holds the hashing secret was unspecified"
     origin: revision_2
@@ -575,87 +581,121 @@ issues:
   14-2:
     title: "A cross-bank payment's two sides had no shared key"
     origin: revision_2
-    status: planned
+    status: built
     levels: [14]
     parts: [14a]
-    later_work: ["Level 14a: payment_id, bank_id, side"]
+    evidence:
+      - {kind: test, file: tests/integration/test_upi_schema_0006.py, name: test_same_bank_payment_side_is_unique}
+      - {kind: test, file: tests/integration/test_upi_outbox_writer.py, name: test_same_side_sent_twice_is_replay}
+      - {kind: test, file: tests/integration/test_upi_outbox_writer.py, name: test_cross_bank_payment}
   14-4:
     title: "Signature freshness against simulated time would reject replays"
     origin: revision_2
-    status: planned
+    status: built
     levels: [14]
     parts: [14b]
-    later_work: ["Level 14b: Wall-clock transport time"]
+    evidence:
+      - {kind: test, file: tests/integration/test_bank_endpoints.py, name: test_fast_replay_old_event_time_fresh_signature_accepted}
+      - {kind: test, file: tests/integration/test_bank_endpoints.py, name: test_stale_signature_refused}
   14-6:
     title: "Live mode had nowhere to send held payments before Level 22"
     origin: revision_2
-    status: planned
+    status: built
     levels: [14, 19]
     parts: [14c]
-    later_work: ["Level 14c: Allow-only until Level 19"]
+    evidence:
+      - {kind: test, file: tests/unit/world/test_bank_connectors.py, name: test_live_mode_counts_fallback_for_unscored}
   14-8:
     title: "No payee type or channel for features"
     origin: revision_2
-    status: planned
+    status: built
     levels: [14]
     parts: [14a, 14c]
-    later_work: ["Level 14a: Columns and projection"]
+    evidence:
+      - {kind: test, file: tests/integration/test_upi_schema_0006.py, name: test_0006_applies_on_top_of_0004_and_old_rows_still_read}
+      - {kind: test, file: tests/integration/test_migration_runner.py, name: test_transactions_table_column_count_is_locked}
+      - {kind: test, file: tests/unit/world/test_bank_feed.py, name: test_payee_type_resolution_and_invalid_prefix}
   14-9:
     title: "Idempotency, keys and error handling underspecified"
     origin: revision_2
-    status: planned
+    status: built
     levels: [14]
     parts: [14a, 14b]
-    later_work: ["Level 14a: Per-bank scope and 409; hashed keys with rotation; fuzzing"]
+    evidence:
+      - {kind: test, file: tests/integration/test_bank_isolation.py, name: test_rotation_old_and_new_key_work_until_revoked}
+      - {kind: test, file: tests/integration/test_bank_isolation.py, name: test_revoked_key_resolves_to_none}
+      - {kind: test, file: tests/integration/test_bank_isolation.py, name: test_malformed_and_wrong_secret_keys_resolve_to_none}
+      - {kind: test, file: tests/integration/test_bank_idempotency.py, name: test_same_key_with_different_hash_yields_conflict}
+      - {kind: test, file: tests/integration/test_bank_endpoints.py, name: test_same_key_different_body_returns_409}
   14-10:
     title: "Failed-payment visibility depends on the failure domain"
     origin: revision_2
-    status: planned
+    status: built
     levels: [14]
     parts: [14c]
-    later_work: ["Level 14c: Encoded and tested"]
+    evidence:
+      - {kind: test, file: tests/unit/world/test_bank_feed.py, name: test_r7_visibility_rules_per_domain}
   14-11:
     title: "Idempotency, keys and error handling underspecified"
     origin: revision_2
-    status: planned
+    status: built
     levels: [14]
     parts: [14a, 14b]
-    later_work: ["Level 14a: Per-bank scope and 409; hashed keys with rotation; fuzzing"]
+    evidence:
+      - {kind: test, file: tests/integration/test_bank_isolation.py, name: test_rotation_old_and_new_key_work_until_revoked}
+      - {kind: test, file: tests/integration/test_bank_isolation.py, name: test_revoked_key_resolves_to_none}
+      - {kind: test, file: tests/integration/test_bank_isolation.py, name: test_malformed_and_wrong_secret_keys_resolve_to_none}
+      - {kind: test, file: tests/integration/test_bank_idempotency.py, name: test_same_key_with_different_hash_yields_conflict}
+      - {kind: test, file: tests/integration/test_bank_endpoints.py, name: test_same_key_different_body_returns_409}
   14-12:
     title: "Idempotency, keys and error handling underspecified"
     origin: revision_2
-    status: planned
+    status: built
     levels: [14]
     parts: [14a, 14b]
-    later_work: ["Level 14a: Per-bank scope and 409; hashed keys with rotation; fuzzing"]
+    evidence:
+      - {kind: test, file: tests/integration/test_bank_isolation.py, name: test_rotation_old_and_new_key_work_until_revoked}
+      - {kind: test, file: tests/integration/test_bank_isolation.py, name: test_revoked_key_resolves_to_none}
+      - {kind: test, file: tests/integration/test_bank_isolation.py, name: test_malformed_and_wrong_secret_keys_resolve_to_none}
+      - {kind: test, file: tests/integration/test_bank_idempotency.py, name: test_same_key_with_different_hash_yields_conflict}
+      - {kind: test, file: tests/integration/test_bank_endpoints.py, name: test_same_key_different_body_returns_409}
   14-13:
     title: "chk_source rejects UPI rows; \"migration 0002\" already used"
     origin: revision_2
-    status: planned
+    status: built
     levels: [14]
     parts: [14a]
-    later_work: ["Level 14a: Migration 0006"]
+    evidence:
+      - {kind: test, file: tests/integration/test_upi_schema_0006.py, name: test_0006_applies_on_top_of_0004_and_old_rows_still_read}
+      - {kind: test, file: tests/integration/test_upi_schema_0006.py, name: test_world_row_requires_its_fields}
   14-14:
     title: "Outbox schema \"1\" is locked; processed_events expects UUIDs"
     origin: revision_2
-    status: planned
+    status: built
     levels: [14]
     parts: [14a]
-    later_work: ["Level 14a: Schema \"2\"; UUIDv5 IDs"]
+    evidence:
+      - {kind: test, file: tests/integration/test_upi_outbox_writer.py, name: test_cross_bank_payment}
+      - {kind: test, file: tests/unit/test_upi_relay_topic.py, name: test_v2_payload_routes_to_kafka_upi_topic}
   14-15:
     title: "Outbox schema \"1\" is locked; processed_events expects UUIDs"
     origin: revision_2
-    status: planned
+    status: built
     levels: [14]
     parts: [14a]
-    later_work: ["Level 14a: Schema \"2\"; UUIDv5 IDs"]
+    evidence:
+      - {kind: test, file: tests/integration/test_upi_outbox_writer.py, name: test_cross_bank_payment}
+      - {kind: test, file: tests/unit/test_upi_relay_topic.py, name: test_v2_payload_routes_to_kafka_upi_topic}
   14-16:
     title: "Level 11's \"signed envelope\" is not actually signed"
     origin: revision_2
-    status: planned
+    status: built
     levels: [14]
     parts: [14b]
-    later_work: ["Level 14b: Signing built in 14b"]
+    evidence:
+      - {kind: test, file: tests/unit/test_bank_signing.py, name: test_tampering_any_parameter_changes_signature}
+      - {kind: test, file: tests/integration/test_bank_request_auth.py, name: test_good_request_authenticates_successfully}
+      - {kind: test, file: tests/integration/test_bank_request_auth.py, name: test_step_7_bad_signature}
   15-1:
     title: "Velocity already uses event time; a 7-day window needs its own expiry"
     origin: revision_2
@@ -909,10 +949,12 @@ issues:
   R7:
     title: "Failed payments in the transaction feed"
     origin: level_11
-    status: planned
+    status: built
     levels: [14]
+    parts: [14c]
     v1_status: planned
-    later_work: ["Level 14: bank APIs and transaction feed"]
+    evidence:
+      - {kind: test, file: tests/integration/test_bank_connectors_end_to_end.py, name: test_d_failed_payment_r7_visibility}
   R8:
     title: "Device and routine-life feature fixes"
     origin: level_11
