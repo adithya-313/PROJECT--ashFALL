@@ -37,10 +37,13 @@ from features.account_keys import (
     marks_key,
     side_records_key,
     side_times_key,
+    withdrawal_records_key,
+    withdrawal_times_key,
 )
 from features.account_records import (
     AccountEventRecord,
     PaymentSideRecord,
+    WithdrawalRecord,
     record_member,
     serialize_record,
 )
@@ -222,6 +225,70 @@ def apply_account_event(
             logger.info(
                 "Account event %s for account %s is older than retention horizon (event=%s, cutoff=%s)",
                 record.event_id,
+                record.account_id,
+                event_unix,
+                cutoff,
+            )
+            return "older_than_retention"
+
+    return "stored"
+
+
+def apply_withdrawal(
+    client: Any,
+    record: WithdrawalRecord,
+    settings: AccountFeaturesSettings | None = None,
+) -> str:
+    """
+    WHAT: Atomically writes a WithdrawalRecord to Redis and prunes records older than retention.
+
+    WHY: Updates the account's cash withdrawal time-series and watermark marks in a single atomic
+    pipeline. If the record's timestamp falls behind the retention horizon (last_event - retention),
+    it is written and trimmed in the same call and reported as 'older_than_retention'.
+
+    Args:
+        client: Redis or FakeRedis client instance.
+        record: Validated WithdrawalRecord to apply.
+        settings: Optional AccountFeaturesSettings; defaults to repository configuration.
+
+    Returns:
+        'stored' if the record remains within the retention horizon, or
+        'older_than_retention' if the record is older than (last_event - retention).
+    """
+    cfg = settings if settings is not None else get_default_settings()
+
+    wt_key = withdrawal_times_key(record.run_id, record.bank_id, record.account_id)
+    wr_key = withdrawal_records_key(record.run_id, record.bank_id, record.account_id)
+    m_key = marks_key(record.run_id, record.bank_id, record.account_id)
+
+    member = record_member(record)
+    event_unix = to_unix_seconds(record.event_time)
+    arrival_unix = to_unix_seconds(record.arrival_time)
+    payload_bytes = serialize_record(record)
+    ttl_seconds = cfg.expiry_seconds
+
+    # Atomic write pipeline (MULTI/EXEC)
+    pipeline = client.pipeline(transaction=True)
+    pipeline.zadd(wt_key, {member: event_unix})
+    pipeline.hset(wr_key, member, payload_bytes)
+    pipeline.zadd(m_key, {"first_event": event_unix}, lt=True)
+    pipeline.zadd(m_key, {"last_event": event_unix}, gt=True)
+    pipeline.zadd(m_key, {"arrival_watermark": arrival_unix}, gt=True)
+    pipeline.expire(wt_key, ttl_seconds)
+    pipeline.expire(wr_key, ttl_seconds)
+    pipeline.expire(m_key, ttl_seconds)
+    pipeline.execute()
+
+    # Trim withdrawals older than (last_event - (retention + allowed_lateness))
+    last_event_unix = client.zscore(m_key, "last_event")
+    if last_event_unix is not None:
+        cutoff = float(last_event_unix) - (cfg.retention_seconds + cfg.allowed_lateness_seconds)
+        _trim_expired(client, wt_key, wr_key, f"({cutoff}")
+
+        if event_unix < cutoff:
+            logger.info(
+                "Withdrawal %s for account %s is older than retention horizon (event=%s, cutoff=%s)",
+                record.withdrawal_id,
                 record.account_id,
                 event_unix,
                 cutoff,

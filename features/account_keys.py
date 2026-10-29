@@ -228,6 +228,22 @@ def event_records_key(run_id: str, bank_id: str, account_id: str) -> str:
     return _build_key(run_id, bank_id, account_id, "event_records")
 
 
+def withdrawal_times_key(run_id: str, bank_id: str, account_id: str) -> str:
+    """
+    Redis key for the sorted set (ZSET) tracking cash withdrawal event timestamps.
+    Score: Unix epoch seconds; Member: withdrawal_id.
+    """
+    return _build_key(run_id, bank_id, account_id, "withdrawal_times")
+
+
+def withdrawal_records_key(run_id: str, bank_id: str, account_id: str) -> str:
+    """
+    Redis key for the hash (HASH) storing serialized WithdrawalRecord payloads.
+    Field: withdrawal_id; Value: JSON payload bytes.
+    """
+    return _build_key(run_id, bank_id, account_id, "withdrawal_records")
+
+
 def marks_key(run_id: str, bank_id: str, account_id: str) -> str:
     """
     Redis key for the sorted set (ZSET) holding watermark timestamps for the account.
