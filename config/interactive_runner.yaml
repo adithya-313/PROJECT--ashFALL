@@ -72,6 +72,7 @@ interactive_runner:
   #   14  gang_observation_feed    how late a gang hears about a lien, and whether it misses it
   #   15  gang_reactions           which reaction rules each gang follows
   #   16  account_market           which burned accounts are resold to a later gang
+  #   23  account_opening_dates    how long each starting account had been open
   #
   # Example
   #   With seed 101, child 4 is the fifth supply split off that seed. Moving
@@ -105,8 +106,10 @@ interactive_runner:
     bulk_confirmations: 21
     # Child 22 draws each sampled world's gang mix before the run (world/gang_mix.py, Level 12f); the world loop never reads it.
     gang_mix: 22
+    # Child 23 draws realistic opening dates for accounts that exist at the start.
+    account_opening_dates: 23
   # The reason for the numbers above, as the project wrote it (kept as is).
-  random_stream_children_reason: Children 0-3 belong to Level 11 and must never be touched. Children 4-5 handle failure decisions. Child 6 is reserved for gang devices (Level 12b B-2b) and child 7 provides planning randomness for gangs (D6). Children 8 and 9 handle mid-run account openings for genuine agents and criminal gangs respectively, isolating draw sequences across operational domains. Child 10 decides whether a new genuine person has a routine and plans it, child 11 takes the failure draws of those routine payments, child 12 decides which outgoing payments of a rented mule's owner are paused, child 13 evaluates failure draws for cash withdrawals, child 14 evaluates gang observation feed delivery delays and miss draws, child 15 evaluates gang reaction decision rules, and child 16 evaluates account market resale decisions between criminal syndicates. Each component gets its own stream so its draws never shift another stream's draws.
+  random_stream_children_reason: Children 0-3 belong to Level 11 and must never be touched. Children 4-5 handle failure decisions. Child 6 is reserved for gang devices (Level 12b B-2b) and child 7 provides planning randomness for gangs (D6). Children 8 and 9 handle mid-run account openings for genuine agents and criminal gangs respectively, isolating draw sequences across operational domains. Child 10 decides whether a new genuine person has a routine and plans it, child 11 takes the failure draws of those routine payments, child 12 decides which outgoing payments of a rented mule's owner are paused, child 13 evaluates failure draws for cash withdrawals, child 14 evaluates gang observation feed delivery delays and miss draws, child 15 evaluates gang reaction decision rules, and child 16 evaluates account market resale decisions between criminal syndicates. Each component gets its own stream so its draws never shift another stream's draws. Child 23 draws realistic opening dates for accounts that exist at the start.
   # ---------------------------------------------------------------------
   # tie_break_order: who goes first when several things happen in the same minute
   #
