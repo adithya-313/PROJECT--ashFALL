@@ -17,6 +17,10 @@ BankMode = Literal["shadow", "live"]
 # The one list of allowed modes: the Literal above, so the config check and the response models cannot drift apart.
 BANK_MODES: tuple[str, ...] = get_args(BankMode)
 IDENTIFIER_PATTERN: str = r"^[A-Za-z0-9_.:@-]+$"
+# largest value a Postgres BIGINT column holds (transactions.balance_after_paise, bank_withdrawals.balance_after_paise)
+POSTGRES_BIGINT_MAX = 9_223_372_036_854_775_807
+# largest value a Postgres INTEGER column holds (transactions.sender_os_generation, migration 0008)
+POSTGRES_INTEGER_MAX = 2_147_483_647
 
 
 @dataclass(frozen=True)
@@ -193,8 +197,8 @@ class TransactionSideRequest(ApiModel):
     payee_type: Identifier | None = None
     channel: Identifier | None = None
     sender_device_fingerprint: Identifier | None = None
-    sender_os_generation: Annotated[int, Field(strict=True, ge=0)] | None = None
-    balance_after_paise: Annotated[int, Field(strict=True, ge=0)] | None = None
+    sender_os_generation: Annotated[int, Field(strict=True, ge=0, le=POSTGRES_INTEGER_MAX)] | None = None
+    balance_after_paise: Annotated[int, Field(strict=True, ge=0, le=POSTGRES_BIGINT_MAX)] | None = None
 
 
 class TransactionResponse(ApiModel):
@@ -277,7 +281,7 @@ class WithdrawalRequest(ApiModel):
         "npci_central", "sender_bank", "receiver_bank", "app_or_network", "customer"
     ] | None = None
     event_time: AwareDatetime
-    balance_after_paise: Annotated[int, Field(strict=True, ge=0)] | None = None
+    balance_after_paise: Annotated[int, Field(strict=True, ge=0, le=POSTGRES_BIGINT_MAX)] | None = None
 
     @model_validator(mode="after")
     def _validate_failure_domain(self) -> "WithdrawalRequest":
