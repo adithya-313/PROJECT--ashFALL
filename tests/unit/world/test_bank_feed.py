@@ -257,7 +257,8 @@ def test_device_event_mapping_and_counts_on_tiny_world(tiny_world_output: Intera
     total_raw_device_events = len(tiny_world_output.result.applied_device_events)
 
     assert total_raw_device_events == 32
-    assert total_projected + total_dropped == 32
+    # 32 device events + 72 existing accounts = 104 total projected and dropped account events
+    assert total_projected + total_dropped == 104
 
     # Verify that at least one phone_change was mapped to device_binding_change with clean details.
     all_account_events = [ev for bank_events in feed.account_events_by_bank.values() for ev in bank_events]
@@ -292,7 +293,7 @@ def test_opened_account_drops_owner_kind(tiny_world_output: InteractiveWorldOutp
     assert ev.kind == "account_opened"
     assert ev.bank_id == "bank_1"
     assert ev.event_id == f"{tiny_world_output.result.run_id}-open-acc_person_000999"
-    assert ev.details == {}
+    assert ev.details == {"home_region": 1}
 
     ev_dict = asdict(ev)
     assert "owner_kind" not in ev_dict

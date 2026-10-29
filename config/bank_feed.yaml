@@ -93,3 +93,10 @@ bank_feed:
       - os_update
       - account_opened
       - account_reactivated
+
+  emit_opening_for_existing_accounts:
+    label: policy
+    value: true
+    reason: "Commercial banks require account_opened lifecycle events for pre-existing accounts at simulation start."
+    derived_from: "Level 15 architect decision 3A"
+

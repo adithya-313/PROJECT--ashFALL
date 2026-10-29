@@ -10,7 +10,7 @@ or core banking system would provide. Simulation-internal fields like fraud grou
 episode purposes, switch outage details unseen by receiving banks, and device flags must be scrubbed.
 """
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
 from typing import Any, Sequence
 
@@ -57,6 +57,7 @@ class BankFeedPaymentSide:
     counterparty_vpa: str | None = None
     sender_device_fingerprint: str | None = None
     sender_os_generation: int | None = None
+    balance_after_paise: int | None = None
 
 
 BANK_VISIBLE_PAYMENT_FIELDS: frozenset[str] = frozenset(
@@ -77,8 +78,45 @@ BANK_VISIBLE_PAYMENT_FIELDS: frozenset[str] = frozenset(
         "counterparty_vpa",
         "sender_device_fingerprint",
         "sender_os_generation",
+        "balance_after_paise",
     }
 )
+
+ACCOUNT_OPENED_DETAIL_FIELDS: frozenset[str] = frozenset({"home_region"})
+
+
+@dataclass(frozen=True)
+class BankFeedWithdrawal:
+    """
+    WHAT: Represents a cash withdrawal (ATM or branch) visible to a commercial bank.
+    WHY: Commercial banks observe cash extractions made on their accounts with running balances.
+    """
+
+    withdrawal_id: str
+    bank_id: str
+    account_id: str
+    channel: str
+    amount_paise: int
+    status: str
+    failure_domain: str | None
+    event_time: datetime
+    balance_after_paise: int | None
+
+
+BANK_VISIBLE_WITHDRAWAL_FIELDS: frozenset[str] = frozenset(
+    {
+        "withdrawal_id",
+        "bank_id",
+        "account_id",
+        "channel",
+        "amount_paise",
+        "status",
+        "failure_domain",
+        "event_time",
+        "balance_after_paise",
+    }
+)
+
 
 BANK_VISIBLE_ACCOUNT_EVENT_FIELDS: frozenset[str] = frozenset(
     {
@@ -201,6 +239,8 @@ class BankFeed:
     account_events_by_bank: dict[str, tuple[BankFeedAccountEvent, ...]]
     complaints_by_bank: dict[str, tuple[BankFeedComplaint, ...]]
     dropped_device_events_by_kind: dict[str, int]
+    withdrawals_by_bank: dict[str, tuple[BankFeedWithdrawal, ...]] = field(default_factory=dict)
+
 
 
 def check_bank_visible(record: dict[str, Any], allowed: frozenset[str]) -> None:
@@ -223,13 +263,123 @@ def check_bank_visible(record: dict[str, Any], allowed: frozenset[str]) -> None:
         raise ProjectionLeakError(f"Record contains bank-invisible fields: {unexpected_keys}")
 
 
+class BalanceReplay:
+    """
+    WHAT: Replayed running balances from bank ledgers.
+    WHY: Associates each ledger entry with the account balance immediately after that entry posted.
+    """
+
+    def __init__(
+        self,
+        balances_by_transfer: dict[tuple[str, str], list[int]],
+        balances_by_account: dict[str, int],
+        account_history: dict[str, list[tuple[int, int]]],
+    ) -> None:
+        self._balances = balances_by_transfer
+        self._cursors: dict[tuple[str, str], int] = {}
+        self._balances_by_account = balances_by_account
+        self._account_history = account_history
+
+    def get_balance_after(self, account_id: str, transfer_id: str) -> int:
+        """
+        Returns the running balance of account_id after the specific occurrence of transfer_id.
+        Advances cursor so identical payments in the same minute get monotonic balances.
+        """
+        key = (account_id, transfer_id)
+        if key not in self._balances:
+            raise ValueError(f"No ledger entry found for account {account_id!r} and transfer {transfer_id!r}")
+        idx = self._cursors.get(key, 0)
+        lst = self._balances[key]
+        if idx >= len(lst):
+            raise ValueError(f"Exhausted occurrences for account {account_id!r} and transfer {transfer_id!r}")
+        bal = lst[idx]
+        self._cursors[key] = idx + 1
+        return bal
+
+    def get_withdrawal_balance_after(self, account_id: str, transfer_id: str) -> int:
+        """
+        Returns the final balance of account_id after all legs of the withdrawal transfer_id have posted.
+        """
+        key = (account_id, transfer_id)
+        if key not in self._balances:
+            raise ValueError(f"No ledger entry found for account {account_id!r} and withdrawal {transfer_id!r}")
+        lst = self._balances[key]
+        self._cursors[key] = len(lst)
+        return lst[-1]
+
+    def get_balance_at_minute(self, account_id: str, minute: int) -> int:
+        """
+        Returns the account running balance at or immediately before the specified minute.
+        """
+        history = self._account_history.get(account_id, [])
+        running = 0
+        for entry_minute, bal in history:
+            if entry_minute <= minute:
+                running = bal
+            else:
+                break
+        return running
+
+    def get_final_balance(self, account_id: str) -> int:
+        """Returns the final balance of the account at simulation end."""
+        if account_id not in self._balances_by_account:
+            raise ValueError(f"Account {account_id!r} not found in balance replay")
+        return self._balances_by_account[account_id]
+
+
+def replay_balances(world: Any) -> BalanceReplay:
+    """
+    WHAT: Walks ledger transactions in entry order, tracking per-account running balances.
+    CRITICAL: Maps by (account_id, transfer_id) occurrence. At the end of the walk, asserts
+    `running_balance[account] == ledger.balance_of(account)` for every account seen; if any mismatch,
+    raises ValueError (self-check against silent divergence).
+    """
+    ledgers = (
+        world.ledgers
+        if hasattr(world, "ledgers")
+        else [world.ledger]
+        if hasattr(world, "ledger")
+        else [world]
+        if hasattr(world, "entries") and hasattr(world, "balance_of")
+        else list(world)
+    )
+
+    balances_by_transfer: dict[tuple[str, str], list[int]] = {}
+    running_balances: dict[str, int] = {}
+    account_history: dict[str, list[tuple[int, int]]] = {}
+
+    for ledger in ledgers:
+        for acc in ledger.accounts:
+            running_balances[acc] = 0
+            account_history[acc] = [(0, 0)]
+
+        for entry in ledger.entries:
+            acc = entry.account_id
+            running_balances[acc] = running_balances.get(acc, 0) + entry.amount_paise
+            account_history.setdefault(acc, []).append((entry.minute, running_balances[acc]))
+            key = (acc, entry.transfer_id)
+            balances_by_transfer.setdefault(key, []).append(running_balances[acc])
+
+        for acc in ledger.accounts:
+            actual = ledger.balance_of(acc)
+            if running_balances[acc] != actual:
+                raise ValueError(
+                    f"Balance replay self-check divergence for account {acc!r}: "
+                    f"calculated {running_balances[acc]} != actual {actual}"
+                )
+
+    return BalanceReplay(balances_by_transfer, dict(running_balances), account_history)
+
+
 def project_payment(
     event: PaymentEvent,
     payment_id: str,
     stamp: DeviceStamp | None,
     clock_start: date,
     config: BankFeedConfig,
+    balance_replay: BalanceReplay | None = None,
 ) -> list[BankFeedPaymentSide]:
+
     """
     WHAT: Transforms a raw simulation PaymentEvent into one or two bank-visible BankFeedPaymentSide records.
     It always constructs a debit side for the originating bank, and constructs a credit side for the
@@ -271,6 +421,14 @@ def project_payment(
     # 3. Compute timezone-aware IST event timestamp from simulation minute.
     event_time = world_minute_to_ist(event.minute, clock_start)
 
+    tx_id = f"tx_{event.minute}_{event.from_account}_{event.to_account}_{event.amount_paise}"
+    if event.status == "success" and balance_replay is not None:
+        debit_balance: int | None = balance_replay.get_balance_after(event.from_account, tx_id)
+        credit_balance: int | None = balance_replay.get_balance_after(event.to_account, tx_id)
+    else:
+        debit_balance = None
+        credit_balance = None
+
     # 4. Construct sender bank debit record (sender always observes their own attempt).
     debit_record = BankFeedPaymentSide(
         bank_id=sender_bank_id,
@@ -289,6 +447,7 @@ def project_payment(
         counterparty_vpa=None,
         sender_device_fingerprint=stamp.fingerprint if stamp is not None else None,
         sender_os_generation=stamp.os_generation if stamp is not None else None,
+        balance_after_paise=debit_balance,
     )
     check_bank_visible(asdict(debit_record), BANK_VISIBLE_PAYMENT_FIELDS)
     sides: list[BankFeedPaymentSide] = [debit_record]
@@ -324,6 +483,7 @@ def project_payment(
             counterparty_vpa=None,
             sender_device_fingerprint=None,
             sender_os_generation=None,
+            balance_after_paise=credit_balance,
         )
         check_bank_visible(asdict(credit_record), BANK_VISIBLE_PAYMENT_FIELDS)
         sides.append(credit_record)
@@ -367,6 +527,7 @@ def project_run(
     payments_by_bank: dict[str, list[BankFeedPaymentSide]] = {b: [] for b in all_bank_ids}
     account_events_by_bank: dict[str, list[BankFeedAccountEvent]] = {b: [] for b in all_bank_ids}
     complaints_by_bank: dict[str, list[BankFeedComplaint]] = {b: [] for b in all_bank_ids}
+    withdrawals_by_bank: dict[str, list[BankFeedWithdrawal]] = {b: [] for b in all_bank_ids}
     dropped_device_events_by_kind: dict[str, int] = {k: 0 for k in config.unmapped_gang_device_kinds}
 
     # 2. Build account-to-bank and person-to-account lookups for rapid O(1) resolution.
@@ -381,13 +542,22 @@ def project_run(
         op_b_idx = opened[4]
         account_to_bank[op_acc] = resolve_bank_id(op_b_idx, config)
 
+    account_to_region: dict[str, int] = {}
+    if hasattr(output.world, "people"):
+        for p in output.world.people:
+            account_to_region[p.account_id] = p.region
+    if hasattr(output.world, "shops"):
+        for s in output.world.shops:
+            account_to_region[s.account_id] = s.region
+
+    balance_replay = replay_balances(output.world)
     people_by_id = {p.person_id: p for p in output.world.people}
 
     # 3. Project all payment events into debit and credit sides across banks.
     for idx, event in enumerate(output.result.run_result.events):
         pid = output.result.payment_ids[idx]
         stamp = output.result.run_result.event_sender_devices[idx]
-        sides = project_payment(event, pid, stamp, clock_start, config)
+        sides = project_payment(event, pid, stamp, clock_start, config, balance_replay)
         for side in sides:
             payments_by_bank[side.bank_id].append(side)
 
@@ -468,16 +638,99 @@ def project_run(
         event_time = world_minute_to_ist(op_minute, clock_start)
         event_id = f"{run_id}-open-{op_account_id}"
 
+        region = account_to_region.get(op_account_id, op_bank_index)
+        details = {"home_region": region}
+        check_bank_visible(details, ACCOUNT_OPENED_DETAIL_FIELDS)
+
         acct_ev = BankFeedAccountEvent(
             bank_id=bank_id,
             event_id=event_id,
             account_id=op_account_id,
             kind="account_opened",
             event_time=event_time,
-            details={},
+            details=details,
         )
         check_bank_visible(asdict(acct_ev), BANK_VISIBLE_ACCOUNT_EVENT_FIELDS)
         account_events_by_bank[bank_id].append(acct_ev)
+
+    # 6b. Emit account_opened events for existing accounts at start of run if configured.
+    if config.emit_opening_for_existing_accounts:
+        opened_ids = {opened[1] for opened in output.result.opened_accounts}
+        if hasattr(output.world, "accounts"):
+            existing_accounts = output.world.accounts
+        elif hasattr(output.world, "ledgers"):
+            existing_accounts = sorted({acc for ledger in output.world.ledgers for acc in ledger.accounts})
+        else:
+            existing_accounts = sorted(account_to_bank.keys())
+
+        start_time = world_minute_to_ist(0, clock_start)
+        for acc_id in existing_accounts:
+            if acc_id not in opened_ids and acc_id in account_to_bank:
+                b_id = account_to_bank[acc_id]
+                r = account_to_region.get(acc_id, 0)
+                open_details = {"home_region": r}
+                check_bank_visible(open_details, ACCOUNT_OPENED_DETAIL_FIELDS)
+                open_ev = BankFeedAccountEvent(
+                    bank_id=b_id,
+                    event_id=f"{run_id}-open-{acc_id}",
+                    account_id=acc_id,
+                    kind="account_opened",
+                    event_time=start_time,
+                    details=open_details,
+                )
+                check_bank_visible(asdict(open_ev), BANK_VISIBLE_ACCOUNT_EVENT_FIELDS)
+                account_events_by_bank[b_id].append(open_ev)
+
+    # 6c. Project cash withdrawals.
+    cash_withdrawals = getattr(output.result, "cash_withdrawals", [])
+    for w in cash_withdrawals:
+        if getattr(w, "status", "") == "skipped":
+            continue
+        acc_id = getattr(w, "account_id", getattr(w, "account", None))
+        if acc_id is None or acc_id not in account_to_bank:
+            raise ValueError(f"Cash withdrawal references unknown account: {w}")
+        b_id = account_to_bank[acc_id]
+        event_time = world_minute_to_ist(w.minute, clock_start)
+        channel = getattr(w, "channel", "atm")
+
+        if hasattr(w, "withdrawn") and w.status == "success":
+            amount_paise = w.withdrawn
+        elif hasattr(w, "requested"):
+            amount_paise = w.requested
+        elif hasattr(w, "amount_paise"):
+            amount_paise = w.amount_paise
+        elif hasattr(w, "amount"):
+            amount_paise = int(w.amount * 100)
+        else:
+            raise ValueError(f"Cannot determine amount_paise for withdrawal {w}")
+
+        if w.status == "success":
+            failure_domain = None
+            balance_after_paise = balance_replay.get_withdrawal_balance_after(acc_id, w.id)
+        elif w.status == "failed":
+            failure_domain = (
+                w.domain
+                if getattr(w, "domain", None)
+                in ("npci_central", "sender_bank", "receiver_bank", "app_or_network", "customer")
+                else "customer"
+            )
+            balance_after_paise = balance_replay.get_balance_at_minute(acc_id, w.minute)
+        else:
+            raise ValueError(f"Unknown withdrawal status: {w.status!r}")
+
+        withdrawal_rec = BankFeedWithdrawal(
+            withdrawal_id=w.id,
+            bank_id=b_id,
+            account_id=acc_id,
+            channel=channel,
+            amount_paise=amount_paise,
+            status=w.status,
+            failure_domain=failure_domain,
+            event_time=event_time,
+            balance_after_paise=balance_after_paise,
+        )
+        check_bank_visible(asdict(withdrawal_rec), BANK_VISIBLE_WITHDRAWAL_FIELDS)
+        withdrawals_by_bank[b_id].append(withdrawal_rec)
 
     # 7. Project customer fraud complaints into complainant bank records.
     for label_ev in label_events:
@@ -511,11 +764,16 @@ def project_run(
         b: tuple(sorted(complaints_by_bank[b], key=lambda c: (c.received_at, c.complaint_id)))
         for b in sorted(all_bank_ids)
     }
+    sorted_withdrawals = {
+        b: tuple(sorted(withdrawals_by_bank[b], key=lambda w: (w.event_time, w.withdrawal_id)))
+        for b in sorted(all_bank_ids)
+    }
 
     return BankFeed(
         payments_by_bank=sorted_payments,
         account_events_by_bank=sorted_account_events,
         complaints_by_bank=sorted_complaints,
         dropped_device_events_by_kind=dropped_device_events_by_kind,
+        withdrawals_by_bank=sorted_withdrawals,
     )
 
