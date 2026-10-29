@@ -1,0 +1,62 @@
+# =====================================================================
+# ACCOUNT FEATURES: configuration for Level 15 account feature updating,
+# Redis sliding look-back windows, key lifecycle and table polling.
+# =====================================================================
+
+account_features:
+  windows_seconds:
+    label: policy
+    value: [3600, 86400, 604800]
+    reason: "Defines sliding look-back window intervals for account velocity features."
+    derived_from: "Level 15 plan, M1 inflow group: 1 hour, 24 hours, 7 days"
+
+  retention_seconds:
+    label: policy
+    value: 604800
+    reason: "The largest window; anything older can never be read by any feature."
+    derived_from: "Level 15 plan, M1 inflow group: 7 days"
+
+  allowed_lateness_seconds:
+    label: policy
+    value: 86400
+    reason: "events may arrive up to one simulated day late; anything later is outside the window the trim keeps"
+    derived_from: "Level 15 architect decision 3 (trim cutoff = newest event time − (retention + allowed lateness))"
+
+  key_expiry_margin_seconds:
+    label: policy
+    value: 86400
+    reason: "Redis expiry TTL margin added to retention so quiet accounts are cleaned up without expiring valid window data."
+    derived_from: "Level 15 plan, Redis key lifecycle policy"
+
+  key_prefix:
+    label: policy
+    value: "acctf"
+    reason: "Redis namespace prefix for Level 15 account feature structures, avoiding collision with existing keys."
+    derived_from: "data-contract rule: Level 15 may add a prefix"
+
+  run_id_source:
+    label: policy
+    path: "config/interactive_runner.yaml"
+    key: "run_id_hex_length"
+    value: "config/interactive_runner.yaml"
+    reason: "Path to runner config specifying exact length of run identifiers."
+    derived_from: "config/interactive_runner.yaml run_id_hex_length"
+
+  account_event_batch_size:
+    label: policy
+    value: 500
+    reason: "Batch size limit for polling bank account events table to bound memory usage and transaction lock times."
+    derived_from: "Level 15 plan, account event ingestion batching"
+
+  account_event_overlap_rows:
+    label: policy
+    value: 200
+    reason: "re-read the tail of committed events so out-of-order transaction commits are not skipped"
+    derived_from: "Level 15 architect decision 5"
+
+  upi_key_by_account:
+    label: policy
+    value: true
+    reason: "Default partition key strategy for schema-2 UPI payment events in transactional outbox relay."
+    derived_from: "Level 15 plan, C4 partition key design"
+

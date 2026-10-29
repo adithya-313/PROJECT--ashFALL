@@ -252,7 +252,7 @@ jobs:
           --deselect tests/unit/test_geo_velocity.py::test_vectorized_batch_equals_old_loop_on_many_random_rows
           --deselect tests/unit/test_geo_velocity.py::test_array_haversine_matches_single_pair_haversine_bit_for_bit
 
-      # Start only the two services the next steps need, and wait until their health checks pass.
+      # Start the services the next steps need (Redis is needed by the Level 15 showcase and its integration test), and wait until their health checks pass.
       # Log in to Docker Hub so image pulls are not limited as anonymous requests (the rate limit that failed the
       # boot check). The step is skipped when the secrets are absent, for example on pull requests from forks.
       - name: Log in to Docker Hub
@@ -262,8 +262,8 @@ jobs:
           username: ${{ env.DOCKERHUB_USERNAME }}
           password: ${{ env.DOCKERHUB_TOKEN }}
 
-      - name: Start Postgres and Redpanda
-        run: docker compose up --wait postgres redpanda
+      - name: Start Postgres, Redpanda and Redis
+        run: docker compose up --wait postgres redpanda redis
 
       # CI's database starts empty. The isolation test needs the real tables in the public schema, to prove that
       # the showcase never changes them. The migration runner can be run again safely (it skips files it already
@@ -296,6 +296,7 @@ jobs:
             tests/integration/test_bank_idempotency.py \
             tests/integration/test_bank_endpoints.py \
             tests/contract/test_bank_api_fuzz.py \
+            tests/integration/test_account_stream_end_to_end.py \
             -q -rs -p no:cacheprovider 2>&1 | tee "$RUNNER_TEMP/integration.log"
           code=${PIPESTATUS[0]}
           if [ "$code" -ne 0 ]; then
