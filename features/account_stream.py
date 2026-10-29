@@ -140,6 +140,8 @@ async def apply_account_events_since(
     """
     cfg = settings if settings is not None else get_default_settings()
     batch_size = cfg.account_event_batch_size
+    overlap = cfg.account_event_overlap_rows
+    start_id = max(0, after_id - overlap)
 
     rows = await connection.fetch(
         """
@@ -150,7 +152,7 @@ async def apply_account_events_since(
         LIMIT $3
         """,
         bank_id,
-        after_id,
+        start_id,
         batch_size,
     )
 
@@ -161,7 +163,9 @@ async def apply_account_events_since(
     for row in rows:
         record = account_event_from_row(row)
         apply_account_event(redis_client, record, cfg)
-        last_id = int(row["id"])
+        row_id = int(row["id"])
+        if row_id > last_id:
+            last_id = row_id
 
     return last_id
 

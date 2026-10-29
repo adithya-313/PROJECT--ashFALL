@@ -14,9 +14,10 @@ and sliding-window Redis cache with idempotency guarantees under duplicate event
 
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import asyncpg
 import pytest
 import redis
 
@@ -25,8 +26,9 @@ from api.v1.upi_outbox import UpiPaymentSide, record_upi_side
 from core.config import config
 from features.account_keys import namespace_pattern
 from features.account_reader import empty_snapshot, read_account_snapshot
-from features.account_stream import run_payment_updater
+from features.account_stream import apply_account_events_since, run_payment_updater
 from showcase.kafka_tools import create_topic, delete_topic, make_producer, make_topic_name
+from tests.integration.conftest import get_test_database_url
 
 pytestmark = [pytest.mark.anyio, pytest.mark.needs_stack]
 
@@ -180,6 +182,114 @@ async def test_account_stream_end_to_end(isolated_schema: tuple[Any, str]) -> No
         await delete_topic(topic)
         # Clean up Redis test namespace
         for pat in (namespace_pattern(run_id, "bank_0"), namespace_pattern(run_id, "bank_1")):
+            for k in redis_client.scan_iter(match=pat):
+                redis_client.delete(k)
+        redis_client.close()
+
+
+async def test_account_event_poller_overlap_catches_late_commit(isolated_schema: tuple[Any, str]) -> None:
+    """
+    Fix 2 / Architect Decision 5: Proves that the overlap poller re-reads recent events
+    so that an out-of-order committed row (id1 < id2, but committed after id2) is NOT skipped.
+    """
+    connection, schema_name = isolated_schema
+    database_url = get_test_database_url()
+    run_id = uuid.uuid4().hex[:16]
+    now = datetime.now(timezone.utc)
+
+    conn1 = await asyncpg.connect(database_url, server_settings={"search_path": schema_name})
+    conn2 = await asyncpg.connect(database_url, server_settings={"search_path": schema_name})
+    redis_client = redis.Redis.from_url(host_side_redis_url())
+
+    try:
+        # Start tx1 and insert event 1 (allocates id 1)
+        tx1 = conn1.transaction()
+        await tx1.start()
+        row1 = await conn1.fetchrow(
+            """
+            INSERT INTO bank_account_events (bank_id, event_id, account_id, kind, event_time, details)
+            VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+            RETURNING id
+            """,
+            "bank_0",
+            f"{run_id}-dev-000001",
+            "acc_overlap_01",
+            "account_opened",
+            now,
+            "{}",
+        )
+        assert row1 is not None
+        id1 = int(row1["id"])
+
+        # Start tx2 and insert event 2 (allocates id 2 > id1)
+        tx2 = conn2.transaction()
+        await tx2.start()
+        row2 = await conn2.fetchrow(
+            """
+            INSERT INTO bank_account_events (bank_id, event_id, account_id, kind, event_time, details)
+            VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+            RETURNING id
+            """,
+            "bank_0",
+            f"{run_id}-dev-000002",
+            "acc_overlap_01",
+            "device_binding_change",
+            now + timedelta(seconds=1),
+            "{}",
+        )
+        assert row2 is not None
+        id2 = int(row2["id"])
+        assert id2 > id1
+
+        # Commit tx2 FIRST! tx1 remains uncommitted.
+        await tx2.commit()
+
+        # Poller run 1: sees event 2, records after_id = id2
+        after_id_1 = await apply_account_events_since(
+            connection, redis_client, bank_id="bank_0", after_id=0
+        )
+        assert after_id_1 == id2
+
+        # Verify only event 2 is in Redis so far
+        snap_mid = read_account_snapshot(
+            redis_client,
+            run_id,
+            "bank_0",
+            "acc_overlap_01",
+            now + timedelta(hours=1),
+            now + timedelta(hours=1),
+        )
+        assert len(snap_mid.account_events) == 1
+        assert snap_mid.account_events[0].event_id == f"{run_id}-dev-000002"
+
+        # Now commit tx1 (late commit with id1 < id2)
+        await tx1.commit()
+
+        # Poller run 2: starts from after_id_1 (= id2).
+        # Because of overlap (200 rows), it queries id > max(0, id2 - 200) = 0.
+        after_id_2 = await apply_account_events_since(
+            connection, redis_client, bank_id="bank_0", after_id=after_id_1
+        )
+        assert after_id_2 == id2
+
+        # Verify BOTH event 1 and event 2 are now present in Redis!
+        snap_final = read_account_snapshot(
+            redis_client,
+            run_id,
+            "bank_0",
+            "acc_overlap_01",
+            now + timedelta(hours=1),
+            now + timedelta(hours=1),
+        )
+        assert len(snap_final.account_events) == 2
+        event_ids = [e.event_id for e in snap_final.account_events]
+        assert f"{run_id}-dev-000001" in event_ids
+        assert f"{run_id}-dev-000002" in event_ids
+
+    finally:
+        await conn1.close()
+        await conn2.close()
+        for pat in (namespace_pattern(run_id, "bank_0"),):
             for k in redis_client.scan_iter(match=pat):
                 redis_client.delete(k)
         redis_client.close()

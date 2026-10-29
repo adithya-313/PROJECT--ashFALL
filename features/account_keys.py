@@ -34,6 +34,7 @@ class AccountFeaturesSettings:
         key_prefix: Root Redis namespace prefix for account feature keys.
         run_id_hex_length: Required character length of simulation run identifiers.
         account_event_batch_size: Maximum rows read per table poll of bank_account_events.
+        account_event_overlap_rows: Tail overlap rows re-read on every poll to prevent commit skips.
         upi_key_by_account: Whether transactional outbox relays schema-2 events keyed by account.
     """
 
@@ -44,6 +45,7 @@ class AccountFeaturesSettings:
     key_prefix: str
     run_id_hex_length: int
     account_event_batch_size: int
+    account_event_overlap_rows: int
     upi_key_by_account: bool
 
     @property
@@ -111,8 +113,9 @@ def load_account_features_settings(config_path: Path | None = None) -> AccountFe
         runner_raw = yaml.safe_load(rf)
     run_id_hex_length = int(runner_raw["interactive_runner"]["run_id_hex_length"])
 
-    # Account event batch size
+    # Account event batch size and overlap
     account_event_batch_size = int(block["account_event_batch_size"]["value"])
+    account_event_overlap_rows = int(block.get("account_event_overlap_rows", {}).get("value", 200))
 
     # UPI key by account switch default
     upi_key_by_account = bool(block.get("upi_key_by_account", {}).get("value", True))
@@ -125,6 +128,7 @@ def load_account_features_settings(config_path: Path | None = None) -> AccountFe
         key_prefix=key_prefix,
         run_id_hex_length=run_id_hex_length,
         account_event_batch_size=account_event_batch_size,
+        account_event_overlap_rows=account_event_overlap_rows,
         upi_key_by_account=upi_key_by_account,
     )
 

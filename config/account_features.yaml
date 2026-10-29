@@ -48,6 +48,12 @@ account_features:
     reason: "Batch size limit for polling bank account events table to bound memory usage and transaction lock times."
     derived_from: "Level 15 plan, account event ingestion batching"
 
+  account_event_overlap_rows:
+    label: policy
+    value: 200
+    reason: "re-read the tail of committed events so out-of-order transaction commits are not skipped"
+    derived_from: "Level 15 architect decision 5"
+
   upi_key_by_account:
     label: policy
     value: true
