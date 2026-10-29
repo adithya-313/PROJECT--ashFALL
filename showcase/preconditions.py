@@ -28,3 +28,16 @@ async def check_database(database_url: str, fix_hint: str) -> str | None:
         return f"Postgres not reachable ({type(error).__name__}) - run: {fix_hint}"
     await connection.close()
     return None
+
+
+def check_redis(redis_url: str, fix_hint: str) -> str | None:
+    """Return None if Redis accepts a connection, otherwise a plain-English problem."""
+    import redis
+
+    try:
+        client = redis.Redis.from_url(redis_url, socket_timeout=CONNECT_TIMEOUT_SECONDS)
+        client.ping()
+        client.close()
+        return None
+    except Exception as error:
+        return f"Redis not reachable ({type(error).__name__}) - run: {fix_hint}"
