@@ -26,8 +26,8 @@ from features.account_keys import (
     side_times_key,
 )
 from features.account_reader import empty_snapshot, read_account_snapshot
-from features.account_records import PaymentSideRecord
-from features.account_updater import apply_payment_side
+from features.account_records import AccountEventRecord, PaymentSideRecord
+from features.account_updater import apply_account_event, apply_payment_side
 from showcase.framework import CheckDefinition, CheckOutcome
 from showcase.preconditions import check_redis
 
@@ -243,7 +243,7 @@ async def check_15a_2_point_in_time_reader(workspace: Any) -> CheckOutcome:
 async def check_15a_3_idempotency_and_replay(workspace: Any) -> CheckOutcome:
     """
     Check 15a-3 (edge): idempotency / replay: replay the same side 3 times, verify Redis hash/zset
-    sizes do not grow, byte dump before == byte dump after.
+    sizes do not grow, byte dump before == byte dump after, and verify shuffle order-independence.
     """
     client = redis.Redis.from_url(host_side_redis_url())
     settings = get_default_settings()
@@ -263,8 +263,10 @@ async def check_15a_3_idempotency_and_replay(workspace: Any) -> CheckOutcome:
         amount_paise=50000,
     )
 
+    run_shuffle = uuid.uuid4().hex[:16]
+
     try:
-        # First write
+        # 1. First write and 3x replay test
         outcome_1 = apply_payment_side(client, rec, settings)
         assert outcome_1 == "stored"
         dump_initial = _dump_account_keys(client, run_id)
@@ -278,18 +280,83 @@ async def check_15a_3_idempotency_and_replay(workspace: Any) -> CheckOutcome:
         dump_replayed = _dump_account_keys(client, run_id)
         assert dump_initial == dump_replayed, "Redis state mutated during replay"
 
+        # 2. Fix 3 / Architect Decision 7: Shuffle test in forward and reverse order
+        batch: list[PaymentSideRecord | AccountEventRecord] = []
+        for i in range(16):
+            t = now - timedelta(hours=i * 6)
+            s = "debit" if i % 2 == 0 else "credit"
+            batch.append(
+                make_showcase_record(
+                    run_id=run_shuffle,
+                    bank_id=bank_id,
+                    account_id="acc_showcase_shuf",
+                    payment_id=f"{run_shuffle}-pmt-{i:04d}",
+                    side=s,
+                    event_time=t,
+                    arrival_time=t + timedelta(minutes=10 * (i % 3)),
+                    amount_paise=10000 * (i + 1),
+                )
+            )
+        for j in range(8):
+            t = now - timedelta(hours=j * 12)
+            kind = "device_binding_change" if j % 2 == 0 else "sim_swap"
+            batch.append(
+                AccountEventRecord(
+                    run_id=run_shuffle,
+                    bank_id=bank_id,
+                    account_id="acc_showcase_shuf",
+                    event_id=f"{run_shuffle}-dev-{j:04d}",
+                    kind=kind,
+                    event_time=t,
+                    arrival_time=t + timedelta(minutes=15 * (j % 2)),
+                    details={},
+                )
+            )
+
+        # Apply batch forward
+        for item in batch:
+            if isinstance(item, PaymentSideRecord):
+                apply_payment_side(client, item, settings)
+            else:
+                apply_account_event(client, item, settings)
+        dump_fwd = _dump_account_keys(client, run_shuffle)
+        assert len(dump_fwd) > 0
+
+        # Purge keys for run_shuffle
+        for pat in (namespace_pattern(run_shuffle, bank_id),):
+            for k in client.scan_iter(match=pat):
+                client.delete(k)
+
+        # Apply SAME batch in reverse order
+        for item in reversed(batch):
+            if isinstance(item, PaymentSideRecord):
+                apply_payment_side(client, item, settings)
+            else:
+                apply_account_event(client, item, settings)
+        dump_rev = _dump_account_keys(client, run_shuffle)
+
+        assert dump_fwd == dump_rev, "Forward and reverse application produced divergent Redis state"
+        msg = (
+            f"SHUFFLE TEST: {len(batch)} records applied in forward and reverse order "
+            "produced byte-identical Redis state."
+        )
+        print(msg)
+
         return CheckOutcome(
             key_number="15a-3",
             evidence={
                 "replays_executed": 3,
                 "keys_checked": len(dump_initial),
                 "dumps_identical": True,
+                "shuffle_records": len(batch),
+                "shuffle_identical": True,
             },
         )
     finally:
-        for pat in (namespace_pattern(run_id, bank_id),):
-            for k in client.scan_iter(match=pat):
-                client.delete(k)
+        for r_id in (run_id, run_shuffle):
+            for pat in (namespace_pattern(r_id, bank_id),):
+                for k in client.scan_iter(match=pat):
+                    client.delete(k)
         client.close()
 
 
