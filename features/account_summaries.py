@@ -69,12 +69,12 @@ def _to_unix_seconds(timestamp: datetime) -> float:
 
 # Atomic day totals Lua script: checks seen set, increments totals, indexes day, marks last active day.
 DAY_TOTALS_LUA_SCRIPT: str = """local member = ARGV[1]
-local is_seen = redis.call('SISMEMBER', KEYS[1], member)
+local is_seen = redis.call('HEXISTS', KEYS[1], member)
 if is_seen == 1 then
     return 0
 end
 
-redis.call('SADD', KEYS[1], member)
+redis.call('HSET', KEYS[1], member, '1')
 redis.call('ZADD', KEYS[3], tonumber(ARGV[2]), ARGV[2])
 redis.call('ZADD', KEYS[4], 'GT', tonumber(ARGV[2]), 'last_active_day')
 
