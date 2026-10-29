@@ -275,6 +275,14 @@ class BalanceReplay:
         balances_by_account: dict[str, int],
         account_history: dict[str, list[tuple[int, int]]],
     ) -> None:
+        """
+        Initialises balance replay state tracking chronological account balances and occurrences.
+
+        Args:
+            balances_by_transfer: Mapping of (account_id, transfer_id) to list of posted balances.
+            balances_by_account: Authoritative final balances for each account.
+            account_history: Chronological list of (minute, balance) tuples for minute lookups.
+        """
         self._balances = balances_by_transfer
         self._cursors: dict[tuple[str, str], int] = {}
         self._balances_by_account = balances_by_account

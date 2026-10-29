@@ -68,6 +68,7 @@ CREATE INDEX IF NOT EXISTS idx_bank_withdrawals_lookup
 DO $$
 BEGIN
   EXECUTE format('GRANT SELECT, INSERT ON TABLE %I.bank_withdrawals TO ashfall_bank_api;', current_schema());
+  EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE %I.bank_withdrawals_id_seq TO ashfall_bank_api;', current_schema());
 END
 $$;
 
