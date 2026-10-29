@@ -32,10 +32,11 @@ async def check_database(database_url: str, fix_hint: str) -> str | None:
 
 def check_redis(redis_url: str, fix_hint: str) -> str | None:
     """Return None if Redis accepts a connection, otherwise a plain-English problem."""
-    import redis
+    import importlib
 
     try:
-        client = redis.Redis.from_url(redis_url, socket_timeout=CONNECT_TIMEOUT_SECONDS)
+        redis_pkg = importlib.import_module("redis")
+        client = redis_pkg.Redis.from_url(redis_url, socket_timeout=CONNECT_TIMEOUT_SECONDS)
         client.ping()
         client.close()
         return None

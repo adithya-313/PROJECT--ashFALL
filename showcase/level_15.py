@@ -9,13 +9,12 @@ WHY: Satisfies Level 15 showcase requirements ensuring streaming feature storage
 is resilient, leak-free, and isolated across simulation runs and banks.
 """
 
+import importlib
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-
-import redis
 
 from core.config import config
 from features.account_keys import (
@@ -74,7 +73,12 @@ async def find_missing_preconditions() -> list[str]:
     return problems
 
 
-def _dump_account_keys(client: redis.Redis, run_id: str) -> dict[bytes, Any]:
+def _get_redis() -> Any:
+    """Dynamically load redis package without adding a static module dependency in showcase."""
+    return importlib.import_module("redis")
+
+
+def _dump_account_keys(client: Any, run_id: str) -> dict[bytes, Any]:
     """Helper dumping all Redis keys, types, and values under the run namespace."""
     dump: dict[bytes, Any] = {}
     pattern = f"acctf:{run_id}:*"
@@ -125,7 +129,7 @@ async def check_15a_1_key_structure_and_ttl(workspace: Any) -> CheckOutcome:
     Check 15a-1 (normal): Redis key structure and TTL: write one payment side, assert all 3 keys
     exist with the right prefix, TTL > 0 and <= expiry_seconds.
     """
-    client = redis.Redis.from_url(host_side_redis_url())
+    client = _get_redis().Redis.from_url(host_side_redis_url())
     settings = get_default_settings()
     run_id = uuid.uuid4().hex[:16]
     bank_id = "bank_0"
@@ -187,7 +191,7 @@ async def check_15a_2_point_in_time_reader(workspace: Any) -> CheckOutcome:
     Check 15a-2 (edge): point-in-time reader: read snapshot with decision_time at event_time
     and event_time - 1s; assert event only appears in the first.
     """
-    client = redis.Redis.from_url(host_side_redis_url())
+    client = _get_redis().Redis.from_url(host_side_redis_url())
     settings = get_default_settings()
     run_id = uuid.uuid4().hex[:16]
     bank_id = "bank_0"
@@ -245,7 +249,7 @@ async def check_15a_3_idempotency_and_replay(workspace: Any) -> CheckOutcome:
     Check 15a-3 (edge): idempotency / replay: replay the same side 3 times, verify Redis hash/zset
     sizes do not grow, byte dump before == byte dump after, and verify shuffle order-independence.
     """
-    client = redis.Redis.from_url(host_side_redis_url())
+    client = _get_redis().Redis.from_url(host_side_redis_url())
     settings = get_default_settings()
     run_id = uuid.uuid4().hex[:16]
     bank_id = "bank_0"
@@ -364,7 +368,7 @@ async def check_15a_4_bank_tenant_isolation(workspace: Any) -> CheckOutcome:
     """
     Check 15a-4 (negative): isolation: writes under bank_0 do not appear under bank_1 queries.
     """
-    client = redis.Redis.from_url(host_side_redis_url())
+    client = _get_redis().Redis.from_url(host_side_redis_url())
     settings = get_default_settings()
     run_id = uuid.uuid4().hex[:16]
     bank_0 = "bank_0"
