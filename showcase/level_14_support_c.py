@@ -25,7 +25,7 @@ from api.v1.bank_service import InProcessBankClient
 from core.config import config
 from core.event_clock import ManualClock
 from showcase.framework import CheckOutcome
-from showcase.isolation import Workspace
+from showcase.isolation import Workspace, cleanup_workspace, create_workspace
 from showcase.kafka_tools import (
     create_topic,
     delete_topic,
@@ -148,67 +148,71 @@ async def check_11_http_connectors_and_outbox_relay_normal(
     )
     runner_settings = RunnerSettings(fraud_enabled=True)
 
-    async with workspace_bank_env(workspace) as (api_keys, clock, _pool):
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
-            http_transports: dict[str, BankTransport] = cast(
-                dict[str, BankTransport],
-                {b: SignedHttpBankClient(http_client, b, api_keys[b], clock) for b in BANKS},
-            )
-            report = await run_world_through_banks(
-                fast_settings,
-                runner_settings,
-                transports=http_transports,
-            )
-
-    feed = project_run(report.output)
-    expected_sides = sum(len(sides) for sides in feed.payments_by_bank.values())
-    events_count = len(report.output.result.run_result.events)
-
-    decisions_stored = await workspace.connection.fetchval("SELECT count(*) FROM bank_decision_requests")
-    assert decisions_stored == report.decisions_sent + report.decisions_replayed == events_count
-    assert len(report.decision_failures) == 0
-
-    tx_rows = await workspace.connection.fetchval("SELECT count(*) FROM transactions")
-    assert tx_rows == expected_sides
-
-    # Relay workspace outbox to throwaway Kafka topic
-    producer = await make_producer()
-    topic = make_topic_name(prefix="l14c")
-    await create_topic(topic)
+    isolated_ws = await create_workspace()
     try:
-        while True:
-            batch_res = await relay_one_batch(
-                workspace.connection, producer, batch_size=100, topic=topic
-            )
-            if batch_res.waiting == 0:
-                break
-            if batch_res.error is not None and not batch_res.poison_pending:
-                raise RuntimeError(f"Outbox relay error: {batch_res.error}")
+        async with workspace_bank_env(isolated_ws) as (api_keys, clock, _pool):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as http_client:
+                http_transports: dict[str, BankTransport] = cast(
+                    dict[str, BankTransport],
+                    {b: SignedHttpBankClient(http_client, b, api_keys[b], clock) for b in BANKS},
+                )
+                report = await run_world_through_banks(
+                    fast_settings,
+                    runner_settings,
+                    transports=http_transports,
+                )
 
-        msgs = await read_events(topic, expected_count=tx_rows, idle_timeout_seconds=2.0)
-        kafka_count = len(msgs)
+        feed = project_run(report.output)
+        expected_sides = sum(len(sides) for sides in feed.payments_by_bank.values())
+        events_count = len(report.output.result.run_result.events)
+
+        decisions_stored = await isolated_ws.connection.fetchval("SELECT count(*) FROM bank_decision_requests")
+        assert decisions_stored == report.decisions_sent + report.decisions_replayed == events_count
+        assert len(report.decision_failures) == 0
+
+        tx_rows = await isolated_ws.connection.fetchval("SELECT count(*) FROM transactions")
+        assert tx_rows == expected_sides
+
+        # Relay isolated workspace outbox to throwaway Kafka topic
+        producer = await make_producer()
+        topic = make_topic_name(prefix="l14c")
+        await create_topic(topic)
+        try:
+            while True:
+                batch_res = await relay_one_batch(
+                    isolated_ws.connection, producer, batch_size=100, topic=topic
+                )
+                if batch_res.waiting == 0:
+                    break
+                if batch_res.error is not None and not batch_res.poison_pending:
+                    raise RuntimeError(f"Outbox relay error: {batch_res.error}")
+
+            msgs = await read_events(topic, expected_count=tx_rows, idle_timeout_seconds=2.0)
+            kafka_count = len(msgs)
+        finally:
+            await producer.stop()
+            await delete_topic(topic)
+
+        schema_2_outbox_rows = await isolated_ws.connection.fetchval(
+            "SELECT count(*) FROM outbox WHERE payload->>'schema_version' = '2'"
+        )
+        assert schema_2_outbox_rows == tx_rows == kafka_count
+
+        key_number = f"decisions={decisions_stored}, transaction sides={tx_rows}, kafka events={kafka_count}"
+        evidence = {
+            "decisions_stored": decisions_stored,
+            "decisions_sent": report.decisions_sent,
+            "decisions_replayed": report.decisions_replayed,
+            "transactions_stored": tx_rows,
+            "projected_sides": expected_sides,
+            "schema_2_outbox_rows": schema_2_outbox_rows,
+            "kafka_messages": kafka_count,
+            "topic": topic,
+        }
+        return CheckOutcome(key_number=key_number, evidence=evidence)
     finally:
-        await producer.stop()
-        await delete_topic(topic)
-
-    schema_2_outbox_rows = await workspace.connection.fetchval(
-        "SELECT count(*) FROM outbox WHERE payload->>'schema_version' = '2'"
-    )
-    assert schema_2_outbox_rows == tx_rows == kafka_count
-
-    key_number = f"decisions={decisions_stored}, transaction sides={tx_rows}, kafka events={kafka_count}"
-    evidence = {
-        "decisions_stored": decisions_stored,
-        "decisions_sent": report.decisions_sent,
-        "decisions_replayed": report.decisions_replayed,
-        "transactions_stored": tx_rows,
-        "projected_sides": expected_sides,
-        "schema_2_outbox_rows": schema_2_outbox_rows,
-        "kafka_messages": kafka_count,
-        "topic": topic,
-    }
-    return CheckOutcome(key_number=key_number, evidence=evidence)
+        await cleanup_workspace(isolated_ws)
 
 
 async def check_12_shadow_mode_parity_edge(workspace: Workspace) -> CheckOutcome:
@@ -261,8 +265,10 @@ async def check_13_r7_visibility_edge(workspace: Workspace) -> CheckOutcome:
     Identifies the earliest occurrence of each failure domain by event_time without hardcoded IDs.
     """
     # Ensure in-process rows for 101/10/5/51 exist in the workspace database
-    stored_tx = await workspace.connection.fetchval("SELECT count(*) FROM transactions")
-    if stored_tx == 0:
+    stored_tx = await workspace.connection.fetchval(
+        "SELECT count(*) FROM transactions WHERE failure_domain = 'npci_central'"
+    )
+    if not stored_tx:
         fast_settings = FastRunSettings(101, 10, 5, 51, "training")
         runner_settings = RunnerSettings(fraud_enabled=True)
         async with workspace_bank_env(workspace) as (_api_keys, clock, pool):
