@@ -1024,21 +1024,21 @@ parameters:
     stress: [1, 30]
     reason: "How many times slower the slowest bank is at applying a hold than the fastest, so the three banks differ in speed; no figure is published."
 
-  # How many days an account had been open when the simulation run starts.
-  # Accounts that exist at start draw their age; accounts opened mid-run use their own minute.
-  account_opening_age_days:
-    label: assumption
-    unit: days
-    derived_from: "Level 15 architect decision: realistic account ages spread over years; same spread for every persona so age alone separates no group"
-    reason: "Level 15 architect decision: realistic account ages spread over years; same spread for every persona so age alone separates no group. Suggested values (assumption): person [30, 5475] (one month to 15 years), shop [90, 7300] (three months to 20 years)."
-    person: [30, 5475]
-    shop: [90, 7300]
-    per_persona:
-      salaried_employee: [30, 5475]
-      student: [30, 5475]
-      retiree: [30, 5475]
-      small_shopkeeper: [30, 5475]
-      gig_worker: [30, 5475]
+# How many days an account had been open when the simulation run starts.
+# Accounts that exist at start draw their age; accounts opened mid-run use their own minute.
+account_opening_age_days:
+  label: assumption
+  unit: days
+  derived_from: "Level 15 architect decision: realistic account ages spread over years; same spread for every persona so age alone separates no group"
+  reason: "Level 15 architect decision: realistic account ages spread over years; same spread for every persona so age alone separates no group. Suggested values (assumption): person [30, 5475] (one month to 15 years), shop [90, 7300] (three months to 20 years)."
+  person: [30, 5475]
+  shop: [90, 7300]
+  per_persona:
+    salaried_employee: [30, 5475]
+    student: [30, 5475]
+    retiree: [30, 5475]
+    small_shopkeeper: [30, 5475]
+    gig_worker: [30, 5475]
 
 # Things that were searched for and not found. No numbers and no labels on purpose.
 # Each line is a gap in public evidence. It is listed so nobody mistakes a

@@ -15,7 +15,7 @@ import pytest
 from core.event_clock import world_minute_to_ist
 from world.bank_feed import project_run
 from world.build_world import build_world
-from world.config_reader import get_parameter_entry, read_world_ranges
+from world.config_reader import read_world_ranges
 from world.gang_config import BlockStep, GangBudget, GangConfig
 from world.interactive_runner import FastRunSettings, RunnerSettings, run_interactive_world
 from world.opening_dates import draw_opening_days
@@ -60,7 +60,7 @@ def test_every_drawn_date_lies_within_owner_and_persona_range() -> None:
     world = build_world(seed=101, n_people=50, n_shops=10)
     dates = draw_opening_days(world.people, world.shops, seed=101, ranges=ranges, range_name="training")
 
-    entry = get_parameter_entry(ranges, "account_opening_age_days")
+    entry = ranges["account_opening_age_days"]
     per_persona: dict[str, list[int]] = entry["per_persona"]
     shop_bounds: list[int] = entry["shop"]
 

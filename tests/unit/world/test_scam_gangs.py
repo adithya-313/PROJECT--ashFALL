@@ -55,12 +55,14 @@ DEBIT_CHANCES = TypeChances(investment_or_job=0.0, investment_within=0.5)
 # stories, costs, totals and money rules. It was computed at a103b48 and still matches, so no draw changed.
 # Story fields are reduced to their four original fields (scam_type and scam_step came later, Level 12e).
 FIXTURE_PLAIN_SHA256 = "28615d91d9a0b0f0ab09d79c55d5241d051638fc8df4bf03cc5e59ee1252f30e"
-FIXTURE_RUN_ID = "f3dc93d7013b2eba"
+# Changed in Level 15b: opening-date settings joined the world's run identity; nothing else in this run changed.
+FIXTURE_RUN_ID = "818b8d94ccf49b9f"
 FIXTURE_PLAN_SHA256 = "ade10fcfd89f329ba9b8fa67712da4e6253e05c09ff884ac4caa68338b27fc07"
 
 # Pinned values for a scam-funded gang computed at commit 0574555 (before Level 12g).
 SCAM_GANG_PLAIN_SHA256 = "c89206e5da1c5348559d5aaf22c3fcfd151ebc1c81fddc7e4777063e4a182a65"
-SCAM_GANG_RUN_ID = "5a32b6f51d52d76d"
+# Changed in Level 15b: opening-date settings joined the world's run identity; nothing else in this run changed.
+SCAM_GANG_RUN_ID = "b2a8e92bcff5ed95"
 SCAM_GANG_PLAN_SHA256 = "918882eb0ece3714720132011e0dd989d9728d1247aa4bf599e28a7f7186a856"
 
 

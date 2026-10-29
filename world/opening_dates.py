@@ -18,7 +18,6 @@ from typing import Any
 
 import numpy as np
 
-from world.config_reader import get_parameter_entry
 from world.people import Person
 from world.run_identity import load_runner_config
 from world.shops import Shop
@@ -66,9 +65,13 @@ def draw_opening_days(
     # Spawn the isolated single-child generator using the SeedSequence spawn pattern.
     rng = np.random.default_rng(np.random.SeedSequence(seed).spawn(child + 1)[child])
 
-    # Retrieve the configured age bounds block from world ranges.
-    entry = get_parameter_entry(ranges, "account_opening_age_days")
-    per_persona: dict[str, list[int]] = entry.get("per_persona", {})
+    # Retrieve the configured age bounds block from top-level world ranges.
+    if "account_opening_age_days" not in ranges:
+        raise ValueError("Missing 'account_opening_age_days' block in world ranges configuration")
+    entry = ranges["account_opening_age_days"]
+    if "per_persona" not in entry or "shop" not in entry:
+        raise ValueError("Invalid 'account_opening_age_days' configuration: missing 'per_persona' or 'shop'")
+    per_persona: dict[str, list[int]] = entry["per_persona"]
     shop_bounds: list[int] = entry["shop"]
 
     opening_days: dict[str, int] = {}
@@ -92,3 +95,4 @@ def draw_opening_days(
         opening_days[shop.account_id] = days
 
     return opening_days
+
