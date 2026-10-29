@@ -11,7 +11,7 @@ episode purposes, switch outage details unseen by receiving banks, and device fl
 """
 
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Sequence
 
 from core.event_clock import world_minute_to_ist
@@ -647,6 +647,10 @@ def project_run(
                 b_id = account_to_bank[acc_id]
                 if acc_id not in account_to_region:
                     raise ValueError(f"Account {acc_id!r} has no home region")
+                if acc_id not in output.account_opening_days:
+                    raise ValueError(f"Account {acc_id!r} missing from account_opening_days")
+                days_open = output.account_opening_days[acc_id]
+                event_time = start_time - timedelta(days=days_open)
                 r = account_to_region[acc_id]
                 open_details = {"home_region": r}
                 check_bank_visible(open_details, ACCOUNT_OPENED_DETAIL_FIELDS)
@@ -655,7 +659,7 @@ def project_run(
                     event_id=f"{run_id}-open-{acc_id}",
                     account_id=acc_id,
                     kind="account_opened",
-                    event_time=start_time,
+                    event_time=event_time,
                     details=open_details,
                 )
                 check_bank_visible(asdict(open_ev), BANK_VISIBLE_ACCOUNT_EVENT_FIELDS)

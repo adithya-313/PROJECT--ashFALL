@@ -2,10 +2,11 @@
 # Purpose: Unit tests for Level 15b bank feed additions: balance replay, cash withdrawals, and account home regions.
 
 from dataclasses import asdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
+from core.event_clock import world_minute_to_ist
 from world.bank_feed import (
     ACCOUNT_OPENED_DETAIL_FIELDS,
     BANK_VISIBLE_WITHDRAWAL_FIELDS,
@@ -299,6 +300,7 @@ def test_withdrawal_projection_success_failed_skipped(feed_config: BankFeedConfi
         result=result,
         effective_config={},
         code_version="test",
+        account_opening_days=prepared.account_opening_days,
     )
 
     feed = project_run(output)
@@ -356,6 +358,7 @@ def test_account_opened_home_region_and_config_switch() -> None:
         result=result,
         effective_config={},
         code_version="test",
+        account_opening_days=prepared.account_opening_days,
     )
 
     feed_enabled = project_run(output)
@@ -364,10 +367,13 @@ def test_account_opened_home_region_and_config_switch() -> None:
 
     # 60 people + 12 shops = 72 accounts
     assert len(open_events) == 72
+    start_time = world_minute_to_ist(0, output.plan.clock.start_date)
     for ev in open_events:
         assert "home_region" in ev.details
         assert isinstance(ev.details["home_region"], int)
         check_bank_visible(ev.details, ACCOUNT_OPENED_DETAIL_FIELDS)
+        expected_time = start_time - timedelta(days=output.account_opening_days[ev.account_id])
+        assert ev.event_time == expected_time
 
 
 def test_withdrawal_projection_leak_check_raises_projection_leak_error() -> None:
@@ -439,6 +445,7 @@ def test_failed_withdrawal_preserves_sender_bank_failure_domain() -> None:
         result=result,
         effective_config={},
         code_version="test",
+        account_opening_days=prepared.account_opening_days,
     )
 
     feed = project_run(output)
@@ -488,6 +495,7 @@ def test_failed_withdrawal_with_none_domain_raises_value_error() -> None:
         result=result,
         effective_config={},
         code_version="test",
+        account_opening_days=prepared.account_opening_days,
     )
 
     with pytest.raises(ValueError, match=rf"Withdrawal {w_fail_id} marked failed but has invalid or missing domain"):
@@ -527,6 +535,7 @@ def test_account_with_no_region_raises_value_error() -> None:
         result=result,
         effective_config={},
         code_version="test",
+        account_opening_days=prepared.account_opening_days,
     )
 
     with pytest.raises(ValueError, match=rf"Account {missing_person.account_id!r} has no home region"):
@@ -557,6 +566,7 @@ def test_opened_account_with_no_region_raises_value_error() -> None:
         result=result,
         effective_config={},
         code_version="test",
+        account_opening_days=prepared.account_opening_days,
     )
 
     with pytest.raises(ValueError, match=r"Account 'acc_unknown_000999' has no home region"):

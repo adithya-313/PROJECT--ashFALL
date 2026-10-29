@@ -36,7 +36,7 @@ TERM: run id: a 16-character fingerprint of seed, effective configuration and co
 import copy
 import os
 from collections.abc import Callable, Sequence
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
 import numpy as np
@@ -74,6 +74,7 @@ from world.interactive_records import (
     allow_all,
 )
 from world.interactive_state import start_runner_state
+from world.opening_dates import draw_opening_days
 from world.payments import find_ledger_for_account
 from world.run_identity import REPO_ROOT, find_code_version, load_runner_config, make_payment_id, make_run_id
 from world.tactic_config import load_tactic_blocks
@@ -124,6 +125,7 @@ class PreparedWorld:
     episodes: list[Episode]
     episode_payments: tuple[PlannedPayment, ...]
     episode_report: dict[str, Any]
+    account_opening_days: dict[str, int] = field(default_factory=dict)
 
 
 def prepare_world(fast_settings: FastRunSettings, configs: WorldConfigs | None) -> PreparedWorld:
@@ -149,6 +151,7 @@ def prepare_world(fast_settings: FastRunSettings, configs: WorldConfigs | None) 
     # 1-2. Build people, shops, banks and ledgers from the world ranges.
     ranges = configs.world_ranges if configs is not None else read_world_ranges()
     world = build_world(fast_settings.seed, fast_settings.n_people, fast_settings.n_shops, ranges=ranges)
+    opening_days = draw_opening_days(world.people, world.shops, fast_settings.seed, ranges, fast_settings.range_name)
     # 3-4. Split the seed into Level 11's four streams (children 0 to 3).
     plan_rng, run_rng = spawn_world_streams(fast_settings.seed)
     device_rng, episode_rng = spawn_life_streams(fast_settings.seed)
@@ -167,7 +170,8 @@ def prepare_world(fast_settings: FastRunSettings, configs: WorldConfigs | None) 
     episodes = draw_episode_schedule(ranges, episode_rng, world.people, plan.n_days, range_name=range_name)
     episode_plan = plan_episode_payments(world, plan, episodes, ranges, episode_rng, range_name=range_name)
     return PreparedWorld(
-        world, plan, run_rng, tuple(device_events), episodes, tuple(episode_plan.payments), episode_plan.report
+        world, plan, run_rng, tuple(device_events), episodes, tuple(episode_plan.payments), episode_plan.report,
+        account_opening_days=opening_days,
     )
 
 
@@ -686,7 +690,7 @@ def run_interactive_world(
     )
     return InteractiveWorldOutput(
         prepared.world, prepared.plan, prepared.episodes, prepared.episode_report, prepared.device_events,
-        result, effective_config, version,
+        result, effective_config, version, account_opening_days=prepared.account_opening_days,
     )
 
 
