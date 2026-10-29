@@ -21,6 +21,7 @@ EXPECTED_TRANSACTION_COLUMNS = [
     "payment_id", "bank_id", "side", "counterparty_vpa", "counterparty_bank_id", "amount_paise",
     "event_time", "status", "failure_domain", "payee_type", "channel",
     "sender_device_fingerprint", "sender_os_generation",
+    "balance_after_paise",
 ]
 
 
@@ -44,8 +45,8 @@ async def test_fresh_schema_applies_all_migrations_in_order(empty_schema):
 
     applied_count = await apply_pending_migrations(connection)
 
-    # All files applied (we expect 8 today), and the tracking table lists exactly those names.
-    assert applied_count == len(real_filenames) == 8
+    # All files applied (we expect 9 today), and the tracking table lists exactly those names.
+    assert applied_count == len(real_filenames) == 9
     assert await applied_filenames(connection) == real_filenames
     assert real_filenames == sorted(real_filenames)
 
@@ -67,9 +68,9 @@ async def test_second_run_applies_nothing(empty_schema):
     first_count = await apply_pending_migrations(connection)
     second_count = await apply_pending_migrations(connection)
 
-    assert first_count == len(find_migration_files()) == 8
+    assert first_count == len(find_migration_files()) == 9
     assert second_count == 0
-    assert len(await applied_filenames(connection)) == 8
+    assert len(await applied_filenames(connection)) == 9
 
 
 async def test_failed_migration_is_not_recorded(empty_schema, tmp_path):
@@ -93,7 +94,7 @@ async def test_failed_migration_is_not_recorded(empty_schema, tmp_path):
 
 
 async def test_transactions_table_column_count_is_locked(isolated_schema):
-    """The transactions table has exactly the 28 locked columns, in order."""
+    """The transactions table has exactly the 31 locked columns, in order."""
     connection, schema_name = isolated_schema
 
     rows = await connection.fetch(
@@ -106,7 +107,7 @@ async def test_transactions_table_column_count_is_locked(isolated_schema):
     )
     column_names = [row["column_name"] for row in rows]
 
-    assert len(column_names) == 30
+    assert len(column_names) == 31
     assert column_names == EXPECTED_TRANSACTION_COLUMNS
 
 
