@@ -3,8 +3,6 @@
 
 from dataclasses import asdict
 from datetime import date, datetime, timezone
-from types import SimpleNamespace
-from typing import Any, cast
 
 import pytest
 
@@ -18,8 +16,12 @@ from world.bank_feed import (
     replay_balances,
 )
 from world.bank_feed_config import BankFeedConfig, load_bank_feed_config
+from world.build_world import World
+from world.calendar_runner import RunResult
 from world.cash_withdrawals import CashWithdrawalRecord
 from world.failures import PaymentEvent
+from world.interactive_records import InteractiveRunResult, InteractiveWorldOutput
+from world.interactive_runner import FastRunSettings, prepare_world
 from world.ledger import Ledger
 
 CLOCK_START = date(2026, 10, 28)
@@ -46,7 +48,7 @@ def test_balance_replay_matches_ledger_balance_after_1000_operations() -> None:
     for acc in accounts_1:
         ledger_1.add_account(acc, opening_balance_paise=10_000_000, minute=0)
 
-    world = SimpleNamespace(ledgers=[ledger_0, ledger_1])
+    world = World(seed=101, banks=[], ledgers=[ledger_0, ledger_1], shops=[], people=[], parameters_drawn={})
 
     # Execute 1000 mixed payments and withdrawals across accounts.
     for op_idx in range(1, 1001):
@@ -88,7 +90,7 @@ def test_two_identical_payments_in_same_minute_get_monotonic_balances(feed_confi
     ledger_0.add_account(sender, opening_balance_paise=initial_sender_balance, minute=0)
     ledger_1.add_account(receiver, opening_balance_paise=initial_receiver_balance, minute=0)
 
-    world = SimpleNamespace(ledgers=[ledger_0, ledger_1])
+    world = World(seed=101, banks=[], ledgers=[ledger_0, ledger_1], shops=[], people=[], parameters_drawn={})
 
     # Two identical payments in minute 15 for amount 50000 paise.
     minute = 15
@@ -155,7 +157,7 @@ def test_failed_payment_has_balance_after_none_and_ledger_unchanged(feed_config:
     receiver = "acc_shop_000001"
     initial_balance = 500000
     ledger_0.add_account(sender, opening_balance_paise=initial_balance, minute=0)
-    world = SimpleNamespace(ledgers=[ledger_0])
+    world = World(seed=101, banks=[], ledgers=[ledger_0], shops=[], people=[], parameters_drawn={})
 
     replay = replay_balances(world)
 
@@ -191,7 +193,7 @@ def test_cross_bank_payments_show_independent_balances(feed_config: BankFeedConf
     ledger_0.add_account(sender, opening_balance_paise=800000, minute=0)
     ledger_1.add_account(receiver, opening_balance_paise=250000, minute=0)
 
-    world = SimpleNamespace(ledgers=[ledger_0, ledger_1])
+    world = World(seed=101, banks=[], ledgers=[ledger_0, ledger_1], shops=[], people=[], parameters_drawn={})
 
     minute = 35
     amount = 150000
@@ -224,17 +226,20 @@ def test_cross_bank_payments_show_independent_balances(feed_config: BankFeedConf
 
 
 def test_withdrawal_projection_success_failed_skipped(feed_config: BankFeedConfig) -> None:
-    """Test 5: Withdrawal projection: success shows reduced balance; failed shows unchanged;
+    """Test 5: Withdrawal projection: success shows reduced balance; failed shows balance None;
     skipped omitted; reason dropped.
     """
-    ledger_0 = Ledger(bank_index=0, upi_limit_paise=10000000)
-    acc = "acc_person_000001"
-    start_balance = 500000
-    ledger_0.add_account(acc, opening_balance_paise=start_balance, minute=0)
+    prepared = prepare_world(FastRunSettings(101, 60, 12, 61, "training"), None)
+    world = prepared.world
+    person = world.people[0]
+    acc = person.account_id
+    bank_idx = person.bank_index
+    ledger = world.ledgers[bank_idx]
+    start_balance = ledger.balance_of(acc)
 
     # 1. Successful withdrawal at minute 10 of 100000 paise
-    w_succ_id = "cw_10_acc_person_000001_atm_0"
-    ledger_0.post_debit(acc, 100000, 10, w_succ_id)
+    w_succ_id = f"cw_10_{acc}_atm_0"
+    ledger.post_debit(acc, 100000, 10, w_succ_id)
     rec_succ = CashWithdrawalRecord(
         id=w_succ_id,
         minute=10,
@@ -248,7 +253,7 @@ def test_withdrawal_projection_success_failed_skipped(feed_config: BankFeedConfi
     )
 
     # 2. Failed withdrawal at minute 20 for 1000000 paise (insufficient funds, no ledger debit)
-    w_fail_id = "cw_20_acc_person_000001_branch_0"
+    w_fail_id = f"cw_20_{acc}_branch_0"
     rec_fail = CashWithdrawalRecord(
         id=w_fail_id,
         minute=20,
@@ -263,7 +268,7 @@ def test_withdrawal_projection_success_failed_skipped(feed_config: BankFeedConfi
 
     # 3. Skipped withdrawal at minute 30 (encumbrance hold, never touched bank)
     rec_skip = CashWithdrawalRecord(
-        id="cw_30_acc_person_000001_atm_0",
+        id=f"cw_30_{acc}_atm_0",
         minute=30,
         account=acc,
         channel="atm",
@@ -274,46 +279,51 @@ def test_withdrawal_projection_success_failed_skipped(feed_config: BankFeedConfi
         domain=None,
     )
 
-    world = SimpleNamespace(
-        ledgers=[ledger_0],
-        people=[SimpleNamespace(person_id="person_000001", account_id=acc, region=2)],
-        shops=[],
-    )
-
-    result = SimpleNamespace(
-        run_id="run_test_w",
-        run_result=SimpleNamespace(events=[], event_sender_devices=[]),
+    result = InteractiveRunResult(
+        run_result=RunResult([], {}, [], [], {}),
         payment_ids=[],
+        planned_payment_ids=[],
+        event_sources=[],
+        events_resumed=[],
         applied_device_events=[],
-        applied_gang_device_events=[],
+        run_id="run_test_w",
         opened_accounts=[],
         cash_withdrawals=[rec_succ, rec_fail, rec_skip],
     )
-    plan = SimpleNamespace(clock=SimpleNamespace(start_date=CLOCK_START))
-    output = SimpleNamespace(world=world, plan=plan, result=result)
+    output = InteractiveWorldOutput(
+        world=world,
+        plan=prepared.plan,
+        episodes=[],
+        episode_report={},
+        device_events=prepared.device_events,
+        result=result,
+        effective_config={},
+        code_version="test",
+    )
 
-    feed = project_run(cast(Any, output))
-    withdrawals = feed.withdrawals_by_bank["bank_0"]
+    feed = project_run(output)
+    bank_id = f"bank_{bank_idx}"
+    withdrawals = feed.withdrawals_by_bank[bank_id]
 
     # Skipped withdrawal must be omitted; only success and failed remain.
     assert len(withdrawals) == 2
     ids = [w.withdrawal_id for w in withdrawals]
     assert w_succ_id in ids
     assert w_fail_id in ids
-    assert "cw_30_acc_person_000001_atm_0" not in ids
+    assert f"cw_30_{acc}_atm_0" not in ids
 
-    # Successful withdrawal shows reduced balance (500000 - 100000 = 400000)
+    # Successful withdrawal shows reduced balance (start_balance - 100000)
     w_succ = next(w for w in withdrawals if w.withdrawal_id == w_succ_id)
     assert w_succ.status == "success"
     assert w_succ.amount_paise == 100000
-    assert w_succ.balance_after_paise == 400000
+    assert w_succ.balance_after_paise == start_balance - 100000
     assert w_succ.failure_domain is None
 
-    # Failed withdrawal shows unchanged balance at that moment (400000) and failure_domain='customer'
+    # Failed withdrawal shows balance_after_paise = None and failure_domain='customer'
     w_fail = next(w for w in withdrawals if w.withdrawal_id == w_fail_id)
     assert w_fail.status == "failed"
     assert w_fail.amount_paise == 1000000
-    assert w_fail.balance_after_paise == 400000
+    assert w_fail.balance_after_paise is None
     assert w_fail.failure_domain == "customer"
 
     # Reason field is NEVER projected in bank-visible record.
@@ -325,40 +335,35 @@ def test_withdrawal_projection_success_failed_skipped(feed_config: BankFeedConfi
 
 def test_account_opened_home_region_and_config_switch() -> None:
     """Test 6: Account opened includes home_region; config switch controls start-of-run existing account emission."""
-    ledger_0 = Ledger(bank_index=0, upi_limit_paise=10000000)
-    people_accounts = [f"acc_person_{i:06d}" for i in range(10)]
-    shop_accounts = [f"acc_shop_{i:06d}" for i in range(2)]
-    for acc in people_accounts:
-        ledger_0.add_account(acc, opening_balance_paise=100000, minute=0)
-    for acc in shop_accounts:
-        ledger_0.add_account(acc, opening_balance_paise=500000, minute=0)
-
-    world = SimpleNamespace(
-        ledgers=[ledger_0],
-        people=[
-            SimpleNamespace(person_id=f"person_{i:06d}", account_id=acc, region=1, bank_index=0)
-            for i, acc in enumerate(people_accounts)
-        ],
-        shops=[SimpleNamespace(account_id=acc, region=2, bank_index=0) for acc in shop_accounts],
-    )
-    result = SimpleNamespace(
-        run_id="run_test_open",
-        run_result=SimpleNamespace(events=[], event_sender_devices=[]),
+    prepared = prepare_world(FastRunSettings(101, 60, 12, 61, "training"), None)
+    result = InteractiveRunResult(
+        run_result=RunResult([], {}, [], [], {}),
         payment_ids=[],
+        planned_payment_ids=[],
+        event_sources=[],
+        events_resumed=[],
         applied_device_events=[],
-        applied_gang_device_events=[],
+        run_id="run_test_open",
         opened_accounts=[],
         cash_withdrawals=[],
     )
-    plan = SimpleNamespace(clock=SimpleNamespace(start_date=CLOCK_START))
-    out = SimpleNamespace(world=world, plan=plan, result=result)
+    output = InteractiveWorldOutput(
+        world=prepared.world,
+        plan=prepared.plan,
+        episodes=[],
+        episode_report={},
+        device_events=prepared.device_events,
+        result=result,
+        effective_config={},
+        code_version="test",
+    )
 
-    feed_enabled = project_run(cast(Any, out))
+    feed_enabled = project_run(output)
     all_events = [ev for events in feed_enabled.account_events_by_bank.values() for ev in events]
     open_events = [ev for ev in all_events if ev.kind == "account_opened"]
 
-    # With emit_opening_for_existing_accounts=True, all 12 accounts (10 people + 2 shops) have open events.
-    assert len(open_events) == 12
+    # 60 people + 12 shops = 72 accounts
+    assert len(open_events) == 72
     for ev in open_events:
         assert "home_region" in ev.details
         assert isinstance(ev.details["home_region"], int)
@@ -392,3 +397,167 @@ def test_withdrawal_projection_leak_check_raises_projection_leak_error() -> None
     leaky_flag["illicit_flow_id"] = "flow_xyz"
     with pytest.raises(ProjectionLeakError, match="Record contains bank-invisible fields: \\['illicit_flow_id'\\]"):
         check_bank_visible(leaky_flag, BANK_VISIBLE_WITHDRAWAL_FIELDS)
+
+
+def test_failed_withdrawal_preserves_sender_bank_failure_domain() -> None:
+    """FIX 1: A failed withdrawal with domain 'sender_bank' is projected with failure_domain='sender_bank'."""
+    prepared = prepare_world(FastRunSettings(101, 60, 12, 61, "training"), None)
+    world = prepared.world
+    person = world.people[0]
+    acc = person.account_id
+    bank_idx = person.bank_index
+
+    w_fail_id = f"cw_40_{acc}_atm_0"
+    rec_fail = CashWithdrawalRecord(
+        id=w_fail_id,
+        minute=40,
+        account=acc,
+        channel="atm",
+        requested=50000,
+        withdrawn=0,
+        status="failed",
+        reason="bank_unavailable",
+        domain="sender_bank",
+    )
+    result = InteractiveRunResult(
+        run_result=RunResult([], {}, [], [], {}),
+        payment_ids=[],
+        planned_payment_ids=[],
+        event_sources=[],
+        events_resumed=[],
+        applied_device_events=[],
+        run_id="run_test_w_fail_domain",
+        opened_accounts=[],
+        cash_withdrawals=[rec_fail],
+    )
+    output = InteractiveWorldOutput(
+        world=world,
+        plan=prepared.plan,
+        episodes=[],
+        episode_report={},
+        device_events=prepared.device_events,
+        result=result,
+        effective_config={},
+        code_version="test",
+    )
+
+    feed = project_run(output)
+    bank_id = f"bank_{bank_idx}"
+    w_rec = next(w for w in feed.withdrawals_by_bank[bank_id] if w.withdrawal_id == w_fail_id)
+    assert w_rec.status == "failed"
+    assert w_rec.failure_domain == "sender_bank"
+    assert w_rec.balance_after_paise is None
+
+
+def test_failed_withdrawal_with_none_domain_raises_value_error() -> None:
+    """FIX 1: A failed withdrawal with domain None raises ValueError naming the withdrawal id."""
+    prepared = prepare_world(FastRunSettings(101, 60, 12, 61, "training"), None)
+    world = prepared.world
+    person = world.people[0]
+    acc = person.account_id
+
+    w_fail_id = f"cw_50_{acc}_atm_0"
+    rec_fail = CashWithdrawalRecord(
+        id=w_fail_id,
+        minute=50,
+        account=acc,
+        channel="atm",
+        requested=50000,
+        withdrawn=0,
+        status="failed",
+        reason="technical_error",
+        domain=None,
+    )
+    result = InteractiveRunResult(
+        run_result=RunResult([], {}, [], [], {}),
+        payment_ids=[],
+        planned_payment_ids=[],
+        event_sources=[],
+        events_resumed=[],
+        applied_device_events=[],
+        run_id="run_test_w_fail_none",
+        opened_accounts=[],
+        cash_withdrawals=[rec_fail],
+    )
+    output = InteractiveWorldOutput(
+        world=world,
+        plan=prepared.plan,
+        episodes=[],
+        episode_report={},
+        device_events=prepared.device_events,
+        result=result,
+        effective_config={},
+        code_version="test",
+    )
+
+    with pytest.raises(ValueError, match=rf"Withdrawal {w_fail_id} marked failed but has invalid or missing domain"):
+        project_run(output)
+
+
+def test_account_with_no_region_raises_value_error() -> None:
+    """FIX 2: An existing account with no region in account_to_region raises ValueError."""
+    prepared = prepare_world(FastRunSettings(101, 60, 12, 61, "training"), None)
+    missing_person = prepared.world.people[0]
+    remaining_people = prepared.world.people[1:]
+    world = World(
+        seed=prepared.world.seed,
+        banks=prepared.world.banks,
+        ledgers=prepared.world.ledgers,
+        shops=prepared.world.shops,
+        people=remaining_people,
+        parameters_drawn=prepared.world.parameters_drawn,
+    )
+    result = InteractiveRunResult(
+        run_result=RunResult([], {}, [], [], {}),
+        payment_ids=[],
+        planned_payment_ids=[],
+        event_sources=[],
+        events_resumed=[],
+        applied_device_events=[],
+        run_id="run_test_no_region",
+        opened_accounts=[],
+        cash_withdrawals=[],
+    )
+    output = InteractiveWorldOutput(
+        world=world,
+        plan=prepared.plan,
+        episodes=[],
+        episode_report={},
+        device_events=prepared.device_events,
+        result=result,
+        effective_config={},
+        code_version="test",
+    )
+
+    with pytest.raises(ValueError, match=rf"Account {missing_person.account_id!r} has no home region"):
+        project_run(output)
+
+
+def test_opened_account_with_no_region_raises_value_error() -> None:
+    """FIX 2: A mid-run opened account not in account_to_region raises ValueError."""
+    prepared = prepare_world(FastRunSettings(101, 60, 12, 61, "training"), None)
+    bad_opened = (300, "acc_unknown_000999", "person", "genuine_account_openings", 1, 500000)
+    result = InteractiveRunResult(
+        run_result=RunResult([], {}, [], [], {}),
+        payment_ids=[],
+        planned_payment_ids=[],
+        event_sources=[],
+        events_resumed=[],
+        applied_device_events=[],
+        run_id="run_test_bad_opened",
+        opened_accounts=[bad_opened],
+        cash_withdrawals=[],
+    )
+    output = InteractiveWorldOutput(
+        world=prepared.world,
+        plan=prepared.plan,
+        episodes=[],
+        episode_report={},
+        device_events=prepared.device_events,
+        result=result,
+        effective_config={},
+        code_version="test",
+    )
+
+    with pytest.raises(ValueError, match=r"Account 'acc_unknown_000999' has no home region"):
+        project_run(output)

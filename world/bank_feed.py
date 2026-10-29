@@ -16,8 +16,10 @@ from typing import Any, Sequence
 
 from core.event_clock import world_minute_to_ist
 from world.bank_feed_config import BankFeedConfig, load_bank_feed_config
+from world.build_world import World
+from world.cash_withdrawals import ALLOWED_CHANNELS
 from world.device_runtime import DeviceStamp
-from world.failures import PaymentEvent
+from world.failures import FAILURE_DOMAINS, PaymentEvent
 from world.interactive_records import InteractiveWorldOutput
 from world.label_records import LabelEvent
 
@@ -273,7 +275,6 @@ class BalanceReplay:
         self,
         balances_by_transfer: dict[tuple[str, str], list[int]],
         balances_by_account: dict[str, int],
-        account_history: dict[str, list[tuple[int, int]]],
     ) -> None:
         """
         Initialises balance replay state tracking chronological account balances and occurrences.
@@ -281,12 +282,10 @@ class BalanceReplay:
         Args:
             balances_by_transfer: Mapping of (account_id, transfer_id) to list of posted balances.
             balances_by_account: Authoritative final balances for each account.
-            account_history: Chronological list of (minute, balance) tuples for minute lookups.
         """
         self._balances = balances_by_transfer
         self._cursors: dict[tuple[str, str], int] = {}
         self._balances_by_account = balances_by_account
-        self._account_history = account_history
 
     def get_balance_after(self, account_id: str, transfer_id: str) -> int:
         """
@@ -315,19 +314,6 @@ class BalanceReplay:
         self._cursors[key] = len(lst)
         return lst[-1]
 
-    def get_balance_at_minute(self, account_id: str, minute: int) -> int:
-        """
-        Returns the account running balance at or immediately before the specified minute.
-        """
-        history = self._account_history.get(account_id, [])
-        running = 0
-        for entry_minute, bal in history:
-            if entry_minute <= minute:
-                running = bal
-            else:
-                break
-        return running
-
     def get_final_balance(self, account_id: str) -> int:
         """Returns the final balance of the account at simulation end."""
         if account_id not in self._balances_by_account:
@@ -335,36 +321,23 @@ class BalanceReplay:
         return self._balances_by_account[account_id]
 
 
-def replay_balances(world: Any) -> BalanceReplay:
+def replay_balances(world: World) -> BalanceReplay:
     """
     WHAT: Walks ledger transactions in entry order, tracking per-account running balances.
     CRITICAL: Maps by (account_id, transfer_id) occurrence. At the end of the walk, asserts
     `running_balance[account] == ledger.balance_of(account)` for every account seen; if any mismatch,
     raises ValueError (self-check against silent divergence).
     """
-    ledgers = (
-        world.ledgers
-        if hasattr(world, "ledgers")
-        else [world.ledger]
-        if hasattr(world, "ledger")
-        else [world]
-        if hasattr(world, "entries") and hasattr(world, "balance_of")
-        else list(world)
-    )
-
     balances_by_transfer: dict[tuple[str, str], list[int]] = {}
     running_balances: dict[str, int] = {}
-    account_history: dict[str, list[tuple[int, int]]] = {}
 
-    for ledger in ledgers:
+    for ledger in world.ledgers:
         for acc in ledger.accounts:
             running_balances[acc] = 0
-            account_history[acc] = [(0, 0)]
 
         for entry in ledger.entries:
             acc = entry.account_id
-            running_balances[acc] = running_balances.get(acc, 0) + entry.amount_paise
-            account_history.setdefault(acc, []).append((entry.minute, running_balances[acc]))
+            running_balances[acc] = running_balances[acc] + entry.amount_paise
             key = (acc, entry.transfer_id)
             balances_by_transfer.setdefault(key, []).append(running_balances[acc])
 
@@ -376,7 +349,7 @@ def replay_balances(world: Any) -> BalanceReplay:
                     f"calculated {running_balances[acc]} != actual {actual}"
                 )
 
-    return BalanceReplay(balances_by_transfer, dict(running_balances), account_history)
+    return BalanceReplay(balances_by_transfer, dict(running_balances))
 
 
 def project_payment(
@@ -551,12 +524,10 @@ def project_run(
         account_to_bank[op_acc] = resolve_bank_id(op_b_idx, config)
 
     account_to_region: dict[str, int] = {}
-    if hasattr(output.world, "people"):
-        for p in output.world.people:
-            account_to_region[p.account_id] = p.region
-    if hasattr(output.world, "shops"):
-        for s in output.world.shops:
-            account_to_region[s.account_id] = s.region
+    for p in output.world.people:
+        account_to_region[p.account_id] = p.region
+    for s in output.world.shops:
+        account_to_region[s.account_id] = s.region
 
     balance_replay = replay_balances(output.world)
     people_by_id = {p.person_id: p for p in output.world.people}
@@ -646,7 +617,9 @@ def project_run(
         event_time = world_minute_to_ist(op_minute, clock_start)
         event_id = f"{run_id}-open-{op_account_id}"
 
-        region = account_to_region.get(op_account_id, op_bank_index)
+        if op_account_id not in account_to_region:
+            raise ValueError(f"Account {op_account_id!r} has no home region")
+        region = account_to_region[op_account_id]
         details = {"home_region": region}
         check_bank_visible(details, ACCOUNT_OPENED_DETAIL_FIELDS)
 
@@ -664,18 +637,17 @@ def project_run(
     # 6b. Emit account_opened events for existing accounts at start of run if configured.
     if config.emit_opening_for_existing_accounts:
         opened_ids = {opened[1] for opened in output.result.opened_accounts}
-        if hasattr(output.world, "accounts"):
-            existing_accounts = output.world.accounts
-        elif hasattr(output.world, "ledgers"):
-            existing_accounts = sorted({acc for ledger in output.world.ledgers for acc in ledger.accounts})
-        else:
-            existing_accounts = sorted(account_to_bank.keys())
+        existing_accounts = sorted({acc for ledger in output.world.ledgers for acc in ledger.accounts})
 
         start_time = world_minute_to_ist(0, clock_start)
         for acc_id in existing_accounts:
-            if acc_id not in opened_ids and acc_id in account_to_bank:
+            if acc_id not in opened_ids:
+                if acc_id not in account_to_bank:
+                    raise ValueError(f"Account {acc_id!r} not found in account_to_bank mapping")
                 b_id = account_to_bank[acc_id]
-                r = account_to_region.get(acc_id, 0)
+                if acc_id not in account_to_region:
+                    raise ValueError(f"Account {acc_id!r} has no home region")
+                r = account_to_region[acc_id]
                 open_details = {"home_region": r}
                 check_bank_visible(open_details, ACCOUNT_OPENED_DETAIL_FIELDS)
                 open_ev = BankFeedAccountEvent(
@@ -690,47 +662,38 @@ def project_run(
                 account_events_by_bank[b_id].append(open_ev)
 
     # 6c. Project cash withdrawals.
-    cash_withdrawals = getattr(output.result, "cash_withdrawals", [])
-    for w in cash_withdrawals:
-        if getattr(w, "status", "") == "skipped":
+    for w in output.result.cash_withdrawals:
+        if w.status == "skipped":
             continue
-        acc_id = getattr(w, "account_id", getattr(w, "account", None))
-        if acc_id is None or acc_id not in account_to_bank:
-            raise ValueError(f"Cash withdrawal references unknown account: {w}")
-        b_id = account_to_bank[acc_id]
+        if w.account not in account_to_bank:
+            raise ValueError(f"Cash withdrawal {w.id} references unknown account {w.account!r}")
+        b_id = account_to_bank[w.account]
         event_time = world_minute_to_ist(w.minute, clock_start)
-        channel = getattr(w, "channel", "atm")
+        if w.channel not in ALLOWED_CHANNELS:
+            raise ValueError(f"Withdrawal {w.id} has invalid channel {w.channel!r}; expected one of {ALLOWED_CHANNELS}")
 
-        if hasattr(w, "withdrawn") and w.status == "success":
-            amount_paise = w.withdrawn
-        elif hasattr(w, "requested"):
-            amount_paise = w.requested
-        elif hasattr(w, "amount_paise"):
-            amount_paise = w.amount_paise
-        elif hasattr(w, "amount"):
-            amount_paise = int(w.amount * 100)
-        else:
-            raise ValueError(f"Cannot determine amount_paise for withdrawal {w}")
+        amount_paise = w.withdrawn if w.status == "success" else w.requested
 
         if w.status == "success":
             failure_domain = None
-            balance_after_paise = balance_replay.get_withdrawal_balance_after(acc_id, w.id)
+            balance_after_paise = balance_replay.get_withdrawal_balance_after(w.account, w.id)
         elif w.status == "failed":
-            failure_domain = (
-                w.domain
-                if getattr(w, "domain", None)
-                in ("npci_central", "sender_bank", "receiver_bank", "app_or_network", "customer")
-                else "customer"
-            )
-            balance_after_paise = balance_replay.get_balance_at_minute(acc_id, w.minute)
+            # R7: a technical failure must never be counted against the customer,
+            # so an unknown domain is an error, not a customer failure.
+            if w.domain is None or w.domain not in FAILURE_DOMAINS:
+                raise ValueError(
+                    f"Withdrawal {w.id} marked failed but has invalid or missing domain: {w.domain}"
+                )
+            failure_domain = w.domain
+            balance_after_paise = None
         else:
             raise ValueError(f"Unknown withdrawal status: {w.status!r}")
 
         withdrawal_rec = BankFeedWithdrawal(
             withdrawal_id=w.id,
             bank_id=b_id,
-            account_id=acc_id,
-            channel=channel,
+            account_id=w.account,
+            channel=w.channel,
             amount_paise=amount_paise,
             status=w.status,
             failure_domain=failure_domain,
