@@ -57,6 +57,8 @@ recorded_at=created_at_iso,
 ```
 The `recorded_at` field is populated directly from PostgreSQL's server transaction timestamp (`transactions.created_at`). It represents the physical persistence arrival time in ashFALL storage, strictly separating business occurrence time (`event_time`) from storage availability time (`arrival_time`).
 
+bank_withdrawals uses recorded_at (Postgres DEFAULT now()) as its arrival time, the same clock as bank_account_events.created_at and transactions.created_at.
+
 ---
 
 ## 2. Bank Account Events Table (`bank_account_events`)
