@@ -124,6 +124,35 @@ PART_CONFIGS: dict[str, dict[str, Any]] = {
         ),
         "REGISTER_IDS": ("13-2", "13-3", "13-16", "13-17"),
     },
+    "14c": {
+        "INTERFACE_MODULES": (
+            "world.bank_feed",
+            "world.bank_feed_config",
+            "world.bank_connectors",
+            "api.v1.bank_service",
+            "api.v1.bank_clients",
+        ),
+        "RECORDS_MODULE": (
+            "world.bank_feed",
+            "world.bank_feed_config",
+            "world.bank_connectors",
+            "api.v1.bank_service",
+        ),
+        "RECORD_NAMES": (
+            "BankFeedPaymentSide",
+            "BankFeedAccountEvent",
+            "BankFeedComplaint",
+            "BankFeed",
+            "BankFeedConfig",
+            "ConnectorRunReport",
+            "IdempotentOutcome",
+        ),
+        "CONFIG_FILES": (
+            "config/bank_feed.yaml",
+            "config/bank_api.yaml",
+        ),
+        "REGISTER_IDS": ("14-6", "14-8", "14-10", "R7", "K2", "X3"),
+    },
 }
 
 
