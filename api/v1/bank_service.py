@@ -7,7 +7,7 @@
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
 import asyncpg
 import orjson
@@ -33,6 +33,8 @@ from api.v1.models import (
     DecisionResponse,
     TransactionResponse,
     TransactionSideRequest,
+    WithdrawalRequest,
+    WithdrawalResponse,
 )
 from api.v1.upi_outbox import UpiPaymentSide, record_upi_side, validate_side
 from core.event_clock import Clock
@@ -210,6 +212,7 @@ async def record_transaction(
         channel=request.channel,
         sender_device_fingerprint=request.sender_device_fingerprint,
         sender_os_generation=request.sender_os_generation,
+        balance_after_paise=request.balance_after_paise,
     )
     try:
         validate_side(upi_side)
@@ -314,6 +317,64 @@ async def record_complaint(
     return 201, ComplaintResponse(complaint_id=request.complaint_id).model_dump(mode="json")
 
 
+async def record_withdrawal(
+    pool_or_conn: asyncpg.Pool | asyncpg.Connection,
+    bank_id: str,
+    request: WithdrawalRequest,
+) -> tuple[bool, Any]:
+    """
+    WHAT: Persists an ATM or branch cash withdrawal into bank_withdrawals.
+    Returns (True, row) if inserted, (False, row) if duplicate.
+    Run under the same bank tenant role / app.bank_id setting as other bank writes.
+
+    Args:
+        pool_or_conn: Active connection pool or connection.
+        bank_id: Authorized commercial bank identifier.
+        request: Validated WithdrawalRequest model.
+
+    Returns:
+        Tuple of (inserted_boolean, row_record).
+    """
+    if request.bank_id != bank_id:
+        raise ApiError(422, "invalid_body", "bank_id must match authenticated bank")
+
+    async def _execute_insert(conn: asyncpg.Connection) -> tuple[bool, Any]:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO bank_withdrawals (
+                bank_id, withdrawal_id, account_id, channel, amount_paise,
+                status, failure_domain, event_time, balance_after_paise
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (bank_id, withdrawal_id) DO NOTHING
+            RETURNING *
+            """,
+            bank_id,
+            request.withdrawal_id,
+            request.account_id,
+            request.channel,
+            request.amount_paise,
+            request.status,
+            request.failure_domain,
+            request.event_time,
+            request.balance_after_paise,
+        )
+        if row is not None:
+            return True, row
+        existing = await conn.fetchrow(
+            "SELECT * FROM bank_withdrawals WHERE bank_id = $1 AND withdrawal_id = $2",
+            bank_id,
+            request.withdrawal_id,
+        )
+        return False, existing
+
+    if isinstance(pool_or_conn, asyncpg.Pool):
+        async with pool_or_conn.acquire() as connection:
+            async with bank_scoped_transaction(connection, bank_id) as scoped:
+                return await _execute_insert(scoped)
+    return await _execute_insert(pool_or_conn)
+
+
 def parse_raw_body(body_bytes: bytes, model_class: type[ModelT]) -> ModelT:
     """
     WHAT: Parses raw JSON bytes into a validated Pydantic model instance.
@@ -412,6 +473,20 @@ class InProcessBankClient:
             async def handler(connection: asyncpg.Connection) -> tuple[int, dict[str, Any]]:
                 return await record_complaint(connection, self._bank_id, complaint_model)
 
+        elif path == "/v1/withdrawals":
+            withdrawal_model = parse_raw_body(body_bytes, WithdrawalRequest)
+
+            async def handler(connection: asyncpg.Connection) -> tuple[int, dict[str, Any]]:
+                inserted, _ = await record_withdrawal(connection, self._bank_id, withdrawal_model)
+                status_code = 201 if inserted else 200
+                resp_status: Literal["recorded", "duplicate"] = "recorded" if inserted else "duplicate"
+                resp = WithdrawalResponse(
+                    status=resp_status,
+                    withdrawal_id=withdrawal_model.withdrawal_id,
+                    bank_id=self._bank_id,
+                )
+                return status_code, resp.model_dump(mode="json")
+
         else:
             raise ValueError(f"Unknown in-process path: {path!r}")
 
@@ -426,4 +501,19 @@ class InProcessBankClient:
             now=now,
             handler=handler,
         )
+
+    async def record_withdrawal(
+        self,
+        withdrawal: WithdrawalRequest | dict[str, Any] | bytes,
+        idempotency_key: str,
+    ) -> IdempotentOutcome:
+        """Records an ATM or branch withdrawal idempotently."""
+        if isinstance(withdrawal, bytes):
+            body_bytes = withdrawal
+        elif isinstance(withdrawal, dict):
+            body_bytes = orjson.dumps(withdrawal)
+        else:
+            body_bytes = orjson.dumps(withdrawal.model_dump(mode="json"))
+        return await self.post("/v1/withdrawals", body_bytes, idempotency_key)
+
 

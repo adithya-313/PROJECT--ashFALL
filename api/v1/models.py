@@ -194,6 +194,7 @@ class TransactionSideRequest(ApiModel):
     channel: Identifier | None = None
     sender_device_fingerprint: Identifier | None = None
     sender_os_generation: Annotated[int, Field(strict=True, ge=0)] | None = None
+    balance_after_paise: Annotated[int, Field(strict=True, ge=0)] | None = None
 
 
 class TransactionResponse(ApiModel):
@@ -261,3 +262,35 @@ class FeedbackResponse(ApiModel):
     """The result of storing feedback."""
 
     feedback_id: str
+
+
+class WithdrawalRequest(ApiModel):
+    """An ATM or branch cash withdrawal recorded by the account's bank."""
+
+    bank_id: Identifier
+    withdrawal_id: Identifier
+    account_id: Identifier
+    channel: Literal["atm", "branch"]
+    amount_paise: AmountPaise
+    status: Literal["success", "failed"]
+    failure_domain: Literal[
+        "npci_central", "sender_bank", "receiver_bank", "app_or_network", "customer"
+    ] | None = None
+    event_time: AwareDatetime
+    balance_after_paise: Annotated[int, Field(strict=True, ge=0)] | None = None
+
+    @model_validator(mode="after")
+    def _validate_failure_domain(self) -> "WithdrawalRequest":
+        if self.status == "failed" and self.failure_domain is None:
+            raise ValueError("failure_domain is required when status is 'failed'")
+        if self.status == "success" and self.failure_domain is not None:
+            raise ValueError("failure_domain must be None when status is 'success'")
+        return self
+
+
+class WithdrawalResponse(ApiModel):
+    """The result of recording a cash withdrawal."""
+
+    status: Literal["recorded", "duplicate"]
+    withdrawal_id: str
+    bank_id: str

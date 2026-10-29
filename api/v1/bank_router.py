@@ -7,7 +7,7 @@
 # (3) for POST routes, claim the idempotency key and do the business write in ONE bank-scoped transaction.
 import re
 from collections.abc import Awaitable, Callable
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
 import asyncpg
 from fastapi import APIRouter, Request
@@ -21,6 +21,7 @@ from api.v1.bank_service import (
     record_complaint,
     record_decision,
     record_transaction,
+    record_withdrawal,
     run_idempotent_operation,
 )
 from api.v1.errors import ApiError
@@ -39,6 +40,8 @@ from api.v1.models import (
     RiskResponse,
     TransactionResponse,
     TransactionSideRequest,
+    WithdrawalRequest,
+    WithdrawalResponse,
 )
 from api.v1.request_auth import BankRequestContext, authenticate_bank_request, raw_request_path
 from core.event_clock import Clock, WallClock
@@ -282,6 +285,33 @@ async def post_feedback(request: Request) -> ORJSONResponse:
         except asyncpg.UniqueViolationError as error:
             raise as_duplicate_record_error(error, FEEDBACK_UNIQUE_CONSTRAINT) from error
         return 201, FeedbackResponse(feedback_id=feedback.feedback_id).model_dump(mode="json")
+
+    return await run_idempotent_post(request, ctx, handler)
+
+
+@router.post(
+    "/withdrawals",
+    status_code=201,
+    response_model=WithdrawalResponse,
+    openapi_extra=request_schema(WithdrawalRequest),
+)
+async def post_withdrawal(request: Request) -> ORJSONResponse:
+    """Records an ATM or branch cash withdrawal. Repeated withdrawal id is stored once and answered with 200."""
+    ctx = await get_bank_context(request)
+    withdrawal = parse_body(ctx, WithdrawalRequest)
+    if withdrawal.bank_id != ctx.bank_id:
+        raise ApiError(422, "invalid_body", "bank_id must match authenticated bank")
+
+    async def handler(connection: asyncpg.Connection) -> tuple[int, dict[str, Any]]:
+        inserted, _ = await record_withdrawal(connection, ctx.bank_id, withdrawal)
+        status_code = 201 if inserted else 200
+        resp_status: Literal["recorded", "duplicate"] = "recorded" if inserted else "duplicate"
+        resp = WithdrawalResponse(
+            status=resp_status,
+            withdrawal_id=withdrawal.withdrawal_id,
+            bank_id=ctx.bank_id,
+        )
+        return status_code, resp.model_dump(mode="json")
 
     return await run_idempotent_post(request, ctx, handler)
 
