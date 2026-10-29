@@ -530,3 +530,55 @@ def test_shuffle_order_independence() -> None:
         _apply_batch(r_shuffled, shuffled)
         dump_shuffled = _canonical_dump(r_shuffled)
         assert dump_shuffled == dump_chrono, f"State diverged under seed {seed}"
+
+
+def test_trim_runs_through_lua_script(
+    redis_client: fakeredis.FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Proves that _trim_expired invokes the registered Lua script and deletes from both zset and hash."""
+    settings = load_account_features_settings()
+    calls = 0
+    orig_register_script = redis_client.register_script
+
+    def spy_register_script(*args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        return orig_register_script(*args, **kwargs)
+
+    monkeypatch.setattr(redis_client, "register_script", spy_register_script)
+
+    # Apply an old record
+    old_time = BASE_TIME
+    old_rec = _make_payment_side(
+        RUN_A, BANK_0, ACC_1, "pmt_old_001", "debit", old_time, old_time
+    )
+    apply_payment_side(redis_client, old_rec, settings)
+
+    st_key = side_times_key(RUN_A, BANK_0, ACC_1)
+    sr_key = side_records_key(RUN_A, BANK_0, ACC_1)
+    old_member = record_member(old_rec)
+
+    # Verify old record exists initially
+    assert redis_client.zscore(st_key, old_member) is not None
+    assert redis_client.hexists(sr_key, old_member) is True
+
+    # Apply a modern record far enough in the future to push old_rec behind retention + allowed_lateness
+    future_time = old_time + timedelta(
+        seconds=settings.retention_seconds + settings.allowed_lateness_seconds + 3600
+    )
+    new_rec = _make_payment_side(
+        RUN_A, BANK_0, ACC_1, "pmt_new_001", "credit", future_time, future_time
+    )
+    apply_payment_side(redis_client, new_rec, settings)
+
+    # Assert the Lua script was registered and executed at least once
+    assert calls >= 1
+
+    # Assert old member is gone from BOTH the sorted set and the hash
+    assert redis_client.zscore(st_key, old_member) is None
+    assert redis_client.hexists(sr_key, old_member) is False
+
+    # And the new member is retained in both
+    new_member = record_member(new_rec)
+    assert redis_client.zscore(st_key, new_member) is not None
+    assert redis_client.hexists(sr_key, new_member) is True

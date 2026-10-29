@@ -3,6 +3,8 @@
 #
 # fakeredis: tests/unit/test_velocity_features.py uses an in-memory fake Redis.
 fakeredis==2.39.0
+# lupa: lets fakeredis run the Lua trim script, so unit tests exercise the real atomic path.
+lupa==2.8
 # hypothesis: tests/property/test_haversine_property.py is a property-based test.
 hypothesis==6.168.3
 # PyYAML now comes from requirements.txt (nationalsim reads config/nationalsim.yaml inside the image).

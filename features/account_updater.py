@@ -63,31 +63,43 @@ def _trim_expired(
     records_key: str,
     cutoff_arg: str,
 ) -> int:
-    """Atomic trim using registered Lua script on Redis; falls back to pipeline if evalsha unsupported."""
-    script = getattr(client, "_account_trim_script", None)
-    if script is None:
-        script = client.register_script(TRIM_LUA_SCRIPT)
-        try:
-            client._account_trim_script = script
-        except Exception:
-            pass
+    """
+    PURPOSE:
+        Atomically trims expired member records from both the sorted set and hash storage in Redis.
 
-    try:
-        count = script(keys=[times_key, records_key], args=[cutoff_arg], client=client)
-        return int(count) if count is not None else 0
-    except Exception as exc:
-        if "unknown command" in str(exc).lower() and "eval" in str(exc).lower():
-            # In-memory test environment (fakeredis without lupa extension)
-            expired = client.zrangebyscore(times_key, "-inf", cutoff_arg)
-            if expired:
-                members = [
-                    m.decode("utf-8") if isinstance(m, bytes) else str(m)
-                    for m in expired
-                ]
-                client.hdel(records_key, *members)
-                client.zremrangebyscore(times_key, "-inf", cutoff_arg)
-            return len(expired)
-        raise
+    INPUTS:
+        client: Redis or FakeRedis client instance.
+        times_key: Sorted set key (KEYS[1]) containing event members scored by timestamp.
+        records_key: Hash key (KEYS[2]) storing serialized record payloads by member name.
+        cutoff_arg: Upper score bound string for ZRANGEBYSCORE (e.g. exclusive bound '(<cutoff>').
+
+    WHAT THE LUA SCRIPT DOES LINE BY LINE:
+        Line 1 (local expired = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])):
+            Queries all member names from the sorted set scored up to the cutoff threshold.
+        Line 2 (if #expired > 0 then):
+            Checks whether any expired members were found.
+        Line 3 (redis.call('HDEL', KEYS[2], unpack(expired))):
+            Deletes all expired member fields from the record hash storage.
+        Line 4 (redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])):
+            Removes all expired members from the sorted set.
+        Line 5 (end):
+            Concludes the conditional branch.
+        Line 6 (return #expired):
+            Returns the count of pruned records.
+
+    RETURN VALUE:
+        int: The number of expired records pruned from both keys.
+
+    ERRORS:
+        Any Redis error propagates directly to the caller without suppression or fallback.
+
+    CONSTRAINT:
+        One call is atomic on the Redis server, guaranteeing no orphan entries remain in the hash.
+    """
+    # redis-py registered scripts already use EVALSHA with an automatic reload, so no caching is needed.
+    script = client.register_script(TRIM_LUA_SCRIPT)
+    count = script(keys=[times_key, records_key], args=[cutoff_arg], client=client)
+    return int(count) if count is not None else 0
 
 
 def apply_payment_side(
