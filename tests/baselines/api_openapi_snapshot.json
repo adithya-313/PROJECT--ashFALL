@@ -277,6 +277,35 @@
       ],
       "title": "ValidationError",
       "type": "object"
+    },
+    "WithdrawalResponse": {
+      "additionalProperties": false,
+      "description": "The result of recording a cash withdrawal.",
+      "properties": {
+        "bank_id": {
+          "title": "Bank Id",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "recorded",
+            "duplicate"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "withdrawal_id": {
+          "title": "Withdrawal Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "withdrawal_id",
+        "bank_id"
+      ],
+      "title": "WithdrawalResponse",
+      "type": "object"
     }
   },
   "metrics_endpoint_present": true,
@@ -380,6 +409,11 @@
       ]
     },
     "/v1/transactions": {
+      "methods": [
+        "post"
+      ]
+    },
+    "/v1/withdrawals": {
       "methods": [
         "post"
       ]

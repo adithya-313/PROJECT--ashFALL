@@ -23,6 +23,7 @@ from world.bank_connectors import (
     make_complaint_idempotency_key,
     make_decision_idempotency_key,
     make_transaction_idempotency_key,
+    make_withdrawal_idempotency_key,
 )
 from world.bank_feed import (
     BankFeed,
@@ -89,6 +90,7 @@ def test_feed_config() -> BankFeedConfig:
             "account_opened",
             "account_reactivated",
         ),
+        emit_opening_for_existing_accounts=True,
     )
 
 
@@ -374,9 +376,11 @@ async def test_send_feed_routes_each_record_to_own_bank_in_documented_order(
     assert t1.calls[0][0] == "/v1/transactions"
     assert t1.calls[1][0] == "/v1/complaints"
 
+    # Arithmetic: 2 payments + 1 lifecycle event + 1 complaint + 0 withdrawals = 4 sent records
     assert connectors.sent_by_kind["transaction"] == 2
     assert connectors.sent_by_kind["account_event"] == 1
     assert connectors.sent_by_kind["complaint"] == 1
+    assert connectors.sent_by_kind["withdrawal"] == 0
 
 
 def test_idempotency_keys_match_documented_format() -> None:
@@ -385,7 +389,10 @@ def test_idempotency_keys_match_documented_format() -> None:
     assert make_transaction_idempotency_key("pmt_1", "debit", 128) == "tx:pmt_1:debit"
     assert make_account_event_idempotency_key("evt_1", 128) == "acct:evt_1"
     assert make_complaint_idempotency_key("cmp_1", 128) == "cmp:cmp_1"
+    assert make_withdrawal_idempotency_key("wth_1", 128) == "wth:wth_1"
 
     with pytest.raises(ValueError, match="exceeds max length"):
         make_decision_idempotency_key("x" * 200, 128)
+    with pytest.raises(ValueError, match="exceeds max length"):
+        make_withdrawal_idempotency_key("x" * 200, 128)
 

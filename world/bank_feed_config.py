@@ -40,6 +40,7 @@ class BankFeedConfig:
     device_event_kind_map: dict[str, str]
     unmapped_gang_device_kinds: tuple[str, ...]
     allowed_account_event_kinds: tuple[str, ...]
+    emit_opening_for_existing_accounts: bool
 
 
 def load_bank_feed_config(path: Path | str | None = None) -> BankFeedConfig:
@@ -166,6 +167,12 @@ def load_bank_feed_config(path: Path | str | None = None) -> BankFeedConfig:
         raise ValueError("unmapped_gang_device_kinds must list at least one unmapped kind")
     unmapped_gang_device_kinds = tuple(str(k) for k in raw_unmapped)
 
+    # 9. Extract emit_opening_for_existing_accounts policy flag.
+    raw_emit_opening = feed_data.get("emit_opening_for_existing_accounts", {}).get("value")
+    if not isinstance(raw_emit_opening, bool):
+        raise ValueError("emit_opening_for_existing_accounts.value must be a boolean")
+    emit_opening_for_existing_accounts = bool(raw_emit_opening)
+
     return BankFeedConfig(
         bank_ids_by_index=bank_ids_by_index,
         payee_type_by_account_prefix=payee_type_by_account_prefix,
@@ -175,4 +182,5 @@ def load_bank_feed_config(path: Path | str | None = None) -> BankFeedConfig:
         device_event_kind_map=device_event_kind_map,
         unmapped_gang_device_kinds=unmapped_gang_device_kinds,
         allowed_account_event_kinds=allowed_account_event_kinds,
+        emit_opening_for_existing_accounts=emit_opening_for_existing_accounts,
     )
