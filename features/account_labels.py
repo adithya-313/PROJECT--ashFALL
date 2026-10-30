@@ -47,7 +47,6 @@ async def apply_feedback_since(
     settings: AccountFeaturesSettings | None = None,
     bank_id: str = "bank_0",
     after_id: int = 0,
-    now_utc: datetime | None = None,
 ) -> int:
     """
     WHAT: Queries bank_feedback for rows with id > after_id (with overlap re-read) and updates Redis labelled_accounts.
@@ -70,6 +69,8 @@ async def apply_feedback_since(
         The highest row ID processed, or after_id if no rows were found.
     """
     cfg = settings if settings is not None else get_default_settings()
+    poll_start_db_time = await connection.fetchval("SELECT now()")
+
     batch_size = cfg.account_event_batch_size
     overlap = cfg.account_event_overlap_rows
     start_id = max(0, after_id - overlap)
@@ -87,77 +88,66 @@ async def apply_feedback_since(
         batch_size,
     )
 
-    if not rows:
-        now = now_utc if now_utc is not None else datetime.now(timezone.utc)
-        if now.tzinfo is None:
-            now = now.replace(tzinfo=timezone.utc)
-        idle_ts = int(now.timestamp()) - cfg.commit_grace
-        record_poller_watermark(redis_client, bank_id, "feedback", idle_ts)
-        return after_id
-
     last_id = after_id
-    batch_max_dt = None
-    for row in rows:
-        row_id = int(row["id"])
-        if row_id > last_id:
-            last_id = row_id
-        row_dt = max(row["event_time"], row["created_at"])
-        if batch_max_dt is None or row_dt > batch_max_dt:
-            batch_max_dt = row_dt
+    if rows:
+        for row in rows:
+            row_id = int(row["id"])
+            if row_id > last_id:
+                last_id = row_id
 
-        outcome = row["outcome"]
-        # Architect decision 9b: confirmed_fraud feedback only; not_fraud and customer_dispute are ignored here.
-        if outcome != "confirmed_fraud":
-            logger.info(
-                "Feedback %s on payment %s outcome is %r; not confirmed_fraud, ignoring",
-                row["feedback_id"],
-                row["payment_id"],
-                outcome,
-            )
-            continue
+            outcome = row["outcome"]
+            # Architect decision 9b: confirmed_fraud feedback only; not_fraud and customer_dispute are ignored here.
+            if outcome != "confirmed_fraud":
+                logger.info(
+                    "Feedback %s on payment %s outcome is %r; not confirmed_fraud, ignoring",
+                    row["feedback_id"],
+                    row["payment_id"],
+                    outcome,
+                )
+                continue
 
-        payment_id = row["payment_id"]
-        run_id = extract_run_id(payment_id)
+            payment_id = row["payment_id"]
+            run_id = extract_run_id(payment_id)
 
-        # Look up THIS bank's transactions rows for that payment_id
-        txn_rows = await connection.fetch(
-            """
-            SELECT side, account_id
-            FROM transactions
-            WHERE bank_id = $1 AND payment_id = $2
-            """,
-            bank_id,
-            payment_id,
-        )
-
-        credit_accounts = [r["account_id"] for r in txn_rows if r["side"] == "credit"]
-        debit_accounts = [r["account_id"] for r in txn_rows if r["side"] == "debit"]
-
-        if credit_accounts:
-            # Score is available_from: max(feedback event_time, created_at)
-            available_from = max(row["event_time"], row["created_at"])
-            score = to_unix_seconds(available_from)
-            key = labelled_accounts_key(run_id, bank_id)
-            for acc_id in credit_accounts:
-                redis_client.zadd(key, {acc_id: score}, lt=True)
-        elif debit_accounts:
-            # Only debit side exists; sender is victim, do not label
-            logger.info(
-                "Feedback %s on payment %s for bank %s has only debit side; labelling nothing",
-                row["feedback_id"],
-                payment_id,
+            # Look up THIS bank's transactions rows for that payment_id
+            txn_rows = await connection.fetch(
+                """
+                SELECT side, account_id
+                FROM transactions
+                WHERE bank_id = $1 AND payment_id = $2
+                """,
                 bank_id,
-            )
-        else:
-            logger.info(
-                "Feedback %s on payment %s for bank %s has no transaction records; labelling nothing",
-                row["feedback_id"],
                 payment_id,
-                bank_id,
             )
 
-    if batch_max_dt is not None:
-        record_poller_watermark(redis_client, bank_id, "feedback", batch_max_dt)
+            credit_accounts = [r["account_id"] for r in txn_rows if r["side"] == "credit"]
+            debit_accounts = [r["account_id"] for r in txn_rows if r["side"] == "debit"]
+
+            if credit_accounts:
+                # Score is available_from: max(feedback event_time, created_at)
+                available_from = max(row["event_time"], row["created_at"])
+                score = to_unix_seconds(available_from)
+                key = labelled_accounts_key(run_id, bank_id)
+                for acc_id in credit_accounts:
+                    redis_client.zadd(key, {acc_id: score}, lt=True)
+            elif debit_accounts:
+                # Only debit side exists; sender is victim, do not label
+                logger.info(
+                    "Feedback %s on payment %s for bank %s has only debit side; labelling nothing",
+                    row["feedback_id"],
+                    payment_id,
+                    bank_id,
+                )
+            else:
+                logger.info(
+                    "Feedback %s on payment %s for bank %s has no transaction records; labelling nothing",
+                    row["feedback_id"],
+                    payment_id,
+                    bank_id,
+                )
+
+    watermark_ts = int(to_unix_seconds(poll_start_db_time)) - cfg.commit_grace
+    record_poller_watermark(redis_client, bank_id, "feedback", watermark_ts)
 
     return last_id
 
@@ -168,7 +158,6 @@ async def apply_complaints_since(
     settings: AccountFeaturesSettings | None = None,
     bank_id: str = "bank_0",
     after_id: int = 0,
-    now_utc: datetime | None = None,
 ) -> int:
     """
     WHAT: Queries bank_complaints for rows with id > after_id and records complained accounts for this bank.
@@ -187,6 +176,8 @@ async def apply_complaints_since(
         The highest row ID processed, or after_id if no rows were found.
     """
     cfg = settings if settings is not None else get_default_settings()
+    poll_start_db_time = await connection.fetchval("SELECT now()")
+
     batch_size = cfg.account_event_batch_size
     overlap = cfg.account_event_overlap_rows
     start_id = max(0, after_id - overlap)
@@ -205,45 +196,34 @@ async def apply_complaints_since(
         batch_size,
     )
 
-    if not rows:
-        now = now_utc if now_utc is not None else datetime.now(timezone.utc)
-        if now.tzinfo is None:
-            now = now.replace(tzinfo=timezone.utc)
-        idle_ts = int(now.timestamp()) - cfg.commit_grace
-        record_poller_watermark(redis_client, bank_id, "complaints", idle_ts)
-        return after_id
-
     last_id = after_id
-    batch_max_dt = None
-    for row in rows:
-        row_id = int(row["id"])
-        if row_id > last_id:
-            last_id = row_id
-        row_dt = max(row["received_at"], row["created_at"])
-        if batch_max_dt is None or row_dt > batch_max_dt:
-            batch_max_dt = row_dt
+    if rows:
+        for row in rows:
+            row_id = int(row["id"])
+            if row_id > last_id:
+                last_id = row_id
 
-        # Mark reported_account ONLY when reported_bank_id equals this bank
-        if row["reported_bank_id"] != bank_id:
-            logger.info(
-                "Complaint %s reported_bank_id %r does not match this bank %r; ignoring",
-                row["complaint_id"],
-                row["reported_bank_id"],
-                bank_id,
-            )
-            continue
+            # Mark reported_account ONLY when reported_bank_id equals this bank
+            if row["reported_bank_id"] != bank_id:
+                logger.info(
+                    "Complaint %s reported_bank_id %r does not match this bank %r; ignoring",
+                    row["complaint_id"],
+                    row["reported_bank_id"],
+                    bank_id,
+                )
+                continue
 
-        complaint_id = row["complaint_id"]
-        run_id = extract_run_id(complaint_id)
-        reported_account = row["reported_account"]
+            complaint_id = row["complaint_id"]
+            run_id = extract_run_id(complaint_id)
+            reported_account = row["reported_account"]
 
-        available_from = max(row["received_at"], row["created_at"])
-        score = to_unix_seconds(available_from)
-        key = complained_accounts_key(run_id, bank_id)
-        redis_client.zadd(key, {reported_account: score}, lt=True)
+            available_from = max(row["received_at"], row["created_at"])
+            score = to_unix_seconds(available_from)
+            key = complained_accounts_key(run_id, bank_id)
+            redis_client.zadd(key, {reported_account: score}, lt=True)
 
-    if batch_max_dt is not None:
-        record_poller_watermark(redis_client, bank_id, "complaints", batch_max_dt)
+    watermark_ts = int(to_unix_seconds(poll_start_db_time)) - cfg.commit_grace
+    record_poller_watermark(redis_client, bank_id, "complaints", watermark_ts)
 
     return last_id
 

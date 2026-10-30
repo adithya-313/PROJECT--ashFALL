@@ -16,16 +16,17 @@ writes are strictly monotonic via an atomic Redis Lua script so late-arriving ba
 watermarks backwards.
 """
 
-from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
 
-from features.account_keys import payment_watermark_key, poller_watermark_key
+from features.account_keys import payment_watermark_key, payments_partitions_key, poller_watermark_key
+from features.account_summaries import to_unix_seconds
 
 __all__ = [
     "SET_WATERMARK_LUA",
     "POLLER_SOURCES",
     "to_unix_seconds",
+    "to_watermark_seconds",
     "record_payment_watermark",
     "record_poller_watermark",
     "get_payment_watermark",
@@ -46,26 +47,26 @@ end
 POLLER_SOURCES: frozenset[str] = frozenset({"events", "withdrawals", "feedback", "complaints"})
 
 
-def to_unix_seconds(ts: datetime | int | float) -> int:
+def to_watermark_seconds(ts: datetime | int | float) -> int:
     """Convert a UTC or timezone-aware datetime or int/float timestamp to integer Unix seconds."""
     if isinstance(ts, (int, float)):
         return int(ts)
-    if not isinstance(ts, datetime):
-        raise ValueError(f"Expected datetime or int timestamp, got {type(ts)}")
-    if ts.tzinfo is None:
-        return int(ts.replace(tzinfo=timezone.utc).timestamp())
-    return int(ts.timestamp())
+    if isinstance(ts, datetime):
+        return int(to_unix_seconds(ts))
+    raise ValueError(f"Expected datetime or int timestamp, got {type(ts)}")
 
 
 def record_payment_watermark(client: Any, partition: int, timestamp: datetime | int | float) -> None:
     """
-    WHAT: Monotonically records the watermark timestamp for a Kafka payments partition.
+    WHAT: Monotonically records the watermark timestamp for a Kafka payments partition and registers
+    the partition in the known partitions set.
 
     WHY: Tracks real-time Kafka consumer progress per-partition without moving backwards.
     """
     key = payment_watermark_key(partition)
-    ts = to_unix_seconds(timestamp)
+    ts = to_watermark_seconds(timestamp)
     client.eval(SET_WATERMARK_LUA, 1, key, ts)
+    client.sadd(payments_partitions_key(), partition)
 
 
 def record_poller_watermark(
@@ -82,7 +83,7 @@ def record_poller_watermark(
     if source not in POLLER_SOURCES:
         raise ValueError(f"Unknown poller source: {source!r}. Must be one of {sorted(POLLER_SOURCES)}")
     key = poller_watermark_key(bank_id, source)
-    ts = to_unix_seconds(timestamp)
+    ts = to_watermark_seconds(timestamp)
     client.eval(SET_WATERMARK_LUA, 1, key, ts)
 
 
@@ -119,21 +120,22 @@ def get_poller_watermark(client: Any, bank_id: str, source: str) -> datetime | N
 def get_bank_watermark(
     client: Any,
     bank_id: str,
-    assigned_partitions: Sequence[int] | None = None,
 ) -> datetime | None:
     """
-    WHAT: Computes the aggregate ingestion watermark for bank_id across all 5 sources.
+    WHAT: Computes the aggregate ingestion watermark for bank_id across all sources.
 
     WHY: Section 22 correctness: an account feature snapshot or decision is valid only if
     all ingestion sources (Kafka payments and 4 Postgres pollers) have progressed to at least T.
-    If ANY source has no recorded watermark, returns None.
+    If the known partitions set is empty, or ANY source has no recorded watermark, returns None.
     Otherwise returns MIN across all sources as a timezone-aware UTC datetime.
     """
-    if assigned_partitions is None or len(assigned_partitions) == 0:
+    raw_partitions = client.smembers(payments_partitions_key())
+    if not raw_partitions:
         return None
 
     partition_ts_list: list[int] = []
-    for p in assigned_partitions:
+    for raw_p in raw_partitions:
+        p = int(raw_p.decode("utf-8") if isinstance(raw_p, bytes) else raw_p)
         val = client.get(payment_watermark_key(p))
         if val is None:
             return None

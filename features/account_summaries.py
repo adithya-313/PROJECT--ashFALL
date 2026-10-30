@@ -70,13 +70,15 @@ from features.account_records import (
     WithdrawalRecord,
     record_member,
 )
+
+
 def to_unix_seconds(dt: datetime) -> float:
     """
     WHAT: Converts a datetime to Unix epoch seconds as a float.
     WHY: Redis sorted sets index timestamps as numeric scores.
     """
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        raise ValueError("Datetime must be timezone-aware")
     return dt.timestamp()
 
 logger = logging.getLogger(__name__)

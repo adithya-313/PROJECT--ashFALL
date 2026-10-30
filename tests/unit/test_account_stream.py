@@ -53,6 +53,9 @@ class FakeAccountEventConnection:
         matching.sort(key=lambda r: r["id"])
         return matching[:limit]
 
+    async def fetchval(self, query: str, *args: Any) -> Any:
+        return NOW_UTC
+
 
 @pytest.fixture
 def redis_client() -> fakeredis.FakeRedis:

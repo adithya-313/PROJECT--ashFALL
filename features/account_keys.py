@@ -472,6 +472,11 @@ def payment_watermark_key(partition: int) -> str:
     return f"{WATERMARK_PREFIX}payments:{partition}"
 
 
+def payments_partitions_key() -> str:
+    """Redis set key holding known Kafka upi.payments partition numbers."""
+    return f"{WATERMARK_PREFIX}payments:partitions"
+
+
 def poller_watermark_key(bank_id: str, source: str) -> str:
     """Redis key for bank-scoped Postgres poller watermark."""
     _validate_key_component("bank_id", bank_id)

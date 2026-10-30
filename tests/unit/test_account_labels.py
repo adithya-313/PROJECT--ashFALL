@@ -85,6 +85,9 @@ class FakeDBConnection:
             return matching
         raise ValueError(f"Unexpected query: {query}")
 
+    async def fetchval(self, query: str, *args: Any) -> Any:
+        return NOW_UTC
+
 
 @pytest.fixture
 def redis_client() -> fakeredis.FakeRedis:

@@ -87,7 +87,7 @@ def compute_decision_row(
     watermark: datetime | None = None
     if redis_client is not None:
         try:
-            watermark = get_bank_watermark(redis_client, resolved_bank_id, assigned_partitions=[0])
+            watermark = get_bank_watermark(redis_client, resolved_bank_id)
         except Exception as exc:
             logger.warning("Failed to read watermark for bank %s: %s", resolved_bank_id, exc)
             watermark = None
