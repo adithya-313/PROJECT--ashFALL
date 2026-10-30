@@ -3,6 +3,7 @@
 #          bank ledger isolation, R5 OS update safety, and rented mule detection.
 
 import uuid
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -26,7 +27,7 @@ from showcase.framework import CheckOutcome
 from showcase.level_15 import _get_redis, host_side_redis_url
 
 
-def _format_table(title: str, headers: list[str], rows: list[list[Any]]) -> str:
+def _format_table(title: str, headers: list[str], rows: Sequence[Sequence[Any]]) -> str:
     """Renders a clean, monospace-aligned plain-text table for showcase outputs."""
     str_rows = [[str(cell if cell is not None else "-") for cell in row] for row in rows]
     col_widths = [len(h) for h in headers]
@@ -448,7 +449,7 @@ async def check_15b_2_cross_bank_isolation_edge(workspace: Any) -> CheckOutcome:
         assert f_b1["other_bank_outflow_share_7d"] is None
 
         headers = ["Perspective", "Small Credits (24h)", "Distinct Payers (1h)", "Other Bank Outflow Share"]
-        rows = [
+        rows: Sequence[Sequence[Any]] = [
             [
                 "Bank 0 (Sender)",
                 f_b0["small_credit_count_24h"],
