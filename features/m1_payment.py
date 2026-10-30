@@ -25,6 +25,7 @@ from typing import Any
 from core.config import config
 from features.account_keys import (
     AccountFeaturesSettings,
+    extract_run_id,
     get_default_settings,
 )
 from features.account_labels import (
@@ -34,7 +35,15 @@ from features.account_labels import (
 from features.account_reader import read_account_snapshot
 from features.account_summaries import read_counterparty_days
 from features.feature_set import load_feature_set_m1
+from features.m1_features import load_m1_config
 from features.registry_screening import RegistryScreener
+
+__all__ = [
+    "ProposedPayment",
+    "compute_payment_features",
+    "compute_payment_level_features",
+    "compute_payer_only_payment_features",
+]
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -83,6 +92,241 @@ class ProposedPayment:
             raise ValueError(f"Invalid event_time: {self.event_time!r}; must be timezone-aware datetime")
 
 
+def _extract_prop(proposal: Any, *keys: str) -> Any:
+    """Extract property from dict or model object across alternate key names."""
+    for k in keys:
+        if isinstance(proposal, dict):
+            if k in proposal:
+                return proposal[k]
+        elif hasattr(proposal, k):
+            val = getattr(proposal, k)
+            if val is not None:
+                return val
+    return None
+
+
+def compute_payer_only_payment_features(
+    redis_client: Any,
+    proposal: Any,
+    decision_time: datetime,
+    settings: AccountFeaturesSettings | None = None,
+    screener: RegistryScreener | None = None,
+    dpip_key: str | None = None,
+    arrival_cutoff: datetime | None = None,
+) -> dict[str, Any]:
+    """
+    WHAT: Computes payer-only and proposal-level payment features for a proposed transaction.
+
+    WHY: At decision evaluation time, the bank evaluates the transaction strictly from the
+    payer's perspective without requiring private payee profile state. Missing optional fields
+    (e.g. payee_type, receiver_vpa, channel) cleanly return None without crashing.
+    """
+    cfg = settings if settings is not None else get_default_settings()
+    cutoff = arrival_cutoff if arrival_cutoff is not None else decision_time
+
+    # 1. amount_paise
+    raw_amount = _extract_prop(proposal, "amount_paise")
+    amount_paise: int | None = int(raw_amount) if raw_amount is not None else None
+
+    # 2. payment_channel
+    payment_channel = _extract_prop(proposal, "channel", "payment_channel")
+
+    # 3. payer_device_fingerprint
+    payer_device_fingerprint = _extract_prop(
+        proposal, "sender_device_fingerprint", "payer_device_fingerprint", "device_fingerprint"
+    )
+
+    # 4. payer_os_generation
+    raw_os = _extract_prop(proposal, "sender_os_generation", "payer_os_generation", "os_generation")
+    payer_os_generation: int | None = int(raw_os) if raw_os is not None else None
+
+    # 5. round_amount (multiple of ₹100 = 10000 paise)
+    round_amount: bool | None = (amount_paise % 10000 == 0) if amount_paise is not None else None
+
+    # 6. structured_amount (in regulatory structuring band)
+    structured_amount: bool | None = None
+    if amount_paise is not None:
+        m1_cfg = load_m1_config()
+        is_structured = False
+        for threshold in m1_cfg.reporting_thresholds_paise:
+            lower_bound = int(threshold * (1.0 - m1_cfg.below_threshold_band_fraction))
+            if lower_bound <= amount_paise < threshold:
+                is_structured = True
+                break
+        structured_amount = is_structured
+
+    # Payer account identification
+    payer_account_id = _extract_prop(proposal, "payer_account_id", "sender_account_id")
+    bank_id = _extract_prop(proposal, "bank_id")
+    run_id = _extract_prop(proposal, "run_id")
+    if not run_id:
+        payment_id = _extract_prop(proposal, "payment_id")
+        if payment_id:
+            try:
+                run_id = extract_run_id(payment_id)
+            except ValueError:
+                run_id = None
+
+    # Read snapshot if payer state is available
+    snapshot = None
+    if redis_client is not None and payer_account_id and bank_id and run_id:
+        snapshot = read_account_snapshot(
+            redis_client,
+            run_id,
+            bank_id,
+            payer_account_id,
+            decision_time,
+            cutoff,
+            cfg,
+        )
+
+    # 7. same_amount_count_24h
+    same_amount_count_24h: int | None = None
+    if snapshot is not None and amount_paise is not None:
+        cutoff_24h = decision_time - timedelta(seconds=86400)
+        same_amount_count_24h = sum(
+            1
+            for r in snapshot.side_records
+            if r.side == "debit"
+            and r.status == "success"
+            and r.amount_paise == amount_paise
+            and cutoff_24h < r.event_time <= decision_time
+        )
+
+    # 8. payee_type (optional, produces None if missing or None)
+    payee_type = _extract_prop(proposal, "payee_type")
+
+    # 9. payee_registry_match (None if payee_vpa is None or no screener)
+    payee_vpa = _extract_prop(proposal, "payee_vpa", "receiver_vpa")
+    payee_bank_id = _extract_prop(proposal, "payee_bank_id", "receiver_bank_id")
+    payee_registry_match: bool | None = None
+    if (
+        screener is not None
+        and payee_vpa is not None
+        and payee_bank_id is not None
+        and run_id is not None
+    ):
+        resolved_key = dpip_key
+        if resolved_key is None and config.dpip_participant_key is not None:
+            resolved_key = config.dpip_participant_key.get_secret_value()
+
+        if resolved_key:
+            from features.m1_intelligence import get_bank_index
+            from nationalsim.keyed_hash import compute_identifier_hash
+
+            payee_bank_idx = get_bank_index(payee_bank_id)
+            payee_hash = compute_identifier_hash(
+                key=resolved_key,
+                run_id=run_id,
+                identifier_type="account",
+                raw_value=payee_vpa,
+                bank_index=payee_bank_idx,
+            )
+            outcome = screener.screen(payee_hash, "account", as_of=decision_time)
+            if outcome.status == "match":
+                payee_registry_match = True
+            elif outcome.status == "no_match":
+                payee_registry_match = False
+            else:
+                payee_registry_match = None
+
+    # Canonical M1 payment_level features
+    first_payment_to_payee: bool | None = None
+    if (
+        redis_client is not None
+        and payer_account_id
+        and bank_id
+        and run_id
+        and payee_bank_id
+        and payee_vpa
+    ):
+        target_payee = f"{payee_bank_id}:{payee_vpa}"
+        closed_debits = read_counterparty_days(
+            redis_client,
+            run_id,
+            bank_id,
+            payer_account_id,
+            "debit",
+            decision_time,
+            cutoff,
+            cfg,
+        )
+        has_closed = target_payee in closed_debits and len(closed_debits[target_payee]) > 0
+        has_raw = False
+        if snapshot is not None:
+            for r in snapshot.side_records:
+                if r.side == "debit" and r.status == "success" and r.counterparty_vpa:
+                    if f"{r.counterparty_bank_id}:{r.counterparty_vpa}" == target_payee:
+                        has_raw = True
+                        break
+        first_payment_to_payee = not (has_closed or has_raw)
+
+    amount_vs_payer_median_ratio: float | None = None
+    amount_vs_payer_max_ratio: float | None = None
+    if snapshot is not None and amount_paise is not None:
+        successful_debits = [
+            r.amount_paise
+            for r in snapshot.side_records
+            if r.side == "debit" and r.status == "success"
+        ]
+        if successful_debits:
+            amount_vs_payer_median_ratio = float(
+                amount_paise / statistics.median(successful_debits)
+            )
+            amount_vs_payer_max_ratio = float(amount_paise / max(successful_debits))
+
+    payee_same_bank_risk: float | None = None
+    if payee_bank_id is not None and bank_id is not None:
+        if payee_bank_id != bank_id:
+            payee_same_bank_risk = None
+        elif payee_vpa is not None and redis_client is not None and run_id is not None:
+            labelled = labelled_accounts_visible(
+                redis_client, run_id, bank_id, decision_time, cutoff
+            )
+            complained = complained_accounts_visible(
+                redis_client, run_id, bank_id, decision_time, cutoff
+            )
+            if payee_vpa in labelled:
+                payee_same_bank_risk = 1.0
+            elif payee_vpa in complained:
+                payee_same_bank_risk = 0.5
+            else:
+                payee_same_bank_risk = 0.0
+
+    ist_dt = decision_time.astimezone(IST)
+    hour_ist = ist_dt.hour
+
+    customer_failed_attempts_24h = 0
+    if snapshot is not None:
+        cutoff_24h = decision_time - timedelta(seconds=86400)
+        for r in snapshot.side_records:
+            if (
+                r.side == "debit"
+                and r.status == "failed"
+                and r.failure_domain == "customer"
+                and cutoff_24h < r.event_time <= decision_time
+            ):
+                customer_failed_attempts_24h += 1
+
+    return {
+        "amount_paise": amount_paise,
+        "payment_channel": payment_channel,
+        "payer_device_fingerprint": payer_device_fingerprint,
+        "payer_os_generation": payer_os_generation,
+        "round_amount": round_amount,
+        "structured_amount": structured_amount,
+        "same_amount_count_24h": same_amount_count_24h,
+        "payee_type": payee_type,
+        "payee_registry_match": payee_registry_match,
+        "first_payment_to_payee": first_payment_to_payee,
+        "amount_vs_payer_median_ratio": amount_vs_payer_median_ratio,
+        "amount_vs_payer_max_ratio": amount_vs_payer_max_ratio,
+        "payee_same_bank_risk": payee_same_bank_risk,
+        "hour_ist": hour_ist,
+        "customer_failed_attempts_24h": customer_failed_attempts_24h,
+    }
+
+
 def compute_payment_features(
     client: Any,
     proposed: ProposedPayment,
@@ -105,133 +349,26 @@ def compute_payment_features(
     RETURN VALUE:
         Dictionary mapping payment_level feature names to computed values.
     """
-    cfg = settings if settings is not None else get_default_settings()
-    decision_time = proposed.event_time
-
-    # 1. first_payment_to_payee: True when payee_bank_id:payee_vpa never appears
-    # among payer's debit counterparties in closed days or visible 7-day raw window.
-    target_payee = f"{proposed.payee_bank_id}:{proposed.payee_vpa}"
-    closed_debits = read_counterparty_days(
+    payer_features = compute_payer_only_payment_features(
         client,
-        proposed.run_id,
-        proposed.bank_id,
-        proposed.payer_account_id,
-        "debit",
-        decision_time,
-        arrival_cutoff,
-        cfg,
+        proposed,
+        proposed.event_time,
+        settings=settings,
+        screener=screener,
+        dpip_key=dpip_key,
+        arrival_cutoff=arrival_cutoff,
     )
-    has_closed_history = target_payee in closed_debits and len(closed_debits[target_payee]) > 0
 
-    snapshot = read_account_snapshot(
-        client,
-        proposed.run_id,
-        proposed.bank_id,
-        proposed.payer_account_id,
-        decision_time,
-        arrival_cutoff,
-        cfg,
-    )
-    has_raw_history = False
-    for r in snapshot.side_records:
-        if r.side == "debit" and r.status == "success" and r.counterparty_vpa:
-            if f"{r.counterparty_bank_id}:{r.counterparty_vpa}" == target_payee:
-                has_raw_history = True
-                break
-
-    first_payment_to_payee = not (has_closed_history or has_raw_history)
-
-    # 2. amount_vs_payer_median_ratio and amount_vs_payer_max_ratio:
-    # proposed amount divided by median / max of payer's successful debit amounts in 7-day raw window.
-    successful_debits = [
-        r.amount_paise
-        for r in snapshot.side_records
-        if r.side == "debit" and r.status == "success"
-    ]
-    if successful_debits:
-        median_debit = statistics.median(successful_debits)
-        max_debit = max(successful_debits)
-        amount_vs_payer_median_ratio = float(proposed.amount_paise / median_debit)
-        amount_vs_payer_max_ratio = float(proposed.amount_paise / max_debit)
-    else:
-        amount_vs_payer_median_ratio = None
-        amount_vs_payer_max_ratio = None
-
-    # 3. payee_same_bank_risk: None if payee_bank_id != this bank;
-    # else 1.0 if payee is labelled confirmed fraud, 0.5 if complained account, else 0.0.
-    if proposed.payee_bank_id != proposed.bank_id:
-        payee_same_bank_risk = None
-    else:
-        payee_account = proposed.payee_vpa
-        labelled = labelled_accounts_visible(
-            client, proposed.run_id, proposed.bank_id, decision_time, arrival_cutoff
-        )
-        complained = complained_accounts_visible(
-            client, proposed.run_id, proposed.bank_id, decision_time, arrival_cutoff
-        )
-        if payee_account in labelled:
-            payee_same_bank_risk = 1.0
-        elif payee_account in complained:
-            payee_same_bank_risk = 0.5
-        else:
-            payee_same_bank_risk = 0.0
-
-    # 4. hour_ist: 0-23 IST hour of event_time
-    ist_dt = proposed.event_time.astimezone(IST)
-    hour_ist = ist_dt.hour
-
-    # 5. payee_type: proposed payee_type string
-    payee_type = proposed.payee_type
-
-    # 6. customer_failed_attempts_24h: payer's failed sides in 24h where failure_domain == 'customer'.
-    # Issue R7: technical failures (e.g. sender_bank, npci_central) never count against customer velocity.
-    cutoff_24h = decision_time - timedelta(seconds=86400)
-    customer_failed_attempts_24h = 0
-    for r in snapshot.side_records:
-        if (
-            r.side == "debit"
-            and r.status == "failed"
-            and r.failure_domain == "customer"
-            and cutoff_24h < r.event_time <= decision_time
-        ):
-            customer_failed_attempts_24h += 1
-
-    # 7. payee_registry_match: True / False if screened against national registry; None if unknown or no screener.
-    payee_registry_match: bool | None = None
-    if screener is not None:
-        resolved_key = dpip_key
-        if resolved_key is None and config.dpip_participant_key is not None:
-            resolved_key = config.dpip_participant_key.get_secret_value()
-
-        if resolved_key:
-            from features.m1_intelligence import get_bank_index
-            from nationalsim.keyed_hash import compute_identifier_hash
-
-            payee_bank_idx = get_bank_index(proposed.payee_bank_id)
-            payee_hash = compute_identifier_hash(
-                key=resolved_key,
-                run_id=proposed.run_id,
-                identifier_type="account",
-                raw_value=proposed.payee_vpa,
-                bank_index=payee_bank_idx,
-            )
-            outcome = screener.screen(payee_hash, "account", as_of=decision_time)
-            if outcome.status == "match":
-                payee_registry_match = True
-            elif outcome.status == "no_match":
-                payee_registry_match = False
-            else:
-                payee_registry_match = None
 
     result: dict[str, int | float | str | bool | None] = {
-        "payee_registry_match": payee_registry_match,
-        "first_payment_to_payee": first_payment_to_payee,
-        "amount_vs_payer_median_ratio": amount_vs_payer_median_ratio,
-        "amount_vs_payer_max_ratio": amount_vs_payer_max_ratio,
-        "payee_same_bank_risk": payee_same_bank_risk,
-        "hour_ist": hour_ist,
-        "payee_type": payee_type,
-        "customer_failed_attempts_24h": customer_failed_attempts_24h,
+        "payee_registry_match": payer_features["payee_registry_match"],
+        "first_payment_to_payee": payer_features["first_payment_to_payee"],
+        "amount_vs_payer_median_ratio": payer_features["amount_vs_payer_median_ratio"],
+        "amount_vs_payer_max_ratio": payer_features["amount_vs_payer_max_ratio"],
+        "payee_same_bank_risk": payer_features["payee_same_bank_risk"],
+        "hour_ist": payer_features["hour_ist"],
+        "payee_type": payer_features["payee_type"],
+        "customer_failed_attempts_24h": payer_features["customer_failed_attempts_24h"],
     }
 
     # Schema drift check against payment_level group in feature_set_m1.yaml
@@ -247,3 +384,6 @@ def compute_payment_features(
         )
 
     return result
+
+
+compute_payment_level_features = compute_payment_features

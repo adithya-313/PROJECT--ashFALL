@@ -24,7 +24,11 @@ from features.account_keys import (
 from features.account_records import PaymentSideRecord
 from features.account_summaries import update_account_summaries
 from features.account_updater import apply_payment_side
-from features.m1_payment import ProposedPayment, compute_payment_features
+from features.m1_payment import (
+    ProposedPayment,
+    compute_payer_only_payment_features,
+    compute_payment_features,
+)
 
 RUN_ID = "66db9aa439b092ee"
 BANK_0 = "bank_0"
@@ -349,3 +353,74 @@ def test_invalid_proposed_payment_raises() -> None:
     # 4. Empty identifier
     with pytest.raises(ValueError, match="payer_account_id"):
         ProposedPayment(RUN_ID, BANK_0, "", BANK_0, "payee", "person", 1000, t_now)
+
+
+def test_compute_payer_only_payment_features_full_proposal(redis_client: fakeredis.FakeRedis) -> None:
+    """Verifies that compute_payer_only_payment_features calculates all payer-side features on full proposal."""
+    proposal = {
+        "run_id": RUN_ID,
+        "bank_id": BANK_0,
+        "payer_account_id": "acc_01",
+        "payee_bank_id": BANK_0,
+        "payee_vpa": "vpa_01",
+        "amount_paise": 10000,
+        "channel": "upi_app",
+        "sender_device_fingerprint": "fp_01",
+        "sender_os_generation": 14,
+        "payee_type": "merchant",
+    }
+    feats = compute_payer_only_payment_features(redis_client, proposal, NOW_UTC)
+    assert feats["amount_paise"] == 10000
+    assert feats["payment_channel"] == "upi_app"
+    assert feats["payer_device_fingerprint"] == "fp_01"
+    assert feats["payer_os_generation"] == 14
+    assert feats["round_amount"] is True
+    assert feats["structured_amount"] is False
+    assert feats["same_amount_count_24h"] == 0
+    assert feats["payee_type"] == "merchant"
+    assert feats["payee_registry_match"] is None
+
+
+def test_compute_payer_only_payment_features_missing_optional_fields(redis_client: fakeredis.FakeRedis) -> None:
+    """
+    SABOTAGE S3 TARGET:
+    Verifies that missing optional fields (payee_type, channel, fingerprint, os_gen) cleanly produce None
+    without raising any exceptions.
+    """
+    proposal = {
+        "run_id": RUN_ID,
+        "bank_id": BANK_0,
+        "payer_account_id": "acc_01",
+        "payee_bank_id": BANK_0,
+        "payee_vpa": "vpa_01",
+        "amount_paise": 10000,
+        "channel": None,
+        "sender_device_fingerprint": None,
+        "sender_os_generation": None,
+        "payee_type": None,
+    }
+    # Must NOT raise; missing optional fields produce None in feature dictionary
+    feats = compute_payer_only_payment_features(redis_client, proposal, NOW_UTC)
+    assert feats["payee_type"] is None
+    assert feats["payment_channel"] is None
+    assert feats["payer_device_fingerprint"] is None
+    assert feats["payer_os_generation"] is None
+
+
+def test_compute_payer_only_payment_features_payee_vpa_none(redis_client: fakeredis.FakeRedis) -> None:
+    """Verifies that proposal with payee_vpa=None returns payee_registry_match=None without calling screener."""
+    from features.registry_screening import FakeRegistryScreener
+
+    screener = FakeRegistryScreener()
+    proposal = {
+        "run_id": RUN_ID,
+        "bank_id": BANK_0,
+        "payer_account_id": "acc_01",
+        "payee_bank_id": BANK_0,
+        "payee_vpa": None,
+        "amount_paise": 10000,
+        "payee_type": "person",
+    }
+    feats = compute_payer_only_payment_features(redis_client, proposal, NOW_UTC, screener=screener)
+    assert feats["payee_registry_match"] is None
+
