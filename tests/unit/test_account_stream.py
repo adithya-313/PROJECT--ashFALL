@@ -39,22 +39,23 @@ class FakeConsumerMessage:
 class FakeAccountEventConnection:
     """In-memory mock database connection simulating bank_account_events table reads."""
 
-    def __init__(self, rows: list[dict[str, Any]]) -> None:
+    def __init__(self, rows: list[dict[str, Any]], db_now: datetime) -> None:
         self.rows = rows
+        self.db_now = db_now
         self.queries: list[tuple[str, tuple[Any, ...]]] = []
 
     async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
         self.queries.append((query, args))
         bank_id, after_id, limit = args
-        matching = [
-            r for r in self.rows
-            if r["bank_id"] == bank_id and r["id"] > after_id
-        ]
+        matching = [r for r in self.rows if r["bank_id"] == bank_id and r["id"] > after_id]
         matching.sort(key=lambda r: r["id"])
         return matching[:limit]
 
-    async def fetchval(self, query: str, *args: Any) -> Any:
-        return NOW_UTC
+    async def fetchval(self, query: str, *args: Any) -> datetime:
+        self.queries.append((query, args))
+        if query != "SELECT now()":
+            raise AssertionError(f"Unexpected query in fetchval: {query!r}")
+        return self.db_now
 
 
 @pytest.fixture
@@ -116,7 +117,7 @@ async def test_apply_account_events_since_applies_in_id_order_and_returns_last_i
         },
     ]
 
-    conn = FakeAccountEventConnection(rows)
+    conn = FakeAccountEventConnection(rows, db_now=NOW_UTC)
 
     # Poll with after_id=5 -> should process all 3 in id order (10, 11, 12)
     last_id = await apply_account_events_since(conn, redis_client, bank_id="bank_0", after_id=5)
@@ -134,7 +135,6 @@ async def test_apply_account_events_since_empty_returns_after_id(
     redis_client: fakeredis.FakeRedis,
 ) -> None:
     """Verifies that polling when no new rows exist returns after_id unchanged."""
-    conn = FakeAccountEventConnection([])
+    conn = FakeAccountEventConnection([], db_now=NOW_UTC)
     last_id = await apply_account_events_since(conn, redis_client, bank_id="bank_0", after_id=42)
     assert last_id == 42
-

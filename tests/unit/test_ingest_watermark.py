@@ -9,7 +9,7 @@ and watermark updates across streaming consumers and database pollers.
 """
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -61,6 +61,8 @@ class FakeDbConnection:
         return self.rows
 
     async def fetchval(self, query: str, *args: Any) -> Any:
+        if query != "SELECT now()":
+            raise AssertionError(f"Unexpected query in fetchval: {query!r}")
         return self.now_dt
 
 
@@ -375,3 +377,32 @@ async def test_idle_partition_does_not_advance_watermark(redis_client: fakeredis
     # Watermark must be recorded_at (10:00:05) - commit_grace (5s) = 10:00:00
     expected_wm = datetime(2026, 10, 28, 10, 0, 0, tzinfo=timezone.utc)
     assert get_payment_watermark(redis_client, 0) == expected_wm
+
+
+async def test_poller_watermark_uses_database_time(redis_client: fakeredis.FakeRedis) -> None:
+    """
+    R4 & SABOTAGE S9 TARGET:
+    Mock connection returns db_now = T; the batch rows carry event_time = T + 3 days and
+    recorded_at = T - 1 minute. Assert the poller records a watermark of T - commit_grace,
+    NOT based on the rows' event_time or recorded_at.
+    """
+    t_db = datetime(2026, 10, 28, 12, 0, 0, tzinfo=timezone.utc)
+    rows = [
+        {
+            "id": 1,
+            "bank_id": "bank_0",
+            "event_id": f"{RUN_ID}-dev-999",
+            "account_id": "acc_1",
+            "kind": "account_opened",
+            "event_time": t_db + timedelta(days=3),
+            "created_at": t_db - timedelta(minutes=1),
+            "details": {},
+        },
+    ]
+    conn = FakeDbConnection(rows, now_dt=t_db)
+    await apply_account_events_since(conn, redis_client, bank_id="bank_0")
+    expected_wm = datetime(2026, 10, 28, 11, 59, 55, tzinfo=timezone.utc)
+    wm = get_poller_watermark(redis_client, "bank_0", "events")
+    assert wm == expected_wm
+    assert wm != t_db + timedelta(days=3) - timedelta(seconds=5)
+    assert wm != t_db - timedelta(minutes=1) - timedelta(seconds=5)
