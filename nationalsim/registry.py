@@ -47,6 +47,8 @@ class RegistryEntry:
     linked_account_hash: str | None = None
     reported_minute: int | None = None
     resolved_at: datetime | None = None
+    revoked_at: datetime | None = None
+    contested_at: datetime | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert entry into JSON-serializable dictionary."""
@@ -56,6 +58,10 @@ class RegistryEntry:
         data["visible_at"] = self.visible_at.isoformat()
         if self.resolved_at is not None:
             data["resolved_at"] = self.resolved_at.isoformat()
+        if self.revoked_at is not None:
+            data["revoked_at"] = self.revoked_at.isoformat()
+        if self.contested_at is not None:
+            data["contested_at"] = self.contested_at.isoformat()
         return data
 
 
@@ -106,15 +112,22 @@ class ScreenResult:
     status: str  # "listed", "contested", "none"
     distinct_accounts_linked: int
     risk_score: float = 0.0
+    first_visible_at: datetime | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert result into JSON-serializable dictionary matching mock schema."""
-        return {
+        res: dict[str, Any] = {
             "match": self.match,
             "status": self.status,
             "risk_score": self.risk_score,
             "distinct_accounts_linked": self.distinct_accounts_linked,
+            "first_visible_at": (
+                self.first_visible_at.isoformat()
+                if self.first_visible_at is not None
+                else None
+            ),
         }
+        return res
 
 
 @dataclass(frozen=True)
@@ -129,6 +142,57 @@ class FeedbackRecord:
     reported_at: datetime
     received_at: datetime
     run_id: str
+
+
+def _build_screen_result(
+    active_items: list[tuple[RegistryEntry, str]],
+    has_matching_entries: bool,
+    all_resolved: bool,
+) -> ScreenResult:
+    """Shared helper computing composite status and distinct accounts for screen results.
+
+    Used by both the live screen path and the replay as_of screen path to guarantee identical
+    aggregation semantics across status resolution, distinct linked accounts, and first visibility.
+    """
+    if not active_items:
+        if has_matching_entries and all_resolved:
+            return ScreenResult(
+                match=False,
+                status="resolved",
+                distinct_accounts_linked=0,
+                risk_score=0.0,
+                first_visible_at=None,
+            )
+        return ScreenResult(
+            match=False,
+            status="none",
+            distinct_accounts_linked=0,
+            risk_score=0.0,
+            first_visible_at=None,
+        )
+
+    # Determine composite status: contested takes precedence over listed
+    is_contested = any(status == "contested" for _, status in active_items)
+    status = "contested" if is_contested else "listed"
+
+    # Compute distinct accounts linked
+    distinct_accounts: set[str] = set()
+    for e, _ in active_items:
+        if e.linked_account_hash:
+            distinct_accounts.add(e.linked_account_hash)
+        elif e.identifier_type == "account":
+            distinct_accounts.add(e.identifier_hash)
+
+    distinct_count = len(distinct_accounts) if distinct_accounts else len(active_items)
+    first_visible = min(e.visible_at for e, _ in active_items)
+
+    return ScreenResult(
+        match=True,
+        status=status,
+        distinct_accounts_linked=max(1, distinct_count),
+        risk_score=0.0,
+        first_visible_at=first_visible,
+    )
 
 
 class RegistryCore:
@@ -313,6 +377,7 @@ class RegistryCore:
         identifier_hash: str,
         identifier_type: str,
         run_id: str,
+        as_of: datetime | None = None,
     ) -> ScreenResult:
         """Screen an identifier hash against the registry.
 
@@ -325,21 +390,26 @@ class RegistryCore:
             identifier_hash: 64-character lowercase hexadecimal hash.
             identifier_type: 'account', 'device', or 'phone'.
             run_id: Namespace identifier.
+            as_of: Optional evaluation timestamp (testbed replay parameter, not part of the real DPIP interface).
 
         What it returns:
-            ScreenResult with match boolean, status, distinct_accounts_linked, and risk_score.
+            ScreenResult with match boolean, status, distinct_accounts_linked, risk_score, and first_visible_at.
 
         How it works:
             1. Verifies that the requesting bank is an active DPIP participant.
             2. Validates format of identifier_hash.
-            3. Finds matching entries, transitioning resolved disputes if dispute_resolution_delay has elapsed.
-            4. If all matching listings are resolved, returns match=False, status='resolved'.
-            5. If no active entries, returns match=False, status='none'.
-            6. If active entries remain, determines composite status ('contested' or 'listed').
+            3. If as_of is None (live evaluation):
+               Evaluates against self._clock.now_ist(), transitioning contested entries
+               to resolved in-place if dispute delay elapsed.
+            4. If as_of is provided (replay evaluation):
+               Validates timezone awareness and that as_of is not later than the registry clock.
+               Evaluates purely from timestamps without modifying any entry state.
+            5. Aggregates composite status and distinct linked accounts via _build_screen_result.
 
         Errors and side effects:
             Raises NotParticipantError if bank is unlisted or not participating.
             Raises ValueError if identifier_hash is invalid.
+            Raises ValueError if as_of is naive or later than the registry clock.
 
         Limits:
             Read-only check; does not modify external databases.
@@ -349,6 +419,52 @@ class RegistryCore:
 
         validate_identifier_hash(identifier_hash)
 
+        if as_of is not None:
+            # Replay screening as of past timestamp
+            if as_of.tzinfo is None:
+                raise ValueError("as_of must be timezone-aware")
+            current_time = self._clock.now_ist()
+            as_of_ist = as_of.astimezone(IST)
+            if as_of_ist > current_time:
+                raise ValueError("as_of is later than the registry clock")
+
+            t_eval = as_of_ist
+            active_items_as_of: list[tuple[RegistryEntry, str]] = []
+            all_resolved = True
+            has_matching_entries = False
+
+            for entry in self._entries.values():
+                if (
+                    entry.run_id == run_id
+                    and entry.identifier_hash == identifier_hash
+                    and entry.identifier_type == identifier_type
+                ):
+                    # An entry does not count as active at T when revoked at or before T
+                    if entry.revoked_at is not None and entry.revoked_at <= t_eval:
+                        continue
+
+                    has_matching_entries = True
+
+                    # An entry does not count as active at T when resolved at or before T
+                    if entry.resolved_at is not None and entry.resolved_at <= t_eval:
+                        continue
+
+                    all_resolved = False
+
+                    # Counts as active at T when visible_at <= T
+                    if entry.visible_at <= t_eval:
+                        # Counts as contested at T when contested_at <= T < resolved_at (or resolved_at is None)
+                        is_contested = (
+                            entry.contested_at is not None
+                            and entry.contested_at <= t_eval
+                            and (entry.resolved_at is None or t_eval < entry.resolved_at)
+                        )
+                        eff_status = "contested" if is_contested else "listed"
+                        active_items_as_of.append((entry, eff_status))
+
+            return _build_screen_result(active_items_as_of, has_matching_entries, all_resolved)
+
+        # Live evaluation path (byte-for-byte today's behavior)
         current_time = self._clock.now_ist()
         active_entries: list[RegistryEntry] = []
         all_resolved = True
@@ -376,41 +492,8 @@ class RegistryCore:
                 if entry.visible_at <= current_time:
                     active_entries.append(entry)
 
-        if not active_entries:
-            if has_matching_entries and all_resolved:
-                return ScreenResult(
-                    match=False,
-                    status="resolved",
-                    distinct_accounts_linked=0,
-                    risk_score=0.0,
-                )
-            return ScreenResult(
-                match=False,
-                status="none",
-                distinct_accounts_linked=0,
-                risk_score=0.0,
-            )
-
-        # Determine composite status: contested takes precedence over listed
-        is_contested = any(e.status == "contested" for e in active_entries)
-        status = "contested" if is_contested else "listed"
-
-        # Compute distinct accounts linked
-        distinct_accounts: set[str] = set()
-        for e in active_entries:
-            if e.linked_account_hash:
-                distinct_accounts.add(e.linked_account_hash)
-            elif e.identifier_type == "account":
-                distinct_accounts.add(e.identifier_hash)
-
-        distinct_count = len(distinct_accounts) if distinct_accounts else len(active_entries)
-
-        return ScreenResult(
-            match=True,
-            status=status,
-            distinct_accounts_linked=max(1, distinct_count),
-            risk_score=0.0,
-        )
+        active_items = [(e, e.status) for e in active_entries]
+        return _build_screen_result(active_items, has_matching_entries, all_resolved)
 
     def revoke(
         self,
@@ -433,8 +516,10 @@ class RegistryCore:
                 )
 
         revoked_entries: list[RegistryEntry] = []
+        now = self._clock.now_ist()
         for entry in matching_entries:
             entry.status = "revoked"
+            entry.revoked_at = now
             revoked_entries.append(entry)
 
         return revoked_entries
@@ -566,6 +651,7 @@ class RegistryCore:
 
         for entry in matching_entries:
             entry.status = "contested"
+            entry.contested_at = current_time
             entry.resolved_at = resolved_at
             contested_entries.append(entry)
 

@@ -63,6 +63,7 @@ class ScreenRequest(BaseModel):
         description="Type of identifier, either 'account' or 'device'.",
     )
     run_id: str
+    as_of: datetime | None = None
 
 
 class ScreenResponse(BaseModel):
@@ -72,6 +73,7 @@ class ScreenResponse(BaseModel):
     status: str
     distinct_accounts_linked: int
     risk_score: float
+    first_visible_at: datetime | None = None
 
 
 class RevokeRequest(BaseModel):
@@ -434,12 +436,14 @@ def create_app(
                 identifier_hash=payload.identifier_hash,
                 identifier_type=payload.identifier_type,
                 run_id=payload.run_id,
+                as_of=payload.as_of,
             )
             return ScreenResponse(
                 match=result.match,
                 status=result.status,
                 distinct_accounts_linked=result.distinct_accounts_linked,
                 risk_score=result.risk_score,
+                first_visible_at=result.first_visible_at,
             )
         except NotParticipantError as exc:
             # A non-participating bank is refused with an explicit 403 Forbidden
