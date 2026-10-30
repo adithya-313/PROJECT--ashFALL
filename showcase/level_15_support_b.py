@@ -146,8 +146,8 @@ async def check_15b_1_three_profiles_normal(workspace: Any) -> CheckOutcome:
                 ),
                 settings,
             )
-        # Closed-day credits from repeat local customers across the 40 days (days 45, 30, 15, 3)
-        for d_off in (45, 30, 15, 3):
+        # Closed-day credits from repeat local customers across the 40 days (days 45, 30, 20, 10)
+        for d_off in (45, 30, 20, 10):
             t_hist = dec_time - timedelta(days=d_off)
             for i, p_acc in enumerate(local_payers):
                 apply_payment_side(
