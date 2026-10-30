@@ -429,13 +429,38 @@ def test_bank_isolation_on_compute_account_features(monkeypatch: Any) -> None:
     decision_time = T0
     arrival_cutoff = T0 + timedelta(seconds=10)
 
-    # Write a ₹1,000 credit for ACC_1 under BANK_0 (30 minutes ago, inside 1h window)
-    rec_bank0 = _make_payment_side("p_b0", "credit", 100000, decision_time - timedelta(minutes=30), bank_id=BANK_0)
+    # bank_0: one credit of ₹1,000 (100000 paise) from counterparty "payer_a", 30 minutes before decision
+    rec_bank0 = _make_payment_side(
+        "p_b0",
+        "credit",
+        100000,
+        decision_time - timedelta(minutes=30),
+        counterparty_vpa="payer_a",
+        bank_id=BANK_0,
+    )
     apply_payment_side(client, rec_bank0, settings)
 
-    # Write a ₹5,000 credit for the SAME ACC_1 under BANK_1 (30 minutes ago, inside 1h window)
-    rec_bank1 = _make_payment_side("p_b1", "credit", 500000, decision_time - timedelta(minutes=30), bank_id=BANK_1)
-    apply_payment_side(client, rec_bank1, settings)
+    # bank_1: two credits of ₹100 (10000 paise) each, from counterparties "payer_b" and "payer_c",
+    # 30 and 40 minutes before decision
+    rec_bank1_1 = _make_payment_side(
+        "p_b1_1",
+        "credit",
+        10000,
+        decision_time - timedelta(minutes=30),
+        counterparty_vpa="payer_b",
+        bank_id=BANK_1,
+    )
+    apply_payment_side(client, rec_bank1_1, settings)
+
+    rec_bank1_2 = _make_payment_side(
+        "p_b1_2",
+        "credit",
+        10000,
+        decision_time - timedelta(minutes=40),
+        counterparty_vpa="payer_c",
+        bank_id=BANK_1,
+    )
+    apply_payment_side(client, rec_bank1_2, settings)
 
     # Read features for BANK_0: must observe only BANK_0's credit
     features_b0 = compute_account_features(
@@ -448,10 +473,11 @@ def test_bank_isolation_on_compute_account_features(monkeypatch: Any) -> None:
         settings=settings,
         groups=("inflow",),
     )
+    # Arithmetic: bank_0 holds 1 credit from "payer_a" (distinct=1) with amount 100000 > 50000 (small_credits=0)
     assert features_b0["distinct_payers_1h"] == 1
     assert features_b0["small_credit_count_24h"] == 0
 
-    # Read features for BANK_1: must observe only BANK_1's credit
+    # Read features for BANK_1: must observe only BANK_1's credits
     features_b1 = compute_account_features(
         client=client,
         run_id=RUN_ID,
@@ -462,7 +488,9 @@ def test_bank_isolation_on_compute_account_features(monkeypatch: Any) -> None:
         settings=settings,
         groups=("inflow",),
     )
-    assert features_b1["distinct_payers_1h"] == 1
+    # Arithmetic: bank_1 holds 2 credits from "payer_b" and "payer_c" (distinct=2) both 10000 <= 50000 (small_credits=2)
+    assert features_b1["distinct_payers_1h"] == 2
+    assert features_b1["small_credit_count_24h"] == 2
 
 
 def test_compute_account_features_unknown_group_raises() -> None:
