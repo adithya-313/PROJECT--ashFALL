@@ -33,7 +33,7 @@ from showcase.framework import CheckDefinition, CheckOutcome
 from showcase.preconditions import check_redis
 
 LEVEL_NUMBER = 15
-LEVEL_TITLE = "Live mule features and account state (built: part 15a)"
+LEVEL_TITLE = "Live mule features and account state (built: parts 15a, 15b)"
 NEEDS_DATABASE = False
 
 WHAT_YOU_SAW = (
@@ -41,7 +41,9 @@ WHAT_YOU_SAW = (
     "Part 15a establishes namespaced key structures with TTL expiration, point-in-time snapshot "
     "reading enforcing the Section 22 future-leak rule, idempotent updates supporting replay "
     "without data corruption or set explosion, strict tenant isolation across commercial banks, "
-    "and streaming ingestion from Kafka and PostgreSQL."
+    "and streaming ingestion from Kafka and PostgreSQL. Part 15b computes the full M1 behavioral "
+    "feature catalog, cleanly differentiating mules from everyday citizens, enforcing bank ledger "
+    "isolation, respecting Issue R5 OS update safety, and surfacing dormant rented mule dynamics."
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -577,8 +579,15 @@ async def check_15a_5_replay_twice_identical(workspace: Any) -> CheckOutcome:
 def get_checks(quick: bool = False) -> list[CheckDefinition]:
     """
     Return the Level 15 verification checks.
-    Tagged with part='a' for selective execution.
+    Tagged with part='a' and part='b' for selective execution.
     """
+    from showcase.level_15_support_b import (
+        check_15b_1_three_profiles_normal,
+        check_15b_2_cross_bank_isolation_edge,
+        check_15b_3_os_update_not_new_device_edge,
+        check_15b_4_rented_mule_vs_salaried_edge,
+    )
+
     return [
         CheckDefinition(
             name="15a-1 normal account gets correct window counts",
@@ -629,5 +638,59 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
             likely_cause="Updates appended duplicates or diverged under arrival order.",
             where_to_look="features/account_updater.py",
             part="a",
+        ),
+        CheckDefinition(
+            name="15b-1 a mule, a tea stall and a salaried person side by side",
+            kind="normal",
+            proves=(
+                "M1 feature profiles cleanly separate high pass-through mules, small-credit tea stalls, "
+                "and long-tenure salaried persons."
+            ),
+            run=check_15b_1_three_profiles_normal,
+            likely_cause=(
+                "Window aggregation, cash-out channel classification, or history days calculation returned "
+                "incorrect feature values."
+            ),
+            where_to_look="features/m1_features.py, features/m1_inflow_outflow.py, features/m1_routine_lifecycle.py",
+            part="b",
+        ),
+        CheckDefinition(
+            name="15b-2 a cross-bank payment shows only each bank's own side",
+            kind="edge",
+            proves=(
+                "Cross-bank payments reflect strictly sender-debit in bank 0 and receiver-credit in bank 1 "
+                "without ledger bleed."
+            ),
+            run=check_15b_2_cross_bank_isolation_edge,
+            likely_cause="Feature computation crossed tenant boundaries or leaked remote bank ledger entries.",
+            where_to_look="features/account_reader.py, features/m1_inflow_outflow.py",
+            part="b",
+        ),
+        CheckDefinition(
+            name="15b-3 an OS update is not a new device",
+            kind="edge",
+            proves=(
+                "Issue R5 constraint: operating system updates do not trigger new device flags; "
+                "physical hardware switches do."
+            ),
+            run=check_15b_3_os_update_not_new_device_edge,
+            likely_cause=(
+                "Control group treated os_update as device binding change or failed to detect genuine hardware "
+                "replacement."
+            ),
+            where_to_look="features/m1_control_region.py",
+            part="b",
+        ),
+        CheckDefinition(
+            name="15b-4 a rented mule compared with a genuine salaried person",
+            kind="edge",
+            proves=(
+                "Rented mules exhibit dormant account reactivation, rapid pass-through, and fast credit-to-debit "
+                "compared to genuine salaried employees."
+            ),
+            run=check_15b_4_rented_mule_vs_salaried_edge,
+            likely_cause="Dormancy calculation or pass-through ratio failed on reactivated accounts.",
+            where_to_look="features/m1_routine_lifecycle.py, features/m1_inflow_outflow.py",
+            part="b",
         ),
     ]
