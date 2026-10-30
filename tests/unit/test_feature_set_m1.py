@@ -65,9 +65,9 @@ def test_four_r5_device_parts_and_history_days_exist() -> None:
     assert new_dev.group == "control"
     assert "R5" in new_dev.issue_ids
 
-    # History days available
+    # History days available (in routine_life group per canonical architect list)
     hist_days = feature_set.get_feature("history_days_available")
-    assert hist_days.group == "lifecycle"
+    assert hist_days.group == "routine_life"
     assert "summary_horizon_days" in hist_days.window_or_horizon
 
 
@@ -85,8 +85,122 @@ def test_removed_list_contains_expected_entries_with_reasons() -> None:
     assert "channel" in removed_map
     assert "every simulated payment is upi_app; a constant column teaches nothing" in removed_map["channel"]
 
-    # Verify gap note
+    # Verify gap notes
     assert any("bill payments are detected as recurring merchant payments" in note for note in feature_set.gap_notes)
+    assert any("crypto cash-out reaches the bank as an ordinary transfer" in note for note in feature_set.gap_notes)
+
+
+def test_all_canonical_features_present_in_expected_groups() -> None:
+    """Verifies that every canonical M1 feature from the plan is present in its approved group without duplicates."""
+    feature_set = load_feature_set_m1()
+
+    expected_groups: dict[str, set[str]] = {
+        "inflow": {
+            "distinct_payers_1h",
+            "distinct_payers_24h",
+            "distinct_payers_7d",
+            "first_time_payer_share_24h",
+            "small_credit_count_24h",
+            "small_credit_count_7d",
+            "below_threshold_credit_count_7d",
+        },
+        "outflow": {
+            "pass_through_ratio_24h",
+            "pass_through_ratio_7d",
+            "median_credit_to_debit_seconds_7d",
+            "top_receiver_share_7d",
+            "other_bank_outflow_share_7d",
+            "outflow_to_person_paise_7d",
+            "outflow_to_merchant_paise_7d",
+            "cash_atm_paise_7d",
+            "cash_branch_paise_7d",
+        },
+        "balance_pattern": {
+            "current_balance_paise",
+            "min_balance_paise_7d",
+            "near_zero_cycles_7d",
+        },
+        "routine_life": {
+            "salary_like_payer_count",
+            "recurring_merchant_payee_count",
+            "regular_transfer_payee_count",
+            "routine_life_present",
+            "history_days_available",
+        },
+        "lifecycle": {
+            "account_age_days",
+            "account_type",
+            "dormancy_days_before_recent_activity",
+            "volume_vs_own_history_ratio",
+        },
+        "control": {
+            "days_since_device_change",
+            "accounts_on_same_device",
+            "device_hardware_changed",
+            "sim_swapped",
+            "app_reinstalled_same_phone",
+            "new_device_r5",
+            "distinct_fingerprints_lifetime",
+            "machine_regular_timing_score",
+        },
+        "region": {
+            "distinct_same_bank_payer_regions_7d",
+            "unknown_region_payer_count_7d",
+        },
+        "network": {
+            "hops_to_confirmed_label",
+            "shared_counterparties_with_flagged_7d",
+            "local_cluster_density",
+            "hops_to_complained_account",
+        },
+        "intelligence": {
+            "registry_match_count",
+            "registry_match_age_days",
+        },
+        "payment_level": {
+            "first_payment_to_payee",
+            "amount_vs_payer_median_ratio",
+            "amount_vs_payer_max_ratio",
+            "payee_registry_match",
+            "payee_same_bank_risk",
+            "hour_ist",
+            "payee_type",
+            "customer_failed_attempts_24h",
+        },
+    }
+
+    # Verify no duplicates across all names
+    all_names = [f.name for f in feature_set.features]
+    assert len(all_names) == len(set(all_names)), "Duplicate feature names in M1 feature set"
+
+    # Verify each group matches expected canonical members exactly
+    for group_name, expected_names in expected_groups.items():
+        actual_features = feature_set.features_by_group(group_name)
+        actual_names = {f.name for f in actual_features}
+        assert actual_names == expected_names, (
+            f"Group {group_name!r} mismatch. Missing: {expected_names - actual_names}, "
+            f"Unexpected: {actual_names - expected_names}"
+        )
+
+    # Verify total count matches
+    total_expected = sum(len(names) for names in expected_groups.values())
+    assert len(feature_set.features) == total_expected, (
+        f"Expected {total_expected} features, got {len(feature_set.features)}"
+    )
+
+
+def test_no_issue_id_outside_allowed_six() -> None:
+    """Verifies that no feature in the M1 catalog carries an issue id outside the allowed six."""
+    allowed_issue_ids = frozenset({"G1", "G2", "E3", "R5", "R7", "R8"})
+    feature_set = load_feature_set_m1()
+
+    for feat in feature_set.features:
+        assert len(feat.issue_ids) > 0, f"Feature {feat.name!r} has no issue_ids"
+        for issue_id in feat.issue_ids:
+            assert issue_id in allowed_issue_ids, (
+                f"Feature {feat.name!r} has disallowed issue_id {issue_id!r}; "
+                f"must be one of {sorted(allowed_issue_ids)}"
+            )
 
 
 def test_duplicate_feature_name_rejected(tmp_path: Path) -> None:
