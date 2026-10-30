@@ -54,6 +54,8 @@ class AccountFeaturesSettings:
     routine_min_history_days: int = 35
     machine_timing_min_payments: int = 5
     device_change_window_seconds: int = 604800
+    network_max_hops: int = 3
+    network_max_nodes_visited: int = 5000
 
     @property
     def expiry_seconds(self) -> int:
@@ -137,6 +139,8 @@ def load_account_features_settings(config_path: Path | None = None) -> AccountFe
     routine_min_history_days = int(block.get("routine_min_history_days", {}).get("value", 35))
     machine_timing_min_payments = int(block.get("machine_timing_min_payments", {}).get("value", 5))
     device_change_window_seconds = int(block.get("device_change_window_seconds", {}).get("value", 604800))
+    network_max_hops = int(block.get("network_max_hops", {}).get("value", 3))
+    network_max_nodes_visited = int(block.get("network_max_nodes_visited", {}).get("value", 5000))
 
     return AccountFeaturesSettings(
         windows_seconds=windows_seconds,
@@ -155,6 +159,8 @@ def load_account_features_settings(config_path: Path | None = None) -> AccountFe
         routine_min_history_days=routine_min_history_days,
         machine_timing_min_payments=machine_timing_min_payments,
         device_change_window_seconds=device_change_window_seconds,
+        network_max_hops=network_max_hops,
+        network_max_nodes_visited=network_max_nodes_visited,
     )
 
 
@@ -406,6 +412,32 @@ def device_changes_key(run_id: str, bank_id: str, account_id: str) -> str:
     Lifetime key: lives as long as the run's namespace; removed by namespace cleanup, never by a short TTL.
     """
     return _build_key(run_id, bank_id, account_id, "device_changes")
+
+
+def labelled_accounts_key(run_id: str, bank_id: str) -> str:
+    """
+    Redis key for the sorted set (ZSET) tracking confirmed fraud labelled accounts for a bank.
+    Score: Unix epoch seconds of earliest availability max(event_time, created_at); Member: account_id.
+    Lifetime key: lives as long as the run's namespace; no expiry.
+    """
+    _validate_key_component("run_id", run_id)
+    _validate_key_component("bank_id", bank_id)
+    prefix = get_default_settings().key_prefix
+    _validate_key_component("key_prefix", prefix)
+    return f"{prefix}:{run_id}:{bank_id}:labelled_accounts"
+
+
+def complained_accounts_key(run_id: str, bank_id: str) -> str:
+    """
+    Redis key for the sorted set (ZSET) tracking complained accounts for a bank.
+    Score: Unix epoch seconds of earliest availability max(received_at, created_at); Member: account_id.
+    Lifetime key: lives as long as the run's namespace; no expiry.
+    """
+    _validate_key_component("run_id", run_id)
+    _validate_key_component("bank_id", bank_id)
+    prefix = get_default_settings().key_prefix
+    _validate_key_component("key_prefix", prefix)
+    return f"{prefix}:{run_id}:{bank_id}:complained_accounts"
 
 
 def namespace_pattern(run_id: str, bank_id: str) -> str:
