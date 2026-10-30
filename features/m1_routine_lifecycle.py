@@ -22,6 +22,7 @@ from features.account_keys import (
     active_days_key,
     get_default_settings,
 )
+from features.account_reader import AccountSnapshot
 from features.account_summaries import (
     day_closed_threshold,
     history_days_available,
@@ -151,7 +152,7 @@ def compute_lifecycle_features(
     run_id: str,
     bank_id: str,
     account_id: str,
-    snapshot: Any,
+    snapshot: AccountSnapshot,
     decision_time: datetime,
     arrival_cutoff: datetime,
     settings: AccountFeaturesSettings | None = None,

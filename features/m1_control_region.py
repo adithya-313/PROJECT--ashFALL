@@ -21,6 +21,7 @@ from features.account_keys import (
     AccountFeaturesSettings,
     get_default_settings,
 )
+from features.account_reader import AccountSnapshot
 from features.account_summaries import (
     read_accounts_on_device,
     read_device_changes,
@@ -35,7 +36,7 @@ def compute_control_features(
     run_id: str,
     bank_id: str,
     account_id: str,
-    snapshot: Any,
+    snapshot: AccountSnapshot,
     decision_time: datetime,
     arrival_cutoff: datetime,
     settings: AccountFeaturesSettings | None = None,
@@ -166,7 +167,7 @@ def compute_region_features(
     run_id: str,
     bank_id: str,
     account_id: str,
-    snapshot: Any,
+    snapshot: AccountSnapshot,
     decision_time: datetime,
     arrival_cutoff: datetime,
     settings: AccountFeaturesSettings | None = None,
