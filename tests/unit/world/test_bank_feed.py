@@ -294,7 +294,8 @@ def test_opened_account_drops_owner_kind(tiny_world_output: InteractiveWorldOutp
     assert ev.kind == "account_opened"
     assert ev.bank_id == "bank_1"
     assert ev.event_id == f"{tiny_world_output.result.run_id}-open-{target_person.account_id}"
-    assert ev.details == {"home_region": target_person.region}
+    expected_type = "savings" if target_person.account_id.startswith("acc_person_") else "current"
+    assert ev.details == {"home_region": target_person.region, "account_type": expected_type}
 
     ev_dict = asdict(ev)
     assert "owner_kind" not in ev_dict
