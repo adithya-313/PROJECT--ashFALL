@@ -273,3 +273,25 @@ Each bank hashes accounts and device fingerprints using HMAC-SHA256 with the sha
 
 ### 8.4 Known Labelling Blind Spot
 In a mule-to-mule hop the sending side is also a mule and the credit-side rule does not label it; this is a safe miss, never a wrong label.
+
+---
+
+## 9. Decision-Time Feature Logging & Ingestion Watermarks (Level 15c)
+
+### 9.1 Decision Feature Log Contract (`bank_feature_log`)
+When `config.decision_feature_logging_enabled` is True, commercial banks shadow-log point-in-time canonical M1 features during `/v1/decisions` execution. The feature log row is recorded in `bank_feature_log` in the same PostgreSQL transaction as the `bank_decision_requests` record. If the feature log insert fails, the transaction rolls back atomically and HTTP 500 is returned.
+
+The table is range-partitioned daily on `decision_time` with tenant row-level security (`ashfall_bank_api` role).
+
+### 9.2 Watermark Guard Against Section 22 Violations
+To satisfy Section 22 evaluation correctness, features for a payment decision at $T = \text{decision\_time}$ are computed only if the bank's ingestion watermark $W \ge T$. The bank watermark aggregates 5 independent ingestion sources:
+$$W = \min(W_{\text{payments}}, W_{\text{account\_events}}, W_{\text{withdrawals}}, W_{\text{feedback}}, W_{\text{complaints}})$$
+where $W_{\text{payments}} = \min_{p \in \text{assigned\_partitions}}(W_{\text{payments}, p})$.
+
+If $W < T$ or $W$ is missing, evaluation degrades safely to `status = 'no_watermark'` with all canonical features set to `None`. The system never guesses or falls back to wall-clock time.
+
+### 9.3 Live Registry Screener (`LiveRegistryScreener`)
+In live production scoring, screen requests must evaluate strictly against current entries. The `LiveRegistryScreener` adapter wraps any `RegistryScreener` and strips any caller-supplied `as_of` parameter (always forwarding `as_of=None`), guaranteeing simulation replay timestamps never leak into live traffic.
+
+### 9.4 Open for Level 16: Decision Clock vs Event Time Clock Gap
+In Level 15c, live operational decisions record `decision_time` from the system clock (`SystemClock` / host wall-clock). In Level 16 historical replay, the decision clock must align with simulated world time rather than host time, resolving the clock gap between asynchronous event production and decision evaluation.

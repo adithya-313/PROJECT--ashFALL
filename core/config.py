@@ -38,6 +38,7 @@ class AppConfig(BaseSettings):
         database_url: Mandatory PostgreSQL connection URI (no default).
         redis_url: Mandatory Redis connection URI (no default).
     """
+
     environment: str = "development"
     log_level: str = "INFO"
     database_url: str
@@ -72,6 +73,7 @@ class AppConfig(BaseSettings):
     enable_model_v2: bool = False
     enable_gnn_ensemble: bool = False
     enable_research_agent_internet: bool = False
+    decision_feature_logging_enabled: bool = False
 
     # Bank HMAC request signing secrets (Level 14b). Stored securely as SecretStr
     # so they are never printed, logged, or serialized to JSON in plain text.

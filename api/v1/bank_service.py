@@ -4,6 +4,8 @@
 # Enables invoking bank API domain operations directly without HTTP transport or signing overhead,
 # while preserving exact database transaction semantics, schema validation, and idempotency guarantees.
 
+import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -37,7 +39,14 @@ from api.v1.models import (
     WithdrawalResponse,
 )
 from api.v1.upi_outbox import UpiPaymentSide, record_upi_side, validate_side
+from core.config import config
 from core.event_clock import Clock
+from features.account_keys import AccountFeaturesSettings
+from features.decision_features import compute_decision_row
+from features.feature_log import FeatureLogRow, insert_feature_log_row
+from features.registry_screening import RegistryScreener
+
+logger = logging.getLogger(__name__)
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -124,11 +133,18 @@ async def record_decision(
     connection: asyncpg.Connection,
     bank_id: str,
     request: DecisionRequest,
+    *,
+    redis_client: Any = None,
+    decision_clock: Any = None,
+    settings: AccountFeaturesSettings | None = None,
+    screener: RegistryScreener | None = None,
+    feature_row: FeatureLogRow | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """
     WHAT: Executes the business logic for recording a bank payment decision evaluation request.
     It inserts a record into bank_decision_requests with the bank's configured operating mode
-    and returns an unscored evaluation decision response.
+    and returns an unscored evaluation decision response. When decision_feature_logging_enabled
+    is configured, also records point-in-time canonical features in bank_feature_log atomically.
 
     WHY: Moves the decision write logic from the HTTP router into a reusable service function
     callable both by the HTTP route and in-process simulation connectors.
@@ -137,6 +153,11 @@ async def record_decision(
         connection: Active bank-scoped database connection.
         bank_id: Commercial bank identifier.
         request: Validated DecisionRequest model.
+        redis_client: Optional Redis client for watermark and account feature lookups.
+        decision_clock: Optional clock instance for evaluation timestamp.
+        settings: Optional AccountFeaturesSettings.
+        screener: Optional RegistryScreener instance.
+        feature_row: Pre-computed FeatureLogRow to insert (if computed prior to transaction).
 
     Returns:
         Tuple of status code (200) and response body dictionary.
@@ -160,9 +181,26 @@ async def record_decision(
     except asyncpg.UniqueViolationError as error:
         if error.constraint_name != DECISION_UNIQUE_CONSTRAINT:
             raise
-        raise ApiError(
-            409, "payment_already_decided", "A decision was already requested for this payment"
-        ) from error
+        raise ApiError(409, "payment_already_decided", "A decision was already requested for this payment") from error
+
+    if config.decision_feature_logging_enabled:
+        row = feature_row
+        if row is None:
+            try:
+                row = await asyncio.to_thread(
+                    compute_decision_row,
+                    redis_client=redis_client,
+                    request=request,
+                    clock=decision_clock,
+                    settings=settings,
+                    screener=screener,
+                    bank_id=bank_id,
+                )
+            except Exception as exc:
+                logger.error("Failed to compute decision features: %s", exc)
+                row = None
+        if row is not None:
+            await insert_feature_log_row(connection, row)
 
     response = DecisionResponse(
         payment_id=request.payment_id,
@@ -417,7 +455,17 @@ class InProcessBankClient:
     It does not sign requests and records no nonces because there is no transport layer to protect against replay.
     """
 
-    def __init__(self, pool: asyncpg.Pool, bank_id: str, clock: Clock) -> None:
+    def __init__(
+        self,
+        pool: asyncpg.Pool,
+        bank_id: str,
+        clock: Clock,
+        *,
+        redis_client: Any = None,
+        decision_clock: Any = None,
+        settings: Any = None,
+        screener: Any = None,
+    ) -> None:
         """
         Initializes an in-process client instance.
 
@@ -425,10 +473,18 @@ class InProcessBankClient:
             pool: Connection pool for tenant-scoped database access.
             bank_id: Authorized commercial bank identifier.
             clock: Clock providing transport timestamps for idempotency expiration.
+            redis_client: Optional Redis client for feature computation.
+            decision_clock: Optional decision evaluation clock.
+            settings: Optional AccountFeaturesSettings.
+            screener: Optional RegistryScreener instance.
         """
         self._pool = pool
         self._bank_id = bank_id
         self._clock = clock
+        self._redis_client = redis_client
+        self._decision_clock = decision_clock
+        self._settings = settings
+        self._screener = screener
 
     async def post(self, path: str, body_bytes: bytes, idempotency_key: str) -> IdempotentOutcome:
         """
@@ -452,8 +508,33 @@ class InProcessBankClient:
         if path == "/v1/decisions":
             decision_model = parse_raw_body(body_bytes, DecisionRequest)
 
+            feature_row = None
+            if config.decision_feature_logging_enabled:
+                try:
+                    feature_row = await asyncio.to_thread(
+                        compute_decision_row,
+                        redis_client=self._redis_client,
+                        request=decision_model,
+                        clock=self._decision_clock,
+                        settings=self._settings,
+                        screener=self._screener,
+                        bank_id=self._bank_id,
+                    )
+                except Exception as exc:
+                    logger.error("Failed to compute decision features: %s", exc)
+                    feature_row = None
+
             async def handler(connection: asyncpg.Connection) -> tuple[int, dict[str, Any]]:
-                return await record_decision(connection, self._bank_id, decision_model)
+                return await record_decision(
+                    connection,
+                    self._bank_id,
+                    decision_model,
+                    redis_client=self._redis_client,
+                    decision_clock=self._decision_clock,
+                    settings=self._settings,
+                    screener=self._screener,
+                    feature_row=feature_row,
+                )
 
         elif path == "/v1/transactions":
             tx_model = parse_raw_body(body_bytes, TransactionSideRequest)
@@ -515,5 +596,3 @@ class InProcessBankClient:
         else:
             body_bytes = orjson.dumps(withdrawal.model_dump(mode="json"))
         return await self.post("/v1/withdrawals", body_bytes, idempotency_key)
-
-
