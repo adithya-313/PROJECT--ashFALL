@@ -12,6 +12,7 @@ Redis sliding-window feature store.
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from aiokafka import AIOKafkaConsumer, TopicPartition
@@ -21,6 +22,7 @@ from features.account_keys import AccountFeaturesSettings, get_default_settings
 from features.account_labels import apply_complaints_since, apply_feedback_since
 from features.account_records import account_event_from_row, parse_upi_event, withdrawal_from_row
 from features.account_updater import apply_account_event, apply_payment_side, apply_withdrawal
+from features.ingest_watermark import record_payment_watermark, record_poller_watermark
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,7 @@ async def run_payment_updater(
     group_id: str = "account-feature-updater",
     idle_timeout_seconds: float | None = None,
     topic: str = config.kafka_upi_topic,
+    now_utc: datetime | None = None,
 ) -> int:
     """
     WHAT: Consumes schema-2 UPI payment events from Kafka, applies each to Redis, and commits offsets.
@@ -84,6 +87,24 @@ Kafka gives no per-account ordering here; state is correct in any order because 
                     msg = await consumer.getone()
             except asyncio.TimeoutError:
                 # Idle timeout elapsed with no new messages available
+                # When consumer has no new messages, read end offsets:
+                # if high watermark matches current offset, watermark advances to now_utc - commit_grace
+                now = now_utc if now_utc is not None else datetime.now(timezone.utc)
+                if now.tzinfo is None:
+                    now = now.replace(tzinfo=timezone.utc)
+                idle_ts = int(now.timestamp()) - cfg.commit_grace
+
+                try:
+                    assigned = consumer.assignment() if hasattr(consumer, "assignment") else set()
+                    if assigned:
+                        end_offsets = await consumer.end_offsets(list(assigned))
+                        for tp in assigned:
+                            pos = await consumer.position(tp)
+                            high_watermark = end_offsets.get(tp)
+                            if high_watermark is not None and pos == high_watermark:
+                                record_payment_watermark(redis_client, tp.partition, idle_ts)
+                except Exception as exc:
+                    logger.warning("Failed to advance payment watermark at end of partition: %s", exc)
                 break
 
             try:
@@ -104,6 +125,13 @@ Kafka gives no per-account ordering here; state is correct in any order because 
             tp = TopicPartition(msg.topic, msg.partition)
             await consumer.commit({tp: msg.offset + 1})
             processed_count += 1
+
+            # Record per-partition payment watermark
+            if hasattr(msg, "timestamp") and msg.timestamp is not None and msg.timestamp > 0:
+                msg_ts = int(msg.timestamp / 1000)
+            else:
+                msg_ts = int(max(record.event_time, record.arrival_time).timestamp())
+            record_payment_watermark(redis_client, msg.partition, msg_ts)
     finally:
         await consumer.stop()
 
@@ -116,6 +144,7 @@ async def apply_account_events_since(
     settings: AccountFeaturesSettings | None = None,
     bank_id: str = "bank_0",
     after_id: int = 0,
+    now_utc: datetime | None = None,
 ) -> int:
     """
     WHAT: Queries bank_account_events table for events with id > after_id and applies each to Redis.
@@ -166,15 +195,27 @@ async def apply_account_events_since(
     )
 
     if not rows:
+        now = now_utc if now_utc is not None else datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        idle_ts = int(now.timestamp()) - cfg.commit_grace
+        record_poller_watermark(redis_client, bank_id, "events", idle_ts)
         return after_id
 
     last_id = after_id
+    batch_max_dt = None
     for row in rows:
         record = account_event_from_row(row)
         apply_account_event(redis_client, record, cfg)
         row_id = int(row["id"])
         if row_id > last_id:
             last_id = row_id
+        row_dt = max(row["event_time"], row["created_at"])
+        if batch_max_dt is None or row_dt > batch_max_dt:
+            batch_max_dt = row_dt
+
+    if batch_max_dt is not None:
+        record_poller_watermark(redis_client, bank_id, "events", batch_max_dt)
 
     return last_id
 
@@ -185,6 +226,7 @@ async def apply_withdrawals_since(
     settings: AccountFeaturesSettings | None = None,
     bank_id: str = "bank_0",
     after_id: int = 0,
+    now_utc: datetime | None = None,
 ) -> int:
     """
     WHAT: Queries bank_withdrawals table for rows with id > after_id and applies each to Redis.
@@ -234,15 +276,27 @@ async def apply_withdrawals_since(
     )
 
     if not rows:
+        now = now_utc if now_utc is not None else datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        idle_ts = int(now.timestamp()) - cfg.commit_grace
+        record_poller_watermark(redis_client, bank_id, "withdrawals", idle_ts)
         return after_id
 
     last_id = after_id
+    batch_max_dt = None
     for row in rows:
         record = withdrawal_from_row(row)
         apply_withdrawal(redis_client, record, cfg)
         row_id = int(row["id"])
         if row_id > last_id:
             last_id = row_id
+        row_dt = max(row["event_time"], row["recorded_at"])
+        if batch_max_dt is None or row_dt > batch_max_dt:
+            batch_max_dt = row_dt
+
+    if batch_max_dt is not None:
+        record_poller_watermark(redis_client, bank_id, "withdrawals", batch_max_dt)
 
     return last_id
 

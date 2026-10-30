@@ -138,3 +138,9 @@ account_features:
     reason: "bound the work per decision; when reached, the result is None and a warning is logged, never a partial number"
     derived_from: "Level 15c latency budget"
 
+  commit_grace:
+    label: policy
+    value: 5
+    reason: "Watermark advance slack in seconds when consumer or poller is idle."
+    derived_from: "Level 15c ingestion watermark contract"
+

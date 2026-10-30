@@ -29,6 +29,7 @@ from features.account_keys import (
 )
 from features.account_reader import read_account_snapshot
 from features.account_summaries import read_counterparty_days
+from features.ingest_watermark import record_poller_watermark
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,7 @@ async def apply_feedback_since(
     settings: AccountFeaturesSettings | None = None,
     bank_id: str = "bank_0",
     after_id: int = 0,
+    now_utc: datetime | None = None,
 ) -> int:
     """
     WHAT: Queries bank_feedback for rows with id > after_id (with overlap re-read) and updates Redis labelled_accounts.
@@ -86,13 +88,22 @@ async def apply_feedback_since(
     )
 
     if not rows:
+        now = now_utc if now_utc is not None else datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        idle_ts = int(now.timestamp()) - cfg.commit_grace
+        record_poller_watermark(redis_client, bank_id, "feedback", idle_ts)
         return after_id
 
     last_id = after_id
+    batch_max_dt = None
     for row in rows:
         row_id = int(row["id"])
         if row_id > last_id:
             last_id = row_id
+        row_dt = max(row["event_time"], row["created_at"])
+        if batch_max_dt is None or row_dt > batch_max_dt:
+            batch_max_dt = row_dt
 
         outcome = row["outcome"]
         # Architect decision 9b: confirmed_fraud feedback only; not_fraud and customer_dispute are ignored here.
@@ -145,6 +156,9 @@ async def apply_feedback_since(
                 bank_id,
             )
 
+    if batch_max_dt is not None:
+        record_poller_watermark(redis_client, bank_id, "feedback", batch_max_dt)
+
     return last_id
 
 
@@ -154,6 +168,7 @@ async def apply_complaints_since(
     settings: AccountFeaturesSettings | None = None,
     bank_id: str = "bank_0",
     after_id: int = 0,
+    now_utc: datetime | None = None,
 ) -> int:
     """
     WHAT: Queries bank_complaints for rows with id > after_id and records complained accounts for this bank.
@@ -191,13 +206,22 @@ async def apply_complaints_since(
     )
 
     if not rows:
+        now = now_utc if now_utc is not None else datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        idle_ts = int(now.timestamp()) - cfg.commit_grace
+        record_poller_watermark(redis_client, bank_id, "complaints", idle_ts)
         return after_id
 
     last_id = after_id
+    batch_max_dt = None
     for row in rows:
         row_id = int(row["id"])
         if row_id > last_id:
             last_id = row_id
+        row_dt = max(row["received_at"], row["created_at"])
+        if batch_max_dt is None or row_dt > batch_max_dt:
+            batch_max_dt = row_dt
 
         # Mark reported_account ONLY when reported_bank_id equals this bank
         if row["reported_bank_id"] != bank_id:
@@ -217,6 +241,9 @@ async def apply_complaints_since(
         score = to_unix_seconds(available_from)
         key = complained_accounts_key(run_id, bank_id)
         redis_client.zadd(key, {reported_account: score}, lt=True)
+
+    if batch_max_dt is not None:
+        record_poller_watermark(redis_client, bank_id, "complaints", batch_max_dt)
 
     return last_id
 
