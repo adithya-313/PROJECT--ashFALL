@@ -1,0 +1,449 @@
+# Schema specification for M1 live mule features.
+# Level 15b Round 2a: Long-history summaries, cash-out state, and M1 feature list.
+
+features:
+  # -----------------------------------------------------------------------------
+  # Group: inflow
+  # -----------------------------------------------------------------------------
+  - name: "inflow_credit_count_1h"
+    group: "inflow"
+    definition: "Total number of incoming credit transactions in the last 1 hour sliding window."
+    bank_visible_source_records: "PaymentSideRecord (side='credit', status='success')"
+    window_or_horizon: "1h (3600s)"
+    empty_means: "zero"
+    issue_ids: ["G1"]
+
+  - name: "inflow_credit_count_24h"
+    group: "inflow"
+    definition: "Total number of incoming credit transactions in the last 24 hours sliding window."
+    bank_visible_source_records: "PaymentSideRecord (side='credit', status='success')"
+    window_or_horizon: "24h (86400s)"
+    empty_means: "zero"
+    issue_ids: ["G1"]
+
+  - name: "inflow_credit_count_7d"
+    group: "inflow"
+    definition: "Total number of incoming credit transactions in the last 7 days sliding window."
+    bank_visible_source_records: "PaymentSideRecord (side='credit', status='success')"
+    window_or_horizon: "7d (604800s)"
+    empty_means: "zero"
+    issue_ids: ["G1"]
+
+  - name: "inflow_credit_amount_paise_1h"
+    group: "inflow"
+    definition: "Total incoming amount in paise received across successful credit transactions in the last 1 hour sliding window."
+    bank_visible_source_records: "PaymentSideRecord (side='credit', status='success')"
+    window_or_horizon: "1h (3600s)"
+    empty_means: "zero"
+    issue_ids: ["G1"]
+
+  - name: "inflow_credit_amount_paise_24h"
+    group: "inflow"
+    definition: "Total incoming amount in paise received across successful credit transactions in the last 24 hours sliding window."
+    bank_visible_source_records: "PaymentSideRecord (side='credit', status='success')"
+    window_or_horizon: "24h (86400s)"
+    empty_means: "zero"
+    issue_ids: ["G1"]
+
+  - name: "inflow_credit_amount_paise_7d"
+    group: "inflow"
+    definition: "Total incoming amount in paise received across successful credit transactions in the last 7 days sliding window."
+    bank_visible_source_records: "PaymentSideRecord (side='credit', status='success')"
+    window_or_horizon: "7d (604800s)"
+    empty_means: "zero"
+    issue_ids: ["G1"]
+
+  - name: "distinct_payers_count_24h"
+    group: "inflow"
+    definition: "Count of distinct sending counterparties who transferred funds to the account within the last 24 hours (fan-in measure)."
+    bank_visible_source_records: "PaymentSideRecord (side='credit', status='success')"
+    window_or_horizon: "24h (86400s)"
+    empty_means: "zero"
+    issue_ids: ["R3", "G1"]
+
+  - name: "distinct_payers_count_7d"
+    group: "inflow"
+    definition: "Count of distinct sending counterparties who transferred funds to the account within the last 7 days."
+    bank_visible_source_records: "PaymentSideRecord (side='credit', status='success')"
+    window_or_horizon: "7d (604800s)"
+    empty_means: "zero"
+    issue_ids: ["R3", "G1"]
+
+  # -----------------------------------------------------------------------------
+  # Group: outflow
+  # -----------------------------------------------------------------------------
+  - name: "outflow_debit_count_1h"
+    group: "outflow"
+    definition: "Total number of outgoing debit transactions in the last 1 hour sliding window."
+    bank_visible_source_records: "PaymentSideRecord (side='debit', status='success')"
+    window_or_horizon: "1h (3600s)"
+    empty_means: "zero"
+    issue_ids: ["G1"]
+
+  - name: "outflow_debit_count_24h"
+    group: "outflow"
+    definition: "Total number of outgoing debit transactions in the last 24 hours sliding window."
+    bank_visible_source_records: "PaymentSideRecord (side='debit', status='success')"
+    window_or_horizon: "24h (86400s)"
+    empty_means: "zero"
+    issue_ids: ["G1"]
+
+  - name: "outflow_debit_count_7d"
+    group: "outflow"
+    definition: "Total number of outgoing debit transactions in the last 7 days sliding window."
+    bank_visible_source_records: "PaymentSideRecord (side='debit', status='success')"
+    window_or_horizon: "7d (604800s)"
+    empty_means: "zero"
+    issue_ids: ["G1"]
+
+  - name: "outflow_debit_amount_paise_1h"
+    group: "outflow"
+    definition: "Total outgoing amount in paise debited across successful transactions in the last 1 hour sliding window."
+    bank_visible_source_records: "PaymentSideRecord (side='debit', status='success')"
+    window_or_horizon: "1h (3600s)"
+    empty_means: "zero"
+    issue_ids: ["G1"]
+
+  - name: "outflow_debit_amount_paise_24h"
+    group: "outflow"
+    definition: "Total outgoing amount in paise debited across successful transactions in the last 24 hours sliding window."
+    bank_visible_source_records: "PaymentSideRecord (side='debit', status='success')"
+    window_or_horizon: "24h (86400s)"
+    empty_means: "zero"
+    issue_ids: ["G1"]
+
+  - name: "outflow_debit_amount_paise_7d"
+    group: "outflow"
+    definition: "Total outgoing amount in paise debited across successful transactions in the last 7 days sliding window."
+    bank_visible_source_records: "PaymentSideRecord (side='debit', status='success')"
+    window_or_horizon: "7d (604800s)"
+    empty_means: "zero"
+    issue_ids: ["G1"]
+
+  - name: "cash_withdrawal_count_24h"
+    group: "outflow"
+    definition: "Number of successful cash withdrawals (ATM or branch) performed in the last 24 hours."
+    bank_visible_source_records: "WithdrawalRecord (status='success')"
+    window_or_horizon: "24h (86400s)"
+    empty_means: "zero"
+    issue_ids: ["G2"]
+
+  - name: "cash_withdrawal_amount_paise_24h"
+    group: "outflow"
+    definition: "Total cash amount in paise withdrawn across successful ATM and branch withdrawals in the last 24 hours."
+    bank_visible_source_records: "WithdrawalRecord (status='success')"
+    window_or_horizon: "24h (86400s)"
+    empty_means: "zero"
+    issue_ids: ["G2"]
+
+  - name: "cash_withdrawal_count_7d"
+    group: "outflow"
+    definition: "Number of successful cash withdrawals (ATM or branch) performed in the last 7 days."
+    bank_visible_source_records: "WithdrawalRecord (status='success')"
+    window_or_horizon: "7d (604800s)"
+    empty_means: "zero"
+    issue_ids: ["G2"]
+
+  - name: "cash_withdrawal_amount_paise_7d"
+    group: "outflow"
+    definition: "Total cash amount in paise withdrawn across successful ATM and branch withdrawals in the last 7 days."
+    bank_visible_source_records: "WithdrawalRecord (status='success')"
+    window_or_horizon: "7d (604800s)"
+    empty_means: "zero"
+    issue_ids: ["G2"]
+
+  - name: "outflow_share_of_inflow_24h"
+    group: "outflow"
+    definition: "Proportion of 24h total inflow funds subsequently disbursed via debits and withdrawals within 24 hours (pass-through measure)."
+    bank_visible_source_records: "PaymentSideRecord, WithdrawalRecord"
+    window_or_horizon: "24h (86400s)"
+    empty_means: "zero"
+    issue_ids: ["R1", "G1", "G2"]
+
+  - name: "pass_through_dwell_time_seconds"
+    group: "outflow"
+    definition: "Elapsed time in seconds between the latest large credit arrival and the subsequent outgoing debit or withdrawal."
+    bank_visible_source_records: "PaymentSideRecord, WithdrawalRecord"
+    window_or_horizon: "24h (86400s)"
+    empty_means: "no data"
+    issue_ids: ["R1"]
+
+  # -----------------------------------------------------------------------------
+  # Group: balance_pattern
+  # -----------------------------------------------------------------------------
+  - name: "balance_after_paise"
+    group: "balance_pattern"
+    definition: "Ledger balance in integer paise immediately following the most recent successful payment or withdrawal."
+    bank_visible_source_records: "PaymentSideRecord, WithdrawalRecord"
+    window_or_horizon: "latest"
+    empty_means: "no data"
+    issue_ids: ["G2"]
+
+  - name: "near_zero_balance_flag"
+    group: "balance_pattern"
+    definition: "Binary flag indicating whether account balance dropped to near zero following significant debit or cash-out activity."
+    bank_visible_source_records: "PaymentSideRecord, WithdrawalRecord"
+    window_or_horizon: "7d (604800s)"
+    empty_means: "zero"
+    issue_ids: ["R4", "G2"]
+
+  - name: "balance_to_inflow_ratio"
+    group: "balance_pattern"
+    definition: "Current account balance divided by the total credit amount received in the last 24 hours."
+    bank_visible_source_records: "PaymentSideRecord, WithdrawalRecord"
+    window_or_horizon: "24h (86400s)"
+    empty_means: "no data"
+    issue_ids: ["R4"]
+
+  - name: "min_balance_paise_7d"
+    group: "balance_pattern"
+    definition: "Minimum ledger balance in paise recorded after any successful transaction over the 7-day raw window."
+    bank_visible_source_records: "PaymentSideRecord, WithdrawalRecord"
+    window_or_horizon: "7d (604800s)"
+    empty_means: "no data"
+    issue_ids: ["R4"]
+
+  # -----------------------------------------------------------------------------
+  # Group: routine_life
+  # -----------------------------------------------------------------------------
+  - name: "recurring_credits_count"
+    group: "routine_life"
+    definition: "Count of distinct counterparty sources providing recurrent periodic credits across multiple closed days over the summary horizon."
+    bank_visible_source_records: "features/account_summaries.py counterparty days"
+    window_or_horizon: "summary_horizon_days (62d)"
+    empty_means: "not enough history"
+    issue_ids: ["G1"]
+
+  - name: "monthly_credit_regularity_score"
+    group: "routine_life"
+    definition: "Heuristic regularity metric measuring stability of salary or regular monthly deposits across the 62-day horizon."
+    bank_visible_source_records: "features/account_summaries.py day totals"
+    window_or_horizon: "summary_horizon_days (62d)"
+    empty_means: "not enough history"
+    issue_ids: ["G1"]
+
+  - name: "recurring_merchant_payments_count"
+    group: "routine_life"
+    definition: "Count of repeated payments made to merchant counterparties across distinct closed days representing utility bills and recurring purchases."
+    bank_visible_source_records: "features/account_summaries.py counterparty days"
+    window_or_horizon: "summary_horizon_days (62d)"
+    empty_means: "not enough history"
+    issue_ids: ["G1"]
+
+  - name: "dormancy_days_before_activity"
+    group: "routine_life"
+    definition: "Number of consecutive days the account remained inactive prior to the onset of the current activity window."
+    bank_visible_source_records: "features/account_summaries.py day totals"
+    window_or_horizon: "summary_horizon_days (62d)"
+    empty_means: "zero"
+    issue_ids: ["G1"]
+
+  - name: "daily_volume_vs_history_mean"
+    group: "routine_life"
+    definition: "Ratio of transaction volume in the latest active day to the account's historical average daily volume over the 62-day horizon."
+    bank_visible_source_records: "features/account_summaries.py day totals"
+    window_or_horizon: "summary_horizon_days (62d)"
+    empty_means: "not enough history"
+    issue_ids: ["G1"]
+
+  # -----------------------------------------------------------------------------
+  # Group: lifecycle
+  # -----------------------------------------------------------------------------
+  - name: "account_age_days"
+    group: "lifecycle"
+    definition: "Elapsed days since genuine account opening date as established by the account_opened event (opened_at)."
+    bank_visible_source_records: "AccountEventRecord (kind='account_opened')"
+    window_or_horizon: "account lifetime"
+    empty_means: "no data"
+    issue_ids: ["G1"]
+
+  - name: "days_since_last_active"
+    group: "lifecycle"
+    definition: "Elapsed days between decision time and the most recent previous transaction or lifecycle activity (last_active_day)."
+    bank_visible_source_records: "features/account_summaries.py marks.last_active_day"
+    window_or_horizon: "account lifetime"
+    empty_means: "no data"
+    issue_ids: ["G1"]
+
+  - name: "history_days_available"
+    group: "lifecycle"
+    definition: "Whole calendar days of transaction and event history observed by this bank for the account, capped at summary horizon."
+    bank_visible_source_records: "AccountSnapshot.first_event_time"
+    window_or_horizon: "summary_horizon_days (62d)"
+    empty_means: "zero"
+    issue_ids: ["G1"]
+
+  # -----------------------------------------------------------------------------
+  # Group: control
+  # -----------------------------------------------------------------------------
+  - name: "device_hardware_changed"
+    group: "control"
+    definition: "Binary flag indicating whether a physical mobile hardware device binding change occurred on the account."
+    bank_visible_source_records: "AccountEventRecord (kind='device_binding_change')"
+    window_or_horizon: "7d (604800s)"
+    empty_means: "zero"
+    issue_ids: ["R5"]
+
+  - name: "sim_swapped"
+    group: "control"
+    definition: "Binary flag indicating whether a mobile SIM card swap event occurred on the customer phone number."
+    bank_visible_source_records: "AccountEventRecord (kind='sim_swap')"
+    window_or_horizon: "7d (604800s)"
+    empty_means: "zero"
+    issue_ids: ["R5"]
+
+  - name: "app_reinstalled_same_phone"
+    group: "control"
+    definition: "Binary flag indicating whether the banking application was reinstalled on the same physical device hardware."
+    bank_visible_source_records: "AccountEventRecord (kind='app_reinstall')"
+    window_or_horizon: "7d (604800s)"
+    empty_means: "zero"
+    issue_ids: ["R5"]
+
+  - name: "new_device_r5"
+    group: "control"
+    definition: "Architect R5 composite indicator: 1 if physical hardware changed, SIM swapped, or fresh app on different phone; 0 on OS updates."
+    bank_visible_source_records: "AccountEventRecord, PaymentSideRecord"
+    window_or_horizon: "7d (604800s)"
+    empty_means: "zero"
+    issue_ids: ["R5"]
+
+  - name: "distinct_fingerprints_count"
+    group: "control"
+    definition: "Count of distinct mobile device fingerprints observed transacting on this account over its entire lifetime."
+    bank_visible_source_records: "features/account_summaries.py fingerprints ZSET"
+    window_or_horizon: "account lifetime"
+    empty_means: "zero"
+    issue_ids: ["R5"]
+
+  # -----------------------------------------------------------------------------
+  # Group: network
+  # -----------------------------------------------------------------------------
+  - name: "counterparty_concentration_24h"
+    group: "network"
+    definition: "Herfindahl-Hirschman index or maximum volume fraction concentrated across counterparties within the bank in the last 24h."
+    bank_visible_source_records: "PaymentSideRecord"
+    window_or_horizon: "24h (86400s)"
+    empty_means: "zero"
+    issue_ids: ["G1"]
+
+  - name: "shared_counterparty_count"
+    group: "network"
+    definition: "Count of counterparties shared between this account and other accounts flagged within this bank's tenant boundary."
+    bank_visible_source_records: "PaymentSideRecord"
+    window_or_horizon: "summary_horizon_days (62d)"
+    empty_means: "zero"
+    issue_ids: ["G1"]
+
+  - name: "counterparty_days_count"
+    group: "network"
+    definition: "Total distinct closed calendar days on which transactions occurred with counterparties over the 62-day horizon."
+    bank_visible_source_records: "features/account_summaries.py counterparty days"
+    window_or_horizon: "summary_horizon_days (62d)"
+    empty_means: "zero"
+    issue_ids: ["G1"]
+
+  # -----------------------------------------------------------------------------
+  # Group: intelligence
+  # -----------------------------------------------------------------------------
+  - name: "dpip_suspect_match"
+    group: "intelligence"
+    definition: "Binary indicator of whether the account phone number matched the Digital Payment Intelligence Platform (DPIP) suspect registry."
+    bank_visible_source_records: "Mock DPIP registry match"
+    window_or_horizon: "point-in-time"
+    empty_means: "zero"
+    issue_ids: ["N1", "N2"]
+
+  - name: "i4c_feed_match"
+    group: "intelligence"
+    definition: "Binary indicator of whether the customer identifier or account matched the Indian Cybercrime Coordination Centre (I4C) suspect feed."
+    bank_visible_source_records: "Mock I4C intelligence feed"
+    window_or_horizon: "point-in-time"
+    empty_means: "zero"
+    issue_ids: ["N2"]
+
+  - name: "prior_complaint_count"
+    group: "intelligence"
+    definition: "Cumulative count of formal citizen fraud complaints (1930 / NCRP) recorded against this account."
+    bank_visible_source_records: "BankFeedComplaint"
+    window_or_horizon: "account lifetime"
+    empty_means: "zero"
+    issue_ids: ["L1", "G3"]
+
+  # -----------------------------------------------------------------------------
+  # Group: region
+  # -----------------------------------------------------------------------------
+  - name: "payer_payee_same_region"
+    group: "region"
+    definition: "Binary flag indicating whether sending and receiving accounts share the same registered home region (same-bank only)."
+    bank_visible_source_records: "AccountEventRecord (kind='account_opened' details.home_region)"
+    window_or_horizon: "payment moment"
+    empty_means: "no data"
+    issue_ids: ["E3"]
+
+  - name: "home_region_match"
+    group: "region"
+    definition: "Binary flag indicating whether the transaction location/node region matches the account holder's registered home region."
+    bank_visible_source_records: "AccountEventRecord (kind='account_opened' details.home_region)"
+    window_or_horizon: "payment moment"
+    empty_means: "no data"
+    issue_ids: ["E3"]
+
+  # -----------------------------------------------------------------------------
+  # Group: payment_level
+  # -----------------------------------------------------------------------------
+  - name: "current_amount_paise"
+    group: "payment_level"
+    definition: "Transaction amount of the candidate payment being evaluated in integer paise."
+    bank_visible_source_records: "PaymentSideRecord.amount_paise"
+    window_or_horizon: "payment moment"
+    empty_means: "no data"
+    issue_ids: ["E2"]
+
+  - name: "payee_type"
+    group: "payment_level"
+    definition: "Classification of counterparty payee as person or merchant based on account numbering prefix."
+    bank_visible_source_records: "PaymentSideRecord.payee_type"
+    window_or_horizon: "payment moment"
+    empty_means: "no data"
+    issue_ids: ["A2"]
+
+  - name: "failed_attempt_count_24h"
+    group: "payment_level"
+    definition: "Count of failed transaction sides and failed cash withdrawal attempts in the last 24 hours (R7 failure visibility)."
+    bank_visible_source_records: "PaymentSideRecord (status='failed'), WithdrawalRecord (status='failed')"
+    window_or_horizon: "24h (86400s)"
+    empty_means: "zero"
+    issue_ids: ["R7"]
+
+  - name: "hour_of_day"
+    group: "payment_level"
+    definition: "Indian Standard Time (IST) hour of transaction execution (0 to 23)."
+    bank_visible_source_records: "PaymentSideRecord.event_time"
+    window_or_horizon: "payment moment"
+    empty_means: "no data"
+    issue_ids: ["G1"]
+
+  - name: "day_of_week"
+    group: "payment_level"
+    definition: "Day of week of transaction execution (0=Monday, 6=Sunday) in Indian Standard Time (IST)."
+    bank_visible_source_records: "PaymentSideRecord.event_time"
+    window_or_horizon: "payment moment"
+    empty_means: "no data"
+    issue_ids: ["G1"]
+
+# =============================================================================
+# Excluded and removed candidate features with explicit technical rationales
+# =============================================================================
+removed:
+  - name: "emulator_flag"
+    reason: "not visible to banks in this simulator: no such account-event kind"
+
+  - name: "remote_access_flag"
+    reason: "not visible to banks in this simulator: no such account-event kind"
+
+  - name: "channel"
+    reason: "every simulated payment is upi_app; a constant column teaches nothing"
+
+gap_notes:
+  - "bill payments are detected as recurring merchant payments (no biller payee type)"

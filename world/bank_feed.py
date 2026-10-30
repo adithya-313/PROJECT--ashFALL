@@ -425,7 +425,9 @@ def project_payment(
         failure_domain=event.failure_domain,
         payee_type=resolved_payee_type,
         channel=config.channel_value,
-        counterparty_vpa=None,
+        # Architect decision 6B: opaque stand-in VPA. Features may only look it up among
+        # this bank's own accounts and must never parse run, bank or account out of it.
+        counterparty_vpa=event.to_account,
         sender_device_fingerprint=stamp.fingerprint if stamp is not None else None,
         sender_os_generation=stamp.os_generation if stamp is not None else None,
         balance_after_paise=debit_balance,
@@ -461,7 +463,9 @@ def project_payment(
             failure_domain=event.failure_domain,
             payee_type=resolved_payee_type,
             channel=config.channel_value,
-            counterparty_vpa=None,
+            # Architect decision 6B: opaque stand-in VPA. Features may only look it up among
+            # this bank's own accounts and must never parse run, bank or account out of it.
+            counterparty_vpa=event.from_account,
             sender_device_fingerprint=None,
             sender_os_generation=None,
             balance_after_paise=credit_balance,

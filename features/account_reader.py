@@ -22,12 +22,16 @@ from features.account_keys import (
     get_default_settings,
     side_records_key,
     side_times_key,
+    withdrawal_records_key,
+    withdrawal_times_key,
 )
 from features.account_records import (
     AccountEventRecord,
     PaymentSideRecord,
+    WithdrawalRecord,
     deserialize_account_event_record,
     deserialize_payment_side_record,
+    deserialize_withdrawal_record,
 )
 from features.velocity import to_unix_seconds
 
@@ -49,6 +53,7 @@ class AccountSnapshot:
     has_history: bool
     side_records: tuple[PaymentSideRecord, ...]
     account_events: tuple[AccountEventRecord, ...]
+    withdrawals: tuple[WithdrawalRecord, ...]
     first_event_time: datetime | None
     last_event_time: datetime | None
     arrival_watermark: datetime | None
@@ -63,6 +68,7 @@ def empty_snapshot() -> AccountSnapshot:
         has_history=False,
         side_records=(),
         account_events=(),
+        withdrawals=(),
         first_event_time=None,
         last_event_time=None,
         arrival_watermark=None,
@@ -143,7 +149,26 @@ def read_account_snapshot(
             if min_allowed_time <= ev.event_time <= decision_time and ev.arrival_time <= arrival_cutoff:
                 filtered_events.append(ev)
 
-    all_visible = list(filtered_sides) + list(filtered_events)
+    # 3. Query cash withdrawals within [decision_time - retention, decision_time]
+    wt_key = withdrawal_times_key(run_id, bank_id, account_id)
+    wr_key = withdrawal_records_key(run_id, bank_id, account_id)
+
+    w_items = client.zrangebyscore(wt_key, min_unix, max_unix, withscores=True)
+    filtered_withdrawals: list[WithdrawalRecord] = []
+    if w_items:
+        w_members = [
+            m[0].decode("utf-8") if isinstance(m[0], bytes) else str(m[0])
+            for m in w_items
+        ]
+        raw_ws = client.hmget(wr_key, w_members)
+        for raw in raw_ws:
+            if raw is None:
+                continue
+            w_rec = deserialize_withdrawal_record(raw)
+            if min_allowed_time <= w_rec.event_time <= decision_time and w_rec.arrival_time <= arrival_cutoff:
+                filtered_withdrawals.append(w_rec)
+
+    all_visible = list(filtered_sides) + list(filtered_events) + list(filtered_withdrawals)
     if not all_visible:
         return empty_snapshot()
 
@@ -155,6 +180,7 @@ def read_account_snapshot(
         has_history=True,
         side_records=tuple(filtered_sides),
         account_events=tuple(filtered_events),
+        withdrawals=tuple(filtered_withdrawals),
         first_event_time=first_event_time,
         last_event_time=last_event_time,
         arrival_watermark=arrival_watermark,

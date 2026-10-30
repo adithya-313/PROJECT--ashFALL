@@ -146,10 +146,12 @@ Every account feature structure is namespaced under a tenant-isolated prefix:
 
 | Structure | Key Suffix | Redis Type | Contents |
 |---|---|---|---|
-| Side Event Times | `times` | ZSET | Member: `payment_id:side`, Score: Unix seconds of `event_time` |
-| Side Payloads | `records` | HASH | Field: `payment_id:side`, Value: Canonical serialized JSON record |
-| Lifecycle Times | `events:times` | ZSET | Member: `event_id`, Score: Unix seconds of `event_time` |
-| Lifecycle Payloads | `events:records` | HASH | Field: `event_id`, Value: Canonical serialized JSON record |
+| Side Event Times | `side_times` | ZSET | Member: `payment_id:side`, Score: Unix seconds of `event_time` |
+| Side Payloads | `side_records` | HASH | Field: `payment_id:side`, Value: Canonical serialized JSON record |
+| Lifecycle Times | `event_times` | ZSET | Member: `event_id`, Score: Unix seconds of `event_time` |
+| Lifecycle Payloads | `event_records` | HASH | Field: `event_id`, Value: Canonical serialized JSON record |
+| Withdrawal Times | `withdrawal_times` | ZSET | Member: `withdrawal_id`, Score: Unix seconds of `event_time` |
+| Withdrawal Payloads | `withdrawal_records` | HASH | Field: `withdrawal_id`, Value: Canonical serialized JSON record |
 | Watermarks & Marks | `marks` | ZSET | Members: `first_event` (LT), `last_event` (GT), `arrival_watermark` (GT) |
 
 ### 5.1 TTL Expiration Rule
@@ -178,3 +180,77 @@ return #expired
 
 1. **Replay Idempotency:** Submitting the exact same transaction or lifecycle event $N$ times leaves key counts, sorted set cardinality, and serialized payloads completely unchanged.
 2. **Order Independence (Shuffle Invariance):** Applying any set of valid records across an account in chronological order, reverse order, or pseudo-randomly shuffled order yields identical byte dumps in Redis.
+
+---
+
+## 7. Long-Lived Summaries and Cash-Out State (Level 15b)
+
+While sliding windows retain 7 days of raw records per account, certain M1 fraud detection features (routine life, device novelty, dormancy, account age, and cash-out behavior) require memory spanning months or the account's entire lifetime. Long-lived summaries maintain compact, point-in-time consistent aggregates alongside the raw window under strict architectural constraints.
+
+### 7.1 Closed-Day Rule (Point-in-Time Correctness)
+Day numbers are defined as the IST calendar date integer (`event_time.astimezone(IST).date().toordinal()`).
+To prevent future data leakage while ensuring deterministic replay:
+1. **WRITE:** An incoming event updates daily summaries only if its physical arrival timestamp satisfies:
+   $$\text{arrival\_time} \le \text{day\_end\_ist} + \text{allowed\_lateness\_seconds}$$
+   Any event arriving later than $\text{day\_end\_ist} + \text{allowed\_lateness}$ is tagged with outcome `"too_late_for_summary"`, logged, and excluded from summary aggregates. It is still stored in the 7-day raw window.
+2. **READ:** Summary readers return daily aggregates only for closed days where:
+   $$\text{day\_end\_ist} + \text{allowed\_lateness\_seconds} \le \text{decision\_time} \quad \text{and} \quad \le \text{arrival\_cutoff}$$
+   Recent, unclosed days are evaluated exclusively from the 7-day raw window snapshot. This rule guarantees zero lookahead leakage in model evaluation and feature computation.
+
+### 7.2 Cash-Out State and Failed Attempts (G2, R7)
+Cash withdrawals from ATM or branch channels are stored in `bank_withdrawals` and mirrored in Redis:
+- Successful withdrawals increment `withdrawal_count` and add to `withdrawal_paise`.
+- Failed withdrawals (or failed payment sides) increment `failed_attempt_count` only; their amounts are strictly excluded from `withdrawal_paise`, `credit_paise`, or `debit_paise` (Issue R7).
+
+### 7.3 Long-Lived Key Layout & TTL
+Summary keys use an extended retention TTL ($62\text{ days horizon} + 1\text{ day lateness} + 1\text{ day margin} = 64\text{ days} = 5,529,600\text{ seconds}$), while lifetime keys receive no expiry (they live as long as the run's namespace):
+
+| Structure | Key Suffix | Redis Type | Contents | TTL Policy |
+|---|---|---|---|---|
+| Days Index | `days_index` | ZSET | Member: `day`, Score: `day` (IST date ordinal) | Summary TTL (64d) |
+| Day Totals | `day_totals_{day}` | HASH | Aggregated counts and paise amounts for that IST day | Summary TTL (64d) |
+| Day Seen Set | `day_seen_{day}` | HASH | Set of processed `record_member` keys to guarantee update idempotency | Summary TTL (64d) |
+| Counterparty Days | `cp_days_{direction}_{token}` | ZSET | Member: `day`, Score: `day` for distinct counterparty active days | Summary TTL (64d) |
+| Counterparty Index | `cp_index_{direction}` | ZSET | Member: `counterparty`, Score: latest `day` (ZADD GT) | Summary TTL (64d) |
+| Active Days | `active_days` | ZSET | Member: `day`, Score: `day` for closed money activity days | No TTL (Lifetime) |
+| Account Opening | `opened_at` | ZSET | Member: `opened_at`, Score: Unix seconds of `event_time` (ZADD LT) | No TTL (Lifetime) |
+| Device Fingerprints | `fingerprints` | ZSET | Member: `fingerprint`, Score: $\max(\text{event\_time}, \text{arrival\_time})$ (ZADD LT) | No TTL (Lifetime) |
+
+### 7.4 Generated Key List Verbatim
+Generated via the key builders in `features/account_keys.py`:
+```text
+Raw Window & Marks:
+  side_times:           acctf:66db9aa439b092ee:bank_0:acc_101:side_times
+  side_records:         acctf:66db9aa439b092ee:bank_0:acc_101:side_records
+  event_times:          acctf:66db9aa439b092ee:bank_0:acc_101:event_times
+  event_records:        acctf:66db9aa439b092ee:bank_0:acc_101:event_records
+  withdrawal_times:     acctf:66db9aa439b092ee:bank_0:acc_101:withdrawal_times
+  withdrawal_records:   acctf:66db9aa439b092ee:bank_0:acc_101:withdrawal_records
+  marks:                acctf:66db9aa439b092ee:bank_0:acc_101:marks
+
+Long-lived Summaries:
+  days_index:           acctf:66db9aa439b092ee:bank_0:acc_101:days_index
+  day_totals:           acctf:66db9aa439b092ee:bank_0:acc_101:day_totals_20742
+  day_seen:             acctf:66db9aa439b092ee:bank_0:acc_101:day_seen_20742
+  counterparty_days:    acctf:66db9aa439b092ee:bank_0:acc_101:cp_days_inbound_91ba9265940ec8cc
+  counterparty_index:   acctf:66db9aa439b092ee:bank_0:acc_101:cp_index_inbound
+
+Lifetime Keys (No TTL):
+  active_days:          acctf:66db9aa439b092ee:bank_0:acc_101:active_days
+  opened_at:            acctf:66db9aa439b092ee:bank_0:acc_101:opened_at
+  fingerprints:         acctf:66db9aa439b092ee:bank_0:acc_101:fingerprints
+```
+
+### 7.5 Lifetime Values (No TTL Expiry)
+Lifetime keys live as long as the run's namespace; a run's keys are removed by namespace cleanup, never by a short TTL.
+- `active_days`: Tracks distinct closed calendar days where money activity occurred (payment sides and cash withdrawals). Account lifecycle events (device changes, SIM swaps, account opening) are not money activity and never write to `active_days`.
+- `last_active_day`: Derived dynamically on read as the largest day in `active_days` whose closed threshold ($\text{day\_end\_ist} + \text{allowed\_lateness}$) is $\le \min(\text{decision\_time}, \text{arrival\_cutoff})$; `None` if no closed active day exists.
+- `history_days_available`: Measures whole calendar days from the START of the earliest closed active day to `decision_time`, capped at `summary_horizon_days` (62 days); returns 0 if no closed active day exists. It deliberately does not measure account opening age, ensuring an old account early in a run still evaluates as "too new to know" (warm-up).
+- `opened_at`: Recorded in dedicated lifetime ZSET `opened_at` with member `"opened_at"` and score `event_time` (ZADD LT) from the `account_opened` event.
+- `fingerprints`: Recorded in dedicated lifetime ZSET `fingerprints` with score $\max(\text{event\_time}, \text{arrival\_time})$ using `ZADD LT`. When querying, only fingerprints with score $\le \min(\text{decision\_time}, \text{arrival\_cutoff})$ are visible. If the count exceeds `fingerprint_warning_count` (10), a warning is logged, but no entries are dropped.
+
+### 7.6 Warm-up Period
+The system enforces `routine_life_warm_up_days: 62` (two monthly cycles plus weekend/holiday slack). Before an account or world reaches 62 days of elapsed history, routine-life features yield "not enough history" / empty defaults.
+
+### 7.7 Opaque Counterparty VPA (Architect Decision 6B)
+For each payment side, the simulator populates `counterparty_vpa` with the counterparty's raw account ID. This identifier is treated as an opaque string formatted as `counterparty_bank_id:counterparty_vpa`. Features may only perform exact equality matching against known accounts in the local bank and must never parse run, bank, or account components from it.

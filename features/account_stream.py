@@ -18,8 +18,8 @@ from aiokafka import AIOKafkaConsumer, TopicPartition
 
 from core.config import config
 from features.account_keys import AccountFeaturesSettings, get_default_settings
-from features.account_records import account_event_from_row, parse_upi_event
-from features.account_updater import apply_account_event, apply_payment_side
+from features.account_records import account_event_from_row, parse_upi_event, withdrawal_from_row
+from features.account_updater import apply_account_event, apply_payment_side, apply_withdrawal
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +163,74 @@ async def apply_account_events_since(
     for row in rows:
         record = account_event_from_row(row)
         apply_account_event(redis_client, record, cfg)
+        row_id = int(row["id"])
+        if row_id > last_id:
+            last_id = row_id
+
+    return last_id
+
+
+async def apply_withdrawals_since(
+    connection: Any,
+    redis_client: Any,
+    settings: AccountFeaturesSettings | None = None,
+    bank_id: str = "bank_0",
+    after_id: int = 0,
+) -> int:
+    """
+    WHAT: Queries bank_withdrawals table for rows with id > after_id and applies each to Redis.
+
+    WHY: Cash withdrawals (ATM and branch) reside in PostgreSQL and are ingested into Redis feature
+    state through periodic polling alongside account lifecycle events.
+
+    WHY ID ORDER = ARRIVAL ORDER:
+    The bank_withdrawals table uses a BIGINT GENERATED ALWAYS AS IDENTITY primary key (id).
+    Under Postgres sequence semantics, each inserted row obtains a monotonically increasing
+    integer identifier. Ordering by `id` preserves exact ingestion arrival order across all withdrawals.
+
+    WHY RE-RUNNING FROM AN OLD ID IS SAFE:
+    Concurrent transactions may obtain sequence IDs out of commit order (transaction with id=1
+    commits after transaction with id=2). Re-reading the trailing account_event_overlap_rows (200 rows)
+    guarantees that late-committing lower-ID rows are never skipped. All operations in apply_withdrawal
+    (ZADD with score replacement, HSET with payload overwriting, conditional watermarks, and atomic Lua trim)
+    are strictly idempotent, so re-processing already-applied withdrawals produces identical Redis state.
+
+    Args:
+        connection: Active database connection or connection-like object (asyncpg.Connection).
+        redis_client: Redis client instance.
+        settings: Optional AccountFeaturesSettings; defaults to repository configuration.
+        bank_id: Commercial bank identifier to query.
+        after_id: Cursor identifier; only rows with id > after_id are selected.
+
+    Returns:
+        The highest row ID processed, or after_id if no new rows were found.
+    """
+    cfg = settings if settings is not None else get_default_settings()
+    batch_size = cfg.account_event_batch_size
+    overlap = cfg.account_event_overlap_rows
+    start_id = max(0, after_id - overlap)
+
+    rows = await connection.fetch(
+        """
+        SELECT id, bank_id, withdrawal_id, account_id, channel, amount_paise,
+               status, failure_domain, event_time, balance_after_paise, recorded_at
+        FROM bank_withdrawals
+        WHERE bank_id = $1 AND id > $2
+        ORDER BY id
+        LIMIT $3
+        """,
+        bank_id,
+        start_id,
+        batch_size,
+    )
+
+    if not rows:
+        return after_id
+
+    last_id = after_id
+    for row in rows:
+        record = withdrawal_from_row(row)
+        apply_withdrawal(redis_client, record, cfg)
         row_id = int(row["id"])
         if row_id > last_id:
             last_id = row_id

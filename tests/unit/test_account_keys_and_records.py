@@ -55,7 +55,6 @@ def test_settings_load_from_yaml() -> None:
     assert settings.key_prefix == "acctf"
     assert settings.run_id_hex_length == 16
     assert settings.account_event_batch_size == 500
-    assert settings.upi_key_by_account is True
 
 
 def test_extract_run_id_valid() -> None:

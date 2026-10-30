@@ -48,6 +48,7 @@ class PaymentSideRecord:
         channel: Optional delivery channel (e.g. 'upi_app').
         sender_device_fingerprint: Optional device fingerprint (debit-only).
         sender_os_generation: Optional OS generation number (debit-only).
+        balance_after_paise: Optional ledger balance in paise following transaction.
         event_time: Timezone-aware timestamp of payment occurrence.
         arrival_time: Timezone-aware timestamp of ingestion/storage (recorded_at).
     """
@@ -68,6 +69,7 @@ class PaymentSideRecord:
     sender_os_generation: int | None
     event_time: datetime
     arrival_time: datetime
+    balance_after_paise: int | None = None
 
 
 @dataclass(frozen=True)
@@ -94,6 +96,38 @@ class AccountEventRecord:
     event_time: datetime
     arrival_time: datetime
     details: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class WithdrawalRecord:
+    """
+    Immutable representation of a bank cash withdrawal (ATM or branch).
+
+    Attributes:
+        run_id: 16-hex simulation run identifier extracted from withdrawal_id.
+        bank_id: Tenant commercial bank identifier.
+        account_id: Customer account identifier.
+        withdrawal_id: Unique withdrawal event identifier.
+        channel: Withdrawal channel ('atm' or 'branch').
+        amount_paise: Transaction amount in integer paise.
+        status: Outcome status ('success' or 'failed').
+        failure_domain: Optional failure classification string if failed.
+        balance_after_paise: Optional ledger balance in paise following transaction.
+        event_time: Timezone-aware timestamp of withdrawal occurrence.
+        arrival_time: Timezone-aware database recording timestamp (recorded_at).
+    """
+
+    run_id: str
+    bank_id: str
+    account_id: str
+    withdrawal_id: str
+    channel: str
+    amount_paise: int
+    status: str
+    failure_domain: str | None
+    balance_after_paise: int | None
+    event_time: datetime
+    arrival_time: datetime
 
 
 def _ensure_timezone_aware(dt_val: datetime, field_name: str) -> datetime:
@@ -197,6 +231,15 @@ def parse_upi_event(message_value: bytes) -> PaymentSideRecord:
     if status not in ("success", "failed"):
         raise InvalidAccountEventError(f"Invalid 'status' {status!r}; must be 'success' or 'failed'")
 
+    raw_balance = data.get("balance_after_paise")
+    balance_after_paise: int | None = None
+    if raw_balance is not None:
+        if isinstance(raw_balance, bool) or not isinstance(raw_balance, int) or raw_balance < 0:
+            raise InvalidAccountEventError(
+                f"Invalid 'balance_after_paise' {raw_balance!r}; must be integer >= 0 or absent"
+            )
+        balance_after_paise = raw_balance
+
     return PaymentSideRecord(
         run_id=run_id,
         bank_id=bank_id,
@@ -212,6 +255,7 @@ def parse_upi_event(message_value: bytes) -> PaymentSideRecord:
         channel=data.get("channel"),
         sender_device_fingerprint=data.get("sender_device_fingerprint"),
         sender_os_generation=data.get("sender_os_generation"),
+        balance_after_paise=balance_after_paise,
         event_time=event_time,
         arrival_time=recorded_at,  # arrival_time mapped from ashFALL's storage timestamp
     )
@@ -277,16 +321,98 @@ def account_event_from_row(row: Mapping[str, Any]) -> AccountEventRecord:
     )
 
 
-def record_member(record: PaymentSideRecord | AccountEventRecord) -> str:
+def withdrawal_from_row(row: Mapping[str, Any]) -> WithdrawalRecord:
+    """
+    WHAT: Converts a database row from bank_withdrawals into a WithdrawalRecord.
+
+    WHY: Maps database columns to immutable domain records. Ensures event_time and recorded_at
+    are converted to timezone-aware UTC datetimes, assigns recorded_at as arrival_time,
+    and extracts the simulation run ID from withdrawal_id.
+
+    Args:
+        row: Mapping of column names to values from bank_withdrawals.
+
+    Returns:
+        Validated WithdrawalRecord.
+
+    Raises:
+        ValueError: If withdrawal_id has an invalid run prefix or required columns are invalid.
+    """
+    withdrawal_id = str(row["withdrawal_id"])
+    run_id = extract_run_id(withdrawal_id)
+
+    bank_id = str(row["bank_id"])
+    account_id = str(row["account_id"])
+
+    channel = str(row["channel"])
+    if channel not in ("atm", "branch"):
+        raise ValueError(f"Invalid withdrawal channel {channel!r}; must be 'atm' or 'branch'")
+
+    amount_paise = int(row["amount_paise"])
+    if amount_paise <= 0:
+        raise ValueError(f"Invalid amount_paise {amount_paise!r}; must be positive integer")
+
+    status = str(row["status"])
+    if status not in ("success", "failed"):
+        raise ValueError(f"Invalid status {status!r}; must be 'success' or 'failed'")
+
+    failure_domain = row.get("failure_domain")
+    if failure_domain is not None:
+        failure_domain = str(failure_domain)
+
+    raw_bal = row.get("balance_after_paise")
+    balance_after_paise: int | None = None
+    if raw_bal is not None:
+        if isinstance(raw_bal, bool) or not isinstance(raw_bal, int) or raw_bal < 0:
+            raise ValueError(f"Invalid balance_after_paise {raw_bal!r}; must be integer >= 0 or absent")
+        balance_after_paise = raw_bal
+
+    raw_event_time = row["event_time"]
+    if isinstance(raw_event_time, str):
+        event_time = datetime.fromisoformat(raw_event_time)
+    else:
+        event_time = raw_event_time
+    if event_time.tzinfo is None:
+        event_time = event_time.replace(tzinfo=timezone.utc)
+
+    raw_recorded_at = row.get("recorded_at")
+    if raw_recorded_at is None:
+        raw_recorded_at = row.get("created_at")
+    if raw_recorded_at is None:
+        raise ValueError("Missing 'recorded_at' / 'created_at' timestamp for withdrawal arrival_time")
+
+    if isinstance(raw_recorded_at, str):
+        recorded_at = datetime.fromisoformat(raw_recorded_at)
+    else:
+        recorded_at = raw_recorded_at
+    if recorded_at.tzinfo is None:
+        recorded_at = recorded_at.replace(tzinfo=timezone.utc)
+
+    return WithdrawalRecord(
+        run_id=run_id,
+        bank_id=bank_id,
+        account_id=account_id,
+        withdrawal_id=withdrawal_id,
+        channel=channel,
+        amount_paise=amount_paise,
+        status=status,
+        failure_domain=failure_domain,
+        balance_after_paise=balance_after_paise,
+        event_time=event_time,
+        arrival_time=recorded_at,
+    )
+
+
+def record_member(record: PaymentSideRecord | AccountEventRecord | WithdrawalRecord) -> str:
     """
     WHAT: Generates the canonical member string for Redis sorted sets and hash fields.
 
     WHY: Uniquely identifies a record within an account's time series. For payment sides,
     the format is 'payment_id:side' to allow debit and credit sides of the same payment to coexist.
-    For account lifecycle events, the member is simply event_id.
+    For account lifecycle events, the member is event_id. For withdrawals, the member is withdrawal_id.
 
     Args:
-        record: PaymentSideRecord or AccountEventRecord instance.
+        record: PaymentSideRecord, AccountEventRecord, or WithdrawalRecord instance.
 
     Returns:
         String member identifier.
@@ -295,10 +421,12 @@ def record_member(record: PaymentSideRecord | AccountEventRecord) -> str:
         return f"{record.payment_id}:{record.side}"
     if isinstance(record, AccountEventRecord):
         return record.event_id
+    if isinstance(record, WithdrawalRecord):
+        return record.withdrawal_id
     raise TypeError(f"Unsupported record type: {type(record)}")
 
 
-def serialize_record(record: PaymentSideRecord | AccountEventRecord) -> bytes:
+def serialize_record(record: PaymentSideRecord | AccountEventRecord | WithdrawalRecord) -> bytes:
     """Serializes a record to JSON bytes for Redis HASH storage."""
     d = asdict(record)
     d["event_time"] = record.event_time.isoformat()
@@ -320,4 +448,12 @@ def deserialize_account_event_record(data: bytes | str) -> AccountEventRecord:
     d["event_time"] = datetime.fromisoformat(d["event_time"])
     d["arrival_time"] = datetime.fromisoformat(d["arrival_time"])
     return AccountEventRecord(**d)
+
+
+def deserialize_withdrawal_record(data: bytes | str) -> WithdrawalRecord:
+    """Deserializes a WithdrawalRecord from JSON bytes or string."""
+    d = orjson.loads(data)
+    d["event_time"] = datetime.fromisoformat(d["event_time"])
+    d["arrival_time"] = datetime.fromisoformat(d["arrival_time"])
+    return WithdrawalRecord(**d)
 
