@@ -41,7 +41,9 @@ from features.m1_inflow_outflow import (
 FeatureVector = dict[str, int | float | str | bool | None]
 
 # Set of functional groups supported by the calculation engine in Level 15b.
-SUPPORTED_GROUPS: frozenset[str] = frozenset({"inflow", "outflow", "balance_pattern"})
+SUPPORTED_GROUPS: frozenset[str] = frozenset(
+    {"inflow", "outflow", "balance_pattern", "routine_life", "lifecycle", "control", "region"}
+)
 
 
 @dataclass(frozen=True)
@@ -204,6 +206,65 @@ def compute_account_features(
             decision_time,
             m1_cfg.near_zero_balance_max_paise,
         )
+
+    if "routine_life" in groups:
+        from features.m1_routine_lifecycle import compute_routine_life_features
+
+        routine_feats = compute_routine_life_features(
+            client=client,
+            run_id=run_id,
+            bank_id=bank_id,
+            account_id=account_id,
+            decision_time=decision_time,
+            arrival_cutoff=arrival_cutoff,
+            settings=cfg_settings,
+        )
+        result.update(routine_feats)
+
+    if "lifecycle" in groups:
+        from features.m1_routine_lifecycle import compute_lifecycle_features
+
+        lifecycle_feats = compute_lifecycle_features(
+            client=client,
+            run_id=run_id,
+            bank_id=bank_id,
+            account_id=account_id,
+            snapshot=snapshot,
+            decision_time=decision_time,
+            arrival_cutoff=arrival_cutoff,
+            settings=cfg_settings,
+        )
+        result.update(lifecycle_feats)
+
+    if "control" in groups:
+        from features.m1_control_region import compute_control_features
+
+        control_feats = compute_control_features(
+            client=client,
+            run_id=run_id,
+            bank_id=bank_id,
+            account_id=account_id,
+            snapshot=snapshot,
+            decision_time=decision_time,
+            arrival_cutoff=arrival_cutoff,
+            settings=cfg_settings,
+        )
+        result.update(control_feats)
+
+    if "region" in groups:
+        from features.m1_control_region import compute_region_features
+
+        region_feats = compute_region_features(
+            client=client,
+            run_id=run_id,
+            bank_id=bank_id,
+            account_id=account_id,
+            snapshot=snapshot,
+            decision_time=decision_time,
+            arrival_cutoff=arrival_cutoff,
+            settings=cfg_settings,
+        )
+        result.update(region_feats)
 
     # Schema drift check: guarantee returned keys exactly match canonical schema for requested groups
     feature_set = load_feature_set_m1()
