@@ -36,16 +36,15 @@ def test_feature_set_m1_loads_successfully() -> None:
 
 
 def test_every_plan_group_is_present() -> None:
-    """Verifies that all active plan grouping categories contain active features (intelligence parked in pending)."""
+    """Verifies that all active plan grouping categories contain active features including intelligence."""
     feature_set = load_feature_set_m1()
     present_groups = {feat.group for feat in feature_set.features}
-    # Intelligence features are parked in pending awaiting architectural rulings
-    assert present_groups == (KNOWN_GROUPS - {"intelligence"}), f"Missing groups: {KNOWN_GROUPS - present_groups}"
+    # All canonical plan groups are now active and populated
+    assert present_groups == KNOWN_GROUPS, f"Missing groups: {KNOWN_GROUPS - present_groups}"
 
     for group_name in present_groups:
         grouped = feature_set.features_by_group(group_name)
         assert len(grouped) > 0, f"Expected features under group {group_name!r}"
-    assert len(feature_set.features_by_group("intelligence")) == 0
 
 
 def test_four_r5_device_parts_and_history_days_exist() -> None:
@@ -157,8 +156,12 @@ def test_all_canonical_features_present_in_expected_groups() -> None:
             "local_cluster_density",
             "hops_to_complained_account",
         },
-        "intelligence": set(),
+        "intelligence": {
+            "registry_match_count",
+            "registry_match_age_days",
+        },
         "payment_level": {
+            "payee_registry_match",
             "first_payment_to_payee",
             "amount_vs_payer_median_ratio",
             "amount_vs_payer_max_ratio",
@@ -288,12 +291,35 @@ def test_feature_in_both_active_and_removed_rejected(tmp_path: Path) -> None:
 def test_pending_section_loads_and_rejects_duplicates(tmp_path: Path) -> None:
     """Verifies that the pending section loads, has expected entries, and rejects duplicates with active/removed."""
     feature_set = load_feature_set_m1()
-    assert len(feature_set.pending) == 3
-    pending_names = {item.name for item in feature_set.pending}
-    assert pending_names == {"payee_registry_match", "registry_match_count", "registry_match_age_days"}
+    assert len(feature_set.pending) == 0
 
-    for item in feature_set.pending:
-        assert "Level 13 serves matches through /screen" in item.reason
+    # Verify a non-empty pending section loads successfully via tmp_path
+    sample_pending_cfg = {
+        "features": [
+            {
+                "name": "sample_active",
+                "group": "inflow",
+                "definition": "Active definition",
+                "bank_visible_source_records": "PaymentSideRecord",
+                "window_or_horizon": "1h",
+                "empty_means": "zero",
+            }
+        ],
+        "removed": [],
+        "pending": [
+            {
+                "name": "sample_pending",
+                "reason": "Test pending reason",
+            }
+        ],
+    }
+    p_valid = tmp_path / "valid_pending.yaml"
+    with open(p_valid, "w", encoding="utf-8") as f:
+        yaml.safe_dump(sample_pending_cfg, f)
+    loaded_valid = load_feature_set_m1(p_valid)
+    assert len(loaded_valid.pending) == 1
+    assert loaded_valid.pending[0].name == "sample_pending"
+    assert loaded_valid.pending[0].reason == "Test pending reason"
 
     # 1. Feature in both active and pending rejected
     bad_cfg_active = {

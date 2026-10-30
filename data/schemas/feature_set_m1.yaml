@@ -363,8 +363,35 @@ features:
     issue_ids: ["G1"]
 
   # -----------------------------------------------------------------------------
+  # Group: intelligence
+  # -----------------------------------------------------------------------------
+  - name: "registry_match_count"
+    group: "intelligence"
+    definition: "Number of this account's identifiers (account hash plus visible lifetime fingerprints) matching active listings on the national registry."
+    bank_visible_source_records: "DPIP /screen registry matches"
+    window_or_horizon: "account lifetime"
+    empty_means: "no data"
+    issue_ids: ["G1", "R8"]
+
+  - name: "registry_match_age_days"
+    group: "intelligence"
+    definition: "Whole days between the earliest first_visible_at of any matching identifier and the decision time."
+    bank_visible_source_records: "DPIP /screen registry first_visible_at"
+    window_or_horizon: "account lifetime"
+    empty_means: "no data"
+    issue_ids: ["G1", "R8"]
+
+  # -----------------------------------------------------------------------------
   # Group: payment_level
   # -----------------------------------------------------------------------------
+  - name: "payee_registry_match"
+    group: "payment_level"
+    definition: "Boolean indicator whether the candidate payment payee's account matches an active fraud listing on the national registry."
+    bank_visible_source_records: "DPIP /screen registry matches"
+    window_or_horizon: "payment moment"
+    empty_means: "no data"
+    issue_ids: ["R8"]
+
   - name: "first_payment_to_payee"
     group: "payment_level"
     definition: "Binary flag indicating whether this is the payer's first recorded payment to this specific payee."
@@ -424,15 +451,7 @@ features:
 # =============================================================================
 # Parked candidate features awaiting architectural rulings
 # =============================================================================
-pending:
-  - name: "payee_registry_match"
-    reason: "waiting for the architect's decision on how a bank reads the registry (Level 13 serves matches through /screen, not through registry.events)"
-
-  - name: "registry_match_count"
-    reason: "waiting for the architect's decision on how a bank reads the registry (Level 13 serves matches through /screen, not through registry.events)"
-
-  - name: "registry_match_age_days"
-    reason: "waiting for the architect's decision on how a bank reads the registry (Level 13 serves matches through /screen, not through registry.events)"
+pending: []
 
 # =============================================================================
 # Excluded and removed candidate features with explicit technical rationales
@@ -450,3 +469,4 @@ removed:
 gap_notes:
   - "bill payments are detected as recurring merchant payments (no biller payee type)"
   - "crypto cash-out reaches the bank as an ordinary transfer to a person account, so it is counted in outflow_to_person and cannot be told apart (G2)"
+  - "in a mule-to-mule hop the sending side is also a mule and the credit-side rule does not label it; this is a safe miss, never a wrong label"

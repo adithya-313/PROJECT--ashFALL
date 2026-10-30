@@ -37,12 +37,23 @@ from features.m1_inflow_outflow import (
     compute_small_credit_count,
     compute_top_receiver_share_7d,
 )
+from features.registry_screening import RegistryScreener
 
 FeatureVector = dict[str, int | float | str | bool | None]
 
 # Set of functional groups supported by the calculation engine in Level 15b.
 SUPPORTED_GROUPS: frozenset[str] = frozenset(
-    {"inflow", "outflow", "balance_pattern", "routine_life", "lifecycle", "control", "region", "network"}
+    {
+        "inflow",
+        "outflow",
+        "balance_pattern",
+        "routine_life",
+        "lifecycle",
+        "control",
+        "region",
+        "network",
+        "intelligence",
+    }
 )
 
 
@@ -91,6 +102,8 @@ def compute_account_features(
     settings: AccountFeaturesSettings | None = None,
     groups: Sequence[str] = ("inflow", "outflow", "balance_pattern"),
     config: M1FeaturesConfig | None = None,
+    screener: RegistryScreener | None = None,
+    dpip_key: str | None = None,
 ) -> FeatureVector:
     """
     PURPOSE:
@@ -280,6 +293,22 @@ def compute_account_features(
             settings=cfg_settings,
         )
         result.update(network_feats)
+
+    if "intelligence" in groups:
+        from features.m1_intelligence import compute_intelligence_features
+
+        intel_feats = compute_intelligence_features(
+            client=client,
+            run_id=run_id,
+            bank_id=bank_id,
+            account_id=account_id,
+            decision_time=decision_time,
+            arrival_cutoff=arrival_cutoff,
+            settings=cfg_settings,
+            screener=screener,
+            dpip_key=dpip_key,
+        )
+        result.update(intel_feats)
 
     # Schema drift check: guarantee returned keys exactly match canonical schema for requested groups
     feature_set = load_feature_set_m1()

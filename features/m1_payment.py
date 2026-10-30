@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from core.config import config
 from features.account_keys import (
     AccountFeaturesSettings,
     get_default_settings,
@@ -33,6 +34,7 @@ from features.account_labels import (
 from features.account_reader import read_account_snapshot
 from features.account_summaries import read_counterparty_days
 from features.feature_set import load_feature_set_m1
+from features.registry_screening import RegistryScreener
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -86,6 +88,8 @@ def compute_payment_features(
     proposed: ProposedPayment,
     arrival_cutoff: datetime,
     settings: AccountFeaturesSettings | None = None,
+    screener: RegistryScreener | None = None,
+    dpip_key: str | None = None,
 ) -> dict[str, int | float | str | bool | None]:
     """
     PURPOSE:
@@ -192,7 +196,35 @@ def compute_payment_features(
         ):
             customer_failed_attempts_24h += 1
 
+    # 7. payee_registry_match: True / False if screened against national registry; None if unknown or no screener.
+    payee_registry_match: bool | None = None
+    if screener is not None:
+        resolved_key = dpip_key
+        if resolved_key is None and config.dpip_participant_key is not None:
+            resolved_key = config.dpip_participant_key.get_secret_value()
+
+        if resolved_key:
+            from features.m1_intelligence import get_bank_index
+            from nationalsim.keyed_hash import compute_identifier_hash
+
+            payee_bank_idx = get_bank_index(proposed.payee_bank_id)
+            payee_hash = compute_identifier_hash(
+                key=resolved_key,
+                run_id=proposed.run_id,
+                identifier_type="account",
+                raw_value=proposed.payee_vpa,
+                bank_index=payee_bank_idx,
+            )
+            outcome = screener.screen(payee_hash, "account", as_of=decision_time)
+            if outcome.status == "match":
+                payee_registry_match = True
+            elif outcome.status == "no_match":
+                payee_registry_match = False
+            else:
+                payee_registry_match = None
+
     result: dict[str, int | float | str | bool | None] = {
+        "payee_registry_match": payee_registry_match,
         "first_payment_to_payee": first_payment_to_payee,
         "amount_vs_payer_median_ratio": amount_vs_payer_median_ratio,
         "amount_vs_payer_max_ratio": amount_vs_payer_max_ratio,

@@ -238,6 +238,7 @@ class NationalsimBankClient:
         clock: Clock | None = None,
         timeout_seconds: float | None = None,
         retry_backoff_seconds: float | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         cfg_timeout, cfg_backoff = load_bank_client_config(config_path)
         self.timeout_seconds: float = timeout_seconds if timeout_seconds is not None else cfg_timeout
@@ -248,6 +249,7 @@ class NationalsimBankClient:
         self.bank_id: str = bank_id
         self.run_id: str = run_id
         self.clock: Clock = clock if clock is not None else WallClock()
+        self.transport: httpx.AsyncBaseTransport | None = transport
 
         self.active_outage: OutageEvent | None = None
         self.outages: list[OutageEvent] = []
@@ -309,7 +311,7 @@ class NationalsimBankClient:
             httpx.RemoteProtocolError,
         )
 
-        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+        async with httpx.AsyncClient(timeout=self.timeout_seconds, transport=self.transport) as client:
             # Attempt 1
             try:
                 resp = await client.request(method, url, json=json_data, params=params)
