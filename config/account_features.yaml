@@ -126,3 +126,15 @@ account_features:
     reason: "window duration in seconds for recent device binding changes (7 days)"
     derived_from: "Level 15 plan, M1 control group"
 
+  network_max_hops:
+    label: assumption
+    value: 3
+    reason: "beyond three hops almost every account is connected in a payment graph; placeholder until Level 17 tuning"
+    derived_from: "Level 15 plan, M1 network group"
+
+  network_max_nodes_visited:
+    label: policy
+    value: 5000
+    reason: "bound the work per decision; when reached, the result is None and a warning is logged, never a partial number"
+    derived_from: "Level 15c latency budget"
+

@@ -42,7 +42,7 @@ FeatureVector = dict[str, int | float | str | bool | None]
 
 # Set of functional groups supported by the calculation engine in Level 15b.
 SUPPORTED_GROUPS: frozenset[str] = frozenset(
-    {"inflow", "outflow", "balance_pattern", "routine_life", "lifecycle", "control", "region"}
+    {"inflow", "outflow", "balance_pattern", "routine_life", "lifecycle", "control", "region", "network"}
 )
 
 
@@ -265,6 +265,21 @@ def compute_account_features(
             settings=cfg_settings,
         )
         result.update(region_feats)
+
+    if "network" in groups:
+        from features.m1_network import compute_network_features
+
+        network_feats = compute_network_features(
+            client=client,
+            run_id=run_id,
+            bank_id=bank_id,
+            account_id=account_id,
+            snapshot=snapshot,
+            decision_time=decision_time,
+            arrival_cutoff=arrival_cutoff,
+            settings=cfg_settings,
+        )
+        result.update(network_feats)
 
     # Schema drift check: guarantee returned keys exactly match canonical schema for requested groups
     feature_set = load_feature_set_m1()

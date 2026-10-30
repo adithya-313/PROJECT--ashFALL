@@ -11,8 +11,10 @@ WHY: Guarantees the integrity and completeness of the Level 15 M1 live mule feat
 before feature computation and ML model training commence.
 """
 
+from datetime import datetime, timezone
 from pathlib import Path
 
+import fakeredis
 import pytest
 import yaml
 
@@ -21,6 +23,7 @@ from features.feature_set import (
     M1FeatureSet,
     load_feature_set_m1,
 )
+from features.m1_features import SUPPORTED_GROUPS, compute_account_features
 
 
 def test_feature_set_m1_loads_successfully() -> None:
@@ -33,15 +36,16 @@ def test_feature_set_m1_loads_successfully() -> None:
 
 
 def test_every_plan_group_is_present() -> None:
-    """Verifies that every approved plan grouping category contains at least one active feature."""
+    """Verifies that all active plan grouping categories contain active features (intelligence parked in pending)."""
     feature_set = load_feature_set_m1()
     present_groups = {feat.group for feat in feature_set.features}
-    assert present_groups == KNOWN_GROUPS, f"Missing groups: {KNOWN_GROUPS - present_groups}"
+    # Intelligence features are parked in pending awaiting architectural rulings
+    assert present_groups == (KNOWN_GROUPS - {"intelligence"}), f"Missing groups: {KNOWN_GROUPS - present_groups}"
 
-    # Verify each group specifically has members via features_by_group helper
-    for group_name in KNOWN_GROUPS:
+    for group_name in present_groups:
         grouped = feature_set.features_by_group(group_name)
         assert len(grouped) > 0, f"Expected features under group {group_name!r}"
+    assert len(feature_set.features_by_group("intelligence")) == 0
 
 
 def test_four_r5_device_parts_and_history_days_exist() -> None:
@@ -153,15 +157,11 @@ def test_all_canonical_features_present_in_expected_groups() -> None:
             "local_cluster_density",
             "hops_to_complained_account",
         },
-        "intelligence": {
-            "registry_match_count",
-            "registry_match_age_days",
-        },
+        "intelligence": set(),
         "payment_level": {
             "first_payment_to_payee",
             "amount_vs_payer_median_ratio",
             "amount_vs_payer_max_ratio",
-            "payee_registry_match",
             "payee_same_bank_risk",
             "hour_ist",
             "payee_type",
@@ -283,3 +283,93 @@ def test_feature_in_both_active_and_removed_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="appears in both"):
         load_feature_set_m1(test_yaml)
+
+
+def test_pending_section_loads_and_rejects_duplicates(tmp_path: Path) -> None:
+    """Verifies that the pending section loads, has expected entries, and rejects duplicates with active/removed."""
+    feature_set = load_feature_set_m1()
+    assert len(feature_set.pending) == 3
+    pending_names = {item.name for item in feature_set.pending}
+    assert pending_names == {"payee_registry_match", "registry_match_count", "registry_match_age_days"}
+
+    for item in feature_set.pending:
+        assert "Level 13 serves matches through /screen" in item.reason
+
+    # 1. Feature in both active and pending rejected
+    bad_cfg_active = {
+        "features": [
+            {
+                "name": "dup_pending_feature",
+                "group": "inflow",
+                "definition": "Active definition",
+                "bank_visible_source_records": "PaymentSideRecord",
+                "window_or_horizon": "1h",
+                "empty_means": "zero",
+            }
+        ],
+        "removed": [],
+        "pending": [
+            {
+                "name": "dup_pending_feature",
+                "reason": "Parked reason",
+            }
+        ],
+    }
+    p1 = tmp_path / "dup_active_pending.yaml"
+    with open(p1, "w", encoding="utf-8") as f:
+        yaml.safe_dump(bad_cfg_active, f)
+    with pytest.raises(ValueError, match="appears in both active 'features' and 'pending'"):
+        load_feature_set_m1(p1)
+
+    # 2. Feature in both removed and pending rejected
+    bad_cfg_removed = {
+        "features": [
+            {
+                "name": "some_feature",
+                "group": "inflow",
+                "definition": "Active definition",
+                "bank_visible_source_records": "PaymentSideRecord",
+                "window_or_horizon": "1h",
+                "empty_means": "zero",
+            }
+        ],
+        "removed": [
+            {
+                "name": "dup_removed_feature",
+                "reason": "Exclusion reason",
+            }
+        ],
+        "pending": [
+            {
+                "name": "dup_removed_feature",
+                "reason": "Parked reason",
+            }
+        ],
+    }
+    p2 = tmp_path / "dup_removed_pending.yaml"
+    with open(p2, "w", encoding="utf-8") as f:
+        yaml.safe_dump(bad_cfg_removed, f)
+    with pytest.raises(ValueError, match="appears in both 'removed' and 'pending'"):
+        load_feature_set_m1(p2)
+
+
+def test_compute_account_features_never_returns_pending_names() -> None:
+    """Verifies that compute_account_features never returns names parked in the pending section."""
+    client = fakeredis.FakeRedis()
+    t = datetime(2026, 10, 28, 12, 0, 0, tzinfo=timezone.utc)
+    feature_set = load_feature_set_m1()
+    pending_names = {item.name for item in feature_set.pending}
+
+    feats = compute_account_features(
+        client=client,
+        run_id="66db9aa439b092ee",
+        bank_id="bank_0",
+        account_id="acc_test",
+        decision_time=t,
+        arrival_cutoff=t,
+        groups=list(SUPPORTED_GROUPS),
+    )
+
+    returned_names = set(feats.keys())
+    assert not (returned_names & pending_names), f"Returned pending names: {returned_names & pending_names}"
+

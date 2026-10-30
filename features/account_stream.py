@@ -18,10 +18,19 @@ from aiokafka import AIOKafkaConsumer, TopicPartition
 
 from core.config import config
 from features.account_keys import AccountFeaturesSettings, get_default_settings
+from features.account_labels import apply_complaints_since, apply_feedback_since
 from features.account_records import account_event_from_row, parse_upi_event, withdrawal_from_row
 from features.account_updater import apply_account_event, apply_payment_side, apply_withdrawal
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "run_payment_updater",
+    "apply_account_events_since",
+    "apply_withdrawals_since",
+    "apply_feedback_since",
+    "apply_complaints_since",
+]
 
 
 async def run_payment_updater(
