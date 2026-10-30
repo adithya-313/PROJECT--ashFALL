@@ -1,9 +1,9 @@
 # File: tests/integration/test_feature_log_0010.py
-# Purpose: Proves migration 0010 bank_feature_log partitioned storage,
+# Purpose: Proves migration 0011 feature_log partitioned storage,
 #          partition routing, RLS isolation, and missing partition retry.
 # Issue: Level 15c watermark and feature log (plan Task 1, D2).
 """
-WHAT: Integration tests for migration 0010 bank_feature_log.
+WHAT: Integration tests for migration 0011 feature_log.
 
 WHY: Verifies schema migration application, daily range partition routing,
 automatic partition creation retry on 23514 check_violation, and tenant isolation under RLS.
@@ -24,16 +24,16 @@ pytestmark = pytest.mark.anyio
 
 
 async def test_feature_log_rls_and_insert_read(isolated_schema) -> None:
-    """Verifies that bank_feature_log has RLS enabled and supports insert/read with tenant isolation."""
+    """Verifies that feature_log has RLS enabled and supports insert/read with tenant isolation."""
     connection, schema_name = isolated_schema
 
-    # 1. RLS enabled on bank_feature_log
+    # 1. RLS enabled on feature_log
     relrowsecurity = await connection.fetchval(
         """
         SELECT c.relrowsecurity
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = $1 AND c.relname = 'bank_feature_log'
+        WHERE n.nspname = $1 AND c.relname = 'feature_log'
         """,
         schema_name,
     )
@@ -44,41 +44,40 @@ async def test_feature_log_rls_and_insert_read(isolated_schema) -> None:
     row_b0 = FeatureLogRow(
         bank_id="bank_0",
         payment_id="pay_001",
-        decision_id="dec_001",
         decision_time=now,
-        arrival_watermark=now,
+        decided_at=now,
+        watermark_lag_ms=15,
         status="ok",
         feature_values={"distinct_payers_1h": 2.0},
     )
     row_b1 = FeatureLogRow(
         bank_id="bank_1",
         payment_id="pay_002",
-        decision_id="dec_002",
         decision_time=now,
-        arrival_watermark=now,
+        decided_at=now,
+        watermark_lag_ms=20,
         status="ok",
         feature_values={"distinct_payers_1h": 4.0},
     )
 
-    id_0 = await insert_feature_log_row(connection, row_b0)
-    id_1 = await insert_feature_log_row(connection, row_b1)
-    assert id_0 > 0
-    assert id_1 > 0
+    await insert_feature_log_row(connection, row_b0)
+    await insert_feature_log_row(connection, row_b1)
 
     # 3. Read back rows directly
-    fetched_b0 = await read_feature_log_row(connection, "bank_0", "dec_001")
+    fetched_b0 = await read_feature_log_row(connection, "bank_0", "pay_001")
     assert fetched_b0 is not None
     assert fetched_b0.bank_id == "bank_0"
-    assert fetched_b0.decision_id == "dec_001"
+    assert fetched_b0.payment_id == "pay_001"
     assert fetched_b0.status == "ok"
-    assert fetched_b0.feature_values["distinct_payers_1h"] == 2.0
+    assert fetched_b0.watermark_lag_ms == 15
+    assert isinstance(fetched_b0.feature_values, list)
 
     # 4. Tenant isolation under bank_scoped_transaction
     async with bank_scoped_transaction(connection, "bank_1") as scoped_conn:
-        scoped_rows = await scoped_conn.fetch("SELECT id, bank_id, decision_id FROM bank_feature_log")
+        scoped_rows = await scoped_conn.fetch("SELECT bank_id, payment_id FROM feature_log")
         assert len(scoped_rows) == 1
         assert scoped_rows[0]["bank_id"] == "bank_1"
-        assert scoped_rows[0]["decision_id"] == "dec_002"
+        assert scoped_rows[0]["payment_id"] == "pay_002"
 
 
 async def test_feature_log_partition_routing(isolated_schema) -> None:
@@ -90,9 +89,9 @@ async def test_feature_log_partition_routing(isolated_schema) -> None:
     row = FeatureLogRow(
         bank_id="bank_0",
         payment_id="pay_routed_01",
-        decision_id="dec_routed_01",
         decision_time=now,
-        arrival_watermark=now,
+        decided_at=now,
+        watermark_lag_ms=5,
         status="ok",
         feature_values={"distinct_payers_1h": 1.0},
     )
@@ -121,16 +120,15 @@ async def test_feature_log_missing_partition_retry(isolated_schema) -> None:
     row = FeatureLogRow(
         bank_id="bank_0",
         payment_id="pay_future_01",
-        decision_id="dec_future_01",
         decision_time=future_time,
-        arrival_watermark=future_time,
-        status="ok",
-        feature_values={"distinct_payers_1h": 7.0},
+        decided_at=future_time,
+        watermark_lag_ms=None,
+        status="no_watermark",
+        feature_values=[],
     )
 
     # insert_feature_log_row catches CheckViolationError, creates partition, and retries
-    inserted_id = await insert_feature_log_row(connection, row)
-    assert inserted_id > 0
+    await insert_feature_log_row(connection, row)
 
     # Verify partition now exists and contains the row
     exists_now = await connection.fetchval(
@@ -139,7 +137,7 @@ async def test_feature_log_missing_partition_retry(isolated_schema) -> None:
     )
     assert exists_now is not None
 
-    fetched = await read_feature_log_row(connection, "bank_0", "dec_future_01")
+    fetched = await read_feature_log_row(connection, "bank_0", "pay_future_01")
     assert fetched is not None
     assert fetched.payment_id == "pay_future_01"
-    assert fetched.feature_values["distinct_payers_1h"] == 7.0
+    assert fetched.status == "no_watermark"

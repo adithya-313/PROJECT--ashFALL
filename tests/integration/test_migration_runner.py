@@ -45,8 +45,8 @@ async def test_fresh_schema_applies_all_migrations_in_order(empty_schema):
 
     applied_count = await apply_pending_migrations(connection)
 
-    # All files applied (we expect 10 today), and the tracking table lists exactly those names.
-    assert applied_count == len(real_filenames) == 10
+    # All files applied (we expect 11 today), and the tracking table lists exactly those names.
+    assert applied_count == len(real_filenames) == 11
     assert await applied_filenames(connection) == real_filenames
     assert real_filenames == sorted(real_filenames)
 
@@ -56,7 +56,7 @@ async def test_fresh_schema_applies_all_migrations_in_order(empty_schema):
         "transactions", "outbox", "processed_events", "demo_event_counts", "outbox_dead_letter",
         "national_outbox", "bank_api_keys", "schema_migrations",
         "bank_request_nonces", "bank_idempotency_keys", "bank_decision_requests",
-        "bank_account_events", "bank_complaints", "bank_feedback", "bank_feature_log",
+        "bank_account_events", "bank_complaints", "bank_feedback", "feature_log",
     }
     assert expected_tables <= tables
 
@@ -68,9 +68,9 @@ async def test_second_run_applies_nothing(empty_schema):
     first_count = await apply_pending_migrations(connection)
     second_count = await apply_pending_migrations(connection)
 
-    assert first_count == len(find_migration_files()) == 10
+    assert first_count == len(find_migration_files()) == 11
     assert second_count == 0
-    assert len(await applied_filenames(connection)) == 10
+    assert len(await applied_filenames(connection)) == 11
 
 
 async def test_failed_migration_is_not_recorded(empty_schema, tmp_path):
