@@ -174,9 +174,11 @@ def test_other_bank_labelled_never_reached(redis_client: fakeredis.FakeRedis) ->
     p_ext = _make_payment_side(f"{RUN_ID}-p-ext", "A", "debit", BANK_1, "Ext", t_ev, bank_id=BANK_0)
     apply_payment_side(redis_client, p_ext, settings)
 
-    # Ext is labelled in bank_1's namespace
+    # Ext is labelled in bank_1's namespace, and also present in bank_0's labelled set
+    # (so if cross-bank edges leaked into bank_0's graph, Ext would be falsely reached)
     score = int(t_ev.timestamp())
     redis_client.zadd(labelled_accounts_key(RUN_ID, BANK_1), {"Ext": score})
+    redis_client.zadd(labelled_accounts_key(RUN_ID, BANK_0), {"Ext": score})
 
     # At bank_0, A's graph search must never cross to bank_1
     feats = compute_account_features(
