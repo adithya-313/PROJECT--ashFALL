@@ -254,3 +254,22 @@ The system enforces `routine_life_warm_up_days: 62` (two monthly cycles plus wee
 
 ### 7.7 Opaque Counterparty VPA (Architect Decision 6B)
 For each payment side, the simulator populates `counterparty_vpa` with the counterparty's raw account ID. This identifier is treated as an opaque string formatted as `counterparty_bank_id:counterparty_vpa`. Features may only perform exact equality matching against known accounts in the local bank and must never parse run, bank, or account components from it.
+
+---
+
+## 8. Registry Screening (DPIP / I4C Intelligence)
+
+### 8.1 Replay Screening with `as_of`
+When evaluating transaction decisions during historical simulation replay (Level 16), feature extractors query the national fraud registry (DPIP) using the optional testbed replay parameter `as_of`. The registry computes the screening verdict purely from historical timestamps without mutating in-memory entries:
+- An entry is active at $T$ if $\text{visible\_at} \le T$, not revoked at or before $T$, and not resolved at or before $T$.
+- An entry is contested at $T$ if $\text{contested\_at} \le T < \text{resolved\_at}$.
+- `as_of` must be timezone-aware and $\le$ the registry clock; requests with a future `as_of` are rejected with HTTP 400 (`ValueError: as_of is later than the registry clock`) to prevent future information leakage.
+
+### 8.2 Unknown vs No Match (Rule 3 Honest Degradation)
+When national registry connectivity fails or a non-participating bank receives HTTP 403 Forbidden, the screening outcome is marked strictly as `'unknown'`. Downstream intelligence features (`registry_match_count`, `registry_match_age_days`, `payee_registry_match`) evaluate to `None` (`unknown`), never `False` or `0`. An outage or unconfigured key is never mistaken for a clean record.
+
+### 8.3 Bank-Side Hashing Key
+Each bank hashes accounts and device fingerprints using HMAC-SHA256 with the shared DPIP key (`dpip_participant_key`, env `DPIP_PARTICIPANT_KEY`) and `nationalsim.keyed_hash.compute_identifier_hash`. Account hashes namespace with the integer bank index loaded from `config/bank_feed.yaml` (`bank_ids_by_index`), while device fingerprints use the global raw fingerprint. A bank without the configured key cannot screen, causing registry features to degrade honestly to `unknown`.
+
+### 8.4 Known Labelling Blind Spot
+In a mule-to-mule hop the sending side is also a mule and the credit-side rule does not label it; this is a safe miss, never a wrong label.

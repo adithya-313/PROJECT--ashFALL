@@ -79,6 +79,10 @@ class AppConfig(BaseSettings):
     bank_signing_secret_bank_1: SecretStr | None = None
     bank_signing_secret_bank_2: SecretStr | None = None
 
+    # Shared secret key DPIP gives each participating bank (architect decision 9c);
+    # a bank without it cannot screen, so its registry features are unknown.
+    dpip_participant_key: SecretStr | None = None
+
     # SettingsConfigDict tells pydantic-settings where to look for values.
     # env_file=".env" reads variables from a .env file if it exists.
     # extra="ignore" means unknown variables in .env do not cause validation errors.

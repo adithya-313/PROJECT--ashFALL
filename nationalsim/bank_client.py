@@ -72,6 +72,7 @@ class ScreenResult:
         risk_score: Optional float risk score from registry.
         distinct_accounts_linked: Count of distinct accounts linked to the identifier.
         is_unavailable: Boolean flag indicating registry unreachable.
+        first_visible_at: Optional timestamp of the earliest matching entry's initial visibility.
 
     What it returns:
         Immutable ScreenResult instance.
@@ -91,6 +92,7 @@ class ScreenResult:
     risk_score: float | None = None
     distinct_accounts_linked: int | None = None
     is_unavailable: bool = False
+    first_visible_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -236,6 +238,7 @@ class NationalsimBankClient:
         clock: Clock | None = None,
         timeout_seconds: float | None = None,
         retry_backoff_seconds: float | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         cfg_timeout, cfg_backoff = load_bank_client_config(config_path)
         self.timeout_seconds: float = timeout_seconds if timeout_seconds is not None else cfg_timeout
@@ -246,6 +249,7 @@ class NationalsimBankClient:
         self.bank_id: str = bank_id
         self.run_id: str = run_id
         self.clock: Clock = clock if clock is not None else WallClock()
+        self.transport: httpx.AsyncBaseTransport | None = transport
 
         self.active_outage: OutageEvent | None = None
         self.outages: list[OutageEvent] = []
@@ -307,10 +311,14 @@ class NationalsimBankClient:
             httpx.RemoteProtocolError,
         )
 
-        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+        async with httpx.AsyncClient(timeout=self.timeout_seconds, transport=self.transport) as client:
             # Attempt 1
             try:
                 resp = await client.request(method, url, json=json_data, params=params)
+                if resp.status_code == 403:
+                    # Non-participant refused by registry (Rule 3)
+                    self._record_failure()
+                    return False, None
                 resp.raise_for_status()
                 self._record_success()
                 return True, resp.json()
@@ -320,6 +328,11 @@ class NationalsimBankClient:
                     url=url,
                     error_type=type(err1).__name__,
                 )
+            except httpx.HTTPStatusError as status_err1:
+                if status_err1.response.status_code == 403:
+                    self._record_failure()
+                    return False, None
+                raise
 
             # Short backoff before single retry (avoiding retry storm)
             await asyncio.sleep(self.retry_backoff_seconds)
@@ -327,6 +340,10 @@ class NationalsimBankClient:
             # Attempt 2 (the single allowed retry)
             try:
                 resp = await client.request(method, url, json=json_data, params=params)
+                if resp.status_code == 403:
+                    # Non-participant refused by registry (Rule 3)
+                    self._record_failure()
+                    return False, None
                 resp.raise_for_status()
                 self._record_success()
                 return True, resp.json()
@@ -338,11 +355,17 @@ class NationalsimBankClient:
                 )
                 self._record_failure()
                 return False, None
+            except httpx.HTTPStatusError as status_err2:
+                if status_err2.response.status_code == 403:
+                    self._record_failure()
+                    return False, None
+                raise
 
     async def screen(
         self,
         identifier_hash: str,
         identifier_type: str = "account",
+        as_of: datetime | None = None,
     ) -> ScreenResult:
         """Screens an identifier against the registry with resilient outage handling.
 
@@ -353,27 +376,31 @@ class NationalsimBankClient:
         Inputs:
             identifier_hash: 64-character hexadecimal HMAC digest of the identifier.
             identifier_type: 'account', 'device', or 'phone'. Defaults to 'account'.
+            as_of: Optional evaluation timestamp (testbed replay parameter, not part of real DPIP).
 
         What it returns:
             ScreenResult containing status ('match', 'no_match', or 'unavailable'),
-            match boolean (None if unavailable, NEVER False on outage), and risk attributes.
+            match boolean (None if unavailable, NEVER False on outage), risk attributes, and first_visible_at.
 
         How it works:
-            Dispatches POST /screen to nationalsim. On outage, logs failure and returns
-            ScreenResult(status='unavailable', match=None, is_unavailable=True).
+            Dispatches POST /screen to nationalsim. On outage or 403 non-participant, logs failure
+            and returns ScreenResult(status='unavailable', match=None, is_unavailable=True).
 
         Errors and side effects:
-            Records outage events in client history when service is unreachable.
+            Records outage events in client history when service is unreachable or bank is refused.
 
         Limits:
             Does not hash identifiers internally; caller must provide hashed identifiers.
         """
-        payload = {
+        payload: dict[str, Any] = {
             "requesting_bank_id": self.bank_id,
             "identifier_hash": identifier_hash,
             "identifier_type": identifier_type,
             "run_id": self.run_id,
         }
+        if as_of is not None:
+            payload["as_of"] = as_of.isoformat()
+
         success, data = await self._execute_with_single_retry("POST", "/screen", json_data=payload)
         if not success or data is None:
             return ScreenResult(
@@ -382,16 +409,23 @@ class NationalsimBankClient:
                 risk_score=None,
                 distinct_accounts_linked=None,
                 is_unavailable=True,
+                first_visible_at=None,
             )
 
         match_bool = bool(data["match"])
         status_str = "match" if match_bool else "no_match"
+        raw_first_visible = data.get("first_visible_at")
+        first_visible_at: datetime | None = None
+        if raw_first_visible is not None:
+            first_visible_at = datetime.fromisoformat(raw_first_visible)
+
         return ScreenResult(
             status=status_str,
             match=match_bool,
             risk_score=data.get("risk_score"),
             distinct_accounts_linked=data.get("distinct_accounts_linked"),
             is_unavailable=False,
+            first_visible_at=first_visible_at,
         )
 
     async def get_i4c_feed(self) -> I4CFeedResult:
@@ -442,9 +476,10 @@ class NationalsimBankClient:
         self,
         identifier_hash: str,
         identifier_type: str = "account",
+        as_of: datetime | None = None,
     ) -> ScreenResult:
         """Synchronous wrapper for screen()."""
-        return asyncio.run(self.screen(identifier_hash, identifier_type))
+        return asyncio.run(self.screen(identifier_hash, identifier_type, as_of=as_of))
 
     def get_i4c_feed_sync(self) -> I4CFeedResult:
         """Synchronous wrapper for get_i4c_feed()."""
