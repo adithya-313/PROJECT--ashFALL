@@ -43,7 +43,8 @@ WHAT_YOU_SAW = (
     "without data corruption or set explosion, strict tenant isolation across commercial banks, "
     "and streaming ingestion from Kafka and PostgreSQL. Part 15b computes the full M1 behavioral "
     "feature catalog, cleanly differentiating mules from everyday citizens, enforcing bank ledger "
-    "isolation, respecting Issue R5 OS update safety, and surfacing dormant rented mule dynamics."
+    "isolation, respecting Issue R5 OS update safety, and surfacing rented mule dynamics amidst "
+    "normal routine life."
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -685,11 +686,12 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
             name="15b-4 a rented mule compared with a genuine salaried person",
             kind="edge",
             proves=(
-                "Rented mules exhibit dormant account reactivation, rapid pass-through, and fast credit-to-debit "
-                "compared to genuine salaried employees."
+                "A rented mule keeps its owner's routine life; "
+                "recent pass-through, first-time payers and other-bank outflow "
+                "separate it from a genuine salaried person."
             ),
             run=check_15b_4_rented_mule_vs_salaried_edge,
-            likely_cause="Dormancy calculation or pass-through ratio failed on reactivated accounts.",
+            likely_cause="Routine life rhythm, pass-through ratio, or first-time payer calculation failed.",
             where_to_look="features/m1_routine_lifecycle.py, features/m1_inflow_outflow.py",
             part="b",
         ),
