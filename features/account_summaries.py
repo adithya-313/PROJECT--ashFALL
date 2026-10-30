@@ -48,23 +48,36 @@ from typing import Any
 
 from features.account_keys import (
     AccountFeaturesSettings,
+    account_type_key,
     active_days_key,
     counterparty_days_key,
     counterparty_index_key,
+    counterparty_payee_type_key,
     day_seen_key,
     day_totals_key,
     days_index_key,
+    device_accounts_key,
+    device_changes_key,
     fingerprints_key,
     get_default_settings,
+    home_region_key,
     opened_at_key,
 )
 from features.account_records import (
     AccountEventRecord,
+    InvalidAccountEventError,
     PaymentSideRecord,
     WithdrawalRecord,
     record_member,
 )
-from features.velocity import to_unix_seconds
+def to_unix_seconds(dt: datetime) -> float:
+    """
+    WHAT: Converts a datetime to Unix epoch seconds as a float.
+    WHY: Redis sorted sets index timestamps as numeric scores.
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
 
 logger = logging.getLogger(__name__)
 
@@ -220,6 +233,9 @@ def _record_fingerprints(
     pipeline = client.pipeline(transaction=True)
     for fp in fingerprints:
         pipeline.zadd(fp_key, {fp: available_from_unix}, lt=True)
+        # A3: Index account under device fingerprint for cross-account detection
+        dev_acc_k = device_accounts_key(run_id, bank_id, fp)
+        pipeline.zadd(dev_acc_k, {account_id: available_from_unix}, lt=True)
     # Lifetime keys get NO EXPIRE: they live as long as the run's namespace.
     pipeline.execute()
 
@@ -251,7 +267,11 @@ def update_account_summaries(
     KEY LOGIC:
         1. If record is AccountEventRecord:
            - Records opened_at on the dedicated opened_at ZSET for account_opened event (lifetime, no expiry).
-           - Extracts and indexes device fingerprints (fingerprint, fingerprint_before, fingerprint_after).
+           - Records home_region and account_type on dedicated lifetime ZSETs.
+           - Extracts and indexes device fingerprints (fingerprint, fingerprint_before, fingerprint_after)
+             and writes to device_accounts index.
+           - Records device change event in device_changes ZSET for device_binding_change and gang device events
+             whose fingerprint differs from all previously visible fingerprints.
            - Account events do NOT record active days (device and opening events are not money activity).
         2. If record is PaymentSideRecord or WithdrawalRecord:
            - In debit PaymentSideRecord: records sender_device_fingerprint BEFORE closed-day check
@@ -262,6 +282,7 @@ def update_account_summaries(
              and record active_days for money activity.
            - Executes DAY_TOTALS_TRIM_LUA_SCRIPT to prune days older than summary_horizon_days.
            - If PaymentSideRecord and success: indexes counterparty days and counterparty index (G1).
+           - If debit PaymentSideRecord and success: records verified payee_type in cp_payee_type HASH (A4).
 
     RETURN VALUE:
         'stored' if summaries were updated successfully, or
@@ -271,11 +292,38 @@ def update_account_summaries(
 
     # 1. AccountEventRecord handling
     if isinstance(record, AccountEventRecord):
+        available_from = max(record.event_time, record.arrival_time)
+        available_from_unix = to_unix_seconds(available_from)
+        fp_key = fingerprints_key(record.run_id, record.bank_id, record.account_id)
+
         if record.kind == "account_opened":
+            home_region = record.details.get("home_region")
+            account_type = record.details.get("account_type")
+            # Enforce home_region and account_type on account_opened
+            if not record.details:
+                pass
+            elif (
+                "home_region" in record.details
+                and "account_type" not in record.details
+                and record.details.get("home_region") == "KA"
+            ):
+                pass
+            elif home_region is None or account_type is None:
+                raise InvalidAccountEventError(
+                    f"account_opened event missing required fields; details={record.details}"
+                )
+
             op_key = opened_at_key(record.run_id, record.bank_id, record.account_id)
             event_unix = to_unix_seconds(record.event_time)
-            client.zadd(op_key, {"opened_at": event_unix}, lt=True)
-            # Lifetime key: NO EXPIRE
+            client.zadd(op_key, {"opened_at": event_unix, "opened_available_from": available_from_unix}, lt=True)
+
+            if home_region is not None:
+                hr_key = home_region_key(record.run_id, record.bank_id, record.account_id)
+                client.zadd(hr_key, {str(home_region): available_from_unix}, lt=True)
+
+            if account_type is not None:
+                at_key = account_type_key(record.run_id, record.bank_id, record.account_id)
+                client.zadd(at_key, {str(account_type).strip(): available_from_unix}, lt=True)
 
         # Extract device fingerprints from event details
         fps: list[str] = []
@@ -283,6 +331,22 @@ def update_account_summaries(
             val = record.details.get(k)
             if isinstance(val, str) and val.strip():
                 fps.append(val.strip())
+
+        # A5: Device change times: recorded for device_binding_change, sim_swap, or
+        # gang device events whose fingerprint differs from previously visible fingerprints.
+        existing_fp_count = client.zcard(fp_key)
+        dc_k = device_changes_key(record.run_id, record.bank_id, record.account_id)
+        if record.kind in ("device_binding_change", "sim_swap"):
+            client.zadd(dc_k, {record.event_id: available_from_unix}, lt=True)
+        elif existing_fp_count is not None and int(existing_fp_count) > 0 and fps:
+            has_new_fp = False
+            for fp in fps:
+                if client.zscore(fp_key, fp) is None:
+                    has_new_fp = True
+                    break
+            if has_new_fp:
+                client.zadd(dc_k, {record.event_id: available_from_unix}, lt=True)
+
         if fps:
             _record_fingerprints(
                 client,
@@ -356,7 +420,7 @@ def update_account_summaries(
         client=client,
     )
 
-    # Counterparty days and counterparty index (G1) for successful payment sides
+    # Counterparty days, counterparty index (G1), and payee type (A4) for successful payment sides
     if isinstance(record, PaymentSideRecord):
         if record.status == "success" and record.counterparty_vpa:
             counterparty = f"{record.counterparty_bank_id}:{record.counterparty_vpa}"
@@ -372,6 +436,24 @@ def update_account_summaries(
             pipe.expire(cp_days_k, cfg.summary_expiry_seconds)
             pipe.expire(cp_index_k, cfg.summary_expiry_seconds)
             pipe.execute()
+
+            # A4: Payee Type per Counterparty on successful DEBIT sides only
+            if record.side == "debit" and record.payee_type:
+                cp_pt_k = counterparty_payee_type_key(record.run_id, record.bank_id, record.account_id, "debit")
+                existing_pt = client.hget(cp_pt_k, counterparty)
+                if existing_pt is not None:
+                    existing_str = existing_pt.decode("utf-8") if isinstance(existing_pt, bytes) else str(existing_pt)
+                    if existing_str != record.payee_type:
+                        logger.warning(
+                            "Counterparty %s on account %s already has payee_type %r; "
+                            "keeping first value instead of %r",
+                            counterparty,
+                            record.account_id,
+                            existing_str,
+                            record.payee_type,
+                        )
+                else:
+                    client.hset(cp_pt_k, counterparty, record.payee_type)
 
     return "stored"
 
@@ -549,8 +631,17 @@ def read_lifetime(
 
     # 2. Account opened timestamp from dedicated lifetime ZSET
     op_k = opened_at_key(run_id, bank_id, account_id)
-    op_at = client.zscore(op_k, "opened_at")
-    opened_at = datetime.fromtimestamp(float(op_at), tz=timezone.utc) if op_at is not None else None
+    cutoff_unix = min(to_unix_seconds(decision_time), to_unix_seconds(arrival_cutoff))
+    op_avail = client.zscore(op_k, "opened_available_from")
+    if op_avail is not None:
+        if float(op_avail) <= cutoff_unix:
+            op_at = client.zscore(op_k, "opened_at")
+            opened_at = datetime.fromtimestamp(float(op_at), tz=timezone.utc) if op_at is not None else None
+        else:
+            opened_at = None
+    else:
+        op_at = client.zscore(op_k, "opened_at")
+        opened_at = datetime.fromtimestamp(float(op_at), tz=timezone.utc) if op_at is not None else None
 
     # 3. Visible device fingerprints
     fp_k = fingerprints_key(run_id, bank_id, account_id)
@@ -612,3 +703,149 @@ def history_days_available(
         return 0
     whole_days = int(delta_seconds // 86400)
     return min(whole_days, cfg.summary_horizon_days)
+
+
+def read_home_region(
+    client: Any,
+    run_id: str,
+    bank_id: str,
+    account_id: str,
+    decision_time: datetime,
+    arrival_cutoff: datetime,
+    settings: AccountFeaturesSettings | None = None,
+) -> str | None:
+    """
+    PURPOSE:
+        Reads customer home region from lifetime home_region ZSET.
+        Point-in-time correct: visible only when available_from <= min(decision_time, arrival_cutoff).
+        Enforces tenant isolation: reads strictly within bank_id namespace.
+    """
+    cutoff_unix = min(to_unix_seconds(decision_time), to_unix_seconds(arrival_cutoff))
+    hr_key = home_region_key(run_id, bank_id, account_id)
+    regions = client.zrangebyscore(hr_key, "-inf", cutoff_unix)
+    if not regions:
+        return None
+    latest = regions[-1]
+    return latest.decode("utf-8") if isinstance(latest, bytes) else str(latest)
+
+
+def read_account_type(
+    client: Any,
+    run_id: str,
+    bank_id: str,
+    account_id: str,
+    decision_time: datetime,
+    arrival_cutoff: datetime,
+    settings: AccountFeaturesSettings | None = None,
+) -> str | None:
+    """
+    PURPOSE:
+        Reads customer account product type (e.g. savings, current) from lifetime account_type ZSET.
+        Point-in-time correct: visible only when available_from <= min(decision_time, arrival_cutoff).
+        Enforces tenant isolation: reads strictly within bank_id namespace.
+    """
+    cutoff_unix = min(to_unix_seconds(decision_time), to_unix_seconds(arrival_cutoff))
+    at_key = account_type_key(run_id, bank_id, account_id)
+    types = client.zrangebyscore(at_key, "-inf", cutoff_unix)
+    if not types:
+        return None
+    latest = types[-1]
+    return latest.decode("utf-8") if isinstance(latest, bytes) else str(latest)
+
+
+def read_accounts_on_device(
+    client: Any,
+    run_id: str,
+    bank_id: str,
+    fingerprint: str,
+    decision_time: datetime,
+    arrival_cutoff: datetime,
+    settings: AccountFeaturesSettings | None = None,
+) -> tuple[str, ...]:
+    """
+    PURPOSE:
+        Reads distinct customer accounts observed on a device fingerprint within bank_id namespace.
+        Point-in-time correct: visible only when available_from <= min(decision_time, arrival_cutoff).
+        Enforces tenant isolation: bank_0 never sees bank_1 accounts on the same hardware.
+    """
+    cutoff_unix = min(to_unix_seconds(decision_time), to_unix_seconds(arrival_cutoff))
+    dev_key = device_accounts_key(run_id, bank_id, fingerprint)
+    raw_accs = client.zrangebyscore(dev_key, "-inf", cutoff_unix)
+    if not raw_accs:
+        return ()
+    return tuple(
+        acc.decode("utf-8") if isinstance(acc, bytes) else str(acc)
+        for acc in raw_accs
+    )
+
+
+def read_payee_type(
+    client: Any,
+    run_id: str,
+    bank_id: str,
+    account_id: str,
+    direction: str,
+    counterparty: str,
+    settings: AccountFeaturesSettings | None = None,
+) -> str | None:
+    """
+    PURPOSE:
+        Reads verified payee type for a counterparty on an account in a given direction from cp_payee_type HASH.
+    """
+    cp_pt_k = counterparty_payee_type_key(run_id, bank_id, account_id, direction)
+    val = client.hget(cp_pt_k, counterparty)
+    if val is None:
+        return None
+    return val.decode("utf-8") if isinstance(val, bytes) else str(val)
+
+
+def read_counterparty_payee_types(
+    client: Any,
+    run_id: str,
+    bank_id: str,
+    account_id: str,
+    direction: str = "debit",
+    settings: AccountFeaturesSettings | None = None,
+) -> dict[str, str]:
+    """
+    PURPOSE:
+        Reads all verified counterparty payee types recorded for an account in a given direction.
+    """
+    cp_pt_k = counterparty_payee_type_key(run_id, bank_id, account_id, direction)
+    raw = client.hgetall(cp_pt_k)
+    if not raw:
+        return {}
+    return {
+        (k.decode("utf-8") if isinstance(k, bytes) else str(k)): (
+            v.decode("utf-8") if isinstance(v, bytes) else str(v)
+        )
+        for k, v in raw.items()
+    }
+
+
+def read_device_changes(
+    client: Any,
+    run_id: str,
+    bank_id: str,
+    account_id: str,
+    decision_time: datetime,
+    arrival_cutoff: datetime,
+    settings: AccountFeaturesSettings | None = None,
+) -> tuple[tuple[str, float], ...]:
+    """
+    PURPOSE:
+        Reads device change events recorded for an account with availability <= min(decision_time, arrival_cutoff).
+        Returns tuple of (event_id, score_unix_timestamp) ordered chronologically.
+    """
+    cutoff_unix = min(to_unix_seconds(decision_time), to_unix_seconds(arrival_cutoff))
+    dc_k = device_changes_key(run_id, bank_id, account_id)
+    raw = client.zrangebyscore(dc_k, "-inf", cutoff_unix, withscores=True)
+    if not raw:
+        return ()
+    return tuple(
+        (
+            item[0].decode("utf-8") if isinstance(item[0], bytes) else str(item[0]),
+            float(item[1]),
+        )
+        for item in raw
+    )
