@@ -363,25 +363,6 @@ features:
     issue_ids: ["G1"]
 
   # -----------------------------------------------------------------------------
-  # Group: intelligence
-  # -----------------------------------------------------------------------------
-  - name: "registry_match_count"
-    group: "intelligence"
-    definition: "Count of matches against external mule / suspect intelligence registries (e.g. DPIP, I4C)."
-    bank_visible_source_records: "External intelligence registries"
-    window_or_horizon: "point-in-time"
-    empty_means: "zero"
-    issue_ids: ["R8"]
-
-  - name: "registry_match_age_days"
-    group: "intelligence"
-    definition: "Days elapsed since the earliest external suspect registry match was recorded."
-    bank_visible_source_records: "External intelligence registries"
-    window_or_horizon: "point-in-time"
-    empty_means: "no data"
-    issue_ids: ["R8"]
-
-  # -----------------------------------------------------------------------------
   # Group: payment_level
   # -----------------------------------------------------------------------------
   - name: "first_payment_to_payee"
@@ -407,14 +388,6 @@ features:
     window_or_horizon: "summary_horizon_days (62d)"
     empty_means: "no data"
     issue_ids: ["G1"]
-
-  - name: "payee_registry_match"
-    group: "payment_level"
-    definition: "Binary flag indicating whether the receiving payee matches an external suspect registry."
-    bank_visible_source_records: "External intelligence registries"
-    window_or_horizon: "point-in-time"
-    empty_means: "zero"
-    issue_ids: ["R8"]
 
   - name: "payee_same_bank_risk"
     group: "payment_level"
@@ -447,6 +420,19 @@ features:
     window_or_horizon: "24h (86400s)"
     empty_means: "zero"
     issue_ids: ["R7"]
+
+# =============================================================================
+# Parked candidate features awaiting architectural rulings
+# =============================================================================
+pending:
+  - name: "payee_registry_match"
+    reason: "waiting for the architect's decision on how a bank reads the registry (Level 13 serves matches through /screen, not through registry.events)"
+
+  - name: "registry_match_count"
+    reason: "waiting for the architect's decision on how a bank reads the registry (Level 13 serves matches through /screen, not through registry.events)"
+
+  - name: "registry_match_age_days"
+    reason: "waiting for the architect's decision on how a bank reads the registry (Level 13 serves matches through /screen, not through registry.events)"
 
 # =============================================================================
 # Excluded and removed candidate features with explicit technical rationales

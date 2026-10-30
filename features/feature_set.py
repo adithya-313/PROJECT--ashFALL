@@ -71,19 +71,35 @@ class RemovedFeature:
 
 
 @dataclass(frozen=True)
+class PendingFeature:
+    """
+    Candidate feature parked as pending awaiting architectural decisions.
+
+    Attributes:
+        name: Name of the pending feature.
+        reason: Technical or architectural rationale for why the feature is parked.
+    """
+
+    name: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class M1FeatureSet:
     """
-    Validated catalog of Level 15 M1 live mule features and documented exclusions.
+    Validated catalog of Level 15 M1 live mule features, documented exclusions, and parked items.
 
     Attributes:
         features: Tuple of active M1Feature definitions.
         removed: Tuple of RemovedFeature exclusion records.
         gap_notes: Tuple of informational modeling gap notes.
+        pending: Tuple of PendingFeature parked items awaiting architectural rulings.
     """
 
     features: tuple[M1Feature, ...]
     removed: tuple[RemovedFeature, ...]
     gap_notes: tuple[str, ...]
+    pending: tuple[PendingFeature, ...] = ()
 
     def get_feature(self, name: str) -> M1Feature:
         """Looks up a feature by name; raises ValueError if not found."""
@@ -235,8 +251,41 @@ def load_feature_set_m1(config_path: Path | None = None) -> M1FeatureSet:
 
         parsed_removed.append(RemovedFeature(name=name, reason=reason.strip()))
 
+    raw_pending = raw_cfg.get("pending", [])
+    if not isinstance(raw_pending, list):
+        raise ValueError("'pending' must be a list of parked features")
+
+    seen_pending_names: set[str] = set()
+    parsed_pending: list[PendingFeature] = []
+
+    for idx, item in enumerate(raw_pending):
+        if not isinstance(item, dict):
+            raise ValueError(f"Pending feature entry at index {idx} must be a dictionary")
+
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"Pending feature entry at index {idx} missing non-empty 'name'")
+        name = name.strip()
+
+        if name in seen_pending_names:
+            raise ValueError(f"Duplicate pending feature name {name!r}")
+        seen_pending_names.add(name)
+
+        if name in seen_feature_names:
+            raise ValueError(f"Feature {name!r} appears in both active 'features' and 'pending' lists")
+
+        if name in seen_removed_names:
+            raise ValueError(f"Feature {name!r} appears in both 'removed' and 'pending' lists")
+
+        reason = item.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError(f"Pending feature {name!r} missing non-empty 'reason'")
+
+        parsed_pending.append(PendingFeature(name=name, reason=reason.strip()))
+
     return M1FeatureSet(
         features=tuple(parsed_features),
         removed=tuple(parsed_removed),
         gap_notes=gap_notes,
+        pending=tuple(parsed_pending),
     )
