@@ -355,72 +355,131 @@ def test_invalid_proposed_payment_raises() -> None:
         ProposedPayment(RUN_ID, BANK_0, "", BANK_0, "payee", "person", 1000, t_now)
 
 
-def test_compute_payer_only_payment_features_full_proposal(redis_client: fakeredis.FakeRedis) -> None:
-    """Verifies that compute_payer_only_payment_features calculates all payer-side features on full proposal."""
-    proposal = {
-        "run_id": RUN_ID,
-        "bank_id": BANK_0,
-        "payer_account_id": "acc_01",
-        "payee_bank_id": BANK_0,
-        "payee_vpa": "vpa_01",
-        "amount_paise": 10000,
-        "channel": "upi_app",
-        "sender_device_fingerprint": "fp_01",
-        "sender_os_generation": 14,
-        "payee_type": "merchant",
+def test_compute_payer_only_payment_features_ratios_and_counts(redis_client: fakeredis.FakeRedis) -> None:
+    """Verifies that compute_payer_only_payment_features calculates median/max ratios and customer failed count."""
+    for i, amt in enumerate([10000, 30000], start=1):
+        rec = PaymentSideRecord(
+            run_id=RUN_ID,
+            bank_id=BANK_0,
+            account_id="acc_01",
+            payment_id=f"{RUN_ID}-deb-{i:06d}",
+            side="debit",
+            counterparty_bank_id="bank_1",
+            counterparty_vpa="vpa_merch",
+            amount_paise=amt,
+            status="success",
+            failure_domain=None,
+            payee_type="merchant",
+            channel="upi_app",
+            sender_device_fingerprint=None,
+            sender_os_generation=None,
+            balance_after_paise=None,
+            event_time=NOW_UTC - timedelta(days=1),
+            arrival_time=NOW_UTC - timedelta(days=1),
+        )
+        apply_payment_side(redis_client, rec)
+
+    feats = compute_payer_only_payment_features(
+        redis_client, RUN_ID, BANK_0, "acc_01", 20000, NOW_UTC, NOW_UTC
+    )
+    assert set(feats.keys()) == {
+        "amount_vs_payer_median_ratio",
+        "amount_vs_payer_max_ratio",
+        "customer_failed_attempts_24h",
     }
-    feats = compute_payer_only_payment_features(redis_client, proposal, NOW_UTC)
-    assert feats["amount_paise"] == 10000
-    assert feats["payment_channel"] == "upi_app"
-    assert feats["payer_device_fingerprint"] == "fp_01"
-    assert feats["payer_os_generation"] == 14
-    assert feats["round_amount"] is True
-    assert feats["structured_amount"] is False
-    assert feats["same_amount_count_24h"] == 0
-    assert feats["payee_type"] == "merchant"
-    assert feats["payee_registry_match"] is None
+    assert feats["amount_vs_payer_median_ratio"] == 1.0
+    assert feats["amount_vs_payer_max_ratio"] == pytest.approx(20000 / 30000)
+    assert feats["customer_failed_attempts_24h"] == 0
 
 
-def test_compute_payer_only_payment_features_missing_optional_fields(redis_client: fakeredis.FakeRedis) -> None:
+def test_compute_payer_only_payment_features_no_history_returns_nones(
+    redis_client: fakeredis.FakeRedis,
+) -> None:
+    """Verifies that with no historical debits, ratios are None and failed attempts count is 0."""
+    feats = compute_payer_only_payment_features(
+        redis_client, RUN_ID, BANK_0, "acc_new", 5000, NOW_UTC, NOW_UTC
+    )
+    assert feats["amount_vs_payer_median_ratio"] is None
+    assert feats["amount_vs_payer_max_ratio"] is None
+    assert feats["customer_failed_attempts_24h"] == 0
+
+
+def test_compute_payer_only_payment_features_counts_only_customer_failures(
+    redis_client: fakeredis.FakeRedis,
+) -> None:
     """
     SABOTAGE S3 TARGET:
-    Verifies that missing optional fields (payee_type, channel, fingerprint, os_gen) cleanly produce None
-    without raising any exceptions.
+    Verifies that customer_failed_attempts_24h counts only customer failure domain within 24h,
+    ignoring technical failure domains and older failures.
     """
-    proposal = {
-        "run_id": RUN_ID,
-        "bank_id": BANK_0,
-        "payer_account_id": "acc_01",
-        "payee_bank_id": BANK_0,
-        "payee_vpa": "vpa_01",
-        "amount_paise": 10000,
-        "channel": None,
-        "sender_device_fingerprint": None,
-        "sender_os_generation": None,
-        "payee_type": None,
-    }
-    # Must NOT raise; missing optional fields produce None in feature dictionary
-    feats = compute_payer_only_payment_features(redis_client, proposal, NOW_UTC)
-    assert feats["payee_type"] is None
-    assert feats["payment_channel"] is None
-    assert feats["payer_device_fingerprint"] is None
-    assert feats["payer_os_generation"] is None
+    # 1. Customer failure within 24h (counted)
+    rec1 = PaymentSideRecord(
+        run_id=RUN_ID,
+        bank_id=BANK_0,
+        account_id="acc_01",
+        payment_id=f"{RUN_ID}-deb-fail-1",
+        side="debit",
+        counterparty_bank_id="bank_1",
+        counterparty_vpa="vpa_merch",
+        amount_paise=1000,
+        status="failed",
+        failure_domain="customer",
+        payee_type="merchant",
+        channel="upi_app",
+        sender_device_fingerprint=None,
+        sender_os_generation=None,
+        balance_after_paise=None,
+        event_time=NOW_UTC - timedelta(hours=2),
+        arrival_time=NOW_UTC - timedelta(hours=2),
+    )
+    apply_payment_side(redis_client, rec1)
 
+    # 2. Technical failure within 24h (ignored)
+    rec2 = PaymentSideRecord(
+        run_id=RUN_ID,
+        bank_id=BANK_0,
+        account_id="acc_01",
+        payment_id=f"{RUN_ID}-deb-fail-2",
+        side="debit",
+        counterparty_bank_id="bank_1",
+        counterparty_vpa="vpa_merch",
+        amount_paise=1000,
+        status="failed",
+        failure_domain="sender_bank",
+        payee_type="merchant",
+        channel="upi_app",
+        sender_device_fingerprint=None,
+        sender_os_generation=None,
+        balance_after_paise=None,
+        event_time=NOW_UTC - timedelta(hours=3),
+        arrival_time=NOW_UTC - timedelta(hours=3),
+    )
+    apply_payment_side(redis_client, rec2)
 
-def test_compute_payer_only_payment_features_payee_vpa_none(redis_client: fakeredis.FakeRedis) -> None:
-    """Verifies that proposal with payee_vpa=None returns payee_registry_match=None without calling screener."""
-    from features.registry_screening import FakeRegistryScreener
+    # 3. Customer failure older than 24h (ignored)
+    rec3 = PaymentSideRecord(
+        run_id=RUN_ID,
+        bank_id=BANK_0,
+        account_id="acc_01",
+        payment_id=f"{RUN_ID}-deb-fail-3",
+        side="debit",
+        counterparty_bank_id="bank_1",
+        counterparty_vpa="vpa_merch",
+        amount_paise=1000,
+        status="failed",
+        failure_domain="customer",
+        payee_type="merchant",
+        channel="upi_app",
+        sender_device_fingerprint=None,
+        sender_os_generation=None,
+        balance_after_paise=None,
+        event_time=NOW_UTC - timedelta(hours=25),
+        arrival_time=NOW_UTC - timedelta(hours=25),
+    )
+    apply_payment_side(redis_client, rec3)
 
-    screener = FakeRegistryScreener()
-    proposal = {
-        "run_id": RUN_ID,
-        "bank_id": BANK_0,
-        "payer_account_id": "acc_01",
-        "payee_bank_id": BANK_0,
-        "payee_vpa": None,
-        "amount_paise": 10000,
-        "payee_type": "person",
-    }
-    feats = compute_payer_only_payment_features(redis_client, proposal, NOW_UTC, screener=screener)
-    assert feats["payee_registry_match"] is None
+    feats = compute_payer_only_payment_features(
+        redis_client, RUN_ID, BANK_0, "acc_01", 1000, NOW_UTC, NOW_UTC
+    )
+    assert feats["customer_failed_attempts_24h"] == 1
 
