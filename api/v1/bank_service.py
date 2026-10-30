@@ -40,10 +40,14 @@ from api.v1.models import (
 )
 from api.v1.upi_outbox import UpiPaymentSide, record_upi_side, validate_side
 from core.config import config
-from core.event_clock import Clock
+from core.event_clock import Clock, WallClock
 from features.account_keys import AccountFeaturesSettings
 from features.decision_features import compute_decision_row
-from features.feature_log import FeatureLogRow, insert_feature_log_row
+from features.feature_log import (
+    FeatureLogRow,
+    canonical_feature_names,
+    insert_feature_log_row,
+)
 from features.registry_screening import RegistryScreener
 
 logger = logging.getLogger(__name__)
@@ -186,19 +190,35 @@ async def record_decision(
     if config.decision_feature_logging_enabled:
         row = feature_row
         if row is None:
+            clk = decision_clock if decision_clock is not None else WallClock()
             try:
                 row = await asyncio.to_thread(
                     compute_decision_row,
                     redis_client=redis_client,
+                    bank_id=bank_id,
                     request=request,
-                    clock=decision_clock,
+                    clock=clk,
                     settings=settings,
                     screener=screener,
-                    bank_id=bank_id,
                 )
             except Exception as exc:
-                logger.error("Failed to compute decision features: %s", exc)
-                row = None
+                logger.warning(
+                    "Failed to compute decision features for payment %s on bank %s: %s",
+                    request.payment_id,
+                    bank_id,
+                    exc,
+                )
+                row = FeatureLogRow(
+                    bank_id=bank_id,
+                    payment_id=request.payment_id,
+                    decision_time=request.event_time,
+                    decided_at=clk.now_ist(),
+                    watermark_lag_ms=None,
+                    status="error",
+                    feature_values={name: None for name in canonical_feature_names()},
+                    missing_request_fields=[],
+                    registry_answers=[],
+                )
         if row is not None:
             await insert_feature_log_row(connection, row)
 
@@ -508,22 +528,6 @@ class InProcessBankClient:
         if path == "/v1/decisions":
             decision_model = parse_raw_body(body_bytes, DecisionRequest)
 
-            feature_row = None
-            if config.decision_feature_logging_enabled:
-                try:
-                    feature_row = await asyncio.to_thread(
-                        compute_decision_row,
-                        redis_client=self._redis_client,
-                        request=decision_model,
-                        clock=self._decision_clock,
-                        settings=self._settings,
-                        screener=self._screener,
-                        bank_id=self._bank_id,
-                    )
-                except Exception as exc:
-                    logger.error("Failed to compute decision features: %s", exc)
-                    feature_row = None
-
             async def handler(connection: asyncpg.Connection) -> tuple[int, dict[str, Any]]:
                 return await record_decision(
                     connection,
@@ -533,7 +537,6 @@ class InProcessBankClient:
                     decision_clock=self._decision_clock,
                     settings=self._settings,
                     screener=self._screener,
-                    feature_row=feature_row,
                 )
 
         elif path == "/v1/transactions":

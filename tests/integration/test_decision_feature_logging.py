@@ -27,11 +27,11 @@ from pydantic import SecretStr
 from api.main import app
 from api.v1.bank_keys import issue_api_key
 from api.v1.bank_scope import bank_scoped_transaction
-from api.v1.bank_service import InProcessBankClient
+from api.v1.bank_service import DECISION_REASON, InProcessBankClient, get_bank_mode
 from api.v1.signing import sign_outgoing
 from core.config import config
 from core.event_clock import IST, ManualClock
-from features.feature_log import read_feature_log_row
+from features.feature_log import canonical_feature_names, read_feature_log_row
 from features.ingest_watermark import (
     POLLER_SOURCES,
     record_payment_watermark,
@@ -125,7 +125,7 @@ def _signed_headers(
 
 
 async def test_feature_logging_disabled_by_default(env, monkeypatch: pytest.MonkeyPatch) -> None:
-    """When decision_feature_logging_enabled is False, bank_feature_log receives no rows."""
+    """When decision_feature_logging_enabled is False, feature_log receives no rows and response is byte-identical."""
     monkeypatch.setattr(config, "decision_feature_logging_enabled", False)
     connection = env["connection"]
 
@@ -144,7 +144,13 @@ async def test_feature_logging_disabled_by_default(env, monkeypatch: pytest.Monk
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         res = await client.post("/v1/decisions", content=body_bytes, headers=headers)
         assert res.status_code == 200
-        assert res.json()["decision"] == "unscored"
+        # Byte-identical response to 80a35f4
+        assert res.json() == {
+            "payment_id": payment_id,
+            "decision": "unscored",
+            "mode": get_bank_mode("bank_0"),
+            "reason": DECISION_REASON,
+        }
 
     # Decision recorded in bank_decision_requests
     async with bank_scoped_transaction(connection, "bank_0") as scoped:
@@ -154,12 +160,12 @@ async def test_feature_logging_disabled_by_default(env, monkeypatch: pytest.Monk
         assert dec_exists == 1
 
         # No feature log row inserted
-        log_count = await scoped.fetchval("SELECT COUNT(*) FROM bank_feature_log WHERE payment_id = $1", payment_id)
+        log_count = await scoped.fetchval("SELECT COUNT(*) FROM feature_log WHERE payment_id = $1", payment_id)
         assert log_count == 0
 
 
 async def test_feature_logging_enabled_records_row_and_replay(env, monkeypatch: pytest.MonkeyPatch) -> None:
-    """When decision_feature_logging_enabled is True, inserts into bank_feature_log and handles replay."""
+    """When decision_feature_logging_enabled is True, inserts into feature_log and handles replay."""
     monkeypatch.setattr(config, "decision_feature_logging_enabled", True)
     connection = env["connection"]
 
@@ -192,14 +198,56 @@ async def test_feature_logging_enabled_records_row_and_replay(env, monkeypatch: 
 
     async with bank_scoped_transaction(connection, "bank_0") as scoped:
         rows = await scoped.fetch(
-            "SELECT status, feature_values, feature_values_ordered FROM bank_feature_log WHERE payment_id = $1",
+            "SELECT status, feature_values FROM feature_log WHERE payment_id = $1",
             payment_id,
         )
         assert len(rows) == 1
         assert rows[0]["status"] == "ok"
-        assert rows[0]["feature_values_ordered"] is not None
         fv = orjson.loads(rows[0]["feature_values"])
-        assert fv["payee_type"] == "person"
+        assert isinstance(fv, list)
+        names = canonical_feature_names()
+        idx = names.index("payee_type")
+        assert fv[idx] == "person"
+
+
+async def test_duplicate_payment_id_returns_409_and_single_feature_log_row(
+    env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verifies that duplicate payment_id yields 409 conflict and creates exactly ONE feature_log row."""
+    monkeypatch.setattr(config, "decision_feature_logging_enabled", True)
+    connection = env["connection"]
+
+    payment_id = f"{RUN_ID}-dec-dup01"
+    payload = {
+        "payment_id": payment_id,
+        "sender_account_id": "acc_002",
+        "receiver_bank_id": "bank_1",
+        "receiver_vpa": "acc_recv_2",
+        "amount_paise": 150000,
+        "event_time": EVENT_TIME_STR,
+        "payee_type": "person",
+    }
+    body_bytes = orjson.dumps(payload)
+    headers1 = _signed_headers(env, "bank_0", "POST", "/v1/decisions", body_bytes, "idem_dup_1")
+    headers2 = _signed_headers(env, "bank_0", "POST", "/v1/decisions", body_bytes, "idem_dup_2")
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        # First call succeeds
+        res1 = await client.post("/v1/decisions", content=body_bytes, headers=headers1)
+        assert res1.status_code == 200
+
+        # Second call with same payment_id but different idempotency key fails with 409
+        res2 = await client.post("/v1/decisions", content=body_bytes, headers=headers2)
+        assert res2.status_code == 409
+        assert res2.json()["error"]["code"] == "payment_already_decided"
+
+    async with bank_scoped_transaction(connection, "bank_0") as scoped:
+        count = await scoped.fetchval(
+            "SELECT COUNT(*) FROM feature_log WHERE payment_id = $1",
+            payment_id,
+        )
+        assert count == 1
 
 
 async def test_feature_logging_atomic_rollback_on_insert_failure(env, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -254,6 +302,8 @@ async def test_in_process_client_feature_logging(env, monkeypatch: pytest.Monkey
         "payment_id": payment_id,
         "sender_account_id": "acc_004",
         "receiver_bank_id": "bank_1",
+        "receiver_vpa": "acc_recv_4",
+        "payee_type": "person",
         "amount_paise": 75000,
         "event_time": EVENT_TIME_STR,
     }
@@ -264,7 +314,7 @@ async def test_in_process_client_feature_logging(env, monkeypatch: pytest.Monkey
     assert outcome.body["decision"] == "unscored"
 
     async with bank_scoped_transaction(connection, "bank_0") as scoped:
-        log_row = await read_feature_log_row(scoped, "bank_0", f"{payment_id}-dec")
+        log_row = await read_feature_log_row(scoped, "bank_0", payment_id)
         assert log_row is not None
         assert log_row.payment_id == payment_id
         assert log_row.status == "ok"

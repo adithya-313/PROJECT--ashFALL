@@ -78,13 +78,13 @@ async def lifespan(app: fastapi.FastAPI):
     if config.decision_feature_logging_enabled:
         import redis
 
+        from core.event_clock import WallClock
         from features.account_keys import get_default_settings
-        from features.decision_features import SystemClock
 
         if not hasattr(app.state, "redis_client") or app.state.redis_client is None:
             app.state.redis_client = redis.Redis.from_url(config.redis_url)
         if not hasattr(app.state, "decision_clock") or app.state.decision_clock is None:
-            app.state.decision_clock = SystemClock()
+            app.state.decision_clock = WallClock()
         if not hasattr(app.state, "account_settings") or app.state.account_settings is None:
             app.state.account_settings = get_default_settings()
         if not hasattr(app.state, "registry_screener"):

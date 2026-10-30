@@ -24,14 +24,13 @@ __all__ = [
     "ALLOWED_STATUSES",
     "FeatureLogRow",
     "canonical_feature_names",
+    "to_ordered_values",
     "to_feature_values_array",
     "insert_feature_log_row",
     "read_feature_log_row",
 ]
 
-ALLOWED_STATUSES: frozenset[str] = frozenset(
-    {"ok", "incomplete_request", "no_watermark", "error"}
-)
+ALLOWED_STATUSES: frozenset[str] = frozenset({"ok", "incomplete_request", "no_watermark", "error"})
 
 
 @lru_cache(maxsize=1)
@@ -45,15 +44,26 @@ def canonical_feature_names() -> tuple[str, ...]:
     return tuple(f.name for f in feature_set.features)
 
 
-def to_feature_values_array(features_dict: dict[str, Any]) -> list[Any]:
+def to_ordered_values(features_dict: dict[str, Any]) -> list[Any]:
     """
     WHAT: Serializes a dictionary of feature values into a JSON-compatible list matching canonical_feature_names order.
 
     WHY: Point-in-time logging stores feature values as a JSON array in canonical order,
-    preserving exact types (integers, strings, booleans, floats, nulls). Missing keys map to None.
+    preserving exact types (integers, strings, booleans, floats, nulls).
+    Raises ValueError if keys in features_dict do not match the canonical set exactly.
     """
     names = canonical_feature_names()
-    return [features_dict.get(name) for name in names]
+    expected = set(names)
+    actual = set(features_dict.keys())
+    if actual != expected:
+        raise ValueError(
+            "Feature dict keys do not match canonical schema. "
+            f"Missing: {expected - actual}, Unexpected: {actual - expected}"
+        )
+    return [features_dict[name] for name in names]
+
+
+to_feature_values_array = to_ordered_values
 
 
 @dataclass(frozen=True)
@@ -87,9 +97,7 @@ class FeatureLogRow:
 
     def __post_init__(self) -> None:
         if self.status not in ALLOWED_STATUSES:
-            raise ValueError(
-                f"Invalid status: {self.status!r}. Must be one of {sorted(ALLOWED_STATUSES)}"
-            )
+            raise ValueError(f"Invalid status: {self.status!r}. Must be one of {sorted(ALLOWED_STATUSES)}")
         if not isinstance(self.bank_id, str) or not self.bank_id:
             raise ValueError(f"Invalid bank_id: {self.bank_id!r}; must be non-empty string")
         if not isinstance(self.payment_id, str) or not self.payment_id:
@@ -102,9 +110,7 @@ class FeatureLogRow:
             raise ValueError("created_at must be timezone-aware")
 
         if isinstance(self.feature_values, dict):
-            object.__setattr__(
-                self, "feature_values", to_feature_values_array(self.feature_values)
-            )
+            object.__setattr__(self, "feature_values", to_feature_values_array(self.feature_values))
 
 
 async def insert_feature_log_row(conn: Any, row: FeatureLogRow) -> None:
@@ -116,15 +122,9 @@ async def insert_feature_log_row(conn: Any, row: FeatureLogRow) -> None:
     """
     feature_values_json = orjson.dumps(row.feature_values).decode("utf-8")
     registry_answers_json = (
-        orjson.dumps(row.registry_answers).decode("utf-8")
-        if row.registry_answers is not None
-        else None
+        orjson.dumps(row.registry_answers).decode("utf-8") if row.registry_answers is not None else None
     )
-    created_at = (
-        row.created_at
-        if row.created_at is not None
-        else datetime.now(timezone.utc)
-    )
+    created_at = row.created_at if row.created_at is not None else datetime.now(timezone.utc)
 
     query = """
     INSERT INTO feature_log (

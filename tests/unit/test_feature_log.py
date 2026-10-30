@@ -10,6 +10,7 @@ and invalid statuses or naive datetimes fail fast.
 """
 
 from datetime import datetime, timezone
+from typing import Any
 
 import pytest
 
@@ -17,7 +18,7 @@ from features.feature_log import (
     ALLOWED_STATUSES,
     FeatureLogRow,
     canonical_feature_names,
-    to_feature_values_array,
+    to_ordered_values,
 )
 
 NOW_UTC = datetime(2026, 10, 28, 12, 0, 0, tzinfo=timezone.utc)
@@ -34,16 +35,19 @@ def test_canonical_feature_names_order_and_uniqueness() -> None:
 
 
 def test_to_feature_values_array_preserves_types() -> None:
-    """F7: Verifies that to_feature_values_array preserves types (ints, strings, bools, floats, nulls)."""
+    """F7: Verifies that to_ordered_values preserves types (ints, strings, bools, floats, nulls)."""
     names = canonical_feature_names()
-    features = {
-        "distinct_payers_1h": 5,
-        "payee_type": "merchant",
-        "routine_life_present": True,
-        "pass_through_ratio_7d": 0.85,
-    }
+    features: dict[str, Any] = {name: None for name in names}
+    features.update(
+        {
+            "distinct_payers_1h": 5,
+            "payee_type": "merchant",
+            "routine_life_present": True,
+            "pass_through_ratio_7d": 0.85,
+        }
+    )
 
-    arr = to_feature_values_array(features)
+    arr = to_ordered_values(features)
     assert len(arr) == len(names)
 
     idx_payers = names.index("distinct_payers_1h")
@@ -63,15 +67,19 @@ def test_to_feature_values_array_preserves_types() -> None:
     assert isinstance(arr[idx_ratio], float)
 
 
-def test_to_feature_values_array_missing_fields_are_none() -> None:
-    """Verifies that missing features map to None in feature values array."""
+def test_to_ordered_values_requires_exact_canonical_keys() -> None:
+    """F7: Verifies that to_ordered_values raises ValueError if key set differs from canonical set."""
     names = canonical_feature_names()
     features = {"distinct_payers_1h": 5}
-    arr = to_feature_values_array(features)
 
-    assert len(arr) == len(names)
-    assert arr[0] == 5
-    assert all(val is None for val in arr[1:])
+    with pytest.raises(ValueError, match="Feature dict keys do not match canonical schema"):
+        to_ordered_values(features)
+
+    # Extra key also raises
+    features_all: dict[str, Any] = {name: None for name in names}
+    features_all["unexpected_feature"] = 123
+    with pytest.raises(ValueError, match="Feature dict keys do not match canonical schema"):
+        to_ordered_values(features_all)
 
 
 def test_feature_log_row_status_validation() -> None:
@@ -128,6 +136,10 @@ def test_feature_log_row_timezone_validation() -> None:
 
 def test_feature_log_row_converts_dict_to_canonical_array() -> None:
     """Verifies that passing a feature dict automatically converts it to a canonical JSON array."""
+    names = canonical_feature_names()
+    f_dict: dict[str, Any] = {name: None for name in names}
+    f_dict["distinct_payers_1h"] = 3
+    f_dict["payee_type"] = "person"
     row = FeatureLogRow(
         bank_id="bank_0",
         payment_id="pay_01",
@@ -135,12 +147,12 @@ def test_feature_log_row_converts_dict_to_canonical_array() -> None:
         decided_at=NOW_UTC,
         watermark_lag_ms=25,
         status="ok",
-        feature_values={"distinct_payers_1h": 3, "payee_type": "person"},
+        feature_values=f_dict,
         missing_request_fields=["receiver_vpa"],
         registry_answers=[{"identifier_hash": "h1", "status": "match"}],
     )
     assert isinstance(row.feature_values, list)
-    assert len(row.feature_values) == len(canonical_feature_names())
+    assert len(row.feature_values) == len(names)
     assert row.feature_values[0] == 3
     assert row.missing_request_fields == ["receiver_vpa"]
     assert row.registry_answers is not None

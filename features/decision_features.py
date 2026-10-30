@@ -6,14 +6,16 @@ WHAT: Computes decision-time feature vectors and builds FeatureLogRow instances
 for shadow logging during /v1/decisions evaluation.
 
 WHY: Enforces Section 22 evaluation correctness: decision features are computed
-only when the bank's ingestion watermark is >= decision_time. If unwatermarked,
-status is marked 'no_watermark' without guessing or falling back to wall-clock time.
+only when the bank's ingestion watermark is present. If unwatermarked, status is
+marked 'no_watermark' without guessing or falling back to wall-clock time.
+Decision time is strictly request.event_time; decided_at is clock.now_ist().
 """
 
-import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from api.v1.models import DecisionRequest
+from core.event_clock import Clock
 from features.account_keys import (
     AccountFeaturesSettings,
     extract_run_id,
@@ -25,199 +27,224 @@ from features.feature_log import (
 )
 from features.ingest_watermark import get_bank_watermark
 from features.m1_features import compute_account_features
-from features.m1_payment import compute_payer_only_payment_features
-from features.registry_screening import RegistryScreener
+from features.m1_payment import (
+    ProposedPayment,
+    compute_payer_only_payment_features,
+    compute_payment_features,
+)
+from features.registry_screening import (
+    LiveRegistryScreener,
+    RecordingRegistryScreener,
+    RegistryScreener,
+    ScreenOutcome,
+)
 
-logger = logging.getLogger(__name__)
-
-__all__ = ["SystemClock", "compute_decision_row"]
+__all__ = ["compute_decision_row"]
 
 
-class SystemClock:
-    """System clock providing UTC and IST timezone-aware datetimes."""
+def _format_registry_answers(answers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Formats in-memory recording answers into clean, JSON-serializable dictionaries."""
+    formatted: list[dict[str, Any]] = []
+    for a in answers:
+        outcome = a["outcome"]
+        outcome_dict: dict[str, Any] | str
+        if isinstance(outcome, ScreenOutcome):
+            outcome_dict = {
+                "status": outcome.status,
+                "first_visible_at": (
+                    outcome.first_visible_at.isoformat() if outcome.first_visible_at is not None else None
+                ),
+            }
+        else:
+            outcome_dict = str(outcome)
 
-    def now_utc(self) -> datetime:
-        return datetime.now(timezone.utc)
-
-    def now_ist(self) -> datetime:
-        return datetime.now(timezone.utc)
+        as_of = a["as_of"]
+        received_at = a["received_at"]
+        formatted.append(
+            {
+                "identifier_hash": a["identifier_hash"],
+                "identifier_type": a["identifier_type"],
+                "as_of": as_of.isoformat() if isinstance(as_of, datetime) else None,
+                "outcome": outcome_dict,
+                "received_at": (received_at.isoformat() if isinstance(received_at, datetime) else str(received_at)),
+            }
+        )
+    return formatted
 
 
 def compute_decision_row(
     redis_client: Any,
-    request: Any,
-    clock: Any = None,
+    bank_id: str,
+    request: DecisionRequest,
+    clock: Clock,
     settings: AccountFeaturesSettings | None = None,
     screener: RegistryScreener | None = None,
-    bank_id: str | None = None,
+    dpip_key: str | None = None,
 ) -> FeatureLogRow:
     """
-    WHAT: Computes all canonical M1 features as-of decision_time for a DecisionRequest.
+    WHAT: Computes all canonical M1 features as-of request.event_time for a DecisionRequest.
 
     WHY: Decouples real-time payment decisions from training feature vector collection.
     Guarantees strict Section 22 correctness via watermark verification.
+
+    Args:
+        redis_client: Redis client instance.
+        bank_id: Tenant commercial bank identifier (required non-empty str).
+        request: Validated DecisionRequest instance.
+        clock: Injected Clock protocol instance (required).
+        settings: Optional AccountFeaturesSettings.
+        screener: Optional national RegistryScreener.
+        dpip_key: Optional explicit DPIP HMAC key.
+
+    Returns:
+        FeatureLogRow ready for partitioned persistence in feature_log table.
     """
-    computed_at = datetime.now(timezone.utc)
-    clk = clock if clock is not None else SystemClock()
-    if hasattr(clk, "now_utc"):
-        decision_time: datetime = clk.now_utc()
-    elif hasattr(clk, "now_ist"):
-        decision_time = clk.now_ist().astimezone(timezone.utc)
-    elif callable(clk):
-        decision_time = clk()
-    else:
-        decision_time = datetime.now(timezone.utc)
+    if not isinstance(bank_id, str) or not bank_id:
+        raise ValueError(f"Invalid bank_id: {bank_id!r}; must be non-empty string")
 
-    if decision_time.tzinfo is None:
-        decision_time = decision_time.replace(tzinfo=timezone.utc)
-
-    resolved_bank_id = bank_id
-    if resolved_bank_id is None:
-        resolved_bank_id = getattr(request, "bank_id", None)
-    if resolved_bank_id is None:
-        resolved_bank_id = "bank_0"
-
-    payment_id = getattr(request, "payment_id", "")
-    decision_id = f"{payment_id}-dec"
+    payment_id = request.payment_id
+    decision_time = request.event_time
+    decided_at = clock.now_ist()
 
     canonical_names = canonical_feature_names()
     all_none_features: dict[str, Any] = {name: None for name in canonical_names}
 
-    # 1. Watermark check: read bank watermark across assigned Kafka partitions [0]
+    # 1. Watermark check: read bank watermark across all sources
     watermark: datetime | None = None
     if redis_client is not None:
-        try:
-            watermark = get_bank_watermark(redis_client, resolved_bank_id)
-        except Exception as exc:
-            logger.warning("Failed to read watermark for bank %s: %s", resolved_bank_id, exc)
-            watermark = None
+        watermark = get_bank_watermark(redis_client, bank_id)
 
-    if watermark is None or watermark < decision_time:
+    # Condition for no_watermark is strictly watermark is None (F3)
+    if watermark is None:
         return FeatureLogRow(
-            bank_id=resolved_bank_id,
+            bank_id=bank_id,
             payment_id=payment_id,
-            decision_id=decision_id,
             decision_time=decision_time,
-            arrival_watermark=watermark,
+            decided_at=decided_at,
+            watermark_lag_ms=None,
             status="no_watermark",
-            feature_values=dict(all_none_features),
-            computed_at=computed_at,
+            feature_values=all_none_features,
+            missing_request_fields=[],
+            registry_answers=[],
         )
 
-    # 2. Incomplete request check
-    sender_account_id = getattr(request, "sender_account_id", None)
-    amount_paise = getattr(request, "amount_paise", None)
-    event_time = getattr(request, "event_time", None)
+    watermark_lag_ms = int((decision_time - watermark).total_seconds() * 1000)
 
-    if not payment_id or not sender_account_id or amount_paise is None or amount_paise <= 0 or event_time is None:
-        return FeatureLogRow(
-            bank_id=resolved_bank_id,
-            payment_id=payment_id,
-            decision_id=decision_id,
-            decision_time=decision_time,
-            arrival_watermark=watermark,
-            status="incomplete_request",
-            feature_values=dict(all_none_features),
-            computed_at=computed_at,
-        )
+    # 2. Incomplete request check (F4)
+    missing: list[str] = []
+    if request.receiver_vpa is None:
+        missing.append("receiver_vpa")
+    if request.payee_type is None or request.payee_type not in ("person", "merchant"):
+        missing.append("payee_type")
 
-    # 3. Compute account and payment features
-    try:
-        run_id = extract_run_id(payment_id)
-        cfg = settings if settings is not None else get_default_settings()
+    recording_screener: RecordingRegistryScreener | None = None
+    if screener is not None:
+        recording_screener = RecordingRegistryScreener(LiveRegistryScreener(screener), clock=clock)
 
-        account_groups = [
-            "inflow",
-            "outflow",
-            "balance_pattern",
-            "routine_life",
-            "lifecycle",
-            "control",
-            "region",
-            "network",
-            "intelligence",
-        ]
-        account_feats = compute_account_features(
+    run_id = extract_run_id(payment_id)
+    cfg = settings if settings is not None else get_default_settings()
+
+    account_groups = [
+        "inflow",
+        "outflow",
+        "balance_pattern",
+        "routine_life",
+        "lifecycle",
+        "control",
+        "region",
+        "network",
+        "intelligence",
+    ]
+
+    # Account features are computed in every case except no_watermark
+    account_feats = compute_account_features(
+        client=redis_client,
+        run_id=run_id,
+        bank_id=bank_id,
+        account_id=request.sender_account_id,
+        decision_time=decision_time,
+        arrival_cutoff=decision_time,
+        settings=cfg,
+        groups=account_groups,
+        screener=recording_screener,
+        dpip_key=dpip_key,
+    )
+
+    payment_feats: dict[str, Any]
+    if missing:
+        # Compute 3 payer-only features; dependent features set to None (F4)
+        status = "incomplete_request"
+        missing_request_fields: list[str] | None = list(missing)
+        payer_only = compute_payer_only_payment_features(
             client=redis_client,
             run_id=run_id,
-            bank_id=resolved_bank_id,
-            account_id=sender_account_id,
-            decision_time=decision_time,
-            arrival_cutoff=watermark,
+            bank_id=bank_id,
+            payer_account_id=request.sender_account_id,
+            amount_paise=request.amount_paise,
+            event_time=decision_time,
+            arrival_cutoff=decision_time,
             settings=cfg,
-            groups=account_groups,
-            screener=screener,
         )
-
-        proposal_dict = {
-            "run_id": run_id,
-            "bank_id": resolved_bank_id,
-            "payer_account_id": sender_account_id,
-            "payee_bank_id": getattr(request, "receiver_bank_id", None),
-            "payee_vpa": getattr(request, "receiver_vpa", None),
-            "amount_paise": amount_paise,
-            "channel": getattr(request, "channel", None),
-            "payee_type": getattr(request, "payee_type", None),
-            "event_time": event_time,
+        IST = timezone(timedelta(hours=5, minutes=30))
+        hour_ist = decision_time.astimezone(IST).hour
+        payee_type = None if "payee_type" in missing else request.payee_type
+        payment_feats = {
+            "amount_vs_payer_median_ratio": payer_only["amount_vs_payer_median_ratio"],
+            "amount_vs_payer_max_ratio": payer_only["amount_vs_payer_max_ratio"],
+            "customer_failed_attempts_24h": payer_only["customer_failed_attempts_24h"],
+            "hour_ist": hour_ist,
+            "payee_type": payee_type,
+            "first_payment_to_payee": None,
+            "payee_same_bank_risk": None,
+            "payee_registry_match": None,
         }
-        payment_feats = compute_payer_only_payment_features(
-            redis_client=redis_client,
-            proposal=proposal_dict,
-            decision_time=decision_time,
+    else:
+        status = "ok"
+        missing_request_fields = None
+        assert request.receiver_vpa is not None
+        assert request.payee_type in ("person", "merchant")
+        proposed = ProposedPayment(
+            run_id=run_id,
+            bank_id=bank_id,
+            payer_account_id=request.sender_account_id,
+            payee_bank_id=request.receiver_bank_id,
+            payee_vpa=request.receiver_vpa,
+            payee_type=request.payee_type,
+            amount_paise=request.amount_paise,
+            event_time=decision_time,
+        )
+        payment_feats = compute_payment_features(
+            client=redis_client,
+            proposed=proposed,
+            arrival_cutoff=decision_time,
             settings=cfg,
-            screener=screener,
-            arrival_cutoff=watermark,
+            screener=recording_screener,
+            dpip_key=dpip_key,
         )
 
-        features_dict: dict[str, Any] = {}
-        ordered_values: list[float | None] = []
-        for name in canonical_names:
-            if name in account_feats:
-                val = account_feats[name]
-            elif name in payment_feats:
-                val = payment_feats[name]
-            else:
-                val = None
-            features_dict[name] = val
+    features_dict: dict[str, Any] = {}
+    for name in canonical_names:
+        if name in account_feats:
+            features_dict[name] = account_feats[name]
+        elif name in payment_feats:
+            features_dict[name] = payment_feats[name]
+        else:
+            features_dict[name] = None
 
-            if val is None:
-                ordered_values.append(None)
-            elif isinstance(val, bool):
-                ordered_values.append(1.0 if val else 0.0)
-            elif isinstance(val, (int, float)):
-                ordered_values.append(float(val))
-            elif name == "payee_type":
-                ordered_values.append(0.0 if val == "person" else 1.0 if val == "merchant" else None)
-            elif name == "account_type":
-                ordered_values.append(0.0 if val == "savings" else 1.0 if val == "current" else None)
-            else:
-                ordered_values.append(None)
+    registry_answers = (
+        _format_registry_answers(recording_screener.answers)
+        if (recording_screener is not None and recording_screener.answers)
+        else []
+    )
 
-        return FeatureLogRow(
-            bank_id=resolved_bank_id,
-            payment_id=payment_id,
-            decision_id=decision_id,
-            decision_time=decision_time,
-            arrival_watermark=watermark,
-            status="ok",
-            feature_values=features_dict,
-            feature_values_ordered=ordered_values,
-            computed_at=computed_at,
-        )
-    except Exception as exc:
-        logger.error(
-            "Feature computation failed for payment %s on bank %s: %s",
-            payment_id,
-            resolved_bank_id,
-            exc,
-        )
-        return FeatureLogRow(
-            bank_id=resolved_bank_id,
-            payment_id=payment_id,
-            decision_id=decision_id,
-            decision_time=decision_time,
-            arrival_watermark=watermark,
-            status="error",
-            feature_values={"error": str(exc)},
-            computed_at=computed_at,
-        )
+    return FeatureLogRow(
+        bank_id=bank_id,
+        payment_id=payment_id,
+        decision_time=decision_time,
+        decided_at=decided_at,
+        watermark_lag_ms=watermark_lag_ms,
+        status=status,
+        feature_values=features_dict,
+        missing_request_fields=missing_request_fields,
+        registry_answers=registry_answers,
+    )

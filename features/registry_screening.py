@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
+from core.event_clock import Clock
 from nationalsim.bank_client import NationalsimBankClient
 
 __all__ = [
@@ -101,10 +102,9 @@ class FakeRegistryScreener:
     ) -> None:
         self._table: dict[tuple[str, str], ScreenOutcome] = dict(table) if table is not None else {}
         self._default_outcome: ScreenOutcome = (
-            default_outcome
-            if default_outcome is not None
-            else ScreenOutcome(status="no_match", first_visible_at=None)
+            default_outcome if default_outcome is not None else ScreenOutcome(status="no_match", first_visible_at=None)
         )
+        self.calls: list[dict[str, Any]] = []
 
     def set_outcome(
         self,
@@ -122,6 +122,13 @@ class FakeRegistryScreener:
         as_of: datetime | None = None,
     ) -> ScreenOutcome:
         """Look up fixed outcome from table or return default."""
+        self.calls.append(
+            {
+                "identifier_hash": identifier_hash,
+                "identifier_type": identifier_type,
+                "as_of": as_of,
+            }
+        )
         return self._table.get((identifier_hash, identifier_type), self._default_outcome)
 
 
@@ -153,8 +160,9 @@ class RecordingRegistryScreener:
     WHY: Enables audit logging, offline validation, and replay comparison.
     """
 
-    def __init__(self, screener: RegistryScreener) -> None:
+    def __init__(self, screener: RegistryScreener, clock: Clock | None = None) -> None:
         self._screener: RegistryScreener = screener
+        self._clock: Clock | None = clock
         self.answers: list[dict[str, Any]] = []
 
     def screen(
@@ -165,15 +173,14 @@ class RecordingRegistryScreener:
     ) -> ScreenOutcome:
         """Forwards screen to underlying screener and records request/response parameters."""
         outcome = self._screener.screen(identifier_hash, identifier_type, as_of=as_of)
+        received_at = self._clock.now_ist() if self._clock is not None else datetime.now(timezone.utc)
         self.answers.append(
             {
                 "identifier_hash": identifier_hash,
                 "identifier_type": identifier_type,
                 "as_of": as_of,
                 "outcome": outcome,
-                "received_at": datetime.now(timezone.utc),
+                "received_at": received_at,
             }
         )
         return outcome
-
-
