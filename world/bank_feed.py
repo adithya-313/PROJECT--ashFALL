@@ -84,7 +84,7 @@ BANK_VISIBLE_PAYMENT_FIELDS: frozenset[str] = frozenset(
     }
 )
 
-ACCOUNT_OPENED_DETAIL_FIELDS: frozenset[str] = frozenset({"home_region"})
+ACCOUNT_OPENED_DETAIL_FIELDS: frozenset[str] = frozenset({"home_region", "account_type"})
 
 
 @dataclass(frozen=True)
@@ -185,6 +185,20 @@ def resolve_bank_id(bank_index: int, config: BankFeedConfig) -> str:
         known_indexes = sorted(config.bank_ids_by_index.keys())
         raise ValueError(f"Unknown bank index {bank_index}; expected one of {known_indexes}")
     return config.bank_ids_by_index[bank_index]
+
+
+def resolve_account_type(account_id: str, config: BankFeedConfig) -> str:
+    """
+    WHAT: Derives bank-visible account product type (savings or current) from account prefix.
+    WHY: Commercial banks observe product classifications based on registered account numbering schemes.
+    """
+    for prefix, atype in config.account_type_by_account_prefix.items():
+        if account_id.startswith(prefix):
+            return atype
+    raise ValueError(
+        f"account_id '{account_id}' has unknown prefix; "
+        f"expected one of {sorted(config.account_type_by_account_prefix.keys())}"
+    )
 
 
 @dataclass(frozen=True)
@@ -624,7 +638,8 @@ def project_run(
         if op_account_id not in account_to_region:
             raise ValueError(f"Account {op_account_id!r} has no home region")
         region = account_to_region[op_account_id]
-        details = {"home_region": region}
+        acct_type = resolve_account_type(op_account_id, config)
+        details = {"home_region": region, "account_type": acct_type}
         check_bank_visible(details, ACCOUNT_OPENED_DETAIL_FIELDS)
 
         acct_ev = BankFeedAccountEvent(
@@ -656,7 +671,8 @@ def project_run(
                 days_open = output.account_opening_days[acc_id]
                 event_time = start_time - timedelta(days=days_open)
                 r = account_to_region[acc_id]
-                open_details = {"home_region": r}
+                open_type = resolve_account_type(acc_id, config)
+                open_details = {"home_region": r, "account_type": open_type}
                 check_bank_visible(open_details, ACCOUNT_OPENED_DETAIL_FIELDS)
                 open_ev = BankFeedAccountEvent(
                     bank_id=b_id,

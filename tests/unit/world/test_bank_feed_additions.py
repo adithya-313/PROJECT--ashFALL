@@ -371,6 +371,8 @@ def test_account_opened_home_region_and_config_switch() -> None:
     for ev in open_events:
         assert "home_region" in ev.details
         assert isinstance(ev.details["home_region"], int)
+        expected_type = "savings" if ev.account_id.startswith("acc_person_") else "current"
+        assert ev.details.get("account_type") == expected_type
         check_bank_visible(ev.details, ACCOUNT_OPENED_DETAIL_FIELDS)
         expected_time = start_time - timedelta(days=output.account_opening_days[ev.account_id])
         assert ev.event_time == expected_time

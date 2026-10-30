@@ -23,6 +23,14 @@ bank_feed:
       acc_person_: person
       acc_shop_: merchant
 
+  account_type_by_account_prefix:
+    label: policy
+    reason: "a bank knows each account's product type; gang business mules are shop-type accounts and show as current accounts, as at a real bank"
+    derived_from: "plan M1 lifecycle row"
+    mapping:
+      acc_person_: savings
+      acc_shop_: current
+
   channel_value:
     label: assumption
     value: upi_app

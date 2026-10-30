@@ -49,6 +49,11 @@ class AccountFeaturesSettings:
     summary_horizon_days: int = 62
     routine_life_warm_up_days: int = 62
     fingerprint_warning_count: int = 10
+    routine_cycle_days: int = 30
+    routine_rhythm_tolerance_days: int = 5
+    routine_min_history_days: int = 35
+    machine_timing_min_payments: int = 5
+    device_change_window_seconds: int = 604800
 
     @property
     def expiry_seconds(self) -> int:
@@ -127,6 +132,11 @@ def load_account_features_settings(config_path: Path | None = None) -> AccountFe
     summary_horizon_days = int(block.get("summary_horizon_days", {}).get("value", 62))
     routine_life_warm_up_days = int(block.get("routine_life_warm_up_days", {}).get("value", 62))
     fingerprint_warning_count = int(block.get("fingerprint_warning_count", {}).get("value", 10))
+    routine_cycle_days = int(block.get("routine_cycle_days", {}).get("value", 30))
+    routine_rhythm_tolerance_days = int(block.get("routine_rhythm_tolerance_days", {}).get("value", 5))
+    routine_min_history_days = int(block.get("routine_min_history_days", {}).get("value", 35))
+    machine_timing_min_payments = int(block.get("machine_timing_min_payments", {}).get("value", 5))
+    device_change_window_seconds = int(block.get("device_change_window_seconds", {}).get("value", 604800))
 
     return AccountFeaturesSettings(
         windows_seconds=windows_seconds,
@@ -140,6 +150,11 @@ def load_account_features_settings(config_path: Path | None = None) -> AccountFe
         summary_horizon_days=summary_horizon_days,
         routine_life_warm_up_days=routine_life_warm_up_days,
         fingerprint_warning_count=fingerprint_warning_count,
+        routine_cycle_days=routine_cycle_days,
+        routine_rhythm_tolerance_days=routine_rhythm_tolerance_days,
+        routine_min_history_days=routine_min_history_days,
+        machine_timing_min_payments=machine_timing_min_payments,
+        device_change_window_seconds=device_change_window_seconds,
     )
 
 
@@ -337,6 +352,60 @@ def fingerprints_key(run_id: str, bank_id: str, account_id: str) -> str:
     Lifetime key: lives as long as the run's namespace; removed by namespace cleanup, never by a short TTL.
     """
     return _build_key(run_id, bank_id, account_id, "fingerprints")
+
+
+def home_region_key(run_id: str, bank_id: str, account_id: str) -> str:
+    """
+    Redis key for the sorted set (ZSET) tracking the customer home region from account_opened event.
+    Score: Unix epoch seconds of earliest availability max(event_time, arrival_time) (ZADD LT);
+    Member: region identifier string.
+    Lifetime key: lives as long as the run's namespace; removed by namespace cleanup, never by a short TTL.
+    """
+    return _build_key(run_id, bank_id, account_id, "home_region")
+
+
+def account_type_key(run_id: str, bank_id: str, account_id: str) -> str:
+    """
+    Redis key for the sorted set (ZSET) tracking customer account type (savings, current) from account_opened event.
+    Score: Unix epoch seconds of earliest availability max(event_time, arrival_time) (ZADD LT);
+    Member: account type string (e.g. 'savings', 'current').
+    Lifetime key: lives as long as the run's namespace; removed by namespace cleanup, never by a short TTL.
+    """
+    return _build_key(run_id, bank_id, account_id, "account_type")
+
+
+def device_accounts_key(run_id: str, bank_id: str, fingerprint: str) -> str:
+    """
+    Redis key for the sorted set (ZSET) indexing customer accounts observed on a specific device fingerprint.
+    Score: Unix epoch seconds of earliest availability max(event_time, arrival_time) (ZADD LT);
+    Member: account_id string.
+    Lifetime key: lives as long as the run's namespace; removed by namespace cleanup, never by a short TTL.
+    """
+    _validate_key_component("run_id", run_id)
+    _validate_key_component("bank_id", bank_id)
+    prefix = get_default_settings().key_prefix
+    _validate_key_component("key_prefix", prefix)
+    fp_token = hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()[:16]
+    return f"{prefix}:{run_id}:{bank_id}:dev_accs_{fp_token}"
+
+
+def counterparty_payee_type_key(run_id: str, bank_id: str, account_id: str, direction: str) -> str:
+    """
+    Redis key for the hash (HASH) tracking verified payee types for counterparties.
+    Field: opaque counterparty identifier ('bank:vpa'); Value: payee_type string ('person', 'merchant').
+    Lifetime key: lives as long as the run's namespace; removed by namespace cleanup, never by a short TTL.
+    """
+    _validate_key_component("direction", direction)
+    return _build_key(run_id, bank_id, account_id, f"cp_payee_type_{direction}")
+
+
+def device_changes_key(run_id: str, bank_id: str, account_id: str) -> str:
+    """
+    Redis key for the sorted set (ZSET) tracking device change event timestamps on an account.
+    Score: Unix epoch seconds of availability max(event_time, arrival_time); Member: event_id string.
+    Lifetime key: lives as long as the run's namespace; removed by namespace cleanup, never by a short TTL.
+    """
+    return _build_key(run_id, bank_id, account_id, "device_changes")
 
 
 def namespace_pattern(run_id: str, bank_id: str) -> str:

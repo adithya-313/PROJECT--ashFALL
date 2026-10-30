@@ -96,3 +96,33 @@ account_features:
     reason: "Threshold in paise below which an account balance is considered near zero (₹100)."
     derived_from: "plan M1 table; placeholder until the Level 17 rules tuning"
 
+  routine_cycle_days:
+    label: policy
+    value: 30
+    reason: "monthly rhythm for salary and recurring payments"
+    derived_from: "Level 15 plan, M1 routine life group"
+
+  routine_rhythm_tolerance_days:
+    label: policy
+    value: 5
+    reason: "tolerance in days around monthly rhythm cycle"
+    derived_from: "Level 15 plan, M1 routine life group"
+
+  routine_min_history_days:
+    label: policy
+    value: 35
+    reason: "minimum history duration in days required before routine-life features mean anything"
+    derived_from: "architect decision on short history"
+
+  machine_timing_min_payments:
+    label: assumption
+    value: 5
+    reason: "minimum number of payments required to evaluate machine timing regularity"
+    derived_from: "Level 15 plan, M1 control group"
+
+  device_change_window_seconds:
+    label: policy
+    value: 604800
+    reason: "window duration in seconds for recent device binding changes (7 days)"
+    derived_from: "Level 15 plan, M1 control group"
+
