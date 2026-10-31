@@ -300,20 +300,14 @@ def payment_side_from_transaction_row(row: Mapping[str, Any]) -> PaymentSideReco
         InvalidAccountEventError: If any field fails schema-2 validation.
     """
     raw_created_at = row["created_at"]
-    if hasattr(raw_created_at, "isoformat"):
-        recorded_at_iso = raw_created_at.isoformat()
-    elif isinstance(raw_created_at, str):
-        recorded_at_iso = raw_created_at
-    else:
-        raise InvalidAccountEventError(f"Invalid created_at: {raw_created_at!r}")
+    if not isinstance(raw_created_at, datetime):
+        raise InvalidAccountEventError(f"Field 'created_at' must be a datetime, got {type(raw_created_at)}")
+    recorded_at_iso = raw_created_at.isoformat()
 
     raw_event_time = row["event_time"]
-    if hasattr(raw_event_time, "isoformat"):
-        event_time_iso = raw_event_time.isoformat()
-    elif isinstance(raw_event_time, str):
-        event_time_iso = raw_event_time
-    else:
-        raise InvalidAccountEventError(f"Invalid event_time: {raw_event_time!r}")
+    if not isinstance(raw_event_time, datetime):
+        raise InvalidAccountEventError(f"Field 'event_time' must be a datetime, got {type(raw_event_time)}")
+    event_time_iso = raw_event_time.isoformat()
 
     envelope: dict[str, Any] = {
         "schema_version": UPI_SCHEMA_VERSION,
