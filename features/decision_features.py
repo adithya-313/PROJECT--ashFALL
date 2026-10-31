@@ -35,8 +35,15 @@ from features.m1_payment import (
     compute_payer_only_payment_features,
     compute_payment_features,
 )
+from features.registry_prefetch import (
+    PrefetchedScreener,
+    list_registry_questions,
+    load_registry_timeout_seconds,
+    run_registry_prefetch,
+)
 from features.registry_screening import (
     LiveRegistryScreener,
+    NationalsimRegistryScreener,
     RecordingRegistryScreener,
     RegistryScreener,
     ScreenOutcome,
@@ -75,6 +82,7 @@ def _format_registry_answers(answers: list[dict[str, Any]]) -> list[dict[str, An
                 "first_visible_at": (
                     outcome.first_visible_at.isoformat() if outcome.first_visible_at is not None else None
                 ),
+                "timed_out": outcome.timed_out,
             }
         else:
             outcome_dict = str(outcome)
@@ -278,6 +286,7 @@ def compute_decision_row(
     settings: AccountFeaturesSettings | None = None,
     screener: RegistryScreener | None = None,
     dpip_key: str | None = None,
+    arrival_cutoff: datetime | None = None,
 ) -> FeatureLogRow:
     """
     WHAT: Computes all canonical M1 features as-of request.event_time for a DecisionRequest.
@@ -293,6 +302,8 @@ def compute_decision_row(
         settings: Optional AccountFeaturesSettings.
         screener: Optional national RegistryScreener.
         dpip_key: Optional explicit DPIP HMAC key.
+        arrival_cutoff: Optional bank watermark the caller already read (the registry questions were listed at
+            this cutoff); when None the watermark is read here.
 
     Returns:
         FeatureLogRow ready for partitioned persistence in feature_log table.
@@ -310,8 +321,8 @@ def compute_decision_row(
     all_none_features: dict[str, Any] = {name: None for name in canonical_names}
 
     # 1. Watermark check: read bank watermark across all sources
-    watermark: datetime | None = None
-    if redis_client is not None:
+    watermark: datetime | None = arrival_cutoff
+    if watermark is None and redis_client is not None:
         watermark = get_bank_watermark(redis_client, bank_id)
 
     # Condition for no_watermark is strictly watermark is None (F3)
@@ -341,7 +352,26 @@ def compute_decision_row(
 
     recording_screener: RecordingRegistryScreener | None = None
     if screener is not None:
-        recording_screener = RecordingRegistryScreener(LiveRegistryScreener(screener), clock=clock)
+        live_screener: RegistryScreener = LiveRegistryScreener(screener)
+        if isinstance(screener, NationalsimRegistryScreener):
+            # The real registry: ask every question of this decision at once (waiting for the slowest, with a
+            # per-call timeout), then let the unchanged feature code read the answers.
+            questions = list_registry_questions(
+                redis_client,
+                run_id,
+                bank_id,
+                account_id,
+                request.receiver_bank_id,
+                request.receiver_vpa,
+                decision_time,
+                arrival_cutoff,
+                dpip_key,
+                settings,
+            )
+            live_screener = PrefetchedScreener(
+                run_registry_prefetch(screener.client, questions, load_registry_timeout_seconds())
+            )
+        recording_screener = RecordingRegistryScreener(live_screener, clock=clock)
 
     comp = compute_feature_values(
         redis_client=redis_client,

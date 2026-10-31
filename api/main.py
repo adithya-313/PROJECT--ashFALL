@@ -89,6 +89,12 @@ async def lifespan(app: fastapi.FastAPI):
             app.state.account_settings = get_default_settings()
         if not hasattr(app.state, "registry_screener"):
             app.state.registry_screener = None
+        # Registry screening needs a participant key. With one, ONE shared connection pool serves every decision.
+        if config.dpip_participant_key is not None and getattr(app.state, "registry_gateway", None) is None:
+            from features.registry_prefetch import create_registry_gateway
+
+            app.state.registry_gateway = create_registry_gateway()
+            logger.info("Registry connection pool initialized", base_url=app.state.registry_gateway.base_url)
 
     # Start the GPU metrics background task. asyncio.create_task schedules it to run
     # concurrently alongside request handling. It exits on its own if nvidia-smi is absent.
@@ -97,6 +103,9 @@ async def lifespan(app: fastapi.FastAPI):
     yield
 
     # Cleanly close resources on shutdown
+    registry_gateway = getattr(app.state, "registry_gateway", None)
+    if registry_gateway is not None:
+        await registry_gateway.aclose()
     if hasattr(app.state, "redis_client") and app.state.redis_client is not None:
         try:
             app.state.redis_client.close()

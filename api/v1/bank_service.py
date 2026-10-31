@@ -48,6 +48,12 @@ from features.feature_log import (
     canonical_feature_names,
     insert_feature_log_row,
 )
+from features.registry_prefetch import (
+    PrefetchedScreener,
+    RegistryGateway,
+    prefetch_registry_answers,
+    prepare_registry_questions,
+)
 from features.registry_screening import RegistryScreener
 
 logger = logging.getLogger(__name__)
@@ -144,6 +150,7 @@ async def record_decision(
     screener: RegistryScreener | None = None,
     feature_row: FeatureLogRow | None = None,
     dpip_key: str | None = None,
+    registry: RegistryGateway | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """
     WHAT: Executes the business logic for recording a bank payment decision evaluation request.
@@ -164,6 +171,8 @@ async def record_decision(
         screener: Optional RegistryScreener instance.
         feature_row: Pre-computed FeatureLogRow to insert (if computed prior to transaction).
         dpip_key: Optional explicit DPIP HMAC key for registry screening.
+        registry: Optional RegistryGateway. With it and a DPIP key, the registry questions are asked on this
+            event loop through the shared connection pool before the features are computed in a worker thread.
 
     Returns:
         Tuple of status code (200) and response body dictionary.
@@ -194,6 +203,22 @@ async def record_decision(
         if row is None:
             clk = decision_clock if decision_clock is not None else WallClock()
             try:
+                arrival_cutoff = None
+                row_screener = screener
+                if registry is not None and dpip_key and redis_client is not None:
+                    # (a) the blocking Redis work in a worker thread, (b) the registry questions on this event
+                    # loop through the shared pool, (c) the features in a worker thread, from the answers.
+                    prepared = await asyncio.to_thread(
+                        prepare_registry_questions, redis_client, bank_id, request, dpip_key, settings
+                    )
+                    if prepared is not None:
+                        arrival_cutoff, questions = prepared
+                        answers = await prefetch_registry_answers(
+                            registry.client_for(bank_id, extract_run_id(request.payment_id)),
+                            questions,
+                            registry.registry_timeout_seconds,
+                        )
+                        row_screener = PrefetchedScreener(answers)
                 row = await asyncio.to_thread(
                     compute_decision_row,
                     redis_client=redis_client,
@@ -201,8 +226,9 @@ async def record_decision(
                     request=request,
                     clock=clk,
                     settings=settings,
-                    screener=screener,
+                    screener=row_screener,
                     dpip_key=dpip_key,
+                    arrival_cutoff=arrival_cutoff,
                 )
             except Exception as exc:
                 logger.warning(
