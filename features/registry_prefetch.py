@@ -14,6 +14,7 @@ There is deliberately no answer cache here: caching registry answers belongs to 
 """
 
 import asyncio
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -43,6 +44,8 @@ __all__ = [
     "create_registry_gateway",
     "prepare_registry_questions",
     "REGISTRY_TIMEOUTS_TOTAL",
+    "clock_resolution_seconds",
+    "compute_registry_timeout_ms",
     "PrefetchedScreener",
     "RegistryQuestion",
     "list_registry_questions",
@@ -150,17 +153,60 @@ def list_registry_questions(
     return list(dict.fromkeys(questions))
 
 
+def clock_resolution_seconds() -> float:
+    """Resolution of the monotonic clock asyncio uses on this machine (about 0.0156 s on Windows, 1e-9 s on Linux)."""
+    return time.get_clock_info("monotonic").resolution
+
+
 async def _answer_one(client: AsyncScreenClient, question: RegistryQuestion, timeout_seconds: float) -> ScreenOutcome:
-    """Ask one question; a call that outlives the timeout is 'unknown' with timed_out set and counted."""
+    """
+    Ask one question; a call that takes longer than the timeout is 'unknown' with timed_out set and counted.
+
+    On a coarse clock asyncio can fire a timer up to TWO clock ticks early: the clock itself only moves in ticks, and
+    the loop also treats any timer due within one tick as ready (`end_time = self.time() + self._clock_resolution` in
+    BaseEventLoop._run_once). So the wait is allowed `timeout + two ticks`, and the REAL time taken is then measured
+    with perf_counter: a call is never cut off before its real timeout, and an answer that arrives after the timeout
+    (but inside the slack) is still treated as timed out.
+    """
     identifier_type, identifier_hash = question
+    start = time.perf_counter()
     try:
         result = await asyncio.wait_for(
-            client.screen(identifier_hash, identifier_type, as_of=None), timeout=timeout_seconds
+            client.screen(identifier_hash, identifier_type, as_of=None),
+            timeout=timeout_seconds + 2 * clock_resolution_seconds(),
         )
     except asyncio.TimeoutError:
+        result = None
+    elapsed = time.perf_counter() - start
+    if result is None or elapsed > timeout_seconds:
         REGISTRY_TIMEOUTS_TOTAL.labels(identifier_type=identifier_type).inc()
         return ScreenOutcome(status="unknown", first_visible_at=None, timed_out=True)
     return outcome_from_screen_result(result)
+
+
+def compute_registry_timeout_ms(
+    max_ms: float,
+    feature_computation_max_ms: float,
+    other_overhead_p99_ms: float,
+    margin_ms: float,
+    clock_resolution_ms: float,
+    minimum_ms: float,
+) -> float:
+    """
+    WHAT: The registry timeout from the latency budget (architect ruling A2):
+    max_ms - feature_computation_max_ms - other_overhead_p99_ms - margin_ms - clock_resolution_ms.
+
+    WHY: Whatever the budget does not give to our own feature code, the request handling and a safety margin is
+    what the registry may use. A result below `minimum_ms` is an error (ValueError), never a quietly used value.
+    """
+    timeout_ms = max_ms - feature_computation_max_ms - other_overhead_p99_ms - margin_ms - clock_resolution_ms
+    if timeout_ms < minimum_ms:
+        raise ValueError(
+            f"The computed registry timeout {timeout_ms:.3f} ms is below the {minimum_ms:.1f} ms minimum "
+            f"(max {max_ms}, features {feature_computation_max_ms}, overhead p99 {other_overhead_p99_ms}, "
+            f"margin {margin_ms}, clock resolution {clock_resolution_ms}); stop and report, do not set it."
+        )
+    return timeout_ms
 
 
 async def prefetch_registry_answers(

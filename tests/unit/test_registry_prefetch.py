@@ -12,6 +12,7 @@ decision must wait for the slowest call, not the sum of all of them.
 """
 
 import asyncio
+import math
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -23,11 +24,13 @@ from prometheus_client import REGISTRY
 
 import nationalsim.app as nationalsim_app
 from core.event_clock import IST, ManualClock
+from features import registry_prefetch
 from features.account_keys import load_account_features_settings
 from features.account_records import PaymentSideRecord
 from features.account_updater import apply_payment_side
 from features.registry_prefetch import (
     PrefetchedScreener,
+    compute_registry_timeout_ms,
     list_registry_questions,
     load_registry_timeout_seconds,
     prefetch_registry_answers,
@@ -281,8 +284,13 @@ def test_screen_delay_rejects_an_invalid_range() -> None:
 def test_screen_delay_settings_come_from_configuration(tmp_path: Path) -> None:
     """The repository config gives the range and seed; a missing or bad block is an error, not a default."""
     settings = load_screen_delay_settings()
-    assert (settings.min_ms, settings.max_ms) == (10.0, 30.0)
-    assert settings.build().next_seconds() == ScreenDelay(10, 30, settings.seed).next_seconds()
+    assert (settings.min_ms, settings.max_ms) == (2.0, 15.0)
+    assert settings.build().next_seconds() == ScreenDelay(2, 15, settings.seed).next_seconds()
+    slow = load_screen_delay_settings(profile="registry-slow")
+    assert (slow.min_ms, slow.max_ms) == (15.0, 60.0)
+    assert slow.seed != settings.seed
+    with pytest.raises(ValueError, match="Unknown screen delay profile"):
+        load_screen_delay_settings(profile="fast")
 
     missing = tmp_path / "missing.yaml"
     missing.write_text("nationalsim:\n  listing_delay_minutes: 15\n", encoding="utf-8")
@@ -294,3 +302,86 @@ def test_screen_delay_settings_come_from_configuration(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="max is below min"):
         load_screen_delay_settings(backwards)
+
+
+# --- honest timeout: never cut a call before its real timeout, on any clock ---
+
+COARSE_TICK = 0.015625  # the Windows monotonic clock tick
+
+
+class _CoarseClockLoop(asyncio.SelectorEventLoop):
+    """An event loop whose clock only moves in 15.6 ms steps, so its timers can fire up to one tick early."""
+
+    def time(self) -> float:
+        return math.floor(super().time() / COARSE_TICK) * COARSE_TICK
+
+
+class _RealDurationClient:
+    """screen() that really takes `seconds` (a worker thread sleeps), whatever the event loop's clock says."""
+
+    def __init__(self, seconds: float) -> None:
+        self.seconds = seconds
+
+    async def screen(
+        self, identifier_hash: str, identifier_type: str = "account", as_of: datetime | None = None
+    ) -> ScreenResult:
+        await asyncio.get_running_loop().run_in_executor(None, time.sleep, self.seconds)
+        return _result("no_match")
+
+
+def _timed_out_count_on_coarse_clock(repetitions: int, timeout_seconds: float, call_seconds: float) -> int:
+    timed_out = 0
+    with asyncio.Runner(loop_factory=_CoarseClockLoop) as runner:
+        for _ in range(repetitions):
+            answers = runner.run(
+                prefetch_registry_answers(_RealDurationClient(call_seconds), [QUESTIONS[0]], timeout_seconds)
+            )
+            timed_out += sum(1 for outcome in answers.values() if outcome.timed_out)
+    return timed_out
+
+
+def test_a_call_is_never_cut_before_its_real_timeout_on_a_coarse_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On a clock that ticks every 15.6 ms, an 8 ms call with a 20 ms timeout is never marked timed out."""
+    monkeypatch.setattr(registry_prefetch, "clock_resolution_seconds", lambda: COARSE_TICK)
+    assert _timed_out_count_on_coarse_clock(200, 0.020, 0.008) == 0
+
+
+def test_without_the_resolution_slack_the_same_coarse_clock_cuts_calls_early(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Control: with no slack, the same 8 ms calls are wrongly cut, so the test above really exercises the fix."""
+    monkeypatch.setattr(registry_prefetch, "clock_resolution_seconds", lambda: 0.0)
+    assert _timed_out_count_on_coarse_clock(200, 0.020, 0.008) > 0
+
+
+def test_an_answer_that_arrives_after_the_timeout_is_unknown_and_counted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Inside the slack the answer is returned, but 30 ms is over the 20 ms timeout, so it is 'unknown'."""
+    monkeypatch.setattr(registry_prefetch, "clock_resolution_seconds", lambda: 0.050)
+    before = _timeouts("account")
+    answers = asyncio.run(prefetch_registry_answers(_RealDurationClient(0.030), [QUESTIONS[0]], 0.020))
+    assert answers[QUESTIONS[0]] == ScreenOutcome(status="unknown", first_visible_at=None, timed_out=True)
+    assert _timeouts("account") - before == 1
+
+
+def test_a_real_5_ms_call_is_never_timed_out_with_the_production_timeout() -> None:
+    """Native clock, production timeout from config: 200 calls that really take 5 ms are all answered."""
+    timeout_seconds = load_registry_timeout_seconds()
+    timed_out = 0
+    for _ in range(200):
+        answers = asyncio.run(prefetch_registry_answers(_RealDurationClient(0.005), [QUESTIONS[0]], timeout_seconds))
+        timed_out += sum(1 for outcome in answers.values() if outcome.timed_out)
+    assert timed_out == 0
+
+
+# --- the timeout formula ---
+
+
+def test_registry_timeout_formula_from_measured_inputs() -> None:
+    """100 - 50 - 8.4 (overhead p99) - 10 (margin) - 0.000001 (clock) = 31.599999 ms."""
+    value = compute_registry_timeout_ms(100.0, 50.0, 8.4, 10.0, 0.000001, minimum_ms=5.0)
+    assert value == pytest.approx(31.599999)
+
+
+def test_registry_timeout_below_the_minimum_is_an_error_not_a_value() -> None:
+    """The stop rule: a result under 5 ms raises; exactly 5 ms is allowed."""
+    assert compute_registry_timeout_ms(100.0, 50.0, 25.0, 10.0, 10.0, minimum_ms=5.0) == pytest.approx(5.0)
+    with pytest.raises(ValueError, match="below the 5.0 ms minimum"):
+        compute_registry_timeout_ms(100.0, 50.0, 25.0, 10.0, 15.6, minimum_ms=5.0)

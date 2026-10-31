@@ -82,12 +82,20 @@ nationalsim:
     reason: "Number of idle registry connections the pool keeps open between decisions, which saves a TCP connection set-up on each call."
 
   screen_added_delay_ms:
-    min: 10
-    max: 30
+    min: 2
+    max: 15
     seed: 20261101
     label: assumption
-    derived_from: "no public latency figure for the national registry; assumed intra-India API round trip"
-    reason: "Optional delay added to each /screen answer (drawn per request from a seeded stream, so runs repeat) to benchmark decisions against a registry that takes time to answer; it is off unless a ScreenDelay is passed to create_app or NATIONALSIM_SCREEN_DELAY=on. The 10 to 30 ms range is pending architect decision (under review)."
+    derived_from: "assumption; no published DPIP screening latency found; default chosen so answers normally arrive within the timeout; stress range chosen to straddle it"
+    reason: "Default delay added to each /screen answer (drawn per request from a seeded stream, so runs repeat) to benchmark decisions against a registry that takes a little time to answer; it is off unless a ScreenDelay is passed to create_app or NATIONALSIM_SCREEN_DELAY is set to on (this default range)."
+
+  screen_added_delay_ms_registry_slow:
+    min: 15
+    max: 60
+    seed: 20261102
+    label: assumption
+    derived_from: "assumption; no published DPIP screening latency found; default chosen so answers normally arrive within the timeout; stress range chosen to straddle it"
+    reason: "Stress delay for the registry-slow benchmark mode: a registry that often answers later than the decision timeout, to show that those answers become unknown. Enabled by NATIONALSIM_SCREEN_DELAY=registry-slow."
 
   client_timeout_seconds:
     value: 2.0

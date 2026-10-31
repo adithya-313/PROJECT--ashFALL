@@ -358,25 +358,33 @@ class ScreenDelaySettings:
         return ScreenDelay(self.min_ms, self.max_ms, self.seed)
 
 
-def load_screen_delay_settings(config_path: Path | str = "config/nationalsim.yaml") -> ScreenDelaySettings:
-    """Read screen_added_delay_ms (min, max, seed) from configuration; a missing or invalid value is an error."""
+SCREEN_DELAY_KEYS = {"default": "screen_added_delay_ms", "registry-slow": "screen_added_delay_ms_registry_slow"}
+
+
+def load_screen_delay_settings(
+    config_path: Path | str = "config/nationalsim.yaml", profile: str = "default"
+) -> ScreenDelaySettings:
+    """Read the delay range and seed of a profile ('default' or 'registry-slow'); a bad value is an error."""
+    if profile not in SCREEN_DELAY_KEYS:
+        raise ValueError(f"Unknown screen delay profile {profile!r}; expected one of {sorted(SCREEN_DELAY_KEYS)}.")
+    key_name = SCREEN_DELAY_KEYS[profile]
     path = Path(config_path)
     file_name = str(path)
     if not path.is_file():
         raise ValueError(f"Missing configuration file '{file_name}'.")
     parsed = load_yaml(path)
     section = parsed.get("nationalsim") if isinstance(parsed, dict) else None
-    if not isinstance(section, dict) or not isinstance(section.get("screen_added_delay_ms"), dict):
-        raise ValueError(f"Missing 'nationalsim.screen_added_delay_ms' mapping in {file_name}.")
-    block = section["screen_added_delay_ms"]
+    if not isinstance(section, dict) or not isinstance(section.get(key_name), dict):
+        raise ValueError(f"Missing 'nationalsim.{key_name}' mapping in {file_name}.")
+    block = section[key_name]
     values: dict[str, Any] = {}
     for key in ("min", "max", "seed"):
         value = block.get(key)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
-            raise ValueError(f"Invalid 'screen_added_delay_ms.{key}' in {file_name}: must be a non-negative number.")
+            raise ValueError(f"Invalid '{key_name}.{key}' in {file_name}: must be a non-negative number.")
         values[key] = value
     if values["max"] < values["min"]:
-        raise ValueError(f"Invalid 'screen_added_delay_ms' in {file_name}: max is below min.")
+        raise ValueError(f"Invalid '{key_name}' in {file_name}: max is below min.")
     return ScreenDelaySettings(min_ms=float(values["min"]), max_ms=float(values["max"]), seed=int(values["seed"]))
 
 
@@ -662,11 +670,19 @@ def create_app_prod() -> FastAPI:
             "The national simulation service requires this secret key to initialize."
         )
     listing_delay, bank_settings = load_nationalsim_config()
-    # The added /screen delay is off unless NATIONALSIM_SCREEN_DELAY is explicitly set to "on".
+    # The added /screen delay is off unless NATIONALSIM_SCREEN_DELAY is explicitly set: "on" or "default" for the
+    # default range, "registry-slow" for the stress range.
     delay_flag = os.environ.get("NATIONALSIM_SCREEN_DELAY", "off").strip().lower()
-    if delay_flag not in ("on", "off"):
-        raise ValueError(f"Environment variable 'NATIONALSIM_SCREEN_DELAY' must be 'on' or 'off', got {delay_flag!r}.")
-    screen_delay = load_screen_delay_settings().build() if delay_flag == "on" else None
+    if delay_flag not in ("off", "on", "default", "registry-slow"):
+        raise ValueError(
+            "Environment variable 'NATIONALSIM_SCREEN_DELAY' must be 'off', 'on', 'default' or 'registry-slow', "
+            f"got {delay_flag!r}."
+        )
+    screen_delay = (
+        None
+        if delay_flag == "off"
+        else load_screen_delay_settings(profile="registry-slow" if delay_flag == "registry-slow" else "default").build()
+    )
     prod_settings: dict[str, Any] = {
         "listing_delay_minutes": int(listing_delay.total_seconds() // 60),
         "dispute_resolution_minutes": 60,

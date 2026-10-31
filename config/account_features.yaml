@@ -157,6 +157,18 @@ account_snapshots:
 # =====================================================================
 
 decision_registry:
+  timeout_margin_ms:
+    value: 10
+    label: policy
+    reason: Safety margin subtracted when the registry timeout is derived from the latency budget; it is never reduced to make the formula fit.
+    derived_from: "architect ruling A2 and W3, Level 15 latency round"
+
+  timeout_minimum_ms:
+    value: 5
+    label: policy
+    reason: A derived registry timeout below this is an error (stop and report), because a timeout that short would mark almost every real answer as timed out.
+    derived_from: "architect ruling A2, Level 15 latency round"
+
   timeout_ms:
     value: 20
     label: policy
