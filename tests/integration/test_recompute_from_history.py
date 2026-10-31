@@ -43,7 +43,10 @@ from features.account_stream import (
     apply_withdrawals_since,
     run_payment_updater,
 )
+from features.feature_log import canonical_feature_names, read_feature_log_row
 from features.feature_replay import recompute_logged_row
+from features.ingest_watermark import get_bank_watermark, record_poller_watermark
+from features.m1_features import compute_account_features
 from features.registry_screening import FakeRegistryScreener, ScreenOutcome
 from showcase.kafka_tools import create_topic, delete_topic, make_producer, make_topic_name
 from tests.integration.conftest import get_test_database_url
@@ -393,6 +396,10 @@ async def test_recompute_exact_match(isolated_schema: tuple[Any, str], monkeypat
     """
     connection, schema_name = isolated_schema
     async with setup_baseline_history(connection, schema_name, monkeypatch) as base:
+        log_row = await read_feature_log_row(connection, base.bank_id, base.decision_payment_id)
+        assert log_row is not None
+        assert log_row.status == "ok"
+
         scratch_redis = fakeredis.FakeRedis()
         result = await recompute_logged_row(
             pg_connection=connection,
@@ -408,6 +415,10 @@ async def test_recompute_exact_match(isolated_schema: tuple[Any, str], monkeypat
             assert type(l_val) is type(r_val), f"Type mismatch: {type(l_val)} vs {type(r_val)}"
             assert l_val == r_val
 
+        not_none_count = sum(1 for v in result.logged if v is not None)
+        print(f"T1 non-None canonical features count: {not_none_count}")
+        assert not_none_count >= 10, f"Expected >= 10 non-None features, got {not_none_count}"
+
 
 async def test_recompute_late_arriving_event_excluded(
     isolated_schema: tuple[Any, str], monkeypatch: pytest.MonkeyPatch
@@ -418,9 +429,15 @@ async def test_recompute_late_arriving_event_excluded(
     """
     connection, schema_name = isolated_schema
     async with setup_baseline_history(connection, schema_name, monkeypatch) as base:
-        # Late-arriving payment side: event_time is before decision_time, but arrival is way in the future
+        # (a) Read feature_log row BEFORE the late event
+        row_before = await read_feature_log_row(connection, base.bank_id, base.decision_payment_id)
+        assert row_before is not None
+        assert row_before.arrival_cutoff is not None
+
+        # Late-arriving payment side: event_time < decision_time,
+        # but arrival is strictly after the decision arrival_cutoff
         t_late_event = base.decision_time - timedelta(minutes=10)
-        t_late_arrival = base.decision_time + timedelta(days=5)
+        t_late_arrival = row_before.arrival_cutoff + timedelta(hours=1)
         late_pid = f"{base.run_id}-p-late"
 
         late_side = UpiPaymentSide(
@@ -450,6 +467,36 @@ async def test_recompute_late_arriving_event_excluded(
             uuid.UUID(stored_late.transaction_id),
         )
 
+        # Subsequent advancer payment side to advance watermark past late arrival
+        t_adv = t_late_arrival + timedelta(hours=1)
+        adv_pid = f"{base.run_id}-p-adv"
+        adv_side = UpiPaymentSide(
+            payment_id=adv_pid,
+            bank_id=base.bank_id,
+            side="debit",
+            account_id="acc_unrelated_98",
+            counterparty_bank_id="bank_1",
+            sender_bank_id=base.bank_id,
+            receiver_bank_id="bank_1",
+            amount_paise=10000,
+            event_time=t_adv,
+            status="success",
+            counterparty_vpa="other@bank1",
+            payee_type="person",
+            channel="upi_app",
+        )
+        stored_adv = await record_upi_side(connection, adv_side)
+        await connection.execute(
+            "UPDATE transactions SET created_at = $1 WHERE transaction_id = $2",
+            t_adv,
+            uuid.UUID(stored_adv.transaction_id),
+        )
+        await connection.execute(
+            "UPDATE outbox SET payload = jsonb_set(payload, '{recorded_at}', $1::jsonb) WHERE transaction_id = $2",
+            f'"{t_adv.isoformat()}"',
+            uuid.UUID(stored_adv.transaction_id),
+        )
+
         # Relay to Kafka and consume into live Redis
         while True:
             batch_res = await relay_one_batch(connection, base.producer, batch_size=10, topic=base.topic)
@@ -461,6 +508,31 @@ async def test_recompute_late_arriving_event_excluded(
             idle_timeout_seconds=2.0,
             topic=base.topic,
         )
+        for poller_src in ("events", "withdrawals", "feedback", "complaints"):
+            record_poller_watermark(base.live_redis, base.bank_id, poller_src, t_adv)
+
+        # (a) Read feature_log row AFTER the late event and assert identical
+        row_after = await read_feature_log_row(connection, base.bank_id, base.decision_payment_id)
+        assert row_after is not None
+        assert row_before.feature_values == row_after.feature_values
+        assert row_before.arrival_cutoff == row_after.arrival_cutoff
+        assert row_before.decided_at == row_after.decided_at
+        assert row_before == row_after
+
+        # (b) Prove late event reached live Redis
+        new_wm = get_bank_watermark(base.live_redis, base.bank_id)
+        assert new_wm is not None
+        live_feats = compute_account_features(
+            client=base.live_redis,
+            run_id=base.run_id,
+            bank_id=base.bank_id,
+            account_id=base.payer_acc,
+            decision_time=base.decision_time,
+            arrival_cutoff=new_wm,
+        )
+        logged_map = dict(zip(canonical_feature_names(), row_before.feature_values))
+        differing = [k for k, v in live_feats.items() if k in logged_map and logged_map[k] != v]
+        assert len(differing) > 0, "Expected live features with new watermark to differ after late event"
 
         # Recompute into scratch Redis: late event must be excluded by arrival cutoff
         scratch_redis = fakeredis.FakeRedis()

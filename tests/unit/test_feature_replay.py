@@ -24,6 +24,7 @@ from api.v1.upi_outbox import (
 )
 from features.account_keys import side_times_key
 from features.account_records import (
+    InvalidAccountEventError,
     parse_upi_event,
     parse_upi_payload,
     payment_side_from_transaction_row,
@@ -147,6 +148,34 @@ def test_payment_side_from_transaction_row_missing_created_at_raises_key_error()
     with pytest.raises(KeyError) as exc_info:
         payment_side_from_transaction_row(row)
     assert "created_at" in str(exc_info.value)
+
+
+def test_payment_side_from_transaction_row_non_datetime_raises_invalid_account_event_error() -> None:
+    """
+    T3: Verifies that passing a string timestamp instead of a datetime object
+    raises InvalidAccountEventError directly without fallback.
+    """
+    row = {
+        "payment_id": "0123456789abcdef-pay-001",
+        "bank_id": "bank_0",
+        "account_id": "acc_001",
+        "side": "debit",
+        "counterparty_bank_id": "bank_1",
+        "counterparty_vpa": "acc_002",
+        "amount_paise": 10000,
+        "status": "success",
+        "failure_domain": None,
+        "payee_type": "person",
+        "channel": "app",
+        "sender_device_fingerprint": None,
+        "sender_os_generation": None,
+        "balance_after_paise": None,
+        "event_time": "2026-10-28T10:00:00+00:00",  # String instead of datetime
+        "created_at": datetime(2026, 10, 28, 10, 0, 5, tzinfo=timezone.utc),
+    }
+    with pytest.raises(InvalidAccountEventError) as exc_info:
+        payment_side_from_transaction_row(row)
+    assert "event_time" in str(exc_info.value)
 
 
 class FakeReplayConnection:
