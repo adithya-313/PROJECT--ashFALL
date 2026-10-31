@@ -247,9 +247,10 @@ async def replay_history_into_redis(
     for r in txn_rows:
         pid = str(r["payment_id"])
         try:
-            if extract_run_id(pid) != run_id:
-                continue
-        except ValueError:
+            row_run = extract_run_id(pid)
+        except ValueError as exc:
+            raise ValueError(f"transactions row {pid!r} has unparseable id: {exc}") from exc
+        if row_run != run_id:
             continue
         arr = _ensure_utc(r["created_at"])
         items.append((arr, 0, pid, "transaction", r))
@@ -259,9 +260,10 @@ async def replay_history_into_redis(
     for r in event_rows:
         eid = str(r["event_id"])
         try:
-            if extract_run_id(eid) != run_id:
-                continue
-        except ValueError:
+            row_run = extract_run_id(eid)
+        except ValueError as exc:
+            raise ValueError(f"bank_account_events row {eid!r} has unparseable id: {exc}") from exc
+        if row_run != run_id:
             continue
         arr = _ensure_utc(r["created_at"])
         items.append((arr, 1, eid, "account_event", r))
@@ -271,9 +273,10 @@ async def replay_history_into_redis(
     for r in withdrawal_rows:
         wid = str(r["withdrawal_id"])
         try:
-            if extract_run_id(wid) != run_id:
-                continue
-        except ValueError:
+            row_run = extract_run_id(wid)
+        except ValueError as exc:
+            raise ValueError(f"bank_withdrawals row {wid!r} has unparseable id: {exc}") from exc
+        if row_run != run_id:
             continue
         arr = _ensure_utc(r["recorded_at"])
         items.append((arr, 2, wid, "withdrawal", r))
@@ -283,9 +286,10 @@ async def replay_history_into_redis(
     for r in feedback_rows:
         pid = str(r["payment_id"])
         try:
-            if extract_run_id(pid) != run_id:
-                continue
-        except ValueError:
+            row_run = extract_run_id(pid)
+        except ValueError as exc:
+            raise ValueError(f"bank_feedback row {pid!r} has unparseable id: {exc}") from exc
+        if row_run != run_id:
             continue
         arr = _ensure_utc(r["created_at"])
         items.append((arr, 3, str(r["feedback_id"]), "feedback", r))
@@ -295,9 +299,10 @@ async def replay_history_into_redis(
     for r in complaint_rows:
         cid = str(r["complaint_id"])
         try:
-            if extract_run_id(cid) != run_id:
-                continue
-        except ValueError:
+            row_run = extract_run_id(cid)
+        except ValueError as exc:
+            raise ValueError(f"bank_complaints row {cid!r} has unparseable id: {exc}") from exc
+        if row_run != run_id:
             continue
         arr = _ensure_utc(r["created_at"])
         items.append((arr, 4, cid, "complaint", r))

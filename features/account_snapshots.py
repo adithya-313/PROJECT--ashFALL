@@ -201,10 +201,11 @@ async def select_daily_snapshot_accounts(
     for r in txn_rows:
         pid = str(r["payment_id"])
         try:
-            if extract_run_id(pid) == run_id:
-                active_accounts.add(str(r["account_id"]))
-        except ValueError:
-            pass
+            row_run = extract_run_id(pid)
+        except ValueError as exc:
+            raise ValueError(f"transactions row {pid!r} has unparseable id: {exc}") from exc
+        if row_run == run_id:
+            active_accounts.add(str(r["account_id"]))
 
     # 2. Bank account events: account lifecycle changes arriving in window
     event_rows = await pg.fetch(
@@ -220,10 +221,11 @@ async def select_daily_snapshot_accounts(
     for r in event_rows:
         eid = str(r["event_id"])
         try:
-            if extract_run_id(eid) == run_id:
-                active_accounts.add(str(r["account_id"]))
-        except ValueError:
-            pass
+            row_run = extract_run_id(eid)
+        except ValueError as exc:
+            raise ValueError(f"bank_account_events row {eid!r} has unparseable id: {exc}") from exc
+        if row_run == run_id:
+            active_accounts.add(str(r["account_id"]))
 
     # 3. Bank withdrawals: cash withdrawals arriving in window (recorded_at)
     withdrawal_rows = await pg.fetch(
@@ -239,10 +241,11 @@ async def select_daily_snapshot_accounts(
     for r in withdrawal_rows:
         wid = str(r["withdrawal_id"])
         try:
-            if extract_run_id(wid) == run_id:
-                active_accounts.add(str(r["account_id"]))
-        except ValueError:
-            pass
+            row_run = extract_run_id(wid)
+        except ValueError as exc:
+            raise ValueError(f"bank_withdrawals row {wid!r} has unparseable id: {exc}") from exc
+        if row_run == run_id:
+            active_accounts.add(str(r["account_id"]))
 
     # 4. Bank feedback: confirmed_fraud feedback arriving in window -> look up credit-side (mule) account
     feedback_rows = await pg.fetch(
@@ -258,20 +261,21 @@ async def select_daily_snapshot_accounts(
     for r in feedback_rows:
         pid = str(r["payment_id"])
         try:
-            if extract_run_id(pid) == run_id:
-                mule_rows = await pg.fetch(
-                    """
-                    SELECT account_id
-                    FROM transactions
-                    WHERE bank_id = $1 AND payment_id = $2 AND side = 'credit'
-                    """,
-                    bank_id,
-                    pid,
-                )
-                for mr in mule_rows:
-                    active_accounts.add(str(mr["account_id"]))
-        except ValueError:
-            pass
+            row_run = extract_run_id(pid)
+        except ValueError as exc:
+            raise ValueError(f"bank_feedback row {pid!r} has unparseable id: {exc}") from exc
+        if row_run == run_id:
+            mule_rows = await pg.fetch(
+                """
+                SELECT account_id
+                FROM transactions
+                WHERE bank_id = $1 AND payment_id = $2 AND side = 'credit'
+                """,
+                bank_id,
+                pid,
+            )
+            for mr in mule_rows:
+                active_accounts.add(str(mr["account_id"]))
 
     # 5. Bank complaints: reported_account where reported_bank_id = bank_id and created_at in window
     complaint_rows = await pg.fetch(
@@ -287,10 +291,11 @@ async def select_daily_snapshot_accounts(
     for r in complaint_rows:
         cid = str(r["complaint_id"])
         try:
-            if extract_run_id(cid) == run_id:
-                active_accounts.add(str(r["reported_account"]))
-        except ValueError:
-            pass
+            row_run = extract_run_id(cid)
+        except ValueError as exc:
+            raise ValueError(f"bank_complaints row {cid!r} has unparseable id: {exc}") from exc
+        if row_run == run_id:
+            active_accounts.add(str(r["reported_account"]))
 
     return sorted(list(active_accounts))
 
@@ -322,10 +327,11 @@ async def select_all_accounts(
     for r in event_rows:
         eid = str(r["event_id"])
         try:
-            if extract_run_id(eid) == run_id:
-                accounts.add(str(r["account_id"]))
-        except ValueError:
-            pass
+            row_run = extract_run_id(eid)
+        except ValueError as exc:
+            raise ValueError(f"bank_account_events row {eid!r} has unparseable id: {exc}") from exc
+        if row_run == run_id:
+            accounts.add(str(r["account_id"]))
 
     return sorted(list(accounts))
 
@@ -338,7 +344,7 @@ async def write_account_snapshots(
     snapshot_time: datetime,
     snapshot_kind: str,
     account_ids: Sequence[str],
-    settings: Any = None,
+    settings: AccountFeaturesSettings | None = None,
 ) -> int:
     """
     WHAT: Computes point-in-time account features using live Redis state and writes snapshot rows
@@ -355,7 +361,7 @@ async def write_account_snapshots(
         snapshot_time: Timestamp identifying the snapshot instant.
         snapshot_kind: Cadence label ('daily' or 'full').
         account_ids: Sequence of customer account identifiers to snapshot.
-        settings: Optional AccountFeaturesSettings or SnapshotSettings.
+        settings: Optional AccountFeaturesSettings instance. If None, repository defaults are used.
 
     Returns:
         Count of new snapshot rows inserted (0 on idempotent conflict).
@@ -371,11 +377,7 @@ async def write_account_snapshots(
     if arrival_cutoff is None:
         raise NoWatermarkError(f"No watermark available for bank {bank_id!r}")
 
-    acct_settings: AccountFeaturesSettings
-    if isinstance(settings, AccountFeaturesSettings):
-        acct_settings = settings
-    else:
-        acct_settings = get_default_settings()
+    acct_settings: AccountFeaturesSettings = get_default_settings() if settings is None else settings
 
     account_groups = tuple(SUPPORTED_GROUPS)
     snap_time = _ensure_utc(snapshot_time)

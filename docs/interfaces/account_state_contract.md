@@ -315,6 +315,8 @@ Historical replay reads recorded relational rows from all 5 feeds up to the logg
 
 Rows are sorted in merged chronological arrival sequence `(arrival_time, table_order, id_str)` and applied via domain updaters (`apply_payment_side`, `apply_account_event`, `apply_withdrawal`, `apply_feedback_row`, `apply_complaint_row`) without writing watermarks to Redis. Any late-arriving row (`arrival_time > arrival_cutoff`) is strictly excluded.
 
+Identifier parsing uses `extract_run_id` to strictly validate run identifiers: any row with an unparseable identifier raises a plain `ValueError` naming the database table and the offending row ID. Rows from valid other runs are skipped via explicit equality comparison against `run_id`.
+
 ### 10.3 Logged Registry Screener (`LoggedAnswerScreener`)
 Point-in-time replay eliminates external network dependency and guarantees deterministic screening by using `LoggedAnswerScreener`. The screener answers queries exclusively using the `registry_answers` audit payload captured in `feature_log` during the original decision. Any query not present in the logged answers raises a `LookupError`, ensuring no silent fallback or mock drift.
 
@@ -342,5 +344,6 @@ Snapshot feature vectors are stored in PostgreSQL table `account_snapshots` (mig
 - **Primary Key**: `(bank_id, run_id, account_id, snapshot_time, snapshot_kind)`
 - **Arrival Cutoff Contract**: Every snapshot row enforces `arrival_cutoff = get_bank_watermark(redis, bank_id)`. If no watermark is available for the bank, snapshot writing raises `NoWatermarkError` and aborts; it never fabricates an arrival cutoff or falls back to `snapshot_time`. Any event arriving after `arrival_cutoff` is strictly excluded from computed feature state.
 - **Feature Schema**: Features are serialized as a JSONB array matching `account_feature_names()` order (the canonical 52 M1 features minus the 8 `payment_level` features = 44 account features) with `feature_names_sha256` digest verification.
+- **Settings Contract**: `write_account_snapshots` takes `settings: AccountFeaturesSettings | None = None`; if `None`, repository defaults are loaded. Any invalid type is rejected statically by type checking rather than falling back at runtime.
 - **Intelligence Features in Level 15c**: In Level 15c, snapshots compute account features with `screener=None`. Consequently, intelligence features (`registry_match_count`, `registry_match_age_days`) evaluate to `None` (`null` in JSONB). This is intentional and preserved for full offline screener integration in Level 16.
 

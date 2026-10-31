@@ -30,11 +30,12 @@ from features.account_reader import (
 from features.account_records import AccountEventRecord, PaymentSideRecord
 from features.account_updater import apply_account_event, apply_payment_side
 from showcase.framework import CheckDefinition, CheckOutcome
-from showcase.preconditions import check_redis
+from showcase.isolation import get_showcase_database_url
+from showcase.preconditions import check_database, check_redis, check_tcp_port
 
 LEVEL_NUMBER = 15
-LEVEL_TITLE = "Live mule features and account state (built: parts 15a, 15b)"
-NEEDS_DATABASE = False
+LEVEL_TITLE = "Live mule features and account state (built: parts 15a, 15b, 15c)"
+NEEDS_DATABASE = True
 
 WHAT_YOU_SAW = (
     "Level 15 introduces near-real-time account feature updating over Redis sliding windows. "
@@ -44,7 +45,9 @@ WHAT_YOU_SAW = (
     "and streaming ingestion from Kafka and PostgreSQL. Part 15b computes the full M1 behavioral "
     "feature catalog, cleanly differentiating mules from everyday citizens, enforcing bank ledger "
     "isolation, respecting Issue R5 OS update safety, and surfacing rented mule dynamics amidst "
-    "normal routine life."
+    "normal routine life. Part 15c logs the exact feature vector behind each decision: a late event never "
+    "rewrites it, replaying history reproduces it exactly, a feature failure never changes the bank's "
+    "answer, and the decision path is timed against the pre-registered latency budget."
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -55,6 +58,8 @@ REQUIRED_FILES = [
     REPO_ROOT / "features" / "account_updater.py",
     REPO_ROOT / "features" / "account_reader.py",
     REPO_ROOT / "features" / "account_stream.py",
+    REPO_ROOT / "benchmarks" / "decision_latency.py",
+    REPO_ROOT / "showcase" / "level_15_support_c.py",
 ]
 
 
@@ -65,8 +70,17 @@ def host_side_redis_url() -> str:
 
 
 async def find_missing_preconditions() -> list[str]:
-    """Check that Redis is reachable and all mandatory Level 15 implementation files exist."""
+    """Check that Postgres, Redpanda and Redis are reachable and all mandatory Level 15 files exist."""
     problems: list[str] = []
+    database_problem = await check_database(get_showcase_database_url(), "docker compose up -d postgres redpanda")
+    if database_problem is not None:
+        problems.append(database_problem)
+    kafka_host, _, kafka_port = config.kafka_bootstrap_servers.split(",")[0].partition(":")
+    kafka_problem = check_tcp_port(
+        kafka_host, int(kafka_port or 9092), "Redpanda (Kafka)", "docker compose up -d postgres redpanda"
+    )
+    if kafka_problem is not None:
+        problems.append(kafka_problem)
     redis_problem = check_redis(host_side_redis_url(), "docker compose up -d redis")
     if redis_problem is not None:
         problems.append(redis_problem)
@@ -146,18 +160,18 @@ async def check_15a_1_normal_window_counts(workspace: Any) -> CheckOutcome:
 
     # Fixed events spread over 8 days relative to decision_time
     events_spec: list[tuple[timedelta, str, int]] = [
-        (timedelta(minutes=15), "debit", 10000),      # inside 1h, 24h, 7d
-        (timedelta(minutes=30), "credit", 15000),     # inside 1h, 24h, 7d
-        (timedelta(minutes=45), "debit", 20000),      # inside 1h, 24h, 7d
-        (timedelta(hours=1), "debit", 25000),         # lower boundary of 1h (excluded from 1h, inside 24h, 7d)
-        (timedelta(hours=6), "debit", 30000),         # outside 1h, inside 24h, 7d
-        (timedelta(hours=12), "credit", 35000),       # outside 1h, inside 24h, 7d
-        (timedelta(hours=18), "debit", 40000),        # outside 1h, inside 24h, 7d
-        (timedelta(hours=24), "debit", 45000),        # lower boundary of 24h (excluded from 24h, inside 7d)
-        (timedelta(days=3), "debit", 50000),          # outside 1h, 24h, inside 7d
-        (timedelta(days=5), "credit", 55000),         # outside 1h, 24h, inside 7d
-        (timedelta(days=7), "debit", 60000),          # lower boundary of 7d (excluded from 7d)
-        (timedelta(days=8), "debit", 65000),          # outside 7d (> 7d retention)
+        (timedelta(minutes=15), "debit", 10000),  # inside 1h, 24h, 7d
+        (timedelta(minutes=30), "credit", 15000),  # inside 1h, 24h, 7d
+        (timedelta(minutes=45), "debit", 20000),  # inside 1h, 24h, 7d
+        (timedelta(hours=1), "debit", 25000),  # lower boundary of 1h (excluded from 1h, inside 24h, 7d)
+        (timedelta(hours=6), "debit", 30000),  # outside 1h, inside 24h, 7d
+        (timedelta(hours=12), "credit", 35000),  # outside 1h, inside 24h, 7d
+        (timedelta(hours=18), "debit", 40000),  # outside 1h, inside 24h, 7d
+        (timedelta(hours=24), "debit", 45000),  # lower boundary of 24h (excluded from 24h, inside 7d)
+        (timedelta(days=3), "debit", 50000),  # outside 1h, 24h, inside 7d
+        (timedelta(days=5), "credit", 55000),  # outside 1h, 24h, inside 7d
+        (timedelta(days=7), "debit", 60000),  # lower boundary of 7d (excluded from 7d)
+        (timedelta(days=8), "debit", 65000),  # outside 7d (> 7d retention)
     ]
 
     try:
@@ -175,9 +189,7 @@ async def check_15a_1_normal_window_counts(workspace: Any) -> CheckOutcome:
             )
             apply_payment_side(client, rec, settings)
 
-        snap = read_account_snapshot(
-            client, run_id, bank_id, account_id, decision_time, arrival_time, settings
-        )
+        snap = read_account_snapshot(client, run_id, bank_id, account_id, decision_time, arrival_time, settings)
 
         cnt_1h_debit = count_sides_in_window(snap, "debit", decision_time, 3600, settings)
         cnt_1h_credit = count_sides_in_window(snap, "credit", decision_time, 3600, settings)
@@ -237,9 +249,7 @@ async def check_15a_2_empty_history(workspace: Any) -> CheckOutcome:
     now = datetime.now(timezone.utc)
 
     try:
-        snap = read_account_snapshot(
-            client, run_id, bank_id, account_id, now, now, settings
-        )
+        snap = read_account_snapshot(client, run_id, bank_id, account_id, now, now, settings)
         assert snap == empty_snapshot()
         assert snap.has_history is False
         assert snap.side_records == ()
@@ -250,13 +260,9 @@ async def check_15a_2_empty_history(workspace: Any) -> CheckOutcome:
         fields_checked = 6
 
         for w_sec in settings.windows_seconds:
-            cnt_debit = count_sides_in_window(
-                snap, "debit", now, w_sec, settings
-            )
+            cnt_debit = count_sides_in_window(snap, "debit", now, w_sec, settings)
             assert cnt_debit == 0
-            cnt_credit = count_sides_in_window(
-                snap, "credit", now, w_sec, settings
-            )
+            cnt_credit = count_sides_in_window(snap, "credit", now, w_sec, settings)
             assert cnt_credit == 0
             fields_checked += 2
 
@@ -291,12 +297,8 @@ async def check_15a_3_late_event_lands_in_right_window(workspace: Any) -> CheckO
     a3 = t3
 
     # Apply t1 and t3
-    rec_t1 = make_showcase_record(
-        run_id, bank_id, account_id, f"{run_id}-t1", "debit", t1, a1, 10000
-    )
-    rec_t3 = make_showcase_record(
-        run_id, bank_id, account_id, f"{run_id}-t3", "debit", t3, a3, 20000
-    )
+    rec_t1 = make_showcase_record(run_id, bank_id, account_id, f"{run_id}-t1", "debit", t1, a1, 10000)
+    rec_t3 = make_showcase_record(run_id, bank_id, account_id, f"{run_id}-t3", "debit", t3, a3, 20000)
 
     dec_1 = t1 + timedelta(minutes=5)
     dec_3 = t3 + timedelta(minutes=5)
@@ -306,43 +308,33 @@ async def check_15a_3_late_event_lands_in_right_window(workspace: Any) -> CheckO
         apply_payment_side(client, rec_t3, settings)
 
         # Baseline count at dec_1 (1h window: t1 is inside)
-        snap_1_before = read_account_snapshot(
-            client, run_id, bank_id, account_id, dec_1, a3, settings
-        )
+        snap_1_before = read_account_snapshot(client, run_id, bank_id, account_id, dec_1, a3, settings)
         cnt_1_before = count_sides_in_window(snap_1_before, "debit", dec_1, 3600, settings)
         assert cnt_1_before == 1
 
         # Baseline count at dec_3 (1h window: t3 is inside, t1 is 2h old so outside)
-        snap_3_before = read_account_snapshot(
-            client, run_id, bank_id, account_id, dec_3, a3, settings
-        )
+        snap_3_before = read_account_snapshot(client, run_id, bank_id, account_id, dec_3, a3, settings)
         cnt_3_before = count_sides_in_window(snap_3_before, "debit", dec_3, 3600, settings)
         assert cnt_3_before == 1
 
         # Apply late event at t2 with arrival_time after t3's arrival
         t2 = base_time + timedelta(hours=1, minutes=45)
         a2 = t3 + timedelta(minutes=30)
-        rec_t2_late = make_showcase_record(
-            run_id, bank_id, account_id, f"{run_id}-t2-late", "debit", t2, a2, 30000
-        )
+        rec_t2_late = make_showcase_record(run_id, bank_id, account_id, f"{run_id}-t2-late", "debit", t2, a2, 30000)
         apply_payment_side(client, rec_t2_late, settings)
 
         # Re-query with arrival_cutoff after a2
         query_cutoff = a2 + timedelta(minutes=1)
 
         # Count at t1 must be unchanged (earlier window)
-        snap_1_after = read_account_snapshot(
-            client, run_id, bank_id, account_id, dec_1, query_cutoff, settings
-        )
+        snap_1_after = read_account_snapshot(client, run_id, bank_id, account_id, dec_1, query_cutoff, settings)
         cnt_1_after = count_sides_in_window(snap_1_after, "debit", dec_1, 3600, settings)
         earlier_changed = abs(cnt_1_after - cnt_1_before)
         assert earlier_changed == 0
         assert cnt_1_after == 1
 
         # Count at t3 must include t2 (1h window now has t3 and t2)
-        snap_3_after = read_account_snapshot(
-            client, run_id, bank_id, account_id, dec_3, query_cutoff, settings
-        )
+        snap_3_after = read_account_snapshot(client, run_id, bank_id, account_id, dec_3, query_cutoff, settings)
         cnt_3_after = count_sides_in_window(snap_3_after, "debit", dec_3, 3600, settings)
         assert cnt_3_after == 2
 
@@ -401,12 +393,8 @@ async def check_15a_4_two_runs_separate_state(workspace: Any) -> CheckOutcome:
         apply_payment_side(client, rec_1, settings)
         apply_payment_side(client, rec_2, settings)
 
-        snap_1 = read_account_snapshot(
-            client, run_1, bank_id, account_id, now, now, settings
-        )
-        snap_2 = read_account_snapshot(
-            client, run_2, bank_id, account_id, now, now, settings
-        )
+        snap_1 = read_account_snapshot(client, run_1, bank_id, account_id, now, now, settings)
+        snap_2 = read_account_snapshot(client, run_2, bank_id, account_id, now, now, settings)
 
         assert snap_1.has_history is True
         assert len(snap_1.side_records) == 1
@@ -518,15 +506,9 @@ async def check_15a_5_replay_twice_identical(workspace: Any) -> CheckOutcome:
             norm_k = k.replace(r_bytes, b"<RUN>")
             norm_v: Any
             if isinstance(v, dict):
-                norm_v = {
-                    fk.replace(r_bytes, b"<RUN>"): fv.replace(r_bytes, b"<RUN>")
-                    for fk, fv in v.items()
-                }
+                norm_v = {fk.replace(r_bytes, b"<RUN>"): fv.replace(r_bytes, b"<RUN>") for fk, fv in v.items()}
             elif isinstance(v, list):
-                norm_v = [
-                    (m.replace(r_bytes, b"<RUN>"), s)
-                    for m, s in v
-                ]
+                norm_v = [(m.replace(r_bytes, b"<RUN>"), s) for m, s in v]
             else:
                 norm_v = v
             norm[norm_k] = (t, norm_v)
@@ -580,13 +562,20 @@ async def check_15a_5_replay_twice_identical(workspace: Any) -> CheckOutcome:
 def get_checks(quick: bool = False) -> list[CheckDefinition]:
     """
     Return the Level 15 verification checks.
-    Tagged with part='a' and part='b' for selective execution.
+    Tagged with part='a', 'b' and 'c' for selective execution.
     """
     from showcase.level_15_support_b import (
         check_15b_1_three_profiles_normal,
         check_15b_2_cross_bank_isolation_edge,
         check_15b_3_os_update_not_new_device_edge,
         check_15b_4_rented_mule_vs_salaried_edge,
+    )
+    from showcase.level_15_support_c import (
+        check_15c_1_late_event_leaves_logged_unchanged,
+        check_15c_2_recompute_exact_match,
+        check_15c_4_feature_failure_unscored,
+        check_15c_5_no_unexpected_error_rows,
+        make_check_15c_3,
     )
 
     return [
@@ -694,5 +683,62 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
             likely_cause="Routine life rhythm, pass-through ratio, or first-time payer calculation failed.",
             where_to_look="features/m1_routine_lifecycle.py, features/m1_inflow_outflow.py",
             part="b",
+        ),
+        CheckDefinition(
+            name="15c-1 an event that arrives after a decision leaves its logged features unchanged",
+            kind="edge",
+            proves=(
+                "A payment side recorded after a decision never rewrites that decision's feature_log row, "
+                "while a fresh computation at the new watermark does change."
+            ),
+            run=check_15c_1_late_event_leaves_logged_unchanged,
+            likely_cause="The feature log row was updated after insert, or the late event never reached Redis.",
+            where_to_look="features/feature_log.py, features/decision_features.py, features/account_stream.py",
+            part="c",
+        ),
+        CheckDefinition(
+            name="15c-2 a logged vector recomputed from history matches exactly",
+            kind="consistency",
+            proves="Replaying Postgres history into a scratch Redis reproduces all 52 logged values exactly.",
+            run=check_15c_2_recompute_exact_match,
+            likely_cause="Replay applied a different set of events than live ingestion or ignored the arrival cutoff.",
+            where_to_look="features/feature_replay.py",
+            part="c",
+        ),
+        CheckDefinition(
+            name="15c-3 decision latency against the budget",
+            kind="normal",
+            proves=(
+                "In-process record_decision with feature logging on, and compute_decision_row alone, stay within "
+                "the p99 budgets in config/evaluation.yaml (judged in full mode; recorded in quick mode)."
+            ),
+            run=make_check_15c_3(quick),
+            likely_cause=(
+                "Feature computation or the log insert became slower, or this machine is slower than the budget "
+                "machine."
+            ),
+            where_to_look="benchmarks/decision_latency.py, features/decision_features.py, api/v1/bank_service.py",
+            part="c",
+        ),
+        CheckDefinition(
+            name="15c-4 a feature failure never changes the bank's answer",
+            kind="negative",
+            proves=(
+                "When feature computation raises, the decision is still 'unscored' and the log row records "
+                "status error, the error type and no arrival cutoff."
+            ),
+            run=check_15c_4_feature_failure_unscored,
+            likely_cause="record_decision let the feature error escape, or logged an ok row for a failed computation.",
+            where_to_look="api/v1/bank_service.py",
+            part="c",
+        ),
+        CheckDefinition(
+            name="15c-5 no unexpected error rows",
+            kind="consistency",
+            proves="Apart from the deliberate failure of 15c-4, no feature_log row has status error.",
+            run=check_15c_5_no_unexpected_error_rows,
+            likely_cause="A normal decision hit a feature computation error that was logged instead of raised.",
+            where_to_look="features/decision_features.py, api/v1/bank_service.py",
+            part="c",
         ),
     ]
