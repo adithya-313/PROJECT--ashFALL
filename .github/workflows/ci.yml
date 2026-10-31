@@ -300,6 +300,7 @@ jobs:
             tests/integration/test_feature_log_0010.py \
             tests/integration/test_decision_feature_logging.py \
             tests/integration/test_recompute_from_history.py \
+            tests/integration/test_network_label_cutoff.py \
             tests/integration/test_account_snapshots_0014.py \
             -q -rs -p no:cacheprovider 2>&1 | tee "$RUNNER_TEMP/integration.log"
           code=${PIPESTATUS[0]}
