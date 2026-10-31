@@ -26,6 +26,7 @@ from features.account_summaries import update_account_summaries
 from features.account_updater import apply_payment_side
 from features.m1_payment import (
     ProposedPayment,
+    compute_payee_vpa_payment_features,
     compute_payer_only_payment_features,
     compute_payment_features,
 )
@@ -379,13 +380,12 @@ def test_compute_payer_only_payment_features_ratios_and_counts(redis_client: fak
         )
         apply_payment_side(redis_client, rec)
 
-    feats = compute_payer_only_payment_features(
-        redis_client, RUN_ID, BANK_0, "acc_01", 20000, NOW_UTC, NOW_UTC
-    )
+    feats = compute_payer_only_payment_features(redis_client, RUN_ID, BANK_0, "acc_01", 20000, NOW_UTC, NOW_UTC)
     assert set(feats.keys()) == {
         "amount_vs_payer_median_ratio",
         "amount_vs_payer_max_ratio",
         "customer_failed_attempts_24h",
+        "hour_ist",
     }
     assert feats["amount_vs_payer_median_ratio"] == 1.0
     assert feats["amount_vs_payer_max_ratio"] == pytest.approx(20000 / 30000)
@@ -396,9 +396,7 @@ def test_compute_payer_only_payment_features_no_history_returns_nones(
     redis_client: fakeredis.FakeRedis,
 ) -> None:
     """Verifies that with no historical debits, ratios are None and failed attempts count is 0."""
-    feats = compute_payer_only_payment_features(
-        redis_client, RUN_ID, BANK_0, "acc_new", 5000, NOW_UTC, NOW_UTC
-    )
+    feats = compute_payer_only_payment_features(redis_client, RUN_ID, BANK_0, "acc_new", 5000, NOW_UTC, NOW_UTC)
     assert feats["amount_vs_payer_median_ratio"] is None
     assert feats["amount_vs_payer_max_ratio"] is None
     assert feats["customer_failed_attempts_24h"] == 0
@@ -478,8 +476,29 @@ def test_compute_payer_only_payment_features_counts_only_customer_failures(
     )
     apply_payment_side(redis_client, rec3)
 
-    feats = compute_payer_only_payment_features(
-        redis_client, RUN_ID, BANK_0, "acc_01", 1000, NOW_UTC, NOW_UTC
-    )
+    feats = compute_payer_only_payment_features(redis_client, RUN_ID, BANK_0, "acc_01", 1000, NOW_UTC, NOW_UTC)
     assert feats["customer_failed_attempts_24h"] == 1
 
+
+def test_compute_payee_vpa_payment_features_returns_expected_keys(
+    redis_client: fakeredis.FakeRedis,
+) -> None:
+    """Verifies that compute_payee_vpa_payment_features returns exactly the 3 VPA features."""
+    feats = compute_payee_vpa_payment_features(
+        client=redis_client,
+        run_id=RUN_ID,
+        bank_id=BANK_0,
+        payer_account_id="acc_payer",
+        payee_bank_id=BANK_0,
+        payee_vpa="acc_payee",
+        event_time=NOW_UTC,
+        arrival_cutoff=NOW_UTC,
+    )
+    assert set(feats.keys()) == {
+        "first_payment_to_payee",
+        "payee_same_bank_risk",
+        "payee_registry_match",
+    }
+    assert feats["first_payment_to_payee"] is True
+    assert feats["payee_same_bank_risk"] == 0.0
+    assert feats["payee_registry_match"] is None
