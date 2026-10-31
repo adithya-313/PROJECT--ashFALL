@@ -1,9 +1,11 @@
 {
   "api": false,
+  "bench": false,
   "fluent-bit": false,
   "grafana": false,
   "loki": false,
   "nationalsim": true,
+  "nationalsim-bench": true,
   "outbox-relay": false,
   "postgres": true,
   "prometheus": false,
