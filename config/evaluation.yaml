@@ -225,6 +225,61 @@ latency:
 # Amended 2026-10-10 (issues L3, N4, A2, E1; review items R3, R4).
 # Logged in docs/research/amendments.md. No model code exists yet.
 
+# Amended 2026-11-01 (Level 15 latency round; architect rulings A1 and A4).
+# To be logged in docs/research/amendments.md as A-034 (scope) and A-035 (method). That file was outside the
+# allowed files of the round that wrote this, so the two log entries are still to be written. The pre-registered
+# latency block above is unchanged.
+
+# ---------------------------------------------------------------------
+# latency_scope: what the two limits above cover (A-034, ruling A1)
+#
+# The idea
+#   A decision waits for two kinds of work. Our own work (reading the
+#   account history, searching the payment graph, doing arithmetic) and
+#   waiting for the national registry to answer.
+#
+# The rule
+#   The whole decision, registry wait included, must fit in max_ms (100).
+#   feature_computation_max_ms (50) covers OUR OWN feature code only; the
+#   registry wait is not counted against it.
+#   Check to run: registry wait + feature computation + everything else
+#   (request handling, writing the feature log, the response) must fit in
+#   100 ms.
+# ---------------------------------------------------------------------
+latency_scope:
+  label: policy
+  registry_wait_counts_against: max_ms
+  feature_computation_covers: own feature code only (Redis reads, graph search, arithmetic); the registry wait is excluded
+  fit_check: registry wait + feature computation + other overhead must fit within max_ms
+  reason: The 50 ms feature limit is about our own code, which we can speed up. The registry is outside our control, so its wait is judged only inside the 100 ms whole-decision limit.
+  derived_from: "architect ruling A1, Level 15 latency round; amendment A-034 (log entry still to be written)"
+
+# ---------------------------------------------------------------------
+# latency_method: how the latency limits are measured (A-035, ruling A4)
+#
+# The idea
+#   The p99 of 300 timed calls is decided by about 3 samples, so one noisy
+#   moment can flip pass and fail. The method is fixed here, before any
+#   new measurement, so nobody can choose a lucky run afterwards.
+#
+# The method
+#   100 warm-up calls (thrown away), then 1,000 timed calls per run, 3 runs.
+#   Each run gives one p99 for the decision and one for the feature
+#   computation. The verdict uses the MEDIAN of the three p99 values; all
+#   three and their spread are reported. The conditions (platform, Python,
+#   commit, power state, Docker) are recorded, and for the 10 slowest calls
+#   of each run the report says which part took the time.
+# ---------------------------------------------------------------------
+latency_method:
+  label: policy
+  warm_up_calls: 100
+  measured_calls: 1000
+  runs: 3
+  judged_on: median_of_run_p99
+  slowest_calls_reported: 10
+  reason: 300-sample p99 is decided by ~3 samples; method fixed before measuring.
+  derived_from: "architect ruling A4, Level 15 latency round; amendment A-035 (log entry still to be written)"
+
 # ---------------------------------------------------------------------
 # money_held_and_returned: "frozen" money is not "returned" money
 #

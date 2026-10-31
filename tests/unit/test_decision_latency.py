@@ -17,6 +17,8 @@ from benchmarks.decision_latency import (
     build_histogram,
     compute_percentiles,
     load_latency_budget,
+    load_latency_method,
+    median_of_run_values,
 )
 
 
@@ -121,3 +123,38 @@ latency:
     bad_yaml.write_text("something_else: 123\n", encoding="utf-8")
     with pytest.raises(ValueError, match="Missing 'latency' section"):
         load_latency_budget(bad_yaml)
+
+
+def test_latency_method_comes_from_the_pre_registered_file() -> None:
+    """The method (100 warm-up, 1,000 measured, 3 runs, median of run p99) is read from config/evaluation.yaml."""
+    method = load_latency_method()
+    assert method == {
+        "warm_up_calls": 100,
+        "measured_calls": 1000,
+        "runs": 3,
+        "judged_on": "median_of_run_p99",
+        "slowest_calls_reported": 10,
+    }
+
+
+def test_latency_method_rejects_another_statistic(tmp_path: Path) -> None:
+    config_file = tmp_path / "evaluation.yaml"
+    config_file.write_text(
+        "latency_method:\n  warm_up_calls: 1\n  measured_calls: 1\n  runs: 1\n  judged_on: mean\n"
+        "  slowest_calls_reported: 1\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="Unsupported latency_method.judged_on"):
+        load_latency_method(config_file)
+    missing = tmp_path / "missing.yaml"
+    missing.write_text("latency: {}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="Missing 'latency_method'"):
+        load_latency_method(missing)
+
+
+def test_median_of_run_values_is_the_middle_p99() -> None:
+    """One noisy run (the 120) does not decide the verdict."""
+    assert median_of_run_values([48.0, 120.0, 51.0]) == 51.0
+    assert median_of_run_values([40.0, 60.0]) == 50.0
+    with pytest.raises(ValueError, match="at least one run"):
+        median_of_run_values([])
