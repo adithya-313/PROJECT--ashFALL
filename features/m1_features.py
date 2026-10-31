@@ -24,6 +24,7 @@ from features.account_keys import (
 )
 from features.account_reader import read_account_snapshot
 from features.account_summaries import read_counterparty_days
+from features.decision_reads import DecisionReads
 from features.feature_set import load_feature_set_m1
 from features.m1_inflow_outflow import (
     compute_below_threshold_credit_count_7d,
@@ -102,10 +103,13 @@ def compute_account_features(
     config: M1FeaturesConfig | None = None,
     screener: RegistryScreener | None = None,
     dpip_key: str | None = None,
+    reads: DecisionReads | None = None,
 ) -> FeatureVector:
     """
     PURPOSE:
         Computes the FeatureVector for the requested functional groups using Redis account state.
+        When `reads` is given, its payer snapshot and label lists are used instead of reading them again;
+        reads made with different arguments raise ValueError.
 
     INPUTS:
         client: Redis or FakeRedis client.
@@ -136,16 +140,20 @@ def compute_account_features(
     cfg_settings = settings if settings is not None else get_default_settings()
     m1_cfg = config if config is not None else load_m1_config()
 
-    # Read account snapshot once
-    snapshot = read_account_snapshot(
-        client=client,
-        run_id=run_id,
-        bank_id=bank_id,
-        account_id=account_id,
-        decision_time=decision_time,
-        arrival_cutoff=arrival_cutoff,
-        settings=cfg_settings,
-    )
+    # Read account snapshot once (or take the one the decision already read)
+    if reads is not None:
+        reads.require_match(run_id, bank_id, account_id, decision_time, arrival_cutoff)
+        snapshot = reads.payer_snapshot
+    else:
+        snapshot = read_account_snapshot(
+            client=client,
+            run_id=run_id,
+            bank_id=bank_id,
+            account_id=account_id,
+            decision_time=decision_time,
+            arrival_cutoff=arrival_cutoff,
+            settings=cfg_settings,
+        )
 
     result: FeatureVector = {}
 
@@ -289,6 +297,7 @@ def compute_account_features(
             decision_time=decision_time,
             arrival_cutoff=arrival_cutoff,
             settings=cfg_settings,
+            reads=reads,
         )
         result.update(network_feats)
 

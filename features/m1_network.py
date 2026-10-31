@@ -28,6 +28,7 @@ from features.account_labels import (
     same_bank_counterparties_many,
 )
 from features.account_reader import AccountSnapshot, read_side_records_many
+from features.decision_reads import DecisionReads
 
 logger = logging.getLogger(__name__)
 
@@ -209,18 +210,25 @@ def compute_network_features(
     decision_time: datetime,
     arrival_cutoff: datetime,
     settings: AccountFeaturesSettings | None = None,
+    reads: DecisionReads | None = None,
 ) -> dict[str, Any]:
     """
     PURPOSE:
-        Computes all M1 network group features for an account at a decision moment:
+        Computes all M1 network group features for an account at a decision moment
+        (using the label lists in `reads` instead of reading them again, when given):
           - hops_to_confirmed_label
           - shared_counterparties_with_flagged_7d
           - local_cluster_density
           - hops_to_complained_account
     """
     cfg = settings if settings is not None else get_default_settings()
-    labelled = labelled_accounts_visible(client, run_id, bank_id, decision_time, arrival_cutoff)
-    complained = complained_accounts_visible(client, run_id, bank_id, decision_time, arrival_cutoff)
+    if reads is not None:
+        reads.require_match(run_id, bank_id, account_id, decision_time, arrival_cutoff)
+        labelled = reads.labelled_visible
+        complained = reads.complained_visible
+    else:
+        labelled = labelled_accounts_visible(client, run_id, bank_id, decision_time, arrival_cutoff)
+        complained = complained_accounts_visible(client, run_id, bank_id, decision_time, arrival_cutoff)
     # One memo for this call only: both searches and the cluster density ask for many of the same accounts.
     neighbour_memo: dict[str, frozenset[str]] = {}
 

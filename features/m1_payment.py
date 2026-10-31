@@ -33,6 +33,7 @@ from features.account_labels import (
 )
 from features.account_reader import read_account_snapshot
 from features.account_summaries import read_counterparty_days
+from features.decision_reads import DecisionReads
 from features.feature_set import load_feature_set_m1
 from features.registry_screening import RegistryScreener
 
@@ -102,10 +103,12 @@ def compute_payee_vpa_payment_features(
     settings: AccountFeaturesSettings | None = None,
     screener: RegistryScreener | None = None,
     dpip_key: str | None = None,
+    reads: DecisionReads | None = None,
 ) -> dict[str, int | float | str | bool | None]:
     """
     PURPOSE:
-        Computes the 3 payee VPA-level features:
+        Computes the 3 payee VPA-level features (using the payer snapshot and label lists in `reads`
+        instead of reading them again, when given; reads made with different arguments raise ValueError):
           - first_payment_to_payee
           - payee_same_bank_risk
           - payee_registry_match
@@ -127,6 +130,8 @@ def compute_payee_vpa_payment_features(
         Dictionary mapping the 3 feature names to their computed values.
     """
     cfg = settings if settings is not None else get_default_settings()
+    if reads is not None:
+        reads.require_match(run_id, bank_id, payer_account_id, event_time, arrival_cutoff)
 
     # 1. first_payment_to_payee: True when payee_bank_id:payee_vpa never appears
     # among payer's debit counterparties in closed days or visible 7-day raw window.
@@ -143,15 +148,18 @@ def compute_payee_vpa_payment_features(
     )
     has_closed_history = target_payee in closed_debits and len(closed_debits[target_payee]) > 0
 
-    snapshot = read_account_snapshot(
-        client,
-        run_id,
-        bank_id,
-        payer_account_id,
-        event_time,
-        arrival_cutoff,
-        cfg,
-    )
+    if reads is not None:
+        snapshot = reads.payer_snapshot
+    else:
+        snapshot = read_account_snapshot(
+            client,
+            run_id,
+            bank_id,
+            payer_account_id,
+            event_time,
+            arrival_cutoff,
+            cfg,
+        )
     has_raw_history = False
     for r in snapshot.side_records:
         if r.side == "debit" and r.status == "success" and r.counterparty_vpa:
@@ -167,8 +175,12 @@ def compute_payee_vpa_payment_features(
         payee_same_bank_risk = None
     else:
         payee_account = payee_vpa
-        labelled = labelled_accounts_visible(client, run_id, bank_id, event_time, arrival_cutoff)
-        complained = complained_accounts_visible(client, run_id, bank_id, event_time, arrival_cutoff)
+        if reads is not None:
+            labelled = reads.labelled_visible
+            complained = reads.complained_visible
+        else:
+            labelled = labelled_accounts_visible(client, run_id, bank_id, event_time, arrival_cutoff)
+            complained = complained_accounts_visible(client, run_id, bank_id, event_time, arrival_cutoff)
         if payee_account in labelled:
             payee_same_bank_risk = 1.0
         elif payee_account in complained:
@@ -217,11 +229,13 @@ def compute_payment_features(
     settings: AccountFeaturesSettings | None = None,
     screener: RegistryScreener | None = None,
     dpip_key: str | None = None,
+    reads: DecisionReads | None = None,
 ) -> dict[str, int | float | str | bool | None]:
     """
     PURPOSE:
         Computes all M1 payment_level group features for a proposed transaction.
         The decision time is strictly proposed.event_time. Never reads the wall clock.
+        `reads`, when given, is passed to both feature functions (see compute_payee_vpa_payment_features).
 
     INPUTS:
         client: Redis client.
@@ -244,6 +258,7 @@ def compute_payment_features(
         event_time=decision_time,
         arrival_cutoff=arrival_cutoff,
         settings=cfg,
+        reads=reads,
     )
 
     vpa_feats = compute_payee_vpa_payment_features(
@@ -258,6 +273,7 @@ def compute_payment_features(
         settings=cfg,
         screener=screener,
         dpip_key=dpip_key,
+        reads=reads,
     )
 
     result: dict[str, int | float | str | bool | None] = {
@@ -295,10 +311,12 @@ def compute_payer_only_payment_features(
     event_time: datetime,
     arrival_cutoff: datetime,
     settings: AccountFeaturesSettings | None = None,
+    reads: DecisionReads | None = None,
 ) -> dict[str, float | int | None]:
     """
     PURPOSE:
-        Computes the 3 payer-only M1 payment features:
+        Computes the 3 payer-only M1 payment features (using the payer snapshot in `reads` instead of
+        reading it again, when given; reads made with different arguments raise ValueError):
           - amount_vs_payer_median_ratio
           - amount_vs_payer_max_ratio
           - customer_failed_attempts_24h
@@ -318,15 +336,19 @@ def compute_payer_only_payment_features(
     """
     cfg = settings if settings is not None else get_default_settings()
 
-    snapshot = read_account_snapshot(
-        client,
-        run_id,
-        bank_id,
-        payer_account_id,
-        event_time,
-        arrival_cutoff,
-        cfg,
-    )
+    if reads is not None:
+        reads.require_match(run_id, bank_id, payer_account_id, event_time, arrival_cutoff)
+        snapshot = reads.payer_snapshot
+    else:
+        snapshot = read_account_snapshot(
+            client,
+            run_id,
+            bank_id,
+            payer_account_id,
+            event_time,
+            arrival_cutoff,
+            cfg,
+        )
 
     successful_debits = [r.amount_paise for r in snapshot.side_records if r.side == "debit" and r.status == "success"]
     if successful_debits:
