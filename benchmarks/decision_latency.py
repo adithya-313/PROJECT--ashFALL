@@ -18,11 +18,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import platform
+import socket
 import sys
+import threading
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -30,19 +32,32 @@ import asyncpg
 import numpy as np
 import orjson
 import redis
+import uvicorn
 import yaml
+from prometheus_client import REGISTRY
 
 from api.v1.bank_service import record_decision
 from api.v1.models import DecisionRequest
-from core.event_clock import ManualClock
+from core.event_clock import IST, ManualClock
 from features.decision_features import compute_decision_row
-from features.registry_screening import RegistryScreener
+from features.ingest_watermark import get_bank_watermark
+from features.m1_intelligence import get_bank_index
+from features.registry_prefetch import list_registry_questions
+from features.registry_screening import NationalsimRegistryScreener, RegistryScreener
+from nationalsim.app import ScreenDelay, create_app, load_nationalsim_config, load_screen_delay_settings
+from nationalsim.bank_client import NationalsimBankClient
+from nationalsim.keyed_hash import compute_identifier_hash
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = REPO_ROOT / "config" / "evaluation.yaml"
 OUTPUT_REPORT_PATH = REPO_ROOT / "reports" / "latency" / "level_15_decision_latency.json"
 
 FIXED_BUCKET_EDGES = (0.0, 5.0, 10.0, 20.0, 35.0, 50.0, 75.0, 100.0, 150.0, 200.0)
+
+# The participant key the benchmark's mock registry and banks share (a test value, never a real secret).
+BENCHMARK_DPIP_KEY = "benchmark_dpip_key_32_bytes_long!!"
+BENCHMARK_PAYER_DEVICE = "fp_c_dev"
+BENCHMARK_PAYEE_BANK_ID = "bank_1"
 
 
 def load_latency_budget(config_file: Path | None = None) -> dict[str, Any]:
@@ -166,6 +181,19 @@ class LatencyBenchmarkResult:
     platform_name: str
     python_version: str
     scope_note: str
+    registry_mode: str = "fake"
+    registry_delay: str = "off"
+    registry_timeouts: int = 0
+    registry_questions: int = 0
+
+
+def registry_timeouts_so_far() -> int:
+    """Total of ashfall_registry_timeouts_total over both identifier types, read from the process registry."""
+    total = 0.0
+    for identifier_type in ("account", "device"):
+        value = REGISTRY.get_sample_value("ashfall_registry_timeouts_total", {"identifier_type": identifier_type})
+        total += 0.0 if value is None else value
+    return int(total)
 
 
 async def measure_decision_latency(
@@ -180,6 +208,10 @@ async def measure_decision_latency(
     warmup_count: int = 5,
     timed_count: int = 300,
     config_file: Path | None = None,
+    dpip_key: str | None = None,
+    registry_mode: str = "fake",
+    registry_delay: str = "off",
+    registry_questions: int = 0,
 ) -> LatencyBenchmarkResult:
     """
     WHAT: Measures decision recording and feature extraction latency in-process.
@@ -196,6 +228,10 @@ async def measure_decision_latency(
         warmup_count: Number of untimed warm-up calls (default: 5).
         timed_count: Number of timed calls (default: 300).
         config_file: Optional path to evaluation.yaml.
+        dpip_key: Optional DPIP key used to hash the identifiers screened by the registry.
+        registry_mode: "fake" or "http", recorded in the result.
+        registry_delay: "off" or "on", recorded in the result.
+        registry_questions: Registry questions one decision asks (recorded in the result).
 
     Returns:
         LatencyBenchmarkResult with computed percentiles, histograms, and budget pass/fail verdict.
@@ -216,12 +252,14 @@ async def measure_decision_latency(
             event_time=decision_time,
         )
         # Warm compute_decision_row
-        compute_decision_row(
+        await asyncio.to_thread(
+            compute_decision_row,
             redis_client=redis_client,
             bank_id=bank_id,
             request=req,
             clock=clock,
             screener=screener,
+            dpip_key=dpip_key,
         )
         # Warm record_decision
         await record_decision(
@@ -231,9 +269,11 @@ async def measure_decision_latency(
             redis_client=redis_client,
             decision_clock=clock,
             screener=screener,
+            dpip_key=dpip_key,
         )
 
     # 2. Timed calls
+    timeouts_before = registry_timeouts_so_far()
     record_latencies_ms: list[float] = []
     compute_latencies_ms: list[float] = []
 
@@ -251,12 +291,14 @@ async def measure_decision_latency(
 
         # Time compute_decision_row alone
         t_c0 = time.perf_counter()
-        compute_decision_row(
+        await asyncio.to_thread(
+            compute_decision_row,
             redis_client=redis_client,
             bank_id=bank_id,
             request=req,
             clock=clock,
             screener=screener,
+            dpip_key=dpip_key,
         )
         t_c1 = time.perf_counter()
         compute_latencies_ms.append((t_c1 - t_c0) * 1000.0)
@@ -270,9 +312,12 @@ async def measure_decision_latency(
             redis_client=redis_client,
             decision_clock=clock,
             screener=screener,
+            dpip_key=dpip_key,
         )
         t_r1 = time.perf_counter()
         record_latencies_ms.append((t_r1 - t_r0) * 1000.0)
+
+    timeouts_in_timed_calls = registry_timeouts_so_far() - timeouts_before
 
     rec_stats = compute_percentiles(record_latencies_ms)
     comp_stats = compute_percentiles(compute_latencies_ms)
@@ -292,6 +337,11 @@ async def measure_decision_latency(
         "feature logging enabled against real PostgreSQL and Redis. HTTP serialization, network "
         "transport, and cryptographic request signing are NOT included."
     )
+    if registry_mode == "http":
+        scope_note += (
+            " Registry screening IS included: every decision asks the mock national registry over real HTTP "
+            f"(localhost TCP, uvicorn in this process), added registry delay {registry_delay}."
+        )
 
     return LatencyBenchmarkResult(
         warmup_count=warmup_count,
@@ -313,6 +363,10 @@ async def measure_decision_latency(
         platform_name=plat_name,
         python_version=py_ver,
         scope_note=scope_note,
+        registry_mode=registry_mode,
+        registry_delay=registry_delay,
+        registry_timeouts=timeouts_in_timed_calls,
+        registry_questions=registry_questions,
     )
 
 
@@ -330,6 +384,8 @@ def format_benchmark_output(res: LatencyBenchmarkResult) -> str:
         "judgement if this platform is that machine.",
         f"Scope:          {res.scope_note}",
         f"Call Counts:    {res.warmup_count} warm-up calls, {res.timed_count} timed calls",
+        f"Registry:       {res.registry_mode}, added delay {res.registry_delay}, "
+        f"questions per decision {res.registry_questions}, registry timeouts in timed calls {res.registry_timeouts}",
         "",
         "--- Budget Specifications (config/evaluation.yaml) ---",
         f"  Target Endpoint:           {budget['endpoint']}",
@@ -362,12 +418,166 @@ def format_benchmark_output(res: LatencyBenchmarkResult) -> str:
     return "\n".join(lines)
 
 
+class RunningMockRegistry:
+    """The mock national registry served by uvicorn on a free localhost port, in a thread of this process."""
+
+    def __init__(self, server: uvicorn.Server, thread: threading.Thread, base_url: str) -> None:
+        self._server = server
+        self._thread = thread
+        self.base_url = base_url
+
+    def stop(self) -> None:
+        """Ask the server to exit and wait for its thread."""
+        self._server.should_exit = True
+        self._thread.join(timeout=10)
+        if self._thread.is_alive():
+            raise RuntimeError("the mock registry server did not stop within 10 seconds")
+
+
+def start_mock_registry(
+    run_id: str,
+    dpip_key: str,
+    reported: Sequence[tuple[str, str]],
+    screen_delay: ScreenDelay | None,
+) -> RunningMockRegistry:
+    """
+    WHAT: Start the real nationalsim app under uvicorn on 127.0.0.1 (free port) with the given
+    (identifier_type, identifier_hash) entries already reported and visible.
+
+    WHY: The rule is to benchmark against the real registry over real TCP, not httpx.ASGITransport
+    and not an instant fake. The added /screen delay (for example the configured one) is attached only when given.
+    """
+    listing_delay, bank_settings = load_nationalsim_config()
+    clock = ManualClock(datetime.now(IST))
+    app = create_app(
+        clock=clock,
+        key_provider=lambda: dpip_key,
+        settings={"listing_delay_minutes": int(listing_delay.total_seconds() // 60), "banks": bank_settings},
+        screen_delay=screen_delay,
+    )
+    for number, (identifier_type, identifier_hash) in enumerate(reported):
+        app.state.registry.ingest(
+            bank_id="bank_0",
+            report_id=f"bench-{number}",
+            identifier_hash=identifier_hash,
+            identifier_type=identifier_type,
+            reason_code="fraud_confirmed",
+            reported_at=clock.now_ist() - timedelta(days=1),
+            run_id=run_id,
+        )
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    port = int(sock.getsockname()[1])
+    # Clients abandon calls that time out, so the server must not wait forever for those connections to close.
+    server = uvicorn.Server(uvicorn.Config(app, log_level="warning", timeout_graceful_shutdown=2))
+    thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 10
+    while not server.started:
+        if not thread.is_alive() or time.monotonic() > deadline:
+            raise RuntimeError("the mock registry server did not start within 10 seconds")
+        time.sleep(0.01)
+    return RunningMockRegistry(server, thread, f"http://127.0.0.1:{port}")
+
+
+def benchmark_registry_entries(run_id: str, payee_vpa: str) -> list[tuple[str, str]]:
+    """The (identifier_type, identifier_hash) entries the mock registry reports: the payee and the payer's device."""
+    return [
+        (
+            "account",
+            compute_identifier_hash(
+                key=BENCHMARK_DPIP_KEY,
+                run_id=run_id,
+                identifier_type="account",
+                raw_value=payee_vpa,
+                bank_index=get_bank_index(BENCHMARK_PAYEE_BANK_ID),
+            ),
+        ),
+        (
+            "device",
+            compute_identifier_hash(
+                key=BENCHMARK_DPIP_KEY,
+                run_id=run_id,
+                identifier_type="device",
+                raw_value=BENCHMARK_PAYER_DEVICE,
+                bank_index=None,
+            ),
+        ),
+    ]
+
+
+async def measure_against_mock_registry(
+    connection: asyncpg.Connection,
+    redis_client: redis.Redis,
+    bank_id: str,
+    run_id: str,
+    payer_acc: str,
+    payee_vpa: str,
+    decision_time: datetime,
+    delay_on: bool,
+    warmup_count: int = 5,
+    timed_count: int = 300,
+) -> LatencyBenchmarkResult:
+    """
+    WHAT: measure_decision_latency with the real NationalsimBankClient pointed at the mock registry over HTTP.
+    The registry holds one reported match for the payee account and one for the payer's device.
+    """
+    watermark = get_bank_watermark(redis_client, bank_id)
+    if watermark is None:
+        raise RuntimeError("the seeded history left no bank watermark, so there is nothing to benchmark")
+    questions = list_registry_questions(
+        redis_client,
+        run_id,
+        bank_id,
+        payer_acc,
+        BENCHMARK_PAYEE_BANK_ID,
+        payee_vpa,
+        decision_time,
+        watermark,
+        BENCHMARK_DPIP_KEY,
+    )
+
+    screen_delay = load_screen_delay_settings().build() if delay_on else None
+    registry_server = start_mock_registry(
+        run_id, BENCHMARK_DPIP_KEY, benchmark_registry_entries(run_id, payee_vpa), screen_delay
+    )
+    try:
+        client = NationalsimBankClient(registry_server.base_url, bank_id=bank_id, run_id=run_id)
+        return await measure_decision_latency(
+            connection=connection,
+            redis_client=redis_client,
+            bank_id=bank_id,
+            run_id=run_id,
+            payer_acc=payer_acc,
+            payee_vpa=payee_vpa,
+            decision_time=decision_time,
+            screener=NationalsimRegistryScreener(client),
+            warmup_count=warmup_count,
+            timed_count=timed_count,
+            dpip_key=BENCHMARK_DPIP_KEY,
+            registry_mode="http",
+            registry_delay="on" if delay_on else "off",
+            registry_questions=len(questions),
+        )
+    finally:
+        registry_server.stop()
+
+
 async def run_benchmark(
     warmup: int = 5,
     timed: int = 300,
     output_path: Path | None = None,
+    registry: str = "fake",
+    registry_delay: str = "off",
 ) -> LatencyBenchmarkResult:
     """Orchestrates benchmark environment setup, measurement, and reporting."""
+    if registry not in ("fake", "http"):
+        raise ValueError(f"registry must be 'fake' or 'http', got {registry!r}")
+    if registry_delay not in ("off", "on"):
+        raise ValueError(f"registry_delay must be 'off' or 'on', got {registry_delay!r}")
+    if registry == "fake" and registry_delay == "on":
+        raise ValueError("--registry-delay on needs --registry http (the fake registry answers instantly)")
     # Imported here because the showcase support module imports this module's measurement code at top level.
     from showcase.isolation import cleanup_workspace, create_workspace
     from showcase.level_15_support_c import setup_part_c_history
@@ -376,18 +586,32 @@ async def run_benchmark(
     try:
         fixture = await setup_part_c_history(workspace.connection)
         try:
-            res = await measure_decision_latency(
-                connection=fixture.connection,
-                redis_client=fixture.live_redis,
-                bank_id=fixture.bank_id,
-                run_id=fixture.run_id,
-                payer_acc=fixture.payer_acc,
-                payee_vpa=fixture.payee_vpa,
-                decision_time=fixture.decision_time,
-                screener=fixture.screener,
-                warmup_count=warmup,
-                timed_count=timed,
-            )
+            if registry == "http":
+                res = await measure_against_mock_registry(
+                    connection=fixture.connection,
+                    redis_client=fixture.live_redis,
+                    bank_id=fixture.bank_id,
+                    run_id=fixture.run_id,
+                    payer_acc=fixture.payer_acc,
+                    payee_vpa=fixture.payee_vpa,
+                    decision_time=fixture.decision_time,
+                    delay_on=registry_delay == "on",
+                    warmup_count=warmup,
+                    timed_count=timed,
+                )
+            else:
+                res = await measure_decision_latency(
+                    connection=fixture.connection,
+                    redis_client=fixture.live_redis,
+                    bank_id=fixture.bank_id,
+                    run_id=fixture.run_id,
+                    payer_acc=fixture.payer_acc,
+                    payee_vpa=fixture.payee_vpa,
+                    decision_time=fixture.decision_time,
+                    screener=fixture.screener,
+                    warmup_count=warmup,
+                    timed_count=timed,
+                )
             write_report(res, output_path or OUTPUT_REPORT_PATH)
             return res
         finally:
@@ -407,6 +631,12 @@ def write_report(res: LatencyBenchmarkResult, out_file: Path) -> None:
         "scope_note": res.scope_note,
         "warmup_count": res.warmup_count,
         "timed_count": res.timed_count,
+        "registry": {
+            "mode": res.registry_mode,
+            "delay": res.registry_delay,
+            "questions_per_decision": res.registry_questions,
+            "timeouts_in_timed_calls": res.registry_timeouts,
+        },
         "record_decision": {
             "p50_ms": res.record_decision_p50_ms,
             "p95_ms": res.record_decision_p95_ms,
@@ -449,6 +679,18 @@ def main() -> None:
         help=f"Path to write JSON benchmark report (default: {OUTPUT_REPORT_PATH}).",
     )
     parser.add_argument(
+        "--registry",
+        choices=("fake", "http"),
+        default="fake",
+        help="fake: the instant in-memory screener (default). http: the real mock registry over real HTTP.",
+    )
+    parser.add_argument(
+        "--registry-delay",
+        choices=("off", "on"),
+        default="off",
+        help="With --registry http: add the configured seeded delay to every /screen answer (default: off).",
+    )
+    parser.add_argument(
         "--quick",
         action="store_true",
         help="Quick mode with reduced call count for rapid verification (warmup=2, timed=5).",
@@ -458,7 +700,15 @@ def main() -> None:
     warmup_count = 2 if args.quick else args.warmup
     timed_count = 5 if args.quick else args.timed
 
-    result = asyncio.run(run_benchmark(warmup=warmup_count, timed=timed_count, output_path=args.output))
+    result = asyncio.run(
+        run_benchmark(
+            warmup=warmup_count,
+            timed=timed_count,
+            output_path=args.output,
+            registry=args.registry,
+            registry_delay=args.registry_delay,
+        )
+    )
     print(format_benchmark_output(result))
 
 

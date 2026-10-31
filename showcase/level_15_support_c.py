@@ -39,7 +39,12 @@ from api.v1.bank_keys import issue_api_key
 from api.v1.bank_service import record_decision
 from api.v1.models import DecisionRequest
 from api.v1.upi_outbox import UpiPaymentSide, record_upi_side
-from benchmarks.decision_latency import load_latency_budget, measure_decision_latency
+from benchmarks.decision_latency import (
+    BENCHMARK_PAYER_DEVICE,
+    load_latency_budget,
+    measure_against_mock_registry,
+    measure_decision_latency,
+)
 from core.config import config
 from core.event_clock import ManualClock
 from features.account_keys import namespace_pattern
@@ -307,7 +312,7 @@ async def setup_part_c_history(connection: asyncpg.Connection) -> PartCFixture:
             counterparty_vpa=payee_vpa,
             payee_type="person",
             channel="upi_app",
-            sender_device_fingerprint="fp_c_dev",
+            sender_device_fingerprint=BENCHMARK_PAYER_DEVICE,
             sender_os_generation=2,
             balance_after_paise=900000,
         )
@@ -355,7 +360,7 @@ async def setup_part_c_history(connection: asyncpg.Connection) -> PartCFixture:
             counterparty_vpa=payee_vpa,
             payee_type="person",
             channel="upi_app",
-            sender_device_fingerprint="fp_c_dev",
+            sender_device_fingerprint=BENCHMARK_PAYER_DEVICE,
             sender_os_generation=2,
             balance_after_paise=700000,
         )
@@ -744,36 +749,62 @@ def make_check_15c_3(quick: bool) -> Callable[[Workspace], Awaitable[CheckOutcom
         budget = load_latency_budget()
         warmup, timed = (2, 5) if quick else (5, 300)
 
-        result = await measure_decision_latency(
-            connection=fix.connection,
-            redis_client=fix.live_redis,
-            bank_id=fix.bank_id,
-            run_id=fix.run_id,
-            payer_acc=fix.payer_acc,
-            payee_vpa=fix.payee_vpa,
-            decision_time=fix.decision_time,
-            screener=fix.screener,
-            warmup_count=warmup,
-            timed_count=timed,
-        )
-
         if quick:
+            # Quick mode (CI): the instant in-memory registry, measured and recorded, not judged.
+            result = await measure_decision_latency(
+                connection=fix.connection,
+                redis_client=fix.live_redis,
+                bank_id=fix.bank_id,
+                run_id=fix.run_id,
+                payer_acc=fix.payer_acc,
+                payee_vpa=fix.payee_vpa,
+                decision_time=fix.decision_time,
+                screener=fix.screener,
+                warmup_count=warmup,
+                timed_count=timed,
+            )
+            delay_off_result = None
             key_number = (
                 f"measured on {platform.platform()}, budget judged only on {budget['hardware']}: "
-                f"decision p99={result.record_decision_p99_ms:.1f}ms, feature p99={result.compute_row_p99_ms:.1f}ms"
+                f"decision p99={result.record_decision_p99_ms:.1f}ms, feature p99={result.compute_row_p99_ms:.1f}ms "
+                f"(registry: in-memory fake, quick mode)"
             )
         else:
+            # Full mode: the real mock registry over real HTTP. The run with the added registry delay is judged
+            # against the budget; the run without the delay is measured and printed beside it.
+            measured = {}
+            for delay_on in (False, True):
+                measured[delay_on] = await measure_against_mock_registry(
+                    connection=fix.connection,
+                    redis_client=fix.live_redis,
+                    bank_id=fix.bank_id,
+                    run_id=fix.run_id,
+                    payer_acc=fix.payer_acc,
+                    payee_vpa=fix.payee_vpa,
+                    decision_time=fix.decision_time,
+                    delay_on=delay_on,
+                    warmup_count=warmup,
+                    timed_count=timed,
+                )
+            delay_off_result, result = measured[False], measured[True]
+            off_summary = (
+                f"delay off: decision p99={delay_off_result.record_decision_p99_ms:.1f}ms, "
+                f"feature p99={delay_off_result.compute_row_p99_ms:.1f}ms, "
+                f"timeouts={delay_off_result.registry_timeouts}"
+            )
+            on_summary = (
+                f"decision p99={result.record_decision_p99_ms:.1f}ms, feature p99={result.compute_row_p99_ms:.1f}ms, "
+                f"timeouts={result.registry_timeouts}"
+            )
             assert result.record_decision_p99_ms <= budget["max_ms"], (
-                f"record_decision p99 {result.record_decision_p99_ms:.1f} ms is over the {budget['max_ms']} ms budget"
+                f"record_decision p99 {result.record_decision_p99_ms:.1f} ms is over the {budget['max_ms']} ms budget "
+                f"(registry http, delay on; {off_summary})"
             )
             assert result.compute_row_p99_ms <= budget["feature_computation_max_ms"], (
                 f"compute_decision_row p99 {result.compute_row_p99_ms:.1f} ms is over the "
-                f"{budget['feature_computation_max_ms']} ms budget"
+                f"{budget['feature_computation_max_ms']} ms budget (registry http, delay on; {off_summary})"
             )
-            key_number = (
-                f"decision p99={result.record_decision_p99_ms:.1f}ms <= {budget['max_ms']:.0f}ms; "
-                f"feature p99={result.compute_row_p99_ms:.1f}ms <= {budget['feature_computation_max_ms']:.0f}ms"
-            )
+            key_number = f"registry http, delay on: {on_summary} within the budget; {off_summary}"
 
         return CheckOutcome(
             key_number=key_number,
@@ -784,6 +815,12 @@ def make_check_15c_3(quick: bool) -> Callable[[Workspace], Awaitable[CheckOutcom
                 "timed_count": result.timed_count,
                 "budget": result.budget,
                 "scope_note": result.scope_note,
+                "registry": {
+                    "mode": result.registry_mode,
+                    "delay": result.registry_delay,
+                    "questions_per_decision": result.registry_questions,
+                    "timeouts_in_timed_calls": result.registry_timeouts,
+                },
                 "record_decision_ms": {
                     "p50": result.record_decision_p50_ms,
                     "p95": result.record_decision_p95_ms,
@@ -797,6 +834,21 @@ def make_check_15c_3(quick: bool) -> Callable[[Workspace], Awaitable[CheckOutcom
                     "p99": result.compute_row_p99_ms,
                     "max": result.compute_row_max_ms,
                     "histogram": result.compute_row_histogram,
+                },
+                "delay_off_run": None
+                if delay_off_result is None
+                else {
+                    "registry_timeouts": delay_off_result.registry_timeouts,
+                    "record_decision_p50_p95_p99_ms": [
+                        delay_off_result.record_decision_p50_ms,
+                        delay_off_result.record_decision_p95_ms,
+                        delay_off_result.record_decision_p99_ms,
+                    ],
+                    "compute_decision_row_p50_p95_p99_ms": [
+                        delay_off_result.compute_row_p50_ms,
+                        delay_off_result.compute_row_p95_ms,
+                        delay_off_result.compute_row_p99_ms,
+                    ],
                 },
             },
         )
