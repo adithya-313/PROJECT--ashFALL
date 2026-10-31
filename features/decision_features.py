@@ -11,6 +11,7 @@ marked 'no_watermark' without guessing or falling back to wall-clock time.
 Decision time is strictly request.event_time; decided_at is clock.now_ist().
 """
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -40,7 +41,25 @@ from features.registry_screening import (
     ScreenOutcome,
 )
 
-__all__ = ["compute_decision_row"]
+__all__ = ["FeatureComputation", "compute_decision_row", "compute_feature_values"]
+
+
+@dataclass(frozen=True)
+class FeatureComputation:
+    """
+    Core computation result for decision feature evaluation.
+
+    Attributes:
+        feature_values: Dictionary mapping canonical feature names to computed values.
+        status: Evaluation status ('ok' or 'incomplete_request').
+        missing_request_fields: List of missing required request fields.
+        registry_answers: Formatted list of registry queries and answers.
+    """
+
+    feature_values: dict[str, Any]
+    status: str
+    missing_request_fields: list[str]
+    registry_answers: list[dict[str, Any]]
 
 
 def _format_registry_answers(answers: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -71,6 +90,176 @@ def _format_registry_answers(answers: list[dict[str, Any]]) -> list[dict[str, An
             }
         )
     return formatted
+
+
+def compute_feature_values(
+    redis_client: Any,
+    bank_id: str,
+    run_id: str,
+    request: DecisionRequest,
+    decision_time: datetime,
+    arrival_cutoff: datetime,
+    screener: RegistryScreener | None = None,
+    dpip_key: str | None = None,
+    settings: AccountFeaturesSettings | None = None,
+) -> FeatureComputation:
+    """
+    WHAT: Computes canonical M1 feature values for a DecisionRequest at specific timestamps.
+
+    WHY: Shared computation core extracted from compute_decision_row to support
+    both real-time decision logging and offline historical feature replay.
+
+    Args:
+        redis_client: Redis client instance containing account feature structures.
+        bank_id: Commercial bank identifier.
+        run_id: Simulation run identifier.
+        request: DecisionRequest specifying payment parameters.
+        decision_time: Evaluation timestamp (request.event_time).
+        arrival_cutoff: Upper bound for ingestion watermark visibility.
+        screener: Optional RegistryScreener instance (live recording or replay screener).
+        dpip_key: Optional explicit DPIP HMAC key.
+        settings: Optional AccountFeaturesSettings.
+
+    Returns:
+        FeatureComputation dataclass with feature_values, status, missing_request_fields,
+        and registry_answers.
+    """
+    canonical_names = canonical_feature_names()
+    account_id = request.sender_account_id
+
+    # 1. Incomplete request check (F4 & G5)
+    missing: list[str] = []
+    if not request.receiver_vpa:
+        missing.append("receiver_vpa")
+    if request.payee_type is None or request.payee_type not in ("person", "merchant"):
+        missing.append("payee_type")
+
+    cfg = settings if settings is not None else get_default_settings()
+
+    account_groups = [
+        "inflow",
+        "outflow",
+        "balance_pattern",
+        "routine_life",
+        "lifecycle",
+        "control",
+        "region",
+        "network",
+        "intelligence",
+    ]
+
+    # Account features are computed in every case
+    account_feats = compute_account_features(
+        client=redis_client,
+        run_id=run_id,
+        bank_id=bank_id,
+        account_id=account_id,
+        decision_time=decision_time,
+        arrival_cutoff=arrival_cutoff,
+        settings=cfg,
+        groups=account_groups,
+        screener=screener,
+        dpip_key=dpip_key,
+    )
+
+    payment_feats: dict[str, Any]
+    missing_request_fields: list[str]
+    if missing:
+        # Compute payer-only features; payee-VPA features computed if receiver_vpa present (G5)
+        status = "incomplete_request"
+        missing_request_fields = list(missing)
+        payer_only = compute_payer_only_payment_features(
+            client=redis_client,
+            run_id=run_id,
+            bank_id=bank_id,
+            payer_account_id=account_id,
+            amount_paise=request.amount_paise,
+            event_time=decision_time,
+            arrival_cutoff=arrival_cutoff,
+            settings=cfg,
+        )
+        first_payment_to_payee: bool | None = None
+        payee_same_bank_risk: float | None = None
+        payee_registry_match: bool | None = None
+
+        if request.receiver_vpa:
+            vpa_feats = compute_payee_vpa_payment_features(
+                client=redis_client,
+                run_id=run_id,
+                bank_id=bank_id,
+                payer_account_id=account_id,
+                payee_bank_id=request.receiver_bank_id,
+                payee_vpa=request.receiver_vpa,
+                event_time=decision_time,
+                arrival_cutoff=arrival_cutoff,
+                settings=cfg,
+                screener=screener,
+                dpip_key=dpip_key,
+            )
+            v_first = vpa_feats["first_payment_to_payee"]
+            first_payment_to_payee = bool(v_first) if isinstance(v_first, bool) else None
+            v_risk = vpa_feats["payee_same_bank_risk"]
+            payee_same_bank_risk = float(v_risk) if isinstance(v_risk, (int, float)) else None
+            v_match = vpa_feats["payee_registry_match"]
+            payee_registry_match = bool(v_match) if isinstance(v_match, bool) else None
+
+        payee_type = request.payee_type if request.payee_type in ("person", "merchant") else None
+        payment_feats = {
+            "amount_vs_payer_median_ratio": payer_only["amount_vs_payer_median_ratio"],
+            "amount_vs_payer_max_ratio": payer_only["amount_vs_payer_max_ratio"],
+            "customer_failed_attempts_24h": payer_only["customer_failed_attempts_24h"],
+            "hour_ist": payer_only["hour_ist"],
+            "payee_type": payee_type,
+            "first_payment_to_payee": first_payment_to_payee,
+            "payee_same_bank_risk": payee_same_bank_risk,
+            "payee_registry_match": payee_registry_match,
+        }
+    else:
+        status = "ok"
+        missing_request_fields = []
+        assert request.receiver_vpa is not None
+        assert request.payee_type in ("person", "merchant")
+        proposed = ProposedPayment(
+            run_id=run_id,
+            bank_id=bank_id,
+            payer_account_id=account_id,
+            payee_bank_id=request.receiver_bank_id,
+            payee_vpa=request.receiver_vpa,
+            payee_type=request.payee_type,
+            amount_paise=request.amount_paise,
+            event_time=decision_time,
+        )
+        payment_feats = compute_payment_features(
+            client=redis_client,
+            proposed=proposed,
+            arrival_cutoff=arrival_cutoff,
+            settings=cfg,
+            screener=screener,
+            dpip_key=dpip_key,
+        )
+
+    features_dict: dict[str, Any] = {}
+    for name in canonical_names:
+        if name in account_feats:
+            features_dict[name] = account_feats[name]
+        elif name in payment_feats:
+            features_dict[name] = payment_feats[name]
+        else:
+            features_dict[name] = None
+
+    raw_answers = getattr(screener, "answers", None)
+    registry_answers = (
+        _format_registry_answers(raw_answers)
+        if (raw_answers is not None and isinstance(raw_answers, list) and raw_answers)
+        else []
+    )
+
+    return FeatureComputation(
+        feature_values=features_dict,
+        status=status,
+        missing_request_fields=missing_request_fields,
+        registry_answers=registry_answers,
+    )
 
 
 def compute_decision_row(
@@ -142,134 +331,20 @@ def compute_decision_row(
     watermark_utc = watermark.astimezone(timezone.utc)
     watermark_lag_ms = int((decided_at_utc - watermark_utc).total_seconds() * 1000)
 
-    # 2. Incomplete request check (F4 & G5)
-    missing: list[str] = []
-    if not request.receiver_vpa:
-        missing.append("receiver_vpa")
-    if request.payee_type is None or request.payee_type not in ("person", "merchant"):
-        missing.append("payee_type")
-
     recording_screener: RecordingRegistryScreener | None = None
     if screener is not None:
         recording_screener = RecordingRegistryScreener(LiveRegistryScreener(screener), clock=clock)
 
-    cfg = settings if settings is not None else get_default_settings()
-
-    account_groups = [
-        "inflow",
-        "outflow",
-        "balance_pattern",
-        "routine_life",
-        "lifecycle",
-        "control",
-        "region",
-        "network",
-        "intelligence",
-    ]
-
-    # Account features are computed in every case except no_watermark
-    account_feats = compute_account_features(
-        client=redis_client,
-        run_id=run_id,
+    comp = compute_feature_values(
+        redis_client=redis_client,
         bank_id=bank_id,
-        account_id=account_id,
+        run_id=run_id,
+        request=request,
         decision_time=decision_time,
         arrival_cutoff=arrival_cutoff,
-        settings=cfg,
-        groups=account_groups,
         screener=recording_screener,
         dpip_key=dpip_key,
-    )
-
-    payment_feats: dict[str, Any]
-    missing_request_fields: list[str]
-    if missing:
-        # Compute payer-only features; payee-VPA features computed if receiver_vpa present (G5)
-        status = "incomplete_request"
-        missing_request_fields = list(missing)
-        payer_only = compute_payer_only_payment_features(
-            client=redis_client,
-            run_id=run_id,
-            bank_id=bank_id,
-            payer_account_id=account_id,
-            amount_paise=request.amount_paise,
-            event_time=decision_time,
-            arrival_cutoff=arrival_cutoff,
-            settings=cfg,
-        )
-        first_payment_to_payee: bool | None = None
-        payee_same_bank_risk: float | None = None
-        payee_registry_match: bool | None = None
-
-        if request.receiver_vpa:
-            vpa_feats = compute_payee_vpa_payment_features(
-                client=redis_client,
-                run_id=run_id,
-                bank_id=bank_id,
-                payer_account_id=account_id,
-                payee_bank_id=request.receiver_bank_id,
-                payee_vpa=request.receiver_vpa,
-                event_time=decision_time,
-                arrival_cutoff=arrival_cutoff,
-                settings=cfg,
-                screener=recording_screener,
-                dpip_key=dpip_key,
-            )
-            v_first = vpa_feats["first_payment_to_payee"]
-            first_payment_to_payee = bool(v_first) if isinstance(v_first, bool) else None
-            v_risk = vpa_feats["payee_same_bank_risk"]
-            payee_same_bank_risk = float(v_risk) if isinstance(v_risk, (int, float)) else None
-            v_match = vpa_feats["payee_registry_match"]
-            payee_registry_match = bool(v_match) if isinstance(v_match, bool) else None
-
-        payee_type = request.payee_type if request.payee_type in ("person", "merchant") else None
-        payment_feats = {
-            "amount_vs_payer_median_ratio": payer_only["amount_vs_payer_median_ratio"],
-            "amount_vs_payer_max_ratio": payer_only["amount_vs_payer_max_ratio"],
-            "customer_failed_attempts_24h": payer_only["customer_failed_attempts_24h"],
-            "hour_ist": payer_only["hour_ist"],
-            "payee_type": payee_type,
-            "first_payment_to_payee": first_payment_to_payee,
-            "payee_same_bank_risk": payee_same_bank_risk,
-            "payee_registry_match": payee_registry_match,
-        }
-    else:
-        status = "ok"
-        missing_request_fields = []
-        assert request.receiver_vpa is not None
-        assert request.payee_type in ("person", "merchant")
-        proposed = ProposedPayment(
-            run_id=run_id,
-            bank_id=bank_id,
-            payer_account_id=account_id,
-            payee_bank_id=request.receiver_bank_id,
-            payee_vpa=request.receiver_vpa,
-            payee_type=request.payee_type,
-            amount_paise=request.amount_paise,
-            event_time=decision_time,
-        )
-        payment_feats = compute_payment_features(
-            client=redis_client,
-            proposed=proposed,
-            arrival_cutoff=arrival_cutoff,
-            settings=cfg,
-            screener=recording_screener,
-            dpip_key=dpip_key,
-        )
-
-    features_dict: dict[str, Any] = {}
-    for name in canonical_names:
-        if name in account_feats:
-            features_dict[name] = account_feats[name]
-        elif name in payment_feats:
-            features_dict[name] = payment_feats[name]
-        else:
-            features_dict[name] = None
-
-    registry_answers = (
-        _format_registry_answers(recording_screener.answers)
-        if (recording_screener is not None and recording_screener.answers)
-        else []
+        settings=settings,
     )
 
     return FeatureLogRow(
@@ -281,8 +356,8 @@ def compute_decision_row(
         decided_at=decided_at,
         arrival_cutoff=arrival_cutoff,
         watermark_lag_ms=watermark_lag_ms,
-        status=status,
-        feature_values=features_dict,
-        missing_request_fields=missing_request_fields,
-        registry_answers=registry_answers,
+        status=comp.status,
+        feature_values=comp.feature_values,
+        missing_request_fields=comp.missing_request_fields,
+        registry_answers=comp.registry_answers,
     )
