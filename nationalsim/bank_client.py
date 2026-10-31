@@ -9,6 +9,7 @@ false 'no match' screening results.
 """
 
 import asyncio
+import ssl
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -250,6 +251,10 @@ class NationalsimBankClient:
         self.run_id: str = run_id
         self.clock: Clock = clock if clock is not None else WallClock()
         self.transport: httpx.AsyncBaseTransport | None = transport
+        # Building the TLS context loads the CA bundle (about 250 ms on some machines), so it is built once here
+        # with httpx's default trust settings (verification on) and shared by every request's AsyncClient. The
+        # AsyncClient itself cannot be kept: screen_sync runs each call in a new event loop.
+        self._ssl_context: ssl.SSLContext = httpx.create_ssl_context()
 
         self.active_outage: OutageEvent | None = None
         self.outages: list[OutageEvent] = []
@@ -311,7 +316,9 @@ class NationalsimBankClient:
             httpx.RemoteProtocolError,
         )
 
-        async with httpx.AsyncClient(timeout=self.timeout_seconds, transport=self.transport) as client:
+        async with httpx.AsyncClient(
+            timeout=self.timeout_seconds, transport=self.transport, verify=self._ssl_context
+        ) as client:
             # Attempt 1
             try:
                 resp = await client.request(method, url, json=json_data, params=params)
