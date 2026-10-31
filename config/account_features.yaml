@@ -160,5 +160,5 @@ decision_registry:
   timeout_ms:
     value: 20
     label: policy
-    reason: "Longest one registry screening call may take inside a decision; a call that takes longer is answered 'unknown' (never 'no match') and counted in ashfall_registry_timeouts_total."
-    derived_from: "leaves 30 ms of the 50 ms feature budget for the Redis-backed feature groups (their measured p99 on the owner's laptop after the duplicate-reads round: 49.0 ms in the 300-call decision benchmark, 43.7 ms in showcase 15c-3 full mode); the registry calls run in parallel, so one decision waits for the slowest call, not the sum"
+    reason: "Longest one registry screening call may take inside a decision; a call that takes longer is answered 'unknown' (never 'no match') and counted in ashfall_registry_timeouts_total. Value pending architect decision (under review)."
+    derived_from: "measured on the owner's Windows laptop (Python 3.12.10): the feature p99 of the 300-call decision benchmark with an instant in-memory registry was 43.1 to 83.5 ms across repeated runs (budget 50 ms); three parallel screening calls to the mock registry over localhost HTTP, made with the real bank client after it began building its TLS context once, took p50 8.3 ms and p99 11.6 ms (300 samples, no added delay); before that fix, building the context per request had taken about 250 ms per call; on Windows with Python 3.12 the asyncio clock ticks about every 15.6 ms, so a 20 ms asyncio timeout can fire after as little as 4 ms there"

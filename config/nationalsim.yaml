@@ -69,7 +69,7 @@ nationalsim:
     seed: 20261101
     label: assumption
     derived_from: "no public latency figure for the national registry; assumed intra-India API round trip"
-    reason: "Optional delay added to each /screen answer (drawn per request from a seeded stream, so runs repeat) to benchmark decisions against a registry that takes time to answer; it is off unless a ScreenDelay is passed to create_app or NATIONALSIM_SCREEN_DELAY=on."
+    reason: "Optional delay added to each /screen answer (drawn per request from a seeded stream, so runs repeat) to benchmark decisions against a registry that takes time to answer; it is off unless a ScreenDelay is passed to create_app or NATIONALSIM_SCREEN_DELAY=on. The 10 to 30 ms range is pending architect decision (under review)."
 
   client_timeout_seconds:
     value: 2.0
