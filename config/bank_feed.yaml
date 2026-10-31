@@ -23,6 +23,14 @@ bank_feed:
       acc_person_: person
       acc_shop_: merchant
 
+  account_type_by_account_prefix:
+    label: policy
+    reason: "a bank knows each account's product type; gang business mules are shop-type accounts and show as current accounts, as at a real bank"
+    derived_from: "plan M1 lifecycle row"
+    mapping:
+      acc_person_: savings
+      acc_shop_: current
+
   channel_value:
     label: assumption
     value: upi_app
@@ -93,3 +101,10 @@ bank_feed:
       - os_update
       - account_opened
       - account_reactivated
+
+  emit_opening_for_existing_accounts:
+    label: policy
+    value: true
+    reason: "Commercial banks require account_opened lifecycle events for pre-existing accounts at simulation start."
+    derived_from: "Level 15 architect decision 3A"
+

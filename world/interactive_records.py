@@ -431,3 +431,4 @@ class InteractiveWorldOutput:
     result: InteractiveRunResult
     effective_config: dict[str, Any]
     code_version: str
+    account_opening_days: dict[str, int] = field(default_factory=dict)

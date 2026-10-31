@@ -9,6 +9,7 @@ false 'no match' screening results.
 """
 
 import asyncio
+import ssl
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +18,7 @@ from typing import Any
 import httpx
 import yaml
 
+from core.config_validator import load_yaml
 from core.event_clock import Clock, WallClock
 from core.logging import get_logger
 
@@ -72,6 +74,7 @@ class ScreenResult:
         risk_score: Optional float risk score from registry.
         distinct_accounts_linked: Count of distinct accounts linked to the identifier.
         is_unavailable: Boolean flag indicating registry unreachable.
+        first_visible_at: Optional timestamp of the earliest matching entry's initial visibility.
 
     What it returns:
         Immutable ScreenResult instance.
@@ -91,6 +94,7 @@ class ScreenResult:
     risk_score: float | None = None
     distinct_accounts_linked: int | None = None
     is_unavailable: bool = False
+    first_visible_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -191,6 +195,62 @@ def load_bank_client_config(
     return float(raw_timeout), float(raw_backoff)
 
 
+def load_registry_pool_settings(config_path: Path | str = "config/nationalsim.yaml") -> tuple[str, int, int]:
+    """Loads (registry_base_url, client_max_connections, client_max_keepalive_connections) from configuration.
+
+    What it is for:
+        Gives the API's shared registry connection pool its address and size without hardcoding them.
+
+    Errors and side effects:
+        Raises ValueError if the file or any of the three keys is missing or invalid.
+    """
+    path = Path(config_path)
+    file_name = str(path)
+    if not path.is_file():
+        raise ValueError(f"Missing configuration file '{file_name}'.")
+    parsed_yaml = load_yaml(path)
+    if not isinstance(parsed_yaml, dict) or not isinstance(parsed_yaml.get("nationalsim"), dict):
+        raise ValueError(f"Missing 'nationalsim' section in {file_name}.")
+    section = parsed_yaml["nationalsim"]
+    values: dict[str, Any] = {}
+    for key in ("registry_base_url", "client_max_connections", "client_max_keepalive_connections"):
+        block = section.get(key)
+        if not isinstance(block, dict) or "value" not in block:
+            raise ValueError(f"Missing key '{key}.value' in {file_name}.")
+        values[key] = block["value"]
+    base_url = values["registry_base_url"]
+    if not isinstance(base_url, str) or not base_url.startswith(("http://", "https://")):
+        raise ValueError(f"Invalid 'registry_base_url' in {file_name}: must be an http(s) URL.")
+    max_connections = values["client_max_connections"]
+    max_keepalive = values["client_max_keepalive_connections"]
+    sizes = (("client_max_connections", max_connections), ("client_max_keepalive_connections", max_keepalive))
+    for key, value in sizes:
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"Invalid '{key}' in {file_name}: must be a positive integer.")
+    if max_keepalive > max_connections:
+        raise ValueError(f"Invalid pool settings in {file_name}: keepalive connections exceed max connections.")
+    return base_url.rstrip("/"), max_connections, max_keepalive
+
+
+def create_shared_http_client(
+    max_connections: int,
+    max_keepalive_connections: int,
+    timeout_seconds: float,
+) -> httpx.AsyncClient:
+    """Creates ONE AsyncClient (a connection pool) with the shared TLS context and explicit limits.
+
+    What it is for:
+        The API creates it once at startup and passes it to every NationalsimBankClient it builds, so registry
+        calls reuse open connections instead of opening a TCP connection (and a client) per call. The caller owns
+        it and must close it with `await client.aclose()` at shutdown. TLS verification stays on.
+    """
+    return httpx.AsyncClient(
+        timeout=timeout_seconds,
+        verify=httpx.create_ssl_context(),
+        limits=httpx.Limits(max_connections=max_connections, max_keepalive_connections=max_keepalive_connections),
+    )
+
+
 class NationalsimBankClient:
     """Bank-side HTTP client for nationalsim /screen and /i4c/feed with outage recording.
 
@@ -236,8 +296,15 @@ class NationalsimBankClient:
         clock: Clock | None = None,
         timeout_seconds: float | None = None,
         retry_backoff_seconds: float | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
+        http_client: httpx.AsyncClient | None = None,
     ) -> None:
-        cfg_timeout, cfg_backoff = load_bank_client_config(config_path)
+        # The settings file is only read when a value is not given, so a client built per decision from
+        # already-loaded settings does no file or YAML work.
+        if timeout_seconds is None or retry_backoff_seconds is None:
+            cfg_timeout, cfg_backoff = load_bank_client_config(config_path)
+        else:
+            cfg_timeout, cfg_backoff = timeout_seconds, retry_backoff_seconds
         self.timeout_seconds: float = timeout_seconds if timeout_seconds is not None else cfg_timeout
         self.retry_backoff_seconds: float = (
             retry_backoff_seconds if retry_backoff_seconds is not None else cfg_backoff
@@ -246,6 +313,15 @@ class NationalsimBankClient:
         self.bank_id: str = bank_id
         self.run_id: str = run_id
         self.clock: Clock = clock if clock is not None else WallClock()
+        self.transport: httpx.AsyncBaseTransport | None = transport
+        # An optional shared AsyncClient (a connection pool owned by the caller, for example the API's lifespan).
+        # When given, every request uses it and nothing is created or closed per request.
+        self.http_client: httpx.AsyncClient | None = http_client
+        # Building the TLS context loads the CA bundle (about 250 ms on some machines), so it is built once here
+        # with httpx's default trust settings (verification on) and shared by every request's AsyncClient. Without
+        # a shared client the AsyncClient itself cannot be kept: screen_sync runs each call in a new event loop.
+        # A shared client already carries its own context, so none is built for it.
+        self._ssl_context: ssl.SSLContext | None = httpx.create_ssl_context() if http_client is None else None
 
         self.active_outage: OutageEvent | None = None
         self.outages: list[OutageEvent] = []
@@ -300,49 +376,84 @@ class NationalsimBankClient:
     ) -> tuple[bool, dict[str, Any] | None]:
         """Executes an HTTP request with at most one retry and outage recording."""
         url = f"{self.base_url}{path}"
+        if self.http_client is not None:
+            return await self._request_with_single_retry(self.http_client, method, url, json_data, params)
+        if self._ssl_context is None:
+            raise RuntimeError("a bank client without a shared http_client must have built its TLS context")
+        async with httpx.AsyncClient(
+            timeout=self.timeout_seconds, transport=self.transport, verify=self._ssl_context
+        ) as client:
+            return await self._request_with_single_retry(client, method, url, json_data, params)
+
+    async def _request_with_single_retry(
+        self,
+        client: httpx.AsyncClient,
+        method: str,
+        url: str,
+        json_data: dict[str, Any] | None,
+        params: dict[str, Any] | None,
+    ) -> tuple[bool, dict[str, Any] | None]:
+        """Sends the request on `client` with at most one retry; records success or outage."""
         network_errors = (
             httpx.ConnectError,
             httpx.TimeoutException,
             httpx.NetworkError,
             httpx.RemoteProtocolError,
         )
-
-        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-            # Attempt 1
-            try:
-                resp = await client.request(method, url, json=json_data, params=params)
-                resp.raise_for_status()
-                self._record_success()
-                return True, resp.json()
-            except network_errors as err1:
-                logger.warning(
-                    "Nationalsim request attempt 1 failed, retrying once",
-                    url=url,
-                    error_type=type(err1).__name__,
-                )
-
-            # Short backoff before single retry (avoiding retry storm)
-            await asyncio.sleep(self.retry_backoff_seconds)
-
-            # Attempt 2 (the single allowed retry)
-            try:
-                resp = await client.request(method, url, json=json_data, params=params)
-                resp.raise_for_status()
-                self._record_success()
-                return True, resp.json()
-            except network_errors as err2:
-                logger.error(
-                    "Nationalsim request retry failed; marking outage",
-                    url=url,
-                    error_type=type(err2).__name__,
-                )
+        # Attempt 1
+        try:
+            resp = await client.request(method, url, json=json_data, params=params)
+            if resp.status_code == 403:
+                # Non-participant refused by registry (Rule 3)
                 self._record_failure()
                 return False, None
+            resp.raise_for_status()
+            self._record_success()
+            return True, resp.json()
+        except network_errors as err1:
+            logger.warning(
+                "Nationalsim request attempt 1 failed, retrying once",
+                url=url,
+                error_type=type(err1).__name__,
+            )
+        except httpx.HTTPStatusError as status_err1:
+            if status_err1.response.status_code == 403:
+                self._record_failure()
+                return False, None
+            raise
+
+        # Short backoff before single retry (avoiding retry storm)
+        await asyncio.sleep(self.retry_backoff_seconds)
+
+        # Attempt 2 (the single allowed retry)
+        try:
+            resp = await client.request(method, url, json=json_data, params=params)
+            if resp.status_code == 403:
+                # Non-participant refused by registry (Rule 3)
+                self._record_failure()
+                return False, None
+            resp.raise_for_status()
+            self._record_success()
+            return True, resp.json()
+        except network_errors as err2:
+            logger.error(
+                "Nationalsim request retry failed; marking outage",
+                url=url,
+                error_type=type(err2).__name__,
+            )
+            self._record_failure()
+            return False, None
+        except httpx.HTTPStatusError as status_err2:
+            if status_err2.response.status_code == 403:
+                self._record_failure()
+                return False, None
+            raise
 
     async def screen(
         self,
         identifier_hash: str,
         identifier_type: str = "account",
+        as_of: datetime | None = None,
     ) -> ScreenResult:
         """Screens an identifier against the registry with resilient outage handling.
 
@@ -353,27 +464,31 @@ class NationalsimBankClient:
         Inputs:
             identifier_hash: 64-character hexadecimal HMAC digest of the identifier.
             identifier_type: 'account', 'device', or 'phone'. Defaults to 'account'.
+            as_of: Optional evaluation timestamp (testbed replay parameter, not part of real DPIP).
 
         What it returns:
             ScreenResult containing status ('match', 'no_match', or 'unavailable'),
-            match boolean (None if unavailable, NEVER False on outage), and risk attributes.
+            match boolean (None if unavailable, NEVER False on outage), risk attributes, and first_visible_at.
 
         How it works:
-            Dispatches POST /screen to nationalsim. On outage, logs failure and returns
-            ScreenResult(status='unavailable', match=None, is_unavailable=True).
+            Dispatches POST /screen to nationalsim. On outage or 403 non-participant, logs failure
+            and returns ScreenResult(status='unavailable', match=None, is_unavailable=True).
 
         Errors and side effects:
-            Records outage events in client history when service is unreachable.
+            Records outage events in client history when service is unreachable or bank is refused.
 
         Limits:
             Does not hash identifiers internally; caller must provide hashed identifiers.
         """
-        payload = {
+        payload: dict[str, Any] = {
             "requesting_bank_id": self.bank_id,
             "identifier_hash": identifier_hash,
             "identifier_type": identifier_type,
             "run_id": self.run_id,
         }
+        if as_of is not None:
+            payload["as_of"] = as_of.isoformat()
+
         success, data = await self._execute_with_single_retry("POST", "/screen", json_data=payload)
         if not success or data is None:
             return ScreenResult(
@@ -382,16 +497,23 @@ class NationalsimBankClient:
                 risk_score=None,
                 distinct_accounts_linked=None,
                 is_unavailable=True,
+                first_visible_at=None,
             )
 
         match_bool = bool(data["match"])
         status_str = "match" if match_bool else "no_match"
+        raw_first_visible = data.get("first_visible_at")
+        first_visible_at: datetime | None = None
+        if raw_first_visible is not None:
+            first_visible_at = datetime.fromisoformat(raw_first_visible)
+
         return ScreenResult(
             status=status_str,
             match=match_bool,
             risk_score=data.get("risk_score"),
             distinct_accounts_linked=data.get("distinct_accounts_linked"),
             is_unavailable=False,
+            first_visible_at=first_visible_at,
         )
 
     async def get_i4c_feed(self) -> I4CFeedResult:
@@ -442,9 +564,10 @@ class NationalsimBankClient:
         self,
         identifier_hash: str,
         identifier_type: str = "account",
+        as_of: datetime | None = None,
     ) -> ScreenResult:
         """Synchronous wrapper for screen()."""
-        return asyncio.run(self.screen(identifier_hash, identifier_type))
+        return asyncio.run(self.screen(identifier_hash, identifier_type, as_of=as_of))
 
     def get_i4c_feed_sync(self) -> I4CFeedResult:
         """Synchronous wrapper for get_i4c_feed()."""

@@ -40,7 +40,8 @@ TINY_TEST = FastRunSettings(101, 60, 12, 61, "test")
 TINY_STRESS = FastRunSettings(101, 60, 12, 120, "stress")
 GENEROUS_BUDGET = GangBudget(money_paise=50_000_000, time_minutes=500_000, max_risk=0.99)
 # Computed by the architect at commit a48f81a with the same gang, settings and code_version.
-FIXTURE_RUN_ID_A48F81A = "853f341529c51e29"
+# Changed in Level 15b: opening-date settings joined the world's run identity; nothing else in this run changed.
+FIXTURE_RUN_ID_A48F81A = "5f605e48c0459c15"
 FIXTURE_EVENT_COUNT_A48F81A = 2936
 
 

@@ -257,7 +257,8 @@ def test_device_event_mapping_and_counts_on_tiny_world(tiny_world_output: Intera
     total_raw_device_events = len(tiny_world_output.result.applied_device_events)
 
     assert total_raw_device_events == 32
-    assert total_projected + total_dropped == 32
+    # 32 device events + 72 existing accounts = 104 total projected and dropped account events
+    assert total_projected + total_dropped == 104
 
     # Verify that at least one phone_change was mapped to device_binding_change with clean details.
     all_account_events = [ev for bank_events in feed.account_events_by_bank.values() for ev in bank_events]
@@ -279,20 +280,22 @@ def test_opened_account_drops_owner_kind(tiny_world_output: InteractiveWorldOutp
     """Verifies that mid-run opened accounts become account_opened events with owner_kind and stream dropped."""
     from dataclasses import replace
 
-    synthetic_opened = (300, "acc_person_000999", "person", "new_stream", 1, 500000)
+    target_person = next(p for p in tiny_world_output.world.people if p.bank_index == 1)
+    synthetic_opened = (300, target_person.account_id, "person", "new_stream", 1, 500000)
     modified_result = replace(tiny_world_output.result, opened_accounts=[synthetic_opened])
     modified_output = replace(tiny_world_output, result=modified_result)
 
     feed = project_run(modified_output)
     bank_1_events = feed.account_events_by_bank["bank_1"]
-    open_events = [ev for ev in bank_1_events if ev.account_id == "acc_person_000999"]
+    open_events = [ev for ev in bank_1_events if ev.account_id == target_person.account_id]
 
     assert len(open_events) == 1
     ev = open_events[0]
     assert ev.kind == "account_opened"
     assert ev.bank_id == "bank_1"
-    assert ev.event_id == f"{tiny_world_output.result.run_id}-open-acc_person_000999"
-    assert ev.details == {}
+    assert ev.event_id == f"{tiny_world_output.result.run_id}-open-{target_person.account_id}"
+    expected_type = "savings" if target_person.account_id.startswith("acc_person_") else "current"
+    assert ev.details == {"home_region": target_person.region, "account_type": expected_type}
 
     ev_dict = asdict(ev)
     assert "owner_kind" not in ev_dict

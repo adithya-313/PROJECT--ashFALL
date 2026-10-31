@@ -1,0 +1,176 @@
+# =====================================================================
+# ACCOUNT FEATURES: configuration for Level 15 account feature updating,
+# Redis sliding look-back windows, key lifecycle and table polling.
+# =====================================================================
+
+account_features:
+  windows_seconds:
+    label: policy
+    value: [3600, 86400, 604800]
+    reason: "Defines sliding look-back window intervals for account velocity features."
+    derived_from: "Level 15 plan, M1 inflow group: 1 hour, 24 hours, 7 days"
+
+  retention_seconds:
+    label: policy
+    value: 604800
+    reason: "The largest window; anything older can never be read by any feature."
+    derived_from: "Level 15 plan, M1 inflow group: 7 days"
+
+  allowed_lateness_seconds:
+    label: policy
+    value: 86400
+    reason: "events may arrive up to one simulated day late; anything later is outside the window the trim keeps"
+    derived_from: "Level 15 architect decision 3 (trim cutoff = newest event time − (retention + allowed lateness))"
+
+  key_expiry_margin_seconds:
+    label: policy
+    value: 86400
+    reason: "Redis expiry TTL margin added to retention so quiet accounts are cleaned up without expiring valid window data."
+    derived_from: "Level 15 plan, Redis key lifecycle policy"
+
+  key_prefix:
+    label: policy
+    value: "acctf"
+    reason: "Redis namespace prefix for Level 15 account feature structures, avoiding collision with existing keys."
+    derived_from: "data-contract rule: Level 15 may add a prefix"
+
+  run_id_source:
+    label: policy
+    path: "config/interactive_runner.yaml"
+    key: "run_id_hex_length"
+    value: "config/interactive_runner.yaml"
+    reason: "Path to runner config specifying exact length of run identifiers."
+    derived_from: "config/interactive_runner.yaml run_id_hex_length"
+
+  account_event_batch_size:
+    label: policy
+    value: 500
+    reason: "Batch size limit for polling bank account events table to bound memory usage and transaction lock times."
+    derived_from: "Level 15 plan, account event ingestion batching"
+
+  account_event_overlap_rows:
+    label: policy
+    value: 200
+    reason: "re-read the tail of committed events so out-of-order transaction commits are not skipped"
+    derived_from: "Level 15 architect decision 5"
+
+  summary_horizon_days:
+    label: policy
+    value: 62
+    reason: "Defines the summary look-back horizon in whole days for routine-life and counterparty features."
+    derived_from: "two monthly cycles plus slack, because pay dates shift around weekends and holidays"
+
+  routine_life_warm_up_days:
+    label: policy
+    value: 62
+    reason: "Minimum history duration required before routine-life features mean anything."
+    derived_from: "a world must run at least one horizon before routine-life features mean anything"
+
+  fingerprint_warning_count:
+    label: assumption
+    value: 10
+    reason: "Threshold of distinct device fingerprints above which a warning is logged naming the account."
+    derived_from: "real accounts have few devices; more is itself a signal and is reported, never dropped"
+
+  small_credit_max_paise:
+    label: assumption
+    value: 50000
+    reason: "Threshold in paise for small incoming test or fan-in credits (₹500)."
+    derived_from: "plan M1 table; placeholder until the Level 17 rules tuning"
+
+  reporting_thresholds_paise:
+    label: assumption
+    value: [1000000, 5000000, 10000000]
+    reason: "Regulatory reporting thresholds in paise (₹10,000, ₹50,000, ₹1,00,000)."
+    derived_from: "plan M1 table; placeholder until the Level 17 rules tuning"
+
+  below_threshold_band_fraction:
+    label: assumption
+    value: 0.05
+    reason: "Structuring detection band fraction below reporting thresholds (5%)."
+    derived_from: "plan M1 table; placeholder until the Level 17 rules tuning"
+
+  near_zero_balance_max_paise:
+    label: assumption
+    value: 10000
+    reason: "Threshold in paise below which an account balance is considered near zero (₹100)."
+    derived_from: "plan M1 table; placeholder until the Level 17 rules tuning"
+
+  routine_cycle_days:
+    label: policy
+    value: 30
+    reason: "monthly rhythm for salary and recurring payments"
+    derived_from: "Level 15 plan, M1 routine life group"
+
+  routine_rhythm_tolerance_days:
+    label: policy
+    value: 5
+    reason: "tolerance in days around monthly rhythm cycle"
+    derived_from: "Level 15 plan, M1 routine life group"
+
+  routine_min_history_days:
+    label: policy
+    value: 35
+    reason: "minimum history duration in days required before routine-life features mean anything"
+    derived_from: "architect decision on short history"
+
+  machine_timing_min_payments:
+    label: assumption
+    value: 5
+    reason: "minimum number of payments required to evaluate machine timing regularity"
+    derived_from: "Level 15 plan, M1 control group"
+
+  device_change_window_seconds:
+    label: policy
+    value: 604800
+    reason: "window duration in seconds for recent device binding changes (7 days)"
+    derived_from: "Level 15 plan, M1 control group"
+
+  network_max_hops:
+    label: assumption
+    value: 3
+    reason: "beyond three hops almost every account is connected in a payment graph; placeholder until Level 17 tuning"
+    derived_from: "Level 15 plan, M1 network group"
+
+  network_max_nodes_visited:
+    label: policy
+    value: 5000
+    reason: "bound the work per decision; when reached, the result is None and a warning is logged, never a partial number"
+    derived_from: "Level 15c latency budget"
+
+  commit_grace:
+    label: policy
+    value: 5
+    reason: "Watermark advance slack in seconds when consumer or poller is idle."
+    derived_from: "Level 15c ingestion watermark contract"
+
+account_snapshots:
+  full_interval_days:
+    value: 7
+    label: "assumption"
+    derived_from: "Level 15c architect decision: weekly full snapshot so quiet accounts appear in every training week; tune in Level 16"
+    reason: "Ensures all non-transacting and dormant customer accounts are periodically captured for representation in training datasets."
+
+
+# =====================================================================
+# DECISION REGISTRY: how long one decision waits for the national registry
+# =====================================================================
+
+decision_registry:
+  timeout_margin_ms:
+    value: 10
+    label: policy
+    reason: Safety margin subtracted when the registry timeout is derived from the latency budget; it is never reduced to make the formula fit.
+    derived_from: "architect ruling A2 and W3, Level 15 latency round"
+
+  timeout_minimum_ms:
+    value: 5
+    label: policy
+    reason: A derived registry timeout below this is an error (stop and report), because a timeout that short would mark almost every real answer as timed out.
+    derived_from: "architect ruling A2, Level 15 latency round"
+
+  timeout_ms:
+    value: 33.19
+    label: policy
+    reason: Longest one registry screening call may take inside a decision; a call that takes longer is answered 'unknown' (never 'no match') and counted in ashfall_registry_timeouts_total.
+    derived_from: "formula (architect ruling A2): timeout_ms = max_ms - feature_computation_max_ms - other_overhead_p99 - margin - clock_resolution_ms = 100 - 50 - 6.806 - 10 - 0.000001 = 33.194 ms, written as 33.19. Inputs: max_ms and feature_computation_max_ms from config/evaluation.yaml; other_overhead_p99 = 6.806 ms, the median of the three run p99 values (18.48, 5.13, 6.81 ms) of everything in record_decision except feature computation and the registry wait, measured with the fake registry, 100 warm-up + 3 x 1,000 calls, inside the compose bench container (Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.41, Python 3.11.16) on the owner's Windows laptop, commit 11ed048, 2026-11-01; margin 10 ms from timeout_margin_ms; clock resolution 0.000001 ms from time.get_clock_info('monotonic') in that container (CLOCK_MONOTONIC)"

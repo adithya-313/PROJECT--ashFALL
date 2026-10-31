@@ -38,6 +38,7 @@ class AppConfig(BaseSettings):
         database_url: Mandatory PostgreSQL connection URI (no default).
         redis_url: Mandatory Redis connection URI (no default).
     """
+
     environment: str = "development"
     log_level: str = "INFO"
     database_url: str
@@ -72,12 +73,17 @@ class AppConfig(BaseSettings):
     enable_model_v2: bool = False
     enable_gnn_ensemble: bool = False
     enable_research_agent_internet: bool = False
+    decision_feature_logging_enabled: bool = False
 
     # Bank HMAC request signing secrets (Level 14b). Stored securely as SecretStr
     # so they are never printed, logged, or serialized to JSON in plain text.
     bank_signing_secret_bank_0: SecretStr | None = None
     bank_signing_secret_bank_1: SecretStr | None = None
     bank_signing_secret_bank_2: SecretStr | None = None
+
+    # Shared secret key DPIP gives each participating bank (architect decision 9c);
+    # a bank without it cannot screen, so its registry features are unknown.
+    dpip_participant_key: SecretStr | None = None
 
     # SettingsConfigDict tells pydantic-settings where to look for values.
     # env_file=".env" reads variables from a .env file if it exists.

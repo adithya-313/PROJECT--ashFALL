@@ -73,6 +73,7 @@ class UpiPaymentSide:
     channel: str | None = None
     sender_device_fingerprint: str | None = None
     sender_os_generation: int | None = None
+    balance_after_paise: int | None = None
 
 
 class UpiEventData(BaseModel):
@@ -91,6 +92,7 @@ class UpiEventData(BaseModel):
     channel: str | None = None
     sender_device_fingerprint: str | None = None
     sender_os_generation: int | None = None
+    balance_after_paise: int | None = None
 
 
 class UpiEventPayload(BaseModel):
@@ -188,6 +190,12 @@ def validate_side(upi_side: UpiPaymentSide) -> None:
     ):
         raise ValueError(f"sender_os_generation must be a non-negative integer, got {upi_side.sender_os_generation!r}")
 
+    # 10. Balance after transaction must be a non-negative integer when provided
+    if upi_side.balance_after_paise is not None and (
+        not isinstance(upi_side.balance_after_paise, int) or upi_side.balance_after_paise < 0
+    ):
+        raise ValueError(f"balance_after_paise must be a non-negative integer, got {upi_side.balance_after_paise!r}")
+
 
 def make_upi_event_id(payment_id: str, side: str) -> uuid.UUID:
     """
@@ -233,13 +241,13 @@ async def record_upi_side(conn: asyncpg.Connection, upi_side: UpiPaymentSide) ->
                 source, account_id, amount, payment_id, bank_id, side,
                 counterparty_vpa, counterparty_bank_id, amount_paise,
                 event_time, status, failure_domain, payee_type, channel,
-                sender_device_fingerprint, sender_os_generation
+                sender_device_fingerprint, sender_os_generation, balance_after_paise
             )
             VALUES (
                 'world', $1, $2, $3, $4, $5,
                 $6, $7, $8,
                 $9, $10, $11, $12, $13,
-                $14, $15
+                $14, $15, $16
             )
             ON CONFLICT ON CONSTRAINT uq_transactions_bank_payment_side DO NOTHING
             RETURNING transaction_id, created_at
@@ -259,6 +267,7 @@ async def record_upi_side(conn: asyncpg.Connection, upi_side: UpiPaymentSide) ->
             upi_side.channel,
             upi_side.sender_device_fingerprint,
             upi_side.sender_os_generation,
+            upi_side.balance_after_paise,
         )
 
         if row is not None:
@@ -290,6 +299,7 @@ async def record_upi_side(conn: asyncpg.Connection, upi_side: UpiPaymentSide) ->
                     channel=upi_side.channel,
                     sender_device_fingerprint=upi_side.sender_device_fingerprint,
                     sender_os_generation=upi_side.sender_os_generation,
+                    balance_after_paise=upi_side.balance_after_paise,
                 ),
             )
 

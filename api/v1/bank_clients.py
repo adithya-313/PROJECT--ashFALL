@@ -9,10 +9,14 @@ import uuid
 from typing import Any
 
 import httpx
+import orjson
 
-from api.v1.bank_service import IdempotentOutcome
+from api.v1.bank_service import IdempotentOutcome, InProcessBankClient
 from api.v1.signing import sign_outgoing
 from core.event_clock import Clock
+
+__all__ = ["BankCallError", "SignedHttpBankClient", "InProcessBankClient"]
+
 
 
 class BankCallError(Exception):
@@ -129,4 +133,21 @@ class SignedHttpBankClient:
             body=body,
             replayed=replayed,
         )
+
+    async def record_withdrawal(
+        self,
+        withdrawal: Any,
+        idempotency_key: str,
+    ) -> IdempotentOutcome:
+        """Issues an authenticated POST request to record a withdrawal."""
+        if isinstance(withdrawal, bytes):
+            body_bytes = withdrawal
+        elif isinstance(withdrawal, dict):
+            body_bytes = orjson.dumps(withdrawal)
+        elif hasattr(withdrawal, "model_dump"):
+            body_bytes = orjson.dumps(withdrawal.model_dump(mode="json"))
+        else:
+            raise ValueError(f"Unsupported withdrawal payload type: {type(withdrawal)}")
+        return await self.post("/v1/withdrawals", body_bytes, idempotency_key)
+
 

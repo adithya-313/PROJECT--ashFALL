@@ -10,7 +10,7 @@ models. This configuration controls how simulator-internal failure domains, acco
 telemetry hardware events map cleanly into bank-visible data structures without leakage.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +40,8 @@ class BankFeedConfig:
     device_event_kind_map: dict[str, str]
     unmapped_gang_device_kinds: tuple[str, ...]
     allowed_account_event_kinds: tuple[str, ...]
+    emit_opening_for_existing_accounts: bool
+    account_type_by_account_prefix: dict[str, str] = field(default_factory=dict)
 
 
 def load_bank_feed_config(path: Path | str | None = None) -> BankFeedConfig:
@@ -99,6 +101,12 @@ def load_bank_feed_config(path: Path | str | None = None) -> BankFeedConfig:
     if not isinstance(raw_prefix_mapping, dict) or not raw_prefix_mapping:
         raise ValueError("payee_type_by_account_prefix must define a non-empty mapping")
     payee_type_by_account_prefix = {str(prefix): str(ptype) for prefix, ptype in raw_prefix_mapping.items()}
+
+    # 3b. Extract and validate account_type_by_account_prefix mapping.
+    raw_acct_prefix_mapping = feed_data.get("account_type_by_account_prefix", {}).get("mapping", {})
+    if not isinstance(raw_acct_prefix_mapping, dict) or not raw_acct_prefix_mapping:
+        raise ValueError("account_type_by_account_prefix must define a non-empty mapping")
+    account_type_by_account_prefix = {str(prefix): str(atype) for prefix, atype in raw_acct_prefix_mapping.items()}
 
     # 4. Extract default channel identifier token and decision timeout.
     channel_token = feed_data.get("channel_value", {}).get("value")
@@ -166,13 +174,21 @@ def load_bank_feed_config(path: Path | str | None = None) -> BankFeedConfig:
         raise ValueError("unmapped_gang_device_kinds must list at least one unmapped kind")
     unmapped_gang_device_kinds = tuple(str(k) for k in raw_unmapped)
 
+    # 9. Extract emit_opening_for_existing_accounts policy flag.
+    raw_emit_opening = feed_data.get("emit_opening_for_existing_accounts", {}).get("value")
+    if not isinstance(raw_emit_opening, bool):
+        raise ValueError("emit_opening_for_existing_accounts.value must be a boolean")
+    emit_opening_for_existing_accounts = bool(raw_emit_opening)
+
     return BankFeedConfig(
         bank_ids_by_index=bank_ids_by_index,
         payee_type_by_account_prefix=payee_type_by_account_prefix,
+        account_type_by_account_prefix=account_type_by_account_prefix,
         channel_value=channel_token,
         decision_timeout_seconds=decision_timeout_seconds,
         failed_payment_visibility=failed_payment_visibility,
         device_event_kind_map=device_event_kind_map,
         unmapped_gang_device_kinds=unmapped_gang_device_kinds,
         allowed_account_event_kinds=allowed_account_event_kinds,
+        emit_opening_for_existing_accounts=emit_opening_for_existing_accounts,
     )

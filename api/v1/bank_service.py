@@ -4,10 +4,12 @@
 # Enables invoking bank API domain operations directly without HTTP transport or signing overhead,
 # while preserving exact database transaction semantics, schema validation, and idempotency guarantees.
 
+import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
 import asyncpg
 import orjson
@@ -33,9 +35,28 @@ from api.v1.models import (
     DecisionResponse,
     TransactionResponse,
     TransactionSideRequest,
+    WithdrawalRequest,
+    WithdrawalResponse,
 )
 from api.v1.upi_outbox import UpiPaymentSide, record_upi_side, validate_side
-from core.event_clock import Clock
+from core.config import config
+from core.event_clock import Clock, WallClock
+from features.account_keys import AccountFeaturesSettings, extract_run_id
+from features.decision_features import compute_decision_row
+from features.feature_log import (
+    FeatureLogRow,
+    canonical_feature_names,
+    insert_feature_log_row,
+)
+from features.registry_prefetch import (
+    PrefetchedScreener,
+    RegistryGateway,
+    prefetch_registry_answers,
+    prepare_registry_questions,
+)
+from features.registry_screening import RegistryScreener
+
+logger = logging.getLogger(__name__)
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -122,11 +143,20 @@ async def record_decision(
     connection: asyncpg.Connection,
     bank_id: str,
     request: DecisionRequest,
+    *,
+    redis_client: Any = None,
+    decision_clock: Any = None,
+    settings: AccountFeaturesSettings | None = None,
+    screener: RegistryScreener | None = None,
+    feature_row: FeatureLogRow | None = None,
+    dpip_key: str | None = None,
+    registry: RegistryGateway | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """
     WHAT: Executes the business logic for recording a bank payment decision evaluation request.
     It inserts a record into bank_decision_requests with the bank's configured operating mode
-    and returns an unscored evaluation decision response.
+    and returns an unscored evaluation decision response. When decision_feature_logging_enabled
+    is configured, also records point-in-time canonical features in bank_feature_log atomically.
 
     WHY: Moves the decision write logic from the HTTP router into a reusable service function
     callable both by the HTTP route and in-process simulation connectors.
@@ -135,6 +165,14 @@ async def record_decision(
         connection: Active bank-scoped database connection.
         bank_id: Commercial bank identifier.
         request: Validated DecisionRequest model.
+        redis_client: Optional Redis client for watermark and account feature lookups.
+        decision_clock: Optional clock instance for evaluation timestamp.
+        settings: Optional AccountFeaturesSettings.
+        screener: Optional RegistryScreener instance.
+        feature_row: Pre-computed FeatureLogRow to insert (if computed prior to transaction).
+        dpip_key: Optional explicit DPIP HMAC key for registry screening.
+        registry: Optional RegistryGateway. With it and a DPIP key, the registry questions are asked on this
+            event loop through the shared connection pool before the features are computed in a worker thread.
 
     Returns:
         Tuple of status code (200) and response body dictionary.
@@ -158,9 +196,65 @@ async def record_decision(
     except asyncpg.UniqueViolationError as error:
         if error.constraint_name != DECISION_UNIQUE_CONSTRAINT:
             raise
-        raise ApiError(
-            409, "payment_already_decided", "A decision was already requested for this payment"
-        ) from error
+        raise ApiError(409, "payment_already_decided", "A decision was already requested for this payment") from error
+
+    if config.decision_feature_logging_enabled:
+        row = feature_row
+        if row is None:
+            clk = decision_clock if decision_clock is not None else WallClock()
+            try:
+                arrival_cutoff = None
+                row_screener = screener
+                if registry is not None and dpip_key and redis_client is not None:
+                    # (a) the blocking Redis work in a worker thread, (b) the registry questions on this event
+                    # loop through the shared pool, (c) the features in a worker thread, from the answers.
+                    prepared = await asyncio.to_thread(
+                        prepare_registry_questions, redis_client, bank_id, request, dpip_key, settings
+                    )
+                    if prepared is not None:
+                        arrival_cutoff, questions = prepared
+                        answers = await prefetch_registry_answers(
+                            registry.client_for(bank_id, extract_run_id(request.payment_id)),
+                            questions,
+                            registry.registry_timeout_seconds,
+                        )
+                        row_screener = PrefetchedScreener(answers)
+                row = await asyncio.to_thread(
+                    compute_decision_row,
+                    redis_client=redis_client,
+                    bank_id=bank_id,
+                    request=request,
+                    clock=clk,
+                    settings=settings,
+                    screener=row_screener,
+                    dpip_key=dpip_key,
+                    arrival_cutoff=arrival_cutoff,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to compute decision features for payment %s on bank %s: %s",
+                    request.payment_id,
+                    bank_id,
+                    exc,
+                )
+                row = FeatureLogRow(
+                    bank_id=bank_id,
+                    payment_id=request.payment_id,
+                    run_id=extract_run_id(request.payment_id),
+                    account_id=request.sender_account_id,
+                    decision_time=request.event_time,
+                    decided_at=clk.now_ist(),
+                    arrival_cutoff=None,
+                    watermark_lag_ms=None,
+                    status="error",
+                    feature_values={name: None for name in canonical_feature_names()},
+                    missing_request_fields=[],
+                    registry_answers=[],
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
+                )
+        if row is not None:
+            await insert_feature_log_row(connection, row)
 
     response = DecisionResponse(
         payment_id=request.payment_id,
@@ -210,6 +304,7 @@ async def record_transaction(
         channel=request.channel,
         sender_device_fingerprint=request.sender_device_fingerprint,
         sender_os_generation=request.sender_os_generation,
+        balance_after_paise=request.balance_after_paise,
     )
     try:
         validate_side(upi_side)
@@ -314,6 +409,64 @@ async def record_complaint(
     return 201, ComplaintResponse(complaint_id=request.complaint_id).model_dump(mode="json")
 
 
+async def record_withdrawal(
+    pool_or_conn: asyncpg.Pool | asyncpg.Connection,
+    bank_id: str,
+    request: WithdrawalRequest,
+) -> tuple[bool, Any]:
+    """
+    WHAT: Persists an ATM or branch cash withdrawal into bank_withdrawals.
+    Returns (True, row) if inserted, (False, row) if duplicate.
+    Run under the same bank tenant role / app.bank_id setting as other bank writes.
+
+    Args:
+        pool_or_conn: Active connection pool or connection.
+        bank_id: Authorized commercial bank identifier.
+        request: Validated WithdrawalRequest model.
+
+    Returns:
+        Tuple of (inserted_boolean, row_record).
+    """
+    if request.bank_id != bank_id:
+        raise ApiError(422, "invalid_body", "bank_id must match authenticated bank")
+
+    async def _execute_insert(conn: asyncpg.Connection) -> tuple[bool, Any]:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO bank_withdrawals (
+                bank_id, withdrawal_id, account_id, channel, amount_paise,
+                status, failure_domain, event_time, balance_after_paise
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (bank_id, withdrawal_id) DO NOTHING
+            RETURNING *
+            """,
+            bank_id,
+            request.withdrawal_id,
+            request.account_id,
+            request.channel,
+            request.amount_paise,
+            request.status,
+            request.failure_domain,
+            request.event_time,
+            request.balance_after_paise,
+        )
+        if row is not None:
+            return True, row
+        existing = await conn.fetchrow(
+            "SELECT * FROM bank_withdrawals WHERE bank_id = $1 AND withdrawal_id = $2",
+            bank_id,
+            request.withdrawal_id,
+        )
+        return False, existing
+
+    if isinstance(pool_or_conn, asyncpg.Pool):
+        async with pool_or_conn.acquire() as connection:
+            async with bank_scoped_transaction(connection, bank_id) as scoped:
+                return await _execute_insert(scoped)
+    return await _execute_insert(pool_or_conn)
+
+
 def parse_raw_body(body_bytes: bytes, model_class: type[ModelT]) -> ModelT:
     """
     WHAT: Parses raw JSON bytes into a validated Pydantic model instance.
@@ -356,7 +509,17 @@ class InProcessBankClient:
     It does not sign requests and records no nonces because there is no transport layer to protect against replay.
     """
 
-    def __init__(self, pool: asyncpg.Pool, bank_id: str, clock: Clock) -> None:
+    def __init__(
+        self,
+        pool: asyncpg.Pool,
+        bank_id: str,
+        clock: Clock,
+        *,
+        redis_client: Any = None,
+        decision_clock: Any = None,
+        settings: Any = None,
+        screener: Any = None,
+    ) -> None:
         """
         Initializes an in-process client instance.
 
@@ -364,10 +527,18 @@ class InProcessBankClient:
             pool: Connection pool for tenant-scoped database access.
             bank_id: Authorized commercial bank identifier.
             clock: Clock providing transport timestamps for idempotency expiration.
+            redis_client: Optional Redis client for feature computation.
+            decision_clock: Optional decision evaluation clock.
+            settings: Optional AccountFeaturesSettings.
+            screener: Optional RegistryScreener instance.
         """
         self._pool = pool
         self._bank_id = bank_id
         self._clock = clock
+        self._redis_client = redis_client
+        self._decision_clock = decision_clock
+        self._settings = settings
+        self._screener = screener
 
     async def post(self, path: str, body_bytes: bytes, idempotency_key: str) -> IdempotentOutcome:
         """
@@ -390,9 +561,23 @@ class InProcessBankClient:
         """
         if path == "/v1/decisions":
             decision_model = parse_raw_body(body_bytes, DecisionRequest)
+            dpip_key = (
+                config.dpip_participant_key.get_secret_value()
+                if config.dpip_participant_key is not None
+                else None
+            )
 
             async def handler(connection: asyncpg.Connection) -> tuple[int, dict[str, Any]]:
-                return await record_decision(connection, self._bank_id, decision_model)
+                return await record_decision(
+                    connection,
+                    self._bank_id,
+                    decision_model,
+                    redis_client=self._redis_client,
+                    decision_clock=self._decision_clock,
+                    settings=self._settings,
+                    screener=self._screener,
+                    dpip_key=dpip_key,
+                )
 
         elif path == "/v1/transactions":
             tx_model = parse_raw_body(body_bytes, TransactionSideRequest)
@@ -412,6 +597,20 @@ class InProcessBankClient:
             async def handler(connection: asyncpg.Connection) -> tuple[int, dict[str, Any]]:
                 return await record_complaint(connection, self._bank_id, complaint_model)
 
+        elif path == "/v1/withdrawals":
+            withdrawal_model = parse_raw_body(body_bytes, WithdrawalRequest)
+
+            async def handler(connection: asyncpg.Connection) -> tuple[int, dict[str, Any]]:
+                inserted, _ = await record_withdrawal(connection, self._bank_id, withdrawal_model)
+                status_code = 201 if inserted else 200
+                resp_status: Literal["recorded", "duplicate"] = "recorded" if inserted else "duplicate"
+                resp = WithdrawalResponse(
+                    status=resp_status,
+                    withdrawal_id=withdrawal_model.withdrawal_id,
+                    bank_id=self._bank_id,
+                )
+                return status_code, resp.model_dump(mode="json")
+
         else:
             raise ValueError(f"Unknown in-process path: {path!r}")
 
@@ -427,3 +626,16 @@ class InProcessBankClient:
             handler=handler,
         )
 
+    async def record_withdrawal(
+        self,
+        withdrawal: WithdrawalRequest | dict[str, Any] | bytes,
+        idempotency_key: str,
+    ) -> IdempotentOutcome:
+        """Records an ATM or branch withdrawal idempotently."""
+        if isinstance(withdrawal, bytes):
+            body_bytes = withdrawal
+        elif isinstance(withdrawal, dict):
+            body_bytes = orjson.dumps(withdrawal)
+        else:
+            body_bytes = orjson.dumps(withdrawal.model_dump(mode="json"))
+        return await self.post("/v1/withdrawals", body_bytes, idempotency_key)

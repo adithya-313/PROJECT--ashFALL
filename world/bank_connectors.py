@@ -229,6 +229,27 @@ def make_complaint_idempotency_key(complaint_id: str, max_length: int) -> str:
     return key
 
 
+def make_withdrawal_idempotency_key(withdrawal_id: str, max_length: int) -> str:
+    """
+    WHAT: Formats a deterministic idempotency key for cash withdrawals.
+    WHY: Protects cash withdrawal submissions against duplicate dispatch across bank transports.
+
+    Args:
+        withdrawal_id: Unique cash withdrawal identifier.
+        max_length: Upper bound on key length from bank API policy.
+
+    Returns:
+        Formatted idempotency key string 'wth:<withdrawal_id>'.
+
+    Raises:
+        ValueError: If key length exceeds max_length.
+    """
+    key = f"wth:{withdrawal_id}"
+    if len(key) > max_length:
+        raise ValueError(f"Withdrawal idempotency key {key!r} exceeds max length {max_length}")
+    return key
+
+
 class MockBankConnectors:
     """
     WHAT: Bridges the simulated world and commercial bank API transports.
@@ -275,8 +296,18 @@ class MockBankConnectors:
         self.decisions_replayed: int = 0
         self.decision_failures: list[tuple[str, str, str]] = []
         self.live_fallbacks: int = 0
-        self.sent_by_kind: dict[str, int] = {"transaction": 0, "account_event": 0, "complaint": 0}
-        self.replayed_by_kind: dict[str, int] = {"transaction": 0, "account_event": 0, "complaint": 0}
+        self.sent_by_kind: dict[str, int] = {
+            "transaction": 0,
+            "withdrawal": 0,
+            "account_event": 0,
+            "complaint": 0,
+        }
+        self.replayed_by_kind: dict[str, int] = {
+            "transaction": 0,
+            "withdrawal": 0,
+            "account_event": 0,
+            "complaint": 0,
+        }
         self.seen_accounts: set[str] = set()
 
     def make_hook(self) -> Callable[[PaymentView], HookDecision]:
@@ -416,10 +447,15 @@ class MockBankConnectors:
             for idx, a in enumerate(acct_events):
                 items.append((a.event_time, a.bank_id, 1, idx, "account_event", a))
 
+        # Gather cash withdrawals.
+        for bank_id, withdrawals in feed.withdrawals_by_bank.items():
+            for idx, w in enumerate(withdrawals):
+                items.append((w.event_time, w.bank_id, 2, idx, "withdrawal", w))
+
         # Gather fraud complaints.
         for bank_id, complaints in feed.complaints_by_bank.items():
             for idx, c in enumerate(complaints):
-                items.append((c.received_at, c.bank_id, 2, idx, "complaint", c))
+                items.append((c.received_at, c.bank_id, 3, idx, "complaint", c))
 
         # Sort strictly by (event_time, bank_id, record_kind, original_index).
         sorted_items = sorted(items, key=lambda x: (x[0], x[1], x[2], x[3]))
@@ -450,6 +486,7 @@ class MockBankConnectors:
                     "channel": rec.channel,
                     "sender_device_fingerprint": rec.sender_device_fingerprint,
                     "sender_os_generation": rec.sender_os_generation,
+                    "balance_after_paise": rec.balance_after_paise,
                 }
                 body_bytes = orjson.dumps(body_dict)
                 idempotency_key = make_transaction_idempotency_key(
@@ -460,6 +497,28 @@ class MockBankConnectors:
                     self.replayed_by_kind["transaction"] += 1
                 else:
                     self.sent_by_kind["transaction"] += 1
+
+            elif kind == "withdrawal":
+                body_dict = {
+                    "bank_id": rec.bank_id,
+                    "withdrawal_id": rec.withdrawal_id,
+                    "account_id": rec.account_id,
+                    "channel": rec.channel,
+                    "amount_paise": rec.amount_paise,
+                    "balance_after_paise": rec.balance_after_paise,
+                    "status": rec.status,
+                    "failure_domain": rec.failure_domain,
+                    "event_time": rec.event_time.isoformat(),
+                }
+                body_bytes = orjson.dumps(body_dict)
+                idempotency_key = make_withdrawal_idempotency_key(
+                    rec.withdrawal_id, self.max_identifier_length
+                )
+                outcome = await transport.post("/v1/withdrawals", body_bytes, idempotency_key)
+                if outcome.replayed:
+                    self.replayed_by_kind["withdrawal"] += 1
+                else:
+                    self.sent_by_kind["withdrawal"] += 1
 
             elif kind == "account_event":
                 body_dict = {
