@@ -11,7 +11,11 @@ Idempotent means sending the exact same request twice has the same result as sen
 """
 
 import os
+import random
+import threading
+import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -20,6 +24,7 @@ import yaml
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
 
+from core.config_validator import load_yaml
 from core.event_clock import Clock, WallClock
 from nationalsim.i4c_feed import I4CFeedCore
 from nationalsim.registry import NotParticipantError, RegistryCore
@@ -313,11 +318,74 @@ def load_nationalsim_config(
     return timedelta(minutes=delay_minutes), banks_dict
 
 
+class ScreenDelay:
+    """An optional added delay on /screen, drawn per request from a seeded random stream.
+
+    What it is for:
+        Lets benchmarks see the decision path against a registry that takes time to answer. It is OFF unless
+        a ScreenDelay is passed to create_app, so the registry's behaviour is otherwise unchanged.
+
+    Inputs:
+        min_ms, max_ms: Inclusive range in milliseconds each request's delay is drawn from.
+        seed: Seed of the random stream, so a run repeats the same sequence of delays.
+    """
+
+    def __init__(self, min_ms: float, max_ms: float, seed: int) -> None:
+        if min_ms < 0 or max_ms < min_ms:
+            raise ValueError(f"Invalid screen delay range: min_ms={min_ms!r}, max_ms={max_ms!r}")
+        self.min_ms = min_ms
+        self.max_ms = max_ms
+        self.seed = seed
+        self._rng = random.Random(seed)
+        self._lock = threading.Lock()
+
+    def next_seconds(self) -> float:
+        """Draw the next request's delay in seconds."""
+        with self._lock:
+            return self._rng.uniform(self.min_ms, self.max_ms) / 1000.0
+
+
+@dataclass(frozen=True)
+class ScreenDelaySettings:
+    """The configured delay range and seed (config/nationalsim.yaml screen_added_delay_ms)."""
+
+    min_ms: float
+    max_ms: float
+    seed: int
+
+    def build(self) -> ScreenDelay:
+        """A fresh delay stream starting at the configured seed."""
+        return ScreenDelay(self.min_ms, self.max_ms, self.seed)
+
+
+def load_screen_delay_settings(config_path: Path | str = "config/nationalsim.yaml") -> ScreenDelaySettings:
+    """Read screen_added_delay_ms (min, max, seed) from configuration; a missing or invalid value is an error."""
+    path = Path(config_path)
+    file_name = str(path)
+    if not path.is_file():
+        raise ValueError(f"Missing configuration file '{file_name}'.")
+    parsed = load_yaml(path)
+    section = parsed.get("nationalsim") if isinstance(parsed, dict) else None
+    if not isinstance(section, dict) or not isinstance(section.get("screen_added_delay_ms"), dict):
+        raise ValueError(f"Missing 'nationalsim.screen_added_delay_ms' mapping in {file_name}.")
+    block = section["screen_added_delay_ms"]
+    values: dict[str, Any] = {}
+    for key in ("min", "max", "seed"):
+        value = block.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+            raise ValueError(f"Invalid 'screen_added_delay_ms.{key}' in {file_name}: must be a non-negative number.")
+        values[key] = value
+    if values["max"] < values["min"]:
+        raise ValueError(f"Invalid 'screen_added_delay_ms' in {file_name}: max is below min.")
+    return ScreenDelaySettings(min_ms=float(values["min"]), max_ms=float(values["max"]), seed=int(values["seed"]))
+
+
 def create_app(
     clock: Clock,
     key_provider: Callable[[], str | bytes],
     settings: dict[str, Any],
     i4c_key_provider: Callable[[], str | bytes] | None = None,
+    screen_delay: ScreenDelay | None = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application for the national registry mock.
 
@@ -333,6 +401,8 @@ def create_app(
             For example, a lambda returning a fixed test string or reading from the environment.
         settings: Dictionary holding listing_delay_minutes (int) and banks (dict).
             For example, {"listing_delay_minutes": 15, "banks": {"bank_0": {"dpip_participation": True}}}.
+        screen_delay: Optional ScreenDelay; when given, every /screen request first sleeps for a delay drawn
+            from it. None (the default) adds no delay at all.
 
     What it returns:
         A fully configured FastAPI application ready to serve HTTP traffic.
@@ -430,6 +500,8 @@ def create_app(
     @app.post("/screen", response_model=ScreenResponse)
     def screen_identifier(payload: ScreenRequest) -> ScreenResponse:
         """Screen an identifier against the registry on behalf of a participating bank."""
+        if screen_delay is not None:
+            time.sleep(screen_delay.next_seconds())
         try:
             result = registry.screen(
                 requesting_bank_id=payload.requesting_bank_id,
@@ -590,6 +662,11 @@ def create_app_prod() -> FastAPI:
             "The national simulation service requires this secret key to initialize."
         )
     listing_delay, bank_settings = load_nationalsim_config()
+    # The added /screen delay is off unless NATIONALSIM_SCREEN_DELAY is explicitly set to "on".
+    delay_flag = os.environ.get("NATIONALSIM_SCREEN_DELAY", "off").strip().lower()
+    if delay_flag not in ("on", "off"):
+        raise ValueError(f"Environment variable 'NATIONALSIM_SCREEN_DELAY' must be 'on' or 'off', got {delay_flag!r}.")
+    screen_delay = load_screen_delay_settings().build() if delay_flag == "on" else None
     prod_settings: dict[str, Any] = {
         "listing_delay_minutes": int(listing_delay.total_seconds() // 60),
         "dispute_resolution_minutes": 60,
@@ -600,4 +677,5 @@ def create_app_prod() -> FastAPI:
         key_provider=lambda: dpip_key,
         settings=prod_settings,
         i4c_key_provider=lambda: i4c_key,
+        screen_delay=screen_delay,
     )

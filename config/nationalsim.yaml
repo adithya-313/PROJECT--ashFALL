@@ -63,6 +63,14 @@ nationalsim:
     bank_2:
       dpip_participation: true
 
+  screen_added_delay_ms:
+    min: 10
+    max: 30
+    seed: 20261101
+    label: assumption
+    derived_from: "no public latency figure for the national registry; assumed intra-India API round trip"
+    reason: "Optional delay added to each /screen answer (drawn per request from a seeded stream, so runs repeat) to benchmark decisions against a registry that takes time to answer; it is off unless a ScreenDelay is passed to create_app or NATIONALSIM_SCREEN_DELAY=on."
+
   client_timeout_seconds:
     value: 2.0
     label: assumption

@@ -18,8 +18,11 @@ from pathlib import Path
 
 import fakeredis
 import pytest
+from fastapi.testclient import TestClient
 from prometheus_client import REGISTRY
 
+import nationalsim.app as nationalsim_app
+from core.event_clock import IST, ManualClock
 from features.account_keys import load_account_features_settings
 from features.account_records import PaymentSideRecord
 from features.account_updater import apply_payment_side
@@ -30,6 +33,7 @@ from features.registry_prefetch import (
     prefetch_registry_answers,
 )
 from features.registry_screening import ScreenOutcome
+from nationalsim.app import ScreenDelay, create_app, load_screen_delay_settings
 from nationalsim.bank_client import ScreenResult
 
 RUN_ID = "66db9aa439b092ee"
@@ -219,3 +223,74 @@ def test_no_questions_without_a_key() -> None:
     client = fakeredis.FakeRedis()
     # config.dpip_participant_key may be unset in the test environment; an explicit empty key behaves the same.
     assert list_registry_questions(client, RUN_ID, BANK_0, "acc_payer", "bank_1", "p", NOW, NOW, "", settings) == []
+
+
+# --- the mock registry's optional added /screen delay (off by default, seeded when on) ---
+
+SCREEN_PAYLOAD = {
+    "requesting_bank_id": "bank_0",
+    "identifier_hash": "a" * 64,
+    "identifier_type": "account",
+    "run_id": "run_delay",
+}
+DELAY_APP_SETTINGS = {"listing_delay_minutes": 15, "banks": {"bank_0": {"dpip_participation": True}}}
+
+
+def _screen_app(screen_delay: ScreenDelay | None) -> TestClient:
+    app = create_app(
+        clock=ManualClock(datetime(2026, 9, 1, 10, 0, tzinfo=IST)),
+        key_provider=lambda: "test_key_secret",
+        settings=DELAY_APP_SETTINGS,
+        screen_delay=screen_delay,
+    )
+    return TestClient(app)
+
+
+def test_screen_adds_no_delay_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without a ScreenDelay the /screen route never sleeps and answers as before."""
+    sleeps: list[float] = []
+    monkeypatch.setattr(nationalsim_app.time, "sleep", sleeps.append)
+    response = _screen_app(None).post("/screen", json=SCREEN_PAYLOAD)
+    assert response.status_code == 200
+    assert response.json()["match"] is False
+    assert sleeps == []
+
+
+def test_screen_delay_is_drawn_from_a_seeded_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With a ScreenDelay each request sleeps for the next drawn value, and the same seed repeats the sequence."""
+    sleeps: list[float] = []
+    monkeypatch.setattr(nationalsim_app.time, "sleep", sleeps.append)
+    client = _screen_app(ScreenDelay(10, 30, seed=7))
+    for _ in range(5):
+        assert client.post("/screen", json=SCREEN_PAYLOAD).status_code == 200
+
+    expected = ScreenDelay(10, 30, seed=7)
+    assert sleeps == [expected.next_seconds() for _ in range(5)]
+    assert all(0.010 <= seconds <= 0.030 for seconds in sleeps)
+    other = ScreenDelay(10, 30, seed=8)
+    assert [other.next_seconds() for _ in range(5)] != sleeps
+
+
+def test_screen_delay_rejects_an_invalid_range() -> None:
+    with pytest.raises(ValueError, match="Invalid screen delay range"):
+        ScreenDelay(30, 10, seed=1)
+    with pytest.raises(ValueError, match="Invalid screen delay range"):
+        ScreenDelay(-1, 10, seed=1)
+
+
+def test_screen_delay_settings_come_from_configuration(tmp_path: Path) -> None:
+    """The repository config gives the range and seed; a missing or bad block is an error, not a default."""
+    settings = load_screen_delay_settings()
+    assert (settings.min_ms, settings.max_ms) == (10.0, 30.0)
+    assert settings.build().next_seconds() == ScreenDelay(10, 30, settings.seed).next_seconds()
+
+    missing = tmp_path / "missing.yaml"
+    missing.write_text("nationalsim:\n  listing_delay_minutes: 15\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="screen_added_delay_ms"):
+        load_screen_delay_settings(missing)
+    backwards = tmp_path / "backwards.yaml"
+    backwards.write_text(
+        "nationalsim:\n  screen_added_delay_ms:\n    min: 30\n    max: 10\n    seed: 1\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="max is below min"):
+        load_screen_delay_settings(backwards)
