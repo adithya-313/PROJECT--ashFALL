@@ -15,7 +15,7 @@ prevents future-leakage, and rejects unsupported or hallucinated signals.
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
+from core.config_validator import load_yaml
 
 # Canonical list of approved M1 feature grouping categories per architecture plan.
 KNOWN_GROUPS: frozenset[str] = frozenset(
@@ -157,8 +157,7 @@ def load_feature_set_m1(config_path: Path | None = None) -> M1FeatureSet:
     if not config_path.is_file():
         raise FileNotFoundError(f"M1 feature schema file not found at: {config_path}")
 
-    with open(config_path, "r", encoding="utf-8") as f:
-        raw_cfg = yaml.safe_load(f)
+    raw_cfg = load_yaml(config_path)
 
     if not isinstance(raw_cfg, dict):
         raise ValueError(f"M1 feature set in {config_path} must be a YAML mapping")

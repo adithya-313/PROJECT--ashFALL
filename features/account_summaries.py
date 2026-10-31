@@ -42,6 +42,7 @@ CONSERVATIVE DEVICE NOVELTY (R5):
 """
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -568,15 +569,37 @@ def read_counterparty_days(
     if not raw_cps:
         return {}
 
-    result: dict[str, list[int]] = {}
-    for cp_bytes in raw_cps:
-        cp_str = cp_bytes.decode("utf-8") if isinstance(cp_bytes, bytes) else str(cp_bytes)
-        cp_days_k = counterparty_days_key(run_id, bank_id, account_id, direction, cp_str)
-        raw_days = client.zrange(cp_days_k, 0, -1)
+    counterparties = [_decode_text(cp) for cp in raw_cps]
+    raw_days_by_cp = [
+        client.zrange(counterparty_days_key(run_id, bank_id, account_id, direction, cp_str), 0, -1)
+        for cp_str in counterparties
+    ]
+    return _closed_days_by_counterparty(counterparties, raw_days_by_cp, decision_time, arrival_cutoff, cfg)
 
+
+def _decode_text(value: Any) -> str:
+    """Decode a Redis reply member to str."""
+    return value.decode("utf-8") if isinstance(value, bytes) else str(value)
+
+
+def _closed_days_by_counterparty(
+    counterparties: list[str],
+    raw_days_by_cp: list[Any],
+    decision_time: datetime,
+    arrival_cutoff: datetime,
+    cfg: AccountFeaturesSettings,
+) -> dict[str, list[int]]:
+    """
+    WHAT: For one account and direction, keeps per counterparty only the days that are closed at the decision
+    and had arrived by the arrival cutoff, sorted; counterparties with no such day are left out.
+
+    WHY: The one copy of the closed-day rule, shared by the single-account read and the many-account read.
+    """
+    result: dict[str, list[int]] = {}
+    for cp_str, raw_days in zip(counterparties, raw_days_by_cp):
         closed_days: list[int] = []
         for d_bytes in raw_days:
-            d_val = int(d_bytes.decode("utf-8") if isinstance(d_bytes, bytes) else str(d_bytes))
+            d_val = int(_decode_text(d_bytes))
             closed_thresh = day_closed_threshold(d_val, cfg.allowed_lateness_seconds)
             if closed_thresh <= decision_time and closed_thresh <= arrival_cutoff:
                 closed_days.append(d_val)
@@ -585,6 +608,57 @@ def read_counterparty_days(
             result[cp_str] = sorted(closed_days)
 
     return result
+
+
+def read_counterparty_days_many(
+    client: Any,
+    run_id: str,
+    bank_id: str,
+    account_ids: Sequence[str],
+    directions: Sequence[str],
+    decision_time: datetime,
+    arrival_cutoff: datetime,
+    settings: AccountFeaturesSettings | None = None,
+) -> dict[tuple[str, str], dict[str, list[int]]]:
+    """
+    WHAT: Returns read_counterparty_days(...) for every (account, direction) pair, using two Redis round trips
+    in total: one pipeline for all counterparty indexes, then one pipeline for all their day sets.
+
+    WHY: The second read needs the counterparty names from the first, so two pipelines is the minimum. Parsing
+    goes through the same helper as the single read, so the results are identical.
+    """
+    cfg = settings if settings is not None else get_default_settings()
+    pairs = [(account_id, direction) for account_id in dict.fromkeys(account_ids) for direction in directions]
+    if not pairs:
+        return {}
+
+    index_pipe = client.pipeline(transaction=False)
+    for account_id, direction in pairs:
+        index_pipe.zrange(counterparty_index_key(run_id, bank_id, account_id, direction), 0, -1)
+    counterparties_by_pair = {
+        pair: [_decode_text(cp) for cp in raw_cps] for pair, raw_cps in zip(pairs, index_pipe.execute())
+    }
+
+    day_requests = [
+        (pair, cp_str) for pair in pairs for cp_str in counterparties_by_pair[pair]
+    ]
+    results: dict[tuple[str, str], dict[str, list[int]]] = {pair: {} for pair in pairs}
+    if not day_requests:
+        return results
+
+    days_pipe = client.pipeline(transaction=False)
+    for (account_id, direction), cp_str in day_requests:
+        days_pipe.zrange(counterparty_days_key(run_id, bank_id, account_id, direction, cp_str), 0, -1)
+    raw_days_all = days_pipe.execute()
+
+    raw_days_by_pair: dict[tuple[str, str], list[Any]] = {pair: [] for pair in pairs}
+    for (pair, _), raw_days in zip(day_requests, raw_days_all):
+        raw_days_by_pair[pair].append(raw_days)
+    for pair in pairs:
+        results[pair] = _closed_days_by_counterparty(
+            counterparties_by_pair[pair], raw_days_by_pair[pair], decision_time, arrival_cutoff, cfg
+        )
+    return results
 
 
 def read_lifetime(

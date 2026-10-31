@@ -22,6 +22,7 @@ from features.account_keys import (
     extract_run_id,
     get_default_settings,
 )
+from features.decision_reads import read_decision_reads
 from features.feature_log import (
     FeatureLogRow,
     canonical_feature_names,
@@ -148,6 +149,9 @@ def compute_feature_values(
         "intelligence",
     ]
 
+    # The payer's snapshot and the label lists are read once and shared by every feature function below.
+    reads = read_decision_reads(redis_client, run_id, bank_id, account_id, decision_time, arrival_cutoff, cfg)
+
     # Account features are computed in every case
     account_feats = compute_account_features(
         client=redis_client,
@@ -160,6 +164,7 @@ def compute_feature_values(
         groups=account_groups,
         screener=screener,
         dpip_key=dpip_key,
+        reads=reads,
     )
 
     payment_feats: dict[str, Any]
@@ -177,6 +182,7 @@ def compute_feature_values(
             event_time=decision_time,
             arrival_cutoff=arrival_cutoff,
             settings=cfg,
+            reads=reads,
         )
         first_payment_to_payee: bool | None = None
         payee_same_bank_risk: float | None = None
@@ -195,6 +201,7 @@ def compute_feature_values(
                 settings=cfg,
                 screener=screener,
                 dpip_key=dpip_key,
+                reads=reads,
             )
             v_first = vpa_feats["first_payment_to_payee"]
             first_payment_to_payee = bool(v_first) if isinstance(v_first, bool) else None
@@ -236,6 +243,7 @@ def compute_feature_values(
             settings=cfg,
             screener=screener,
             dpip_key=dpip_key,
+            reads=reads,
         )
 
     features_dict: dict[str, Any] = {}

@@ -63,6 +63,9 @@ from showcase.level_15 import host_side_redis_url
 BANK_ID = "bank_0"
 COUNTERPARTY_BANK_ID = "bank_1"
 CANONICAL_FEATURE_COUNT = 52
+# Shape of the seeded payment graph around the decided account (see _seed_network_history).
+SAME_BANK_COUNTERPARTIES = 10
+EXTRA_LABELLED_ACCOUNTS = 4
 
 
 def seeded_run_id(offset: int) -> str:
@@ -109,6 +112,148 @@ class PartCFixture:
                         self.live_redis.delete(key)
         finally:
             self.live_redis.close()
+
+
+async def _store_side(connection: asyncpg.Connection, side: UpiPaymentSide, arrived_at: datetime) -> None:
+    """Store one payment side and stamp when it 'arrived'."""
+    stored = await record_upi_side(connection, side)
+    await _stamp_arrival(connection, stored.transaction_id, arrived_at)
+
+
+async def _seed_same_bank_payment(
+    connection: asyncpg.Connection,
+    *,
+    bank_id: str,
+    payment_id: str,
+    sender_acc: str,
+    receiver_acc: str,
+    amount_paise: int,
+    event_time: datetime,
+) -> None:
+    """Store both sides of a payment between two accounts of this bank (a same-bank edge in the graph)."""
+    arrived_at = event_time + timedelta(seconds=1)
+    for side, account_id, counterparty in (("debit", sender_acc, receiver_acc), ("credit", receiver_acc, sender_acc)):
+        await _store_side(
+            connection,
+            UpiPaymentSide(
+                payment_id=payment_id,
+                bank_id=bank_id,
+                side=side,
+                account_id=account_id,
+                counterparty_bank_id=bank_id,
+                sender_bank_id=bank_id,
+                receiver_bank_id=bank_id,
+                amount_paise=amount_paise,
+                event_time=event_time,
+                status="success",
+                counterparty_vpa=counterparty,
+                payee_type="person",
+                channel="upi_app",
+            ),
+            arrived_at,
+        )
+
+
+async def _insert_confirmed_fraud_feedback(
+    connection: asyncpg.Connection, *, bank_id: str, feedback_id: str, payment_id: str, at: datetime
+) -> None:
+    """Record a confirmed_fraud outcome on a payment; the poller then labels that payment's credit-side account."""
+    await connection.execute(
+        """
+        INSERT INTO bank_feedback (bank_id, feedback_id, payment_id, outcome, event_time, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        """,
+        bank_id,
+        feedback_id,
+        payment_id,
+        "confirmed_fraud",
+        at,
+        at,
+    )
+
+
+async def _seed_network_history(
+    connection: asyncpg.Connection,
+    *,
+    bank_id: str,
+    run_id: str,
+    payer_acc: str,
+    payee_vpa: str,
+    start: datetime,
+) -> None:
+    """
+    WHAT: Gives the decided account a payment neighbourhood at its own bank: SAME_BANK_COUNTERPARTIES
+    same-bank counterparties, one confirmed_fraud-labelled account two hops away (through the first
+    counterparty), and EXTRA_LABELLED_ACCOUNTS more labelled accounts with 7-day history that share the
+    payee counterparty with the decided account.
+
+    WHY: Without neighbours and labels the network feature group does no graph work, so the latency
+    benchmark would time an empty case. The graph is fixed (no randomness), so every run seeds the same history.
+    """
+    counterparties = [f"acc_nb_{run_id[:8]}_{i:02d}" for i in range(SAME_BANK_COUNTERPARTIES)]
+    flagged_acc = f"acc_flag_{run_id[:8]}"
+    labelled_accs = [f"acc_lab_{run_id[:8]}_{i:02d}" for i in range(EXTRA_LABELLED_ACCOUNTS)]
+    step = 0
+
+    def next_time() -> datetime:
+        nonlocal step
+        step += 1
+        return start + timedelta(minutes=10 * step)
+
+    for i, counterparty in enumerate(counterparties):
+        await _seed_same_bank_payment(
+            connection,
+            bank_id=bank_id,
+            payment_id=f"{run_id}-p-nb{i:02d}",
+            sender_acc=payer_acc,
+            receiver_acc=counterparty,
+            amount_paise=50000 + 1000 * i,
+            event_time=next_time(),
+        )
+
+    # The flagged account is paid by the first counterparty, so it is two hops from the decided account.
+    flagged_payment = f"{run_id}-p-flag"
+    await _seed_same_bank_payment(
+        connection,
+        bank_id=bank_id,
+        payment_id=flagged_payment,
+        sender_acc=counterparties[0],
+        receiver_acc=flagged_acc,
+        amount_paise=75000,
+        event_time=next_time(),
+    )
+    labelled_payments = [flagged_payment]
+
+    # These accounts were paid from another bank by the payee the decided account also pays.
+    for i, labelled_acc in enumerate(labelled_accs):
+        payment_id = f"{run_id}-p-lab{i:02d}"
+        event_time = next_time()
+        await _store_side(
+            connection,
+            UpiPaymentSide(
+                payment_id=payment_id,
+                bank_id=bank_id,
+                side="credit",
+                account_id=labelled_acc,
+                counterparty_bank_id=COUNTERPARTY_BANK_ID,
+                sender_bank_id=COUNTERPARTY_BANK_ID,
+                receiver_bank_id=bank_id,
+                amount_paise=60000 + 1000 * i,
+                event_time=event_time,
+                status="success",
+                counterparty_vpa=payee_vpa,
+                payee_type="person",
+                channel="upi_app",
+            ),
+            event_time + timedelta(seconds=1),
+        )
+        labelled_payments.append(payment_id)
+
+    feedback_at = next_time()
+    for i, payment_id in enumerate(labelled_payments):
+        await _insert_confirmed_fraud_feedback(
+            connection, bank_id=bank_id, feedback_id=f"{run_id}-fb-net{i:02d}", payment_id=payment_id, at=feedback_at
+        )
 
 
 async def setup_part_c_history(connection: asyncpg.Connection) -> PartCFixture:
@@ -340,6 +485,10 @@ async def setup_part_c_history(connection: asyncpg.Connection) -> PartCFixture:
             "UPDATE outbox SET payload = jsonb_set(payload, '{recorded_at}', $1::jsonb) WHERE transaction_id = $2",
             f'"{created_day4.isoformat()}"',
             uuid.UUID(stored4.transaction_id),
+        )
+
+        await _seed_network_history(
+            connection, bank_id=bank_id, run_id=run_id, payer_acc=payer_acc, payee_vpa=payee_vpa, start=t_day2
         )
 
         # Relay outbox to Kafka
@@ -593,7 +742,7 @@ def make_check_15c_3(quick: bool) -> Callable[[Workspace], Awaitable[CheckOutcom
         """
         fix = await get_part_c_fixture(workspace)
         budget = load_latency_budget()
-        warmup, timed = (2, 5) if quick else (5, 30)
+        warmup, timed = (2, 5) if quick else (5, 300)
 
         result = await measure_decision_latency(
             connection=fix.connection,

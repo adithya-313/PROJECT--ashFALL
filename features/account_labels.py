@@ -17,7 +17,7 @@ WHY:
 """
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any
 
@@ -28,8 +28,8 @@ from features.account_keys import (
     get_default_settings,
     labelled_accounts_key,
 )
-from features.account_reader import read_account_snapshot
-from features.account_summaries import read_counterparty_days
+from features.account_reader import read_side_records_many
+from features.account_summaries import read_counterparty_days_many
 from features.ingest_watermark import record_poller_watermark
 
 logger = logging.getLogger(__name__)
@@ -331,27 +331,56 @@ def same_bank_counterparties(
         - Self-loops (account_id paying account_id) are discarded.
         - This forms the payment graph edge set for local network features.
     """
+    return same_bank_counterparties_many(
+        client, run_id, bank_id, [account_id], decision_time, arrival_cutoff, settings
+    )[account_id]
+
+
+def same_bank_counterparties_many(
+    client: Any,
+    run_id: str,
+    bank_id: str,
+    account_ids: Sequence[str],
+    decision_time: datetime,
+    arrival_cutoff: datetime,
+    settings: AccountFeaturesSettings | None = None,
+) -> dict[str, frozenset[str]]:
+    """
+    PURPOSE:
+        same_bank_counterparties for several accounts at once, using four Redis round trips in total
+        (two pipelines for the closed counterparty days, two for the visible 7-day side records).
+
+    CONSTRAINTS:
+        Each account's set is exactly what a separate same_bank_counterparties call returns.
+    """
     cfg = settings if settings is not None else get_default_settings()
-    accs: set[str] = set()
+    unique_accounts = list(dict.fromkeys(account_ids))
+    closed_days = read_counterparty_days_many(
+        client, run_id, bank_id, unique_accounts, ("debit", "credit"), decision_time, arrival_cutoff, cfg
+    )
+    side_records = read_side_records_many(
+        client, run_id, bank_id, unique_accounts, decision_time, arrival_cutoff, cfg
+    )
 
-    # 1. Closed counterparty days in both directions (debit and credit)
-    for direction in ("debit", "credit"):
-        cp_dict = read_counterparty_days(
-            client, run_id, bank_id, account_id, direction, decision_time, arrival_cutoff, cfg
-        )
-        for cp_str, days in cp_dict.items():
-            if not days:
-                continue
-            if ":" in cp_str:
-                cp_bank, cp_vpa = cp_str.split(":", 1)
-                if cp_bank == bank_id and cp_vpa:
-                    accs.add(cp_vpa)
+    result: dict[str, frozenset[str]] = {}
+    for account_id in unique_accounts:
+        accs: set[str] = set()
 
-    # 2. Visible 7-day raw window records
-    snapshot = read_account_snapshot(client, run_id, bank_id, account_id, decision_time, arrival_cutoff, cfg)
-    for rec in snapshot.side_records:
-        if rec.status == "success" and rec.counterparty_bank_id == bank_id and rec.counterparty_vpa:
-            accs.add(rec.counterparty_vpa)
+        # 1. Closed counterparty days in both directions (debit and credit)
+        for direction in ("debit", "credit"):
+            for cp_str, days in closed_days[(account_id, direction)].items():
+                if not days:
+                    continue
+                if ":" in cp_str:
+                    cp_bank, cp_vpa = cp_str.split(":", 1)
+                    if cp_bank == bank_id and cp_vpa:
+                        accs.add(cp_vpa)
 
-    accs.discard(account_id)
-    return frozenset(accs)
+        # 2. Visible 7-day raw window records
+        for rec in side_records[account_id]:
+            if rec.status == "success" and rec.counterparty_bank_id == bank_id and rec.counterparty_vpa:
+                accs.add(rec.counterparty_vpa)
+
+        accs.discard(account_id)
+        result[account_id] = frozenset(accs)
+    return result
