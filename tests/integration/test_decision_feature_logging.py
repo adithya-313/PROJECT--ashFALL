@@ -318,3 +318,58 @@ async def test_in_process_client_feature_logging(env, monkeypatch: pytest.Monkey
         assert log_row is not None
         assert log_row.payment_id == payment_id
         assert log_row.status == "ok"
+
+
+async def test_feature_logging_error_status_populates_error_columns_and_provenance(
+    env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    G6: Verifies that when feature computation fails, record_decision logs an error row
+    with error_type, error_message, run_id, and account_id populated.
+    """
+    monkeypatch.setattr(config, "decision_feature_logging_enabled", True)
+    connection = env["connection"]
+    pool = env["pool"]
+    clock = env["clock"]
+    redis_client = env["redis_client"]
+
+    in_process = InProcessBankClient(
+        pool=pool,
+        bank_id="bank_0",
+        clock=clock,
+        redis_client=redis_client,
+        decision_clock=clock,
+    )
+
+    payment_id = f"{RUN_ID}-err001"
+    account_id = "acc_err_001"
+    payload = {
+        "payment_id": payment_id,
+        "sender_account_id": account_id,
+        "receiver_bank_id": "bank_1",
+        "receiver_vpa": "acc_recv_err",
+        "payee_type": "person",
+        "amount_paise": 50000,
+        "event_time": EVENT_TIME_STR,
+    }
+    body_bytes = orjson.dumps(payload)
+
+    # Induce compute error during compute_decision_row
+    with patch(
+        "api.v1.bank_service.compute_decision_row",
+        side_effect=RuntimeError("Simulated screener or compute failure"),
+    ):
+        outcome = await in_process.post("/v1/decisions", body_bytes, idempotency_key="idem_err_01")
+        assert outcome.status == 200
+        assert outcome.body["decision"] == "unscored"
+
+    async with bank_scoped_transaction(connection, "bank_0") as scoped:
+        log_row = await read_feature_log_row(scoped, "bank_0", payment_id)
+        assert log_row is not None
+        assert log_row.payment_id == payment_id
+        assert log_row.status == "error"
+        assert log_row.error_type == "RuntimeError"
+        assert log_row.error_message == "Simulated screener or compute failure"
+        assert log_row.run_id == RUN_ID
+        assert log_row.account_id == account_id
+        assert log_row.arrival_cutoff is not None

@@ -41,13 +41,14 @@ from api.v1.models import (
 from api.v1.upi_outbox import UpiPaymentSide, record_upi_side, validate_side
 from core.config import config
 from core.event_clock import Clock, WallClock
-from features.account_keys import AccountFeaturesSettings
+from features.account_keys import AccountFeaturesSettings, extract_run_id
 from features.decision_features import compute_decision_row
 from features.feature_log import (
     FeatureLogRow,
     canonical_feature_names,
     insert_feature_log_row,
 )
+from features.ingest_watermark import get_bank_watermark
 from features.registry_screening import RegistryScreener
 
 logger = logging.getLogger(__name__)
@@ -208,16 +209,28 @@ async def record_decision(
                     bank_id,
                     exc,
                 )
+                wm = None
+                if redis_client is not None:
+                    try:
+                        wm = get_bank_watermark(redis_client, bank_id)
+                    except Exception:
+                        wm = None
+                arrival_cutoff = wm if wm is not None else request.event_time
                 row = FeatureLogRow(
                     bank_id=bank_id,
                     payment_id=request.payment_id,
+                    run_id=extract_run_id(request.payment_id),
+                    account_id=request.sender_account_id,
                     decision_time=request.event_time,
                     decided_at=clk.now_ist(),
+                    arrival_cutoff=arrival_cutoff,
                     watermark_lag_ms=None,
                     status="error",
                     feature_values={name: None for name in canonical_feature_names()},
                     missing_request_fields=[],
                     registry_answers=[],
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
                 )
         if row is not None:
             await insert_feature_log_row(connection, row)
