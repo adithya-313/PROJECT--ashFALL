@@ -178,7 +178,7 @@ async def measure_decision_latency(
     decision_time: datetime,
     screener: RegistryScreener,
     warmup_count: int = 5,
-    timed_count: int = 30,
+    timed_count: int = 300,
     config_file: Path | None = None,
 ) -> LatencyBenchmarkResult:
     """
@@ -194,7 +194,7 @@ async def measure_decision_latency(
         decision_time: Point-in-time timestamp.
         screener: Registry screener instance.
         warmup_count: Number of untimed warm-up calls (default: 5).
-        timed_count: Number of timed calls (default: 30).
+        timed_count: Number of timed calls (default: 300).
         config_file: Optional path to evaluation.yaml.
 
     Returns:
@@ -364,7 +364,7 @@ def format_benchmark_output(res: LatencyBenchmarkResult) -> str:
 
 async def run_benchmark(
     warmup: int = 5,
-    timed: int = 30,
+    timed: int = 300,
     output_path: Path | None = None,
 ) -> LatencyBenchmarkResult:
     """Orchestrates benchmark environment setup, measurement, and reporting."""
@@ -439,8 +439,8 @@ def main() -> None:
         "--timed",
         "-n",
         type=int,
-        default=30,
-        help="Number of timed measurement calls (default: 30).",
+        default=300,
+        help="Number of timed measurement calls (default: 300).",
     )
     parser.add_argument(
         "--output",

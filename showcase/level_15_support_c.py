@@ -742,7 +742,7 @@ def make_check_15c_3(quick: bool) -> Callable[[Workspace], Awaitable[CheckOutcom
         """
         fix = await get_part_c_fixture(workspace)
         budget = load_latency_budget()
-        warmup, timed = (2, 5) if quick else (5, 30)
+        warmup, timed = (2, 5) if quick else (5, 300)
 
         result = await measure_decision_latency(
             connection=fix.connection,
