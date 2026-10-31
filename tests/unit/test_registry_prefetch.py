@@ -159,8 +159,8 @@ def test_prefetched_screener_answers_and_refuses_unknown_questions() -> None:
 
 
 def test_timeout_comes_from_configuration() -> None:
-    """The repository config says 20 ms; a missing or non-positive value is an error, not a default."""
-    assert load_registry_timeout_seconds() == pytest.approx(0.020)
+    """The repository config says 33.19 ms (from the A2 formula); a missing or bad value is an error, not a default."""
+    assert load_registry_timeout_seconds() == pytest.approx(0.03319)
 
 
 def test_timeout_config_errors_are_loud(tmp_path: Path) -> None:

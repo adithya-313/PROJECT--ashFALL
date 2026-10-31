@@ -170,7 +170,7 @@ decision_registry:
     derived_from: "architect ruling A2, Level 15 latency round"
 
   timeout_ms:
-    value: 20
+    value: 33.19
     label: policy
-    reason: "Longest one registry screening call may take inside a decision; a call that takes longer is answered 'unknown' (never 'no match') and counted in ashfall_registry_timeouts_total. Value pending architect decision (under review)."
-    derived_from: "measured on the owner's Windows laptop (Python 3.12.10): the feature p99 of the 300-call decision benchmark with an instant in-memory registry was 43.1 to 83.5 ms across repeated runs (budget 50 ms); three parallel screening calls to the mock registry over localhost HTTP, made with the real bank client after it began building its TLS context once, took p50 8.3 ms and p99 11.6 ms (300 samples, no added delay); before that fix, building the context per request had taken about 250 ms per call; on Windows with Python 3.12 the asyncio clock ticks about every 15.6 ms, so a 20 ms asyncio timeout can fire after as little as 4 ms there"
+    reason: Longest one registry screening call may take inside a decision; a call that takes longer is answered 'unknown' (never 'no match') and counted in ashfall_registry_timeouts_total.
+    derived_from: "formula (architect ruling A2): timeout_ms = max_ms - feature_computation_max_ms - other_overhead_p99 - margin - clock_resolution_ms = 100 - 50 - 6.806 - 10 - 0.000001 = 33.194 ms, written as 33.19. Inputs: max_ms and feature_computation_max_ms from config/evaluation.yaml; other_overhead_p99 = 6.806 ms, the median of the three run p99 values (18.48, 5.13, 6.81 ms) of everything in record_decision except feature computation and the registry wait, measured with the fake registry, 100 warm-up + 3 x 1,000 calls, inside the compose bench container (Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.41, Python 3.11.16) on the owner's Windows laptop, commit 11ed048, 2026-11-01; margin 10 ms from timeout_margin_ms; clock resolution 0.000001 ms from time.get_clock_info('monotonic') in that container (CLOCK_MONOTONIC)"
