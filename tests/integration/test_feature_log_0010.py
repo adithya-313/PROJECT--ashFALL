@@ -10,12 +10,14 @@ automatic partition creation retry on 23514 check_violation, and tenant isolatio
 """
 
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import pytest
 
 from api.v1.bank_scope import bank_scoped_transaction
 from features.feature_log import (
     FeatureLogRow,
+    canonical_feature_names,
     insert_feature_log_row,
     read_feature_log_row,
 )
@@ -41,23 +43,35 @@ async def test_feature_log_rls_and_insert_read(isolated_schema) -> None:
 
     # 2. Insert rows for bank_0 and bank_1
     now = datetime.now(timezone.utc)
+    names = canonical_feature_names()
+    f_b0: dict[str, Any] = {name: None for name in names}
+    f_b0["distinct_payers_1h"] = 2.0
+    f_b1: dict[str, Any] = {name: None for name in names}
+    f_b1["distinct_payers_1h"] = 4.0
+
     row_b0 = FeatureLogRow(
         bank_id="bank_0",
         payment_id="pay_001",
+        run_id="run_01",
+        account_id="acc_01",
         decision_time=now,
         decided_at=now,
+        arrival_cutoff=now,
         watermark_lag_ms=15,
         status="ok",
-        feature_values={"distinct_payers_1h": 2.0},
+        feature_values=f_b0,
     )
     row_b1 = FeatureLogRow(
         bank_id="bank_1",
         payment_id="pay_002",
+        run_id="run_02",
+        account_id="acc_02",
         decision_time=now,
         decided_at=now,
+        arrival_cutoff=now,
         watermark_lag_ms=20,
         status="ok",
-        feature_values={"distinct_payers_1h": 4.0},
+        feature_values=f_b1,
     )
 
     await insert_feature_log_row(connection, row_b0)
@@ -68,6 +82,10 @@ async def test_feature_log_rls_and_insert_read(isolated_schema) -> None:
     assert fetched_b0 is not None
     assert fetched_b0.bank_id == "bank_0"
     assert fetched_b0.payment_id == "pay_001"
+    assert fetched_b0.run_id == "run_01"
+    assert fetched_b0.account_id == "acc_01"
+    assert fetched_b0.arrival_cutoff == now
+    assert fetched_b0.feature_set_version == "m1"
     assert fetched_b0.status == "ok"
     assert fetched_b0.watermark_lag_ms == 15
     assert isinstance(fetched_b0.feature_values, list)
@@ -86,14 +104,21 @@ async def test_feature_log_partition_routing(isolated_schema) -> None:
     now = datetime.now(timezone.utc)
     partition_name = f"feature_log_{now.strftime('%Y%m%d')}"
 
+    names = canonical_feature_names()
+    f_routed: dict[str, Any] = {name: None for name in names}
+    f_routed["distinct_payers_1h"] = 1.0
+
     row = FeatureLogRow(
         bank_id="bank_0",
         payment_id="pay_routed_01",
+        run_id="run_01",
+        account_id="acc_01",
         decision_time=now,
         decided_at=now,
+        arrival_cutoff=now,
         watermark_lag_ms=5,
         status="ok",
-        feature_values={"distinct_payers_1h": 1.0},
+        feature_values=f_routed,
     )
     await insert_feature_log_row(connection, row)
 
@@ -120,8 +145,11 @@ async def test_feature_log_missing_partition_retry(isolated_schema) -> None:
     row = FeatureLogRow(
         bank_id="bank_0",
         payment_id="pay_future_01",
+        run_id="run_01",
+        account_id="acc_01",
         decision_time=future_time,
         decided_at=future_time,
+        arrival_cutoff=None,
         watermark_lag_ms=None,
         status="no_watermark",
         feature_values=[],
