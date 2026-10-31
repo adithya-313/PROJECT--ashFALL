@@ -32,9 +32,11 @@ import orjson  # noqa: E402
 import redis  # noqa: E402
 
 import features.m1_network as m1_network  # noqa: E402
+from api.v1.models import DecisionRequest  # noqa: E402
 from benchmarks.decision_latency import compute_percentiles  # noqa: E402
 from features.account_keys import AccountFeaturesSettings, get_default_settings  # noqa: E402
 from features.account_reader import read_account_snapshot  # noqa: E402
+from features.decision_features import compute_feature_values  # noqa: E402
 from features.ingest_watermark import get_bank_watermark  # noqa: E402
 from features.m1_features import compute_account_features  # noqa: E402
 from features.m1_payment import ProposedPayment, compute_payment_features  # noqa: E402
@@ -56,6 +58,8 @@ ACCOUNT_GROUPS = (
     "intelligence",
 )
 PING_SAMPLES = 200
+# The whole feature path of one decision (account groups and payment features, reads shared), end to end.
+WHOLE_DECISION_ITEM = "full decision features"
 
 
 class CountingPipeline:
@@ -137,6 +141,7 @@ class NetworkDetail:
 
     bfs_runs: int
     bfs_nodes_visited: int
+    neighbour_batches: int
     neighbour_calls: int
     repeat_neighbour_calls: int
     distinct_accounts_asked: int
@@ -180,20 +185,24 @@ def measure_network_detail(
 
     Done in its own pass so the wrappers never slow the timed measurements.
     """
-    real_neighbours = m1_network.same_bank_counterparties
+    real_neighbours = m1_network.same_bank_counterparties_many
     real_bfs = m1_network._compute_hops_to_target
-    real_snapshot = m1_network.read_account_snapshot
+    real_side_records = m1_network.read_side_records_many
 
     asked: list[str] = []
     bfs_seen: set[str] = set()
-    state = {"bfs_runs": 0, "in_bfs": 0, "labelled_reads": 0}
+    state = {"bfs_runs": 0, "in_bfs": 0, "batches": 0, "labelled_reads": 0}
 
-    def counting_neighbours(client: Any, run_id: str, bank_id: str, account_id: str, *rest: Any) -> frozenset[str]:
-        result = real_neighbours(client, run_id, bank_id, account_id, *rest)
-        asked.append(account_id)
+    def counting_neighbours(
+        client: Any, run_id: str, bank_id: str, account_ids: Sequence[str], *rest: Any
+    ) -> dict[str, frozenset[str]]:
+        result = real_neighbours(client, run_id, bank_id, account_ids, *rest)
+        state["batches"] += 1
+        asked.extend(account_ids)
         if state["in_bfs"]:
-            bfs_seen.add(account_id)
-            bfs_seen.update(result)
+            for account_id in account_ids:
+                bfs_seen.add(account_id)
+                bfs_seen.update(result[account_id])
         return result
 
     def counting_bfs(*args: Any, **kwargs: Any) -> int | None:
@@ -204,14 +213,14 @@ def measure_network_detail(
         finally:
             state["in_bfs"] -= 1
 
-    def counting_snapshot(*args: Any, **kwargs: Any) -> Any:
-        state["labelled_reads"] += 1
-        return real_snapshot(*args, **kwargs)
+    def counting_side_records(client: Any, run_id: str, bank_id: str, account_ids: Sequence[str], *rest: Any) -> Any:
+        state["labelled_reads"] += len(account_ids)
+        return real_side_records(client, run_id, bank_id, account_ids, *rest)
 
     with (
-        patch.object(m1_network, "same_bank_counterparties", counting_neighbours),
+        patch.object(m1_network, "same_bank_counterparties_many", counting_neighbours),
         patch.object(m1_network, "_compute_hops_to_target", counting_bfs),
-        patch.object(m1_network, "read_account_snapshot", counting_snapshot),
+        patch.object(m1_network, "read_side_records_many", counting_side_records),
     ):
         compute_account_features(
             client=counter,
@@ -229,6 +238,7 @@ def measure_network_detail(
     return NetworkDetail(
         bfs_runs=state["bfs_runs"],
         bfs_nodes_visited=len(bfs_seen),
+        neighbour_batches=state["batches"],
         neighbour_calls=len(asked),
         repeat_neighbour_calls=len(asked) - distinct,
         distinct_accounts_asked=distinct,
@@ -250,7 +260,10 @@ def profile_decisions(
         raise RuntimeError("the seeded history left no bank watermark, so there is nothing to profile")
     arrival_cutoff: datetime = watermark
 
-    items = {name: ItemSamples(name) for name in (*ACCOUNT_GROUPS, "payment_features", "read_account_snapshot")}
+    items = {
+        name: ItemSamples(name)
+        for name in (*ACCOUNT_GROUPS, "payment_features", "read_account_snapshot", WHOLE_DECISION_ITEM)
+    }
 
     def group_work(group: str) -> Callable[[], object]:
         """One group computed alone, at the same decision time and arrival cutoff as every other item."""
@@ -278,12 +291,32 @@ def profile_decisions(
             amount_paise=15000 + index * 100,
             event_time=fix.decision_time,
         )
+        request = DecisionRequest(
+            payment_id=f"{fix.run_id}-profile-{index:05d}",
+            sender_account_id=fix.payer_acc,
+            receiver_bank_id="bank_1",
+            receiver_vpa=fix.payee_vpa,
+            amount_paise=15000 + index * 100,
+            event_time=fix.decision_time,
+            channel="upi_app",
+            payee_type="person",
+        )
         works: dict[str, Callable[[], object]] = {
             "payment_features": lambda: compute_payment_features(
                 counter, proposed, arrival_cutoff, settings=settings, screener=screener
             ),
             "read_account_snapshot": lambda: read_account_snapshot(
                 counter, fix.run_id, fix.bank_id, fix.payer_acc, fix.decision_time, arrival_cutoff, settings
+            ),
+            WHOLE_DECISION_ITEM: lambda: compute_feature_values(
+                counter,
+                fix.bank_id,
+                fix.run_id,
+                request,
+                fix.decision_time,
+                arrival_cutoff,
+                screener=screener,
+                settings=settings,
             ),
         }
         for group in ACCOUNT_GROUPS:
@@ -346,9 +379,9 @@ def format_report(
         "",
         "Network group, one decision:",
         f"  BFS runs: {detail.bfs_runs}, BFS nodes visited (start + neighbours seen): {detail.bfs_nodes_visited}",
-        f"  same_bank_counterparties calls: {detail.neighbour_calls}, of which repeat calls "
-        f"(account already asked): {detail.repeat_neighbour_calls}, distinct accounts asked: "
-        f"{detail.distinct_accounts_asked}",
+        f"  same_bank_counterparties_many batches: {detail.neighbour_batches}, accounts fetched: "
+        f"{detail.neighbour_calls}, of which repeats (account already fetched): {detail.repeat_neighbour_calls}, "
+        f"distinct accounts: {detail.distinct_accounts_asked}",
         f"  labelled accounts read by compute_shared_counterparties_with_flagged_7d: {detail.labelled_accounts_read}",
     ]
     return "\n".join(lines)
