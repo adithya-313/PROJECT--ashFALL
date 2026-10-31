@@ -297,3 +297,26 @@ In live production scoring, screen requests must evaluate strictly against curre
 In Level 15c, live operational decisions record `decision_time` from the system clock (`SystemClock` / host wall-clock). In Level 16 historical replay, the decision clock must align with simulated world time rather than host time, resolving the clock gap between asynchronous event production and decision evaluation. A partition that has never received a message is not in the set, so it does not hold the watermark back; Level 16 replay must confirm that every partition it produces to has received at least one message before decisions start.
 
 `redis` is now a pinned runtime dependency of the API (`redis==8.1.0` in `requirements.txt`); it was previously installed only through `fakeredis`, so the API image did not have it.
+
+---
+
+## 10. Historical Feature Replay & Point-in-Time Recomputation (Level 15c Round 2a)
+
+### 10.1 Scratch Redis Isolation
+Historical feature recomputation reconstructs sliding-window account state inside a dedicated, isolated scratch Redis instance (such as `fakeredis.FakeRedis()` or an isolated test Redis database). Scratch Redis operations never mutate, trim, or read live operational keys, namespaces, or watermarks.
+
+### 10.2 Merged Chronological Ingestion Sequence
+Historical replay reads recorded relational rows from all 5 feeds up to the logged decision `arrival_cutoff`:
+1. `transactions` (arrival: `created_at`)
+2. `bank_account_events` (arrival: `created_at`)
+3. `bank_withdrawals` (arrival: `recorded_at`)
+4. `bank_feedback` (arrival: `created_at`)
+5. `bank_complaints` (arrival: `created_at`)
+
+Rows are sorted in merged chronological arrival sequence `(arrival_time, table_order, id_str)` and applied via domain updaters (`apply_payment_side`, `apply_account_event`, `apply_withdrawal`, `apply_feedback_row`, `apply_complaint_row`) without writing watermarks to Redis. Any late-arriving row (`arrival_time > arrival_cutoff`) is strictly excluded.
+
+### 10.3 Logged Registry Screener (`LoggedAnswerScreener`)
+Point-in-time replay eliminates external network dependency and guarantees deterministic screening by using `LoggedAnswerScreener`. The screener answers queries exclusively using the `registry_answers` audit payload captured in `feature_log` during the original decision. Any query not present in the logged answers raises a `LookupError`, ensuring no silent fallback or mock drift.
+
+### 10.4 Zero-Tolerance Parity Verification
+`recompute_logged_row` compares the logged feature vector against the recomputed feature vector. Feature parity requires exact value equality (`==`) and identical runtime types (`type(l) is type(r)`). Any numerical drift, missing field, or subtle type mismatch is captured in `RecomputeResult.mismatches`.

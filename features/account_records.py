@@ -18,6 +18,7 @@ from typing import Any
 
 import orjson
 
+from api.v1.upi_outbox import EVENT_TYPE_UPI_PAYMENT_RECORDED, UPI_SCHEMA_VERSION
 from features.account_keys import extract_run_id
 
 
@@ -137,29 +138,23 @@ def _ensure_timezone_aware(dt_val: datetime, field_name: str) -> datetime:
     return dt_val
 
 
-def parse_upi_event(message_value: bytes) -> PaymentSideRecord:
+def parse_upi_payload(payload: dict[str, Any]) -> PaymentSideRecord:
     """
-    WHAT: Parses and validates a raw Kafka message value representing a schema-2 UPI payment event.
+    WHAT: Parses and validates a decoded dictionary representing a schema-2 UPI payment event.
 
-    WHY: Serves as the primary ingress parser for the payment feature updater. Validates that
-    the message adheres strictly to schema_version '2' and event_type 'upi.payment.recorded',
-    verifies timezone-awareness of all timestamps, and extracts the simulation run ID.
+    WHY: Shared validation core used by live Kafka ingress (parse_upi_event) and history replay
+    (payment_side_from_transaction_row). Enforces schema version '2', event_type 'upi.payment.recorded',
+    timezone awareness of timestamps, and valid run prefix.
 
     Args:
-        message_value: Raw bytes received from the Kafka topic.
+        payload: Decoded dictionary of the UPI event envelope.
 
     Returns:
         Validated, immutable PaymentSideRecord.
 
     Raises:
-        InvalidAccountEventError: If payload cannot be parsed, has incorrect schema version or
-            event type, contains naive timestamps, or carries an invalid run prefix.
+        InvalidAccountEventError: If payload fails schema, type, or integrity checks.
     """
-    try:
-        payload = orjson.loads(message_value)
-    except Exception as exc:
-        raise InvalidAccountEventError(f"Failed to decode JSON payload: {exc}") from exc
-
     if not isinstance(payload, dict):
         raise InvalidAccountEventError("UPI event payload must be a JSON object")
 
@@ -259,6 +254,90 @@ def parse_upi_event(message_value: bytes) -> PaymentSideRecord:
         event_time=event_time,
         arrival_time=recorded_at,  # arrival_time mapped from ashFALL's storage timestamp
     )
+
+
+def parse_upi_event(message_value: bytes) -> PaymentSideRecord:
+    """
+    WHAT: Parses and validates a raw Kafka message value representing a schema-2 UPI payment event.
+
+    WHY: Serves as the primary ingress parser for the payment feature updater. Validates that
+    the message adheres strictly to schema_version '2' and event_type 'upi.payment.recorded',
+    verifies timezone-awareness of all timestamps, and extracts the simulation run ID.
+
+    Args:
+        message_value: Raw bytes received from the Kafka topic.
+
+    Returns:
+        Validated, immutable PaymentSideRecord.
+
+    Raises:
+        InvalidAccountEventError: If payload cannot be parsed, has incorrect schema version or
+            event type, contains naive timestamps, or carries an invalid run prefix.
+    """
+    try:
+        payload = orjson.loads(message_value)
+    except Exception as exc:
+        raise InvalidAccountEventError(f"Failed to decode JSON payload: {exc}") from exc
+
+    return parse_upi_payload(payload)
+
+
+def payment_side_from_transaction_row(row: Mapping[str, Any]) -> PaymentSideRecord:
+    """
+    WHAT: Constructs a PaymentSideRecord directly from a database row of the transactions table.
+
+    WHY: Replay from history reads raw transactions rows without having to relay through Kafka.
+    Builds the schema-2 envelope payload from the transaction row and validates it through parse_upi_payload.
+
+    Args:
+        row: Mapping of column names to values from the transactions table.
+
+    Returns:
+        Validated immutable PaymentSideRecord.
+
+    Raises:
+        KeyError: If any required column is missing from the row.
+        InvalidAccountEventError: If any field fails schema-2 validation.
+    """
+    raw_created_at = row["created_at"]
+    if hasattr(raw_created_at, "isoformat"):
+        recorded_at_iso = raw_created_at.isoformat()
+    elif isinstance(raw_created_at, str):
+        recorded_at_iso = raw_created_at
+    else:
+        raise InvalidAccountEventError(f"Invalid created_at: {raw_created_at!r}")
+
+    raw_event_time = row["event_time"]
+    if hasattr(raw_event_time, "isoformat"):
+        event_time_iso = raw_event_time.isoformat()
+    elif isinstance(raw_event_time, str):
+        event_time_iso = raw_event_time
+    else:
+        raise InvalidAccountEventError(f"Invalid event_time: {raw_event_time!r}")
+
+    envelope: dict[str, Any] = {
+        "schema_version": UPI_SCHEMA_VERSION,
+        "event_type": EVENT_TYPE_UPI_PAYMENT_RECORDED,
+        "payment_id": row["payment_id"],
+        "side": row["side"],
+        "event_time": event_time_iso,
+        "recorded_at": recorded_at_iso,
+        "data": {
+            "bank_id": row["bank_id"],
+            "account_id": row["account_id"],
+            "counterparty_bank_id": row["counterparty_bank_id"],
+            "counterparty_vpa": row["counterparty_vpa"],
+            "amount_paise": row["amount_paise"],
+            "status": row["status"],
+            "failure_domain": row["failure_domain"],
+            "payee_type": row["payee_type"],
+            "channel": row["channel"],
+            "sender_device_fingerprint": row["sender_device_fingerprint"],
+            "sender_os_generation": row["sender_os_generation"],
+            "balance_after_paise": row["balance_after_paise"],
+        },
+    }
+    return parse_upi_payload(envelope)
 
 
 def account_event_from_row(row: Mapping[str, Any]) -> AccountEventRecord:
@@ -456,4 +535,3 @@ def deserialize_withdrawal_record(data: bytes | str) -> WithdrawalRecord:
     d["event_time"] = datetime.fromisoformat(d["event_time"])
     d["arrival_time"] = datetime.fromisoformat(d["arrival_time"])
     return WithdrawalRecord(**d)
-
