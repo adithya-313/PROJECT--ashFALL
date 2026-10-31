@@ -19,9 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from core.config import config
+from core.config_validator import load_yaml
 from features.account_keys import (
     AccountFeaturesSettings,
     get_default_settings,
@@ -38,8 +37,7 @@ def load_bank_ids_by_index(config_path: Path | None = None) -> dict[int, str]:
     """
     root_dir = Path(__file__).resolve().parent.parent
     path = config_path if config_path is not None else root_dir / "config" / "bank_feed.yaml"
-    with open(path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+    data = load_yaml(path)
     mapping = data["bank_feed"]["bank_ids_by_index"]["mapping"]
     return {int(k): str(v) for k, v in mapping.items()}
 
