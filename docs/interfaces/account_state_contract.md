@@ -295,3 +295,5 @@ In live production scoring, screen requests must evaluate strictly against curre
 
 ### 9.4 Open for Level 16: Decision Clock vs Event Time Clock Gap
 In Level 15c, live operational decisions record `decision_time` from the system clock (`SystemClock` / host wall-clock). In Level 16 historical replay, the decision clock must align with simulated world time rather than host time, resolving the clock gap between asynchronous event production and decision evaluation. A partition that has never received a message is not in the set, so it does not hold the watermark back; Level 16 replay must confirm that every partition it produces to has received at least one message before decisions start.
+
+`redis` is now a pinned runtime dependency of the API (`redis==8.1.0` in `requirements.txt`); it was previously installed only through `fakeredis`, so the API image did not have it.
