@@ -18,7 +18,7 @@ QUICK_FLAG = $(if $(filter 1 true,$(QUICK)),--quick,)
 ALLOW_FLAG = $(if $(filter 1 true,$(ALLOW_NOT_RUN)),--allow-not-run,)
 PART_FLAG = $(if $(PART),--part $(PART),)
 
-.PHONY: show show-all check test-gpu test-dvc
+.PHONY: show show-all check test-gpu test-dvc bench-latency-container
 
 show:
 	@test -n "$(LEVEL)" || { echo "Usage: make show LEVEL=7 [QUICK=1] [ALLOW_NOT_RUN=1] [PART=a]"; exit 2; }
@@ -30,6 +30,13 @@ show-all:
 # Run the same checks as the CI jobs (lint, types, tests, the running stack). Add ARGS=--no-docker to skip the Docker steps.
 check:
 	$(PYTHON) scripts/check.py $(ARGS)
+
+# The decision latency benchmark by the pre-registered method, run INSIDE the Linux container where the service runs
+# (needs the compose stack). REGISTRY=fake|http, DELAY=off|default|registry-slow. Example: make bench-latency-container REGISTRY=http DELAY=default
+REGISTRY ?= fake
+DELAY ?= off
+bench-latency-container:
+	$(PYTHON) -m benchmarks.decision_latency --where container --registry $(REGISTRY) --registry-delay $(DELAY)
 
 # CI leaves the gpu tests out (-m "not gpu"). Run them here on a machine that has the GPU.
 test-gpu:

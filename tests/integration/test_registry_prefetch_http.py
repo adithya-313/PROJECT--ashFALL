@@ -28,6 +28,7 @@ from benchmarks.decision_latency import (
     BENCHMARK_DPIP_KEY,
     benchmark_registry_entries,
     registry_timeouts_so_far,
+    seed_registry_over_http,
     start_mock_registry,
 )
 from core.config import config
@@ -192,3 +193,19 @@ async def test_prefetch_covers_every_question_the_features_ask(monkeypatch: pyte
         await cleanup_workspace(workspace)
 
     assert len(asked) == 3 * decisions, f"expected 3 answered questions per decision, got {len(asked)}"
+
+
+def test_entries_seeded_over_http_are_screened_as_matches() -> None:
+    """The container mode seeds a running registry through POST /ingest; those entries must then match."""
+    registry = start_mock_registry(RUN_ID, BENCHMARK_DPIP_KEY, [], None)
+    try:
+        entries = benchmark_registry_entries(RUN_ID, "acc_payee_x@bank1")
+        seed_registry_over_http(registry.base_url, RUN_ID, entries)
+        registry.make_entries_visible()
+        client = NationalsimBankClient(registry.base_url, bank_id="bank_0", run_id=RUN_ID)
+        unreported = ("account", "e" * 64)
+        answers = run_registry_prefetch(client, [*entries, unreported], timeout_seconds=5.0)
+    finally:
+        registry.stop()
+    assert [answers[entry].status for entry in entries] == ["match", "match"]
+    assert answers[unreported].status == "no_match"

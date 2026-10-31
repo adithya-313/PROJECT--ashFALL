@@ -19,6 +19,8 @@ determinism, and latency budgets for real-time inference under operational Kafka
 
 from __future__ import annotations
 
+import asyncio
+import os
 import platform
 import random
 import uuid
@@ -42,8 +44,9 @@ from api.v1.upi_outbox import UpiPaymentSide, record_upi_side
 from benchmarks.decision_latency import (
     BENCHMARK_PAYER_DEVICE,
     load_latency_budget,
-    measure_against_mock_registry,
-    measure_decision_latency,
+    method_result_to_dict,
+    run_method,
+    run_method_in_container,
 )
 from core.config import config
 from core.event_clock import ManualClock
@@ -71,6 +74,13 @@ CANONICAL_FEATURE_COUNT = 52
 # Shape of the seeded payment graph around the decided account (see _seed_network_history).
 SAME_BANK_COUNTERPARTIES = 10
 EXTRA_LABELLED_ACCOUNTS = 4
+
+
+def benchmark_redis_url() -> str:
+    """Redis URL for the seeded history: the configured one in the compose benchmark container, else the host one."""
+    if os.environ.get("ASHFALL_BENCH_RUNTIME") == "container":
+        return config.redis_url
+    return host_side_redis_url()
 
 
 def seeded_run_id(offset: int) -> str:
@@ -293,7 +303,7 @@ async def setup_part_c_history(connection: asyncpg.Connection) -> PartCFixture:
     topic = make_topic_name(prefix="sc15c")
     await create_topic(topic)
     producer = await make_producer()
-    live_redis = redis.Redis.from_url(host_side_redis_url())
+    live_redis = redis.Redis.from_url(benchmark_redis_url())
 
     try:
         # 1. Day 1: Debit payment side (1,000 INR)
@@ -742,114 +752,72 @@ def make_check_15c_3(quick: bool) -> Callable[[Workspace], Awaitable[CheckOutcom
         """
         Check 15c-3 (normal): decision latency against the budget.
 
-        Runs the benchmark's measurement in-process. Full mode asserts both p99 budgets read from
-        config/evaluation.yaml. Quick mode (CI runners are not the budget machine) passes once measured and recorded.
+        Quick mode (CI): one short run against the in-memory registry, measured and recorded, not judged.
+        Full mode: the pre-registered method (config/evaluation.yaml latency_method) run INSIDE the project's Linux
+        container (where the service runs) against the mock registry over HTTP with the default added delay. The
+        verdict is the median of the per-run p99 values: decision <= max_ms AND feature compute <= its limit. The
+        same method is also run natively here and printed, labelled "native Windows harness, not judged".
         """
         fix = await get_part_c_fixture(workspace)
         budget = load_latency_budget()
-        warmup, timed = (2, 5) if quick else (5, 300)
 
         if quick:
-            # Quick mode (CI): the instant in-memory registry, measured and recorded, not judged.
-            result = await measure_decision_latency(
-                connection=fix.connection,
-                redis_client=fix.live_redis,
-                bank_id=fix.bank_id,
-                run_id=fix.run_id,
-                payer_acc=fix.payer_acc,
-                payee_vpa=fix.payee_vpa,
-                decision_time=fix.decision_time,
-                screener=fix.screener,
-                warmup_count=warmup,
-                timed_count=timed,
+            result = await run_method(
+                fixture=fix,
+                mode="fake",
+                delay="off",
+                registry_url=None,
+                warmup_count=2,
+                timed_count=5,
+                runs=1,
+                include_per_group=False,
             )
-            delay_off_result = None
+            run = result.runs[0]
             key_number = (
                 f"measured on {platform.platform()}, budget judged only on {budget['hardware']}: "
-                f"decision p99={result.record_decision_p99_ms:.1f}ms, feature p99={result.compute_row_p99_ms:.1f}ms "
+                f"decision p99={run.decision['p99']:.1f}ms, feature p99={run.feature_compute['p99']:.1f}ms "
                 f"(registry: in-memory fake, quick mode)"
             )
-        else:
-            # Full mode: the real mock registry over real HTTP. The run with the added registry delay is judged
-            # against the budget; the run without the delay is measured and printed beside it.
-            measured = {}
-            for delay_on in (False, True):
-                measured[delay_on] = await measure_against_mock_registry(
-                    connection=fix.connection,
-                    redis_client=fix.live_redis,
-                    bank_id=fix.bank_id,
-                    run_id=fix.run_id,
-                    payer_acc=fix.payer_acc,
-                    payee_vpa=fix.payee_vpa,
-                    decision_time=fix.decision_time,
-                    delay_on=delay_on,
-                    warmup_count=warmup,
-                    timed_count=timed,
-                )
-            delay_off_result, result = measured[False], measured[True]
-            off_summary = (
-                f"delay off: decision p99={delay_off_result.record_decision_p99_ms:.1f}ms, "
-                f"feature p99={delay_off_result.compute_row_p99_ms:.1f}ms, "
-                f"timeouts={delay_off_result.registry_timeouts}"
+            return CheckOutcome(
+                key_number=key_number,
+                evidence={"mode": "quick", "result": method_result_to_dict(result)},
             )
-            on_summary = (
-                f"decision p99={result.record_decision_p99_ms:.1f}ms, feature p99={result.compute_row_p99_ms:.1f}ms, "
-                f"timeouts={result.registry_timeouts}"
-            )
-            assert result.record_decision_p99_ms <= budget["max_ms"], (
-                f"record_decision p99 {result.record_decision_p99_ms:.1f} ms is over the {budget['max_ms']} ms budget "
-                f"(registry http, delay on; {off_summary})"
-            )
-            assert result.compute_row_p99_ms <= budget["feature_computation_max_ms"], (
-                f"compute_decision_row p99 {result.compute_row_p99_ms:.1f} ms is over the "
-                f"{budget['feature_computation_max_ms']} ms budget (registry http, delay on; {off_summary})"
-            )
-            key_number = f"registry http, delay on: {on_summary} within the budget; {off_summary}"
 
+        container = await asyncio.to_thread(run_method_in_container, "http", "default")
+        native = await run_method(fixture=fix, mode="http", delay="default", registry_url=None)
+        medians = container["medians_of_run_p99_ms"]
+        native_medians = method_result_to_dict(native)["medians_of_run_p99_ms"]
+        container_conditions = container["conditions"]
+        native_note = (
+            f"native Windows harness, not judged: decision median p99 {native_medians['decision']:.1f} ms, "
+            f"feature compute median p99 {native_medians['feature_compute']:.1f} ms, "
+            f"clock {native.conditions['monotonic_clock']}"
+        )
+        run_summary = (
+            f"in container ({container_conditions['platform']}, Python {container_conditions['python']}, "
+            f"clock {container_conditions['monotonic_clock']}): "
+            f"decision p99 per run {[round(v, 1) for v in container['run_p99_ms']['decision']]}, "
+            f"feature compute p99 per run {[round(v, 1) for v in container['run_p99_ms']['feature_compute']]}, "
+            f"timeout rate {container['timeout_rate'] * 100:.1f}%"
+        )
+        assert medians["decision"] <= budget["max_ms"], (
+            f"decision median p99 {medians['decision']:.1f} ms is over the {budget['max_ms']:.0f} ms budget; "
+            f"{run_summary}; {native_note}"
+        )
+        assert medians["feature_compute"] <= budget["feature_computation_max_ms"], (
+            f"feature compute median p99 {medians['feature_compute']:.1f} ms is over the "
+            f"{budget['feature_computation_max_ms']:.0f} ms budget; {run_summary}; {native_note}"
+        )
         return CheckOutcome(
-            key_number=key_number,
+            key_number=(
+                f"in container: decision median p99 {medians['decision']:.1f} ms <= {budget['max_ms']:.0f}, "
+                f"feature compute median p99 {medians['feature_compute']:.1f} ms <= "
+                f"{budget['feature_computation_max_ms']:.0f}; {native_note}"
+            ),
             evidence={
-                "mode": "quick" if quick else "full",
-                "platform": result.platform_name,
-                "warmup_count": result.warmup_count,
-                "timed_count": result.timed_count,
-                "budget": result.budget,
-                "scope_note": result.scope_note,
-                "registry": {
-                    "mode": result.registry_mode,
-                    "delay": result.registry_delay,
-                    "questions_per_decision": result.registry_questions,
-                    "timeouts_in_timed_calls": result.registry_timeouts,
-                },
-                "record_decision_ms": {
-                    "p50": result.record_decision_p50_ms,
-                    "p95": result.record_decision_p95_ms,
-                    "p99": result.record_decision_p99_ms,
-                    "max": result.record_decision_max_ms,
-                    "histogram": result.record_decision_histogram,
-                },
-                "compute_decision_row_ms": {
-                    "p50": result.compute_row_p50_ms,
-                    "p95": result.compute_row_p95_ms,
-                    "p99": result.compute_row_p99_ms,
-                    "max": result.compute_row_max_ms,
-                    "histogram": result.compute_row_histogram,
-                },
-                "delay_off_run": None
-                if delay_off_result is None
-                else {
-                    "registry_timeouts": delay_off_result.registry_timeouts,
-                    "record_decision_p50_p95_p99_ms": [
-                        delay_off_result.record_decision_p50_ms,
-                        delay_off_result.record_decision_p95_ms,
-                        delay_off_result.record_decision_p99_ms,
-                    ],
-                    "compute_decision_row_p50_p95_p99_ms": [
-                        delay_off_result.compute_row_p50_ms,
-                        delay_off_result.compute_row_p95_ms,
-                        delay_off_result.compute_row_p99_ms,
-                    ],
-                },
+                "mode": "full",
+                "judged": container,
+                "native_windows_harness_not_judged": method_result_to_dict(native),
             },
         )
 

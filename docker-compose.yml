@@ -242,6 +242,81 @@ services:
       start_period: 5s
     restart: unless-stopped
 
+  # ---------------------------------------------------------------------------------------------------------------
+  # Latency benchmark (profile "benchmark"; nothing here starts with a plain `docker compose up`).
+  #
+  # The latency budget is judged where the service runs: in a Linux container built from the project's API image,
+  # on the compose network. benchmarks/ and showcase/ are NOT in that image; the repository is mounted read-only at
+  # /repo and put first on PYTHONPATH, so the benchmark runs the current code. `bench` writes its JSON result to
+  # reports/latency (mounted at /out). Run it with: make bench-latency-container
+  #
+  # nationalsim-bench is a second copy of the mock registry whose added /screen delay is chosen by the environment
+  # variable NATIONALSIM_SCREEN_DELAY (off, default or registry-slow) when it is started.
+  # ---------------------------------------------------------------------------------------------------------------
+  nationalsim-bench:
+    profiles: ["benchmark"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    working_dir: /repo
+    command: ["uvicorn", "--factory", "--host", "0.0.0.0", "--port", "8080", "nationalsim.app:create_app_prod"]
+    expose:
+      - "8080"
+    env_file:
+      - envs/nationalsim.env
+    environment:
+      PYTHONPATH: /repo
+      PYTHONDONTWRITEBYTECODE: "1"
+      NATIONALSIM_SCREEN_DELAY: ${NATIONALSIM_SCREEN_DELAY:-off}
+    volumes:
+      - .:/repo:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=2)"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  bench:
+    profiles: ["benchmark"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    working_dir: /work
+    # Start-up: (1) the image has no fakeredis (the showcase history builder imports it), so install the pinned test
+    # version; (2) copy the code and small config from the read-only mount into the container's own filesystem, so
+    # config files are read at the speed they are in the real image rather than through a slow Windows bind mount.
+    # Only the folders the benchmark imports are copied (not the 2.5 GB data/ folder, only data/schemas).
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        pip install -q --disable-pip-version-check fakeredis==2.39.0 &&
+        mkdir -p /work && cd /repo &&
+        tar -cf - --exclude=__pycache__ api benchmarks core features nationalsim scripts showcase migrations config
+        infra data/schemas | tar -xf - -C /work &&
+        cd /work && exec "$$@"
+      - bench
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: /work
+      PYTHONDONTWRITEBYTECODE: "1"
+      ASHFALL_BENCH_RUNTIME: container
+      BENCH_COMMIT: ${BENCH_COMMIT:-unknown}
+      TEST_DATABASE_URL: ${DATABASE_URL}
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+    volumes:
+      - .:/repo:ro
+      - ./reports/latency:/out
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   grafana_data:
