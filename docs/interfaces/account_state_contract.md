@@ -356,3 +356,44 @@ Snapshot feature vectors are stored in PostgreSQL table `account_snapshots` (mig
 - **Settings Contract**: `write_account_snapshots` takes `settings: AccountFeaturesSettings | None = None`; if `None`, repository defaults are loaded. Any invalid type is rejected statically by type checking rather than falling back at runtime.
 - **Intelligence Features in Level 15c**: In Level 15c, snapshots compute account features with `screener=None`. Consequently, intelligence features (`registry_match_count`, `registry_match_age_days`) evaluate to `None` (`null` in JSONB). This is intentional and preserved for full offline screener integration in Level 16.
 
+
+## 12. Geo-velocity in M1
+
+M1 uses no geo-velocity. The bank feed carries a region for each account, not a location, so there is nothing to measure a travel speed from. The geo-velocity kernel (`features/geo_velocity.py` and its GPU path `features/gpu_geo_velocity.py`) stays a Level 4.5 artifact, kept for future location data. No M1, account-state or decision module imports it.
+
+Checked with `git grep -n "geo_velocity\|gpu_geo_velocity\|haversine" -- features/` at Level 15 closing; the whole output is:
+
+```
+features/__init__.py:9:#   geo_velocity.py - HOW FAST would the user have had to travel between two transactions? (km/h)
+features/__init__.py:16:#   from features.geo_velocity import haversine_distance_km
+features/geo_velocity.py:1:# File: features/geo_velocity.py
+features/geo_velocity.py:63:def haversine_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+features/geo_velocity.py:97:    # Step 3: apply the haversine formula. "a" is the squared half-chord length between the two points on the
+features/geo_velocity.py:118:def compute_geo_velocity(current_geo: str, last_geo: str | None, elapsed_seconds: float) -> float | None:
+features/geo_velocity.py:163:    distance_km = haversine_distance_km(last_lat, last_lon, current_lat, current_lon)
+features/geo_velocity.py:169:def haversine_distance_km_array(lat1: np.ndarray, lon1: np.ndarray, lat2: np.ndarray, lon2: np.ndarray) -> np.ndarray:
+features/geo_velocity.py:171:    Haversine distance in kilometres for many point pairs at once (the same five steps as haversine_distance_km).
+features/geo_velocity.py:173:    Why a second copy of the formula: haversine_distance_km works on one pair and returns a Python float. This one
+features/geo_velocity.py:176:    the same numbers. If you change one, change the other (tests/unit/test_geo_velocity.py compares them).
+features/geo_velocity.py:183:    # The haversine term "a", kept inside [0, 1] so the square roots below never see a tiny negative number.
+features/geo_velocity.py:197:def compute_geo_velocity_cpu_vectorized(
+features/geo_velocity.py:209:    # It follows the same order as compute_geo_velocity (current location, then last location), so a bad value
+features/geo_velocity.py:228:    # exactly as in compute_geo_velocity), then speed = distance / hours, all rows at once.
+features/geo_velocity.py:229:    distances_km = haversine_distance_km_array(
+features/geo_velocity.py:235:def compute_geo_velocity_batch(
+features/geo_velocity.py:242:    compute_geo_velocity does for a single transaction.
+features/geo_velocity.py:262:        from features.gpu_geo_velocity import compute_geo_velocity_gpu
+features/geo_velocity.py:267:        gpu_values = compute_geo_velocity_gpu(
+features/geo_velocity.py:279:        speeds = compute_geo_velocity_cpu_vectorized(current_geos, last_geos, elapsed_seconds_list, valid_indices)
+features/gpu_geo_velocity.py:1:# File: features/gpu_geo_velocity.py
+features/gpu_geo_velocity.py:3:#          This is the GPU path; the CPU reference path lives in features/geo_velocity.py.
+features/gpu_geo_velocity.py:15:# Mean radius of the Earth in kilometres; identical to EARTH_RADIUS_KM in features/geo_velocity.py so the CPU and
+features/gpu_geo_velocity.py:28:def haversine_triton_kernel(
+features/gpu_geo_velocity.py:64:    # Step 6: apply the haversine formula exactly as the CPU version does. "a" is the squared half-chord length
+features/gpu_geo_velocity.py:85:    # batch dispatcher in features/geo_velocity.py filters such rows out before they reach the GPU.)
+features/gpu_geo_velocity.py:92:def compute_geo_velocity_gpu(
+features/gpu_geo_velocity.py:115:    haversine_triton_kernel[grid](
+features/gpu_geo_velocity.py:124:# It is imported conditionally by features/geo_velocity.py based on batch size.
+```
+
+The only files that match are `features/__init__.py` (a package docstring), `features/geo_velocity.py` and `features/gpu_geo_velocity.py` themselves.

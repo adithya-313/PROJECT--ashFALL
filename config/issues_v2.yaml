@@ -7,7 +7,7 @@
 #   the findings of Revision 2 of the project report (Section 27, 16 October
 #   2026) and also the Level 11 problems that later levels carry on. Level
 #   11's own list, config/issues.yaml, is frozen and never edited, which is
-#   why new problems live here. 93 IDs: 77 from Revision 2 and 16 from
+#   why new problems live here. 95 IDs: 77 from Revision 2 and 18 from
 #   Level 11.
 #
 # Who reads it
@@ -699,80 +699,117 @@ issues:
   15-1:
     title: "Velocity already uses event time; a 7-day window needs its own expiry"
     origin: revision_2
-    status: planned
+    status: built
     levels: [15]
     parts: [15a]
-    later_work: ["Level 15a: Extend Level 4's code"]
+    evidence:
+      - {kind: test, file: tests/unit/test_account_updater.py, name: test_key_ttl_equals_retention_plus_lateness_plus_margin}
+      - {kind: test, file: tests/unit/test_account_updater.py, name: test_older_than_retention_returns_status_and_is_pruned}
+      - {kind: test, file: tests/unit/test_account_updater.py, name: test_count_window_boundaries_inclusion_exclusion}
+      - {kind: config, file: config/account_features.yaml, name: account_features}
   15-2:
     title: "The region feature broke bank visibility"
     origin: revision_2
-    status: planned
+    status: built
     levels: [15]
     parts: [15b]
-    later_work: ["Level 15b: Same-bank payers only"]
+    evidence:
+      - {kind: test, file: tests/unit/test_m1_control_region.py, name: test_region_features_same_bank_and_unknown_payers}
+      - {kind: test, file: tests/unit/test_m1_inflow_outflow.py, name: test_bank_isolation_on_compute_account_features}
   15-3:
     title: "Recompute by event time would flap on late events"
     origin: revision_2
-    status: planned
+    status: built
     levels: [15]
     parts: [15c]
-    later_work: ["Level 15c: Recompute by arrival order"]
+    evidence:
+      - {kind: test, file: tests/unit/test_feature_replay.py, name: test_replay_order_by_arrival_not_id}
+      - {kind: test, file: tests/unit/test_feature_replay.py, name: test_replay_applies_only_rows_with_arrival_lte_cutoff}
+      - {kind: test, file: tests/integration/test_recompute_from_history.py, name: test_recompute_exact_match}
+      - {kind: test, file: tests/integration/test_recompute_from_history.py, name: test_recompute_late_arriving_event_excluded}
+      - {kind: amendment, id: A-036}
   15-5:
     title: "Routine life needed purpose labels the bank cannot see"
     origin: revision_2
-    status: planned
+    status: built
     levels: [15]
     parts: [15b]
-    later_work: ["Level 15b: Recurrence heuristic"]
+    evidence:
+      - {kind: test, file: tests/unit/test_m1_routine_lifecycle.py, name: test_routine_life_detects_salary_and_merchants}
+      - {kind: test, file: tests/unit/test_m1_routine_lifecycle.py, name: test_monthly_rhythm_exact_boundaries}
+      - {kind: test, file: tests/unit/test_m1_routine_lifecycle.py, name: test_routine_life_returns_none_on_short_history}
   15-6:
     title: "Label-based network features risk leakage and feedback loops"
     origin: revision_2
-    status: planned
+    status: partial
     levels: [15, 18]
     parts: [15b]
-    later_work: ["Level 15b: Read by arrival time; leakage checklist"]
+    evidence:
+      - {kind: test, file: tests/unit/test_account_labels.py, name: test_invisible_before_available_from}
+      - {kind: test, file: tests/unit/test_m1_network.py, name: test_other_bank_labelled_never_reached}
+      - {kind: test, file: tests/integration/test_network_label_cutoff.py, name: test_label_arriving_after_the_cutoff_leaves_the_decision_unchanged}
+      - {kind: amendment, id: A-036}
+    later_work:
+      - "Level 18: leakage checklist for label-based features, run automatically (plan section 22)"
+      - "Level 22: feedback-loop handling (analyst labels exist only for cases ashFALL queued); bias measured in Level 28"
   15-7:
     title: "Global event order; feature_log size"
     origin: revision_2
-    status: planned
+    status: built
     levels: [15]
     parts: [15a, 15c]
-    later_work: ["Level 15a: Partition by bank and account; daily partitions and estimates"]
+    evidence:
+      - {kind: test, file: tests/unit/test_account_updater.py, name: test_two_runs_with_identical_account_ids_isolated}
+      - {kind: test, file: tests/integration/test_feature_log_0010.py, name: test_feature_log_partition_routing}
+      - {kind: test, file: tests/integration/test_feature_log_0010.py, name: test_feature_log_missing_partition_retry}
+      - {kind: test, file: tests/unit/test_account_snapshots.py, name: test_sizing_estimates_arithmetic_and_formatting}
   15-8:
     title: "Global event order; feature_log size"
     origin: revision_2
-    status: planned
+    status: built
     levels: [15]
     parts: [15a, 15c]
-    later_work: ["Level 15a: Partition by bank and account; daily partitions and estimates"]
+    evidence:
+      - {kind: test, file: tests/unit/test_account_updater.py, name: test_two_runs_with_identical_account_ids_isolated}
+      - {kind: test, file: tests/integration/test_feature_log_0010.py, name: test_feature_log_partition_routing}
+      - {kind: test, file: tests/integration/test_feature_log_0010.py, name: test_feature_log_missing_partition_retry}
+      - {kind: test, file: tests/unit/test_account_snapshots.py, name: test_sizing_estimates_arithmetic_and_formatting}
   15-9:
     title: "Geo kernel fit; M1 versioning; device scope; world-computed novelty"
     origin: revision_2
-    status: planned
+    status: built
     levels: [15]
     parts: [15b]
-    later_work: ["Level 15b: Stated honestly"]
+    evidence:
+      - {kind: doc, file: docs/interfaces/account_state_contract.md, text: "Geo-velocity in M1"}
   15-10:
     title: "Geo kernel fit; M1 versioning; device scope; world-computed novelty"
     origin: revision_2
-    status: planned
+    status: built
     levels: [15]
     parts: [15b]
-    later_work: ["Level 15b: R8 inside M1"]
+    evidence:
+      - {kind: test, file: tests/unit/test_feature_log.py, name: test_feature_set_version_and_sha256}
+      - {kind: test, file: tests/unit/test_feature_set_m1.py, name: test_four_r5_device_parts_and_history_days_exist}
+      - {kind: test, file: tests/unit/test_feature_set_m1.py, name: test_all_canonical_features_present_in_expected_groups}
   15-11:
     title: "Geo kernel fit; M1 versioning; device scope; world-computed novelty"
     origin: revision_2
-    status: planned
+    status: built
     levels: [15]
     parts: [15b]
-    later_work: ["Level 15b: Within-bank only"]
+    evidence:
+      - {kind: test, file: tests/unit/test_m1_control_region.py, name: test_accounts_on_same_device_and_isolation}
   15-12:
     title: "Geo kernel fit; M1 versioning; device scope; world-computed novelty"
     origin: revision_2
-    status: planned
+    status: built
     levels: [15]
     parts: [15b]
-    later_work: ["Level 15b: Bank-computed novelty"]
+    evidence:
+      - {kind: test, file: tests/unit/test_m1_payment.py, name: test_first_payment_to_payee_uses_only_this_banks_own_records}
+      - {kind: test, file: tests/unit/test_m1_payment.py, name: test_first_payment_to_payee_true_then_false}
+      - {kind: test, file: tests/unit/test_m1_inflow_outflow.py, name: test_first_time_payer_share_24h_normal_architect_case}
   G1:
     title: "Mule origin; rented mules keep normal life"
     origin: level_11
@@ -796,7 +833,11 @@ issues:
       - {kind: config, file: config/cash_out.yaml, name: cash_out}
       - {kind: test, file: tests/unit/world/test_cash_withdrawals.py, name: test_cash_withdrawal_money_conservation_and_record}
       - {kind: test, file: tests/unit/world/test_cash_out.py, name: test_channel_amounts_follow_narrowed_shares}
-    later_work: ["Level 14: withdrawals reach banks as account events"]
+      - {kind: test, file: tests/integration/test_bank_feed_additions_end_to_end.py, name: test_withdrawal_in_process_vs_signed_http_parity}
+      - {kind: test, file: tests/unit/test_account_withdrawals_state.py, name: test_snapshot_includes_withdrawal_only_when_event_and_arrival_in_bounds}
+    later_work:
+      - "Level 15b: bank_withdrawals table is the accepted design: withdrawals are money movements, kept with payment-like records, not account events"
+      - "Level 23: before it starts, add the 'exchange' merchant category so crypto cash-out is not a person-to-person transfer (the tracer must treat it as unrecoverable)"
   G3:
     title: "Mule lifecycle; heavy-tailed victims per mule"
     origin: level_11
@@ -958,10 +999,31 @@ issues:
   R8:
     title: "Device and routine-life feature fixes"
     origin: level_11
-    status: planned
+    status: built
     levels: [15]
     v1_status: planned
-    later_work: ["Level 15: features"]
+    evidence:
+      - {kind: test, file: tests/unit/test_m1_control_region.py, name: test_r5_device_constraints_and_os_update_safety}
+      - {kind: test, file: tests/unit/test_feature_set_m1.py, name: test_four_r5_device_parts_and_history_days_exist}
+      - {kind: test, file: tests/unit/test_m1_routine_lifecycle.py, name: test_routine_life_detects_salary_and_merchants}
+  E3:
+    title: "Regions"
+    origin: level_11
+    status: built
+    levels: [15]
+    parts: [15b]
+    v1_status: built
+    evidence:
+      - {kind: test, file: tests/unit/test_m1_control_region.py, name: test_region_features_same_bank_and_unknown_payers}
+  R5:
+    title: "OS updates do not trigger new-device rules"
+    origin: level_11
+    status: built
+    levels: [15]
+    parts: [15b]
+    v1_status: built
+    evidence:
+      - {kind: test, file: tests/unit/test_m1_control_region.py, name: test_r5_device_constraints_and_os_update_safety}
   R9:
     title: "Arms-race design changes"
     origin: level_11

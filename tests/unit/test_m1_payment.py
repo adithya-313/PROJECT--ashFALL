@@ -502,3 +502,47 @@ def test_compute_payee_vpa_payment_features_returns_expected_keys(
     assert feats["first_payment_to_payee"] is True
     assert feats["payee_same_bank_risk"] == 0.0
     assert feats["payee_registry_match"] is None
+
+
+def test_first_payment_to_payee_uses_only_this_banks_own_records(redis_client: fakeredis.FakeRedis) -> None:
+    """
+    Novelty is computed from the deciding bank's own account records, nothing else.
+
+    The same payer id has paid the same payee at ANOTHER bank (bank_1). bank_0 never recorded that payment, so for
+    bank_0 this is still a first payment. Only once bank_0 records the payment itself does the feature turn False.
+    """
+    settings = load_account_features_settings()
+    t_prop = datetime(2026, 10, 28, 12, 0, 0, tzinfo=IST)
+    t_closed = datetime(2026, 10, 11, 10, 0, 0, tzinfo=IST)
+    proposed = ProposedPayment(
+        run_id=RUN_ID,
+        bank_id=BANK_0,
+        payer_account_id="acc_payer_01",
+        payee_bank_id=BANK_1,
+        payee_vpa="acc_merchant_new",
+        payee_type="merchant",
+        amount_paise=50000,
+        event_time=t_prop,
+    )
+
+    def record_at(bank_id: str) -> None:
+        update_account_summaries(
+            redis_client,
+            _make_payment_side(
+                payment_id=f"{RUN_ID}-p-{bank_id}",
+                account_id="acc_payer_01",
+                side="debit",
+                counterparty_bank_id=BANK_1,
+                counterparty_vpa="acc_merchant_new",
+                event_time=t_closed,
+                amount_paise=25000,
+                bank_id=bank_id,
+            ),
+            settings,
+        )
+
+    record_at(BANK_1)  # history that exists only in another bank's records
+    assert compute_payment_features(redis_client, proposed, t_prop, settings)["first_payment_to_payee"] is True
+
+    record_at(BANK_0)  # now the deciding bank has recorded it too
+    assert compute_payment_features(redis_client, proposed, t_prop, settings)["first_payment_to_payee"] is False
