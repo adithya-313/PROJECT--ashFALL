@@ -11,7 +11,9 @@ strict KeyError behavior on missing required columns.
 """
 
 from datetime import datetime, timezone
+from typing import Any
 
+import fakeredis
 import pytest
 
 from api.v1.upi_outbox import (
@@ -20,11 +22,17 @@ from api.v1.upi_outbox import (
     UpiEventData,
     UpiEventPayload,
 )
+from features.account_keys import side_times_key
 from features.account_records import (
     parse_upi_event,
     parse_upi_payload,
     payment_side_from_transaction_row,
 )
+from features.feature_replay import (
+    LoggedAnswerScreener,
+    replay_history_into_redis,
+)
+from features.registry_screening import ScreenOutcome
 
 pytestmark = pytest.mark.anyio
 
@@ -139,3 +147,257 @@ def test_payment_side_from_transaction_row_missing_created_at_raises_key_error()
     with pytest.raises(KeyError) as exc_info:
         payment_side_from_transaction_row(row)
     assert "created_at" in str(exc_info.value)
+
+
+class FakeReplayConnection:
+    """Fake asyncpg connection returning pre-configured rows for replay unit tests."""
+
+    def __init__(
+        self,
+        transactions: list[dict[str, Any]] | None = None,
+        account_events: list[dict[str, Any]] | None = None,
+        withdrawals: list[dict[str, Any]] | None = None,
+        feedback: list[dict[str, Any]] | None = None,
+        complaints: list[dict[str, Any]] | None = None,
+    ) -> None:
+        self.transactions = list(transactions) if transactions else []
+        self.account_events = list(account_events) if account_events else []
+        self.withdrawals = list(withdrawals) if withdrawals else []
+        self.feedback = list(feedback) if feedback else []
+        self.complaints = list(complaints) if complaints else []
+
+    async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
+        bank_id = args[0]
+        cutoff = args[1]
+        if "FROM transactions" in query and "payment_id = $2" in query:
+            # Feedback transaction lookup
+            return [r for r in self.transactions if r["bank_id"] == bank_id and r["payment_id"] == args[1]]
+        elif "FROM transactions" in query:
+            if "created_at <= $2" in query:
+                return [r for r in self.transactions if r["bank_id"] == bank_id and r["created_at"] <= cutoff]
+            return [r for r in self.transactions if r["bank_id"] == bank_id]
+        elif "FROM bank_account_events" in query:
+            if "created_at <= $2" in query:
+                return [r for r in self.account_events if r["bank_id"] == bank_id and r["created_at"] <= cutoff]
+            return [r for r in self.account_events if r["bank_id"] == bank_id]
+        elif "FROM bank_withdrawals" in query:
+            if "recorded_at <= $2" in query:
+                return [r for r in self.withdrawals if r["bank_id"] == bank_id and r["recorded_at"] <= cutoff]
+            return [r for r in self.withdrawals if r["bank_id"] == bank_id]
+        elif "FROM bank_feedback" in query:
+            if "created_at <= $2" in query:
+                return [r for r in self.feedback if r["bank_id"] == bank_id and r["created_at"] <= cutoff]
+            return [r for r in self.feedback if r["bank_id"] == bank_id]
+        elif "FROM bank_complaints" in query:
+            if "created_at <= $2" in query:
+                return [r for r in self.complaints if r["bank_id"] == bank_id and r["created_at"] <= cutoff]
+            return [r for r in self.complaints if r["bank_id"] == bank_id]
+        return []
+
+
+async def test_replay_applies_only_rows_with_arrival_lte_cutoff() -> None:
+    """
+    D3 unit test: Verifies that replay applies only rows whose arrival <= cutoff.
+    Late-arriving rows (arrival > cutoff) are strictly excluded.
+    """
+    redis_client = fakeredis.FakeRedis()
+    run_id = "0123456789abcdef"
+    bank_id = "bank_0"
+    cutoff = datetime(2026, 10, 28, 12, 0, 0, tzinfo=timezone.utc)
+
+    row_early = {
+        "payment_id": f"{run_id}-pay-001",
+        "bank_id": bank_id,
+        "account_id": "acc_001",
+        "side": "debit",
+        "counterparty_bank_id": "bank_1",
+        "counterparty_vpa": "acc_002",
+        "amount_paise": 10000,
+        "status": "success",
+        "failure_domain": None,
+        "payee_type": "person",
+        "channel": "app",
+        "sender_device_fingerprint": None,
+        "sender_os_generation": None,
+        "balance_after_paise": None,
+        "event_time": datetime(2026, 10, 28, 11, 0, 0, tzinfo=timezone.utc),
+        "created_at": datetime(2026, 10, 28, 11, 30, 0, tzinfo=timezone.utc),
+    }
+    row_late = {
+        "payment_id": f"{run_id}-pay-002",
+        "bank_id": bank_id,
+        "account_id": "acc_001",
+        "side": "debit",
+        "counterparty_bank_id": "bank_1",
+        "counterparty_vpa": "acc_002",
+        "amount_paise": 20000,
+        "status": "success",
+        "failure_domain": None,
+        "payee_type": "person",
+        "channel": "app",
+        "sender_device_fingerprint": None,
+        "sender_os_generation": None,
+        "balance_after_paise": None,
+        "event_time": datetime(2026, 10, 28, 11, 0, 0, tzinfo=timezone.utc),
+        "created_at": datetime(2026, 10, 28, 12, 30, 0, tzinfo=timezone.utc),  # after cutoff
+    }
+
+    conn = FakeReplayConnection(transactions=[row_early, row_late])
+    counts = await replay_history_into_redis(
+        pg_connection=conn,
+        scratch_redis=redis_client,
+        run_id=run_id,
+        bank_id=bank_id,
+        arrival_cutoff=cutoff,
+    )
+
+    assert counts.transactions == 1
+    # Verify the early record is present in Redis and late record is absent
+    st_key = side_times_key(run_id, bank_id, "acc_001")
+    members = redis_client.zrange(st_key, 0, -1)
+    assert len(members) == 1
+    assert b"pay-001:debit" in members[0]
+
+
+async def test_replay_order_by_arrival_not_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    D3 unit test & Sabotage S2 target: Verifies that replay orders by arrival time,
+    not lexicographical ID order, when two rows have divergent ID and arrival sequences.
+    """
+    redis_client = fakeredis.FakeRedis()
+    run_id = "0123456789abcdef"
+    bank_id = "bank_0"
+    cutoff = datetime(2026, 10, 28, 12, 0, 0, tzinfo=timezone.utc)
+
+    # Row A: id 001, but arrived LATER (11:00)
+    row_a = {
+        "payment_id": f"{run_id}-pay-001",
+        "bank_id": bank_id,
+        "account_id": "acc_001",
+        "side": "debit",
+        "counterparty_bank_id": "bank_1",
+        "counterparty_vpa": "acc_002",
+        "amount_paise": 10000,
+        "status": "success",
+        "failure_domain": None,
+        "payee_type": "person",
+        "channel": "app",
+        "sender_device_fingerprint": None,
+        "sender_os_generation": None,
+        "balance_after_paise": None,
+        "event_time": datetime(2026, 10, 28, 10, 0, 0, tzinfo=timezone.utc),
+        "created_at": datetime(2026, 10, 28, 11, 0, 0, tzinfo=timezone.utc),
+    }
+    # Row B: id 002, but arrived EARLIER (10:30)
+    row_b = {
+        "payment_id": f"{run_id}-pay-002",
+        "bank_id": bank_id,
+        "account_id": "acc_001",
+        "side": "debit",
+        "counterparty_bank_id": "bank_1",
+        "counterparty_vpa": "acc_002",
+        "amount_paise": 20000,
+        "status": "success",
+        "failure_domain": None,
+        "payee_type": "person",
+        "channel": "app",
+        "sender_device_fingerprint": None,
+        "sender_os_generation": None,
+        "balance_after_paise": None,
+        "event_time": datetime(2026, 10, 28, 10, 0, 0, tzinfo=timezone.utc),
+        "created_at": datetime(2026, 10, 28, 10, 30, 0, tzinfo=timezone.utc),
+    }
+
+    conn = FakeReplayConnection(transactions=[row_a, row_b])
+
+    applied_ids: list[str] = []
+    from features.account_records import PaymentSideRecord
+    from features.account_updater import apply_payment_side as real_apply
+
+    def spy_apply(client: Any, rec: PaymentSideRecord, settings: Any = None) -> str:
+        applied_ids.append(rec.payment_id)
+        return real_apply(client, rec, settings)
+
+    monkeypatch.setattr("features.feature_replay.apply_payment_side", spy_apply)
+
+    counts = await replay_history_into_redis(
+        pg_connection=conn,
+        scratch_redis=redis_client,
+        run_id=run_id,
+        bank_id=bank_id,
+        arrival_cutoff=cutoff,
+    )
+    assert counts.transactions == 2
+    # S2 Sabotage target: if sorted by id, order would be [pay-001, pay-002].
+    # By arrival, row_b (10:30) MUST be applied before row_a (11:00).
+    assert applied_ids == [f"{run_id}-pay-002", f"{run_id}-pay-001"]
+
+
+async def test_replay_skips_other_run_ids() -> None:
+    """
+    D3 unit test: Verifies that rows belonging to other simulation runs are ignored.
+    """
+    redis_client = fakeredis.FakeRedis()
+    run_id = "0123456789abcdef"
+    other_run_id = "fedcba9876543210"
+    bank_id = "bank_0"
+    cutoff = datetime(2026, 10, 28, 12, 0, 0, tzinfo=timezone.utc)
+
+    row_other = {
+        "payment_id": f"{other_run_id}-pay-001",
+        "bank_id": bank_id,
+        "account_id": "acc_001",
+        "side": "debit",
+        "counterparty_bank_id": "bank_1",
+        "counterparty_vpa": "acc_002",
+        "amount_paise": 10000,
+        "status": "success",
+        "failure_domain": None,
+        "payee_type": "person",
+        "channel": "app",
+        "sender_device_fingerprint": None,
+        "sender_os_generation": None,
+        "balance_after_paise": None,
+        "event_time": datetime(2026, 10, 28, 10, 0, 0, tzinfo=timezone.utc),
+        "created_at": datetime(2026, 10, 28, 10, 30, 0, tzinfo=timezone.utc),
+    }
+
+    conn = FakeReplayConnection(transactions=[row_other])
+    counts = await replay_history_into_redis(
+        pg_connection=conn,
+        scratch_redis=redis_client,
+        run_id=run_id,
+        bank_id=bank_id,
+        arrival_cutoff=cutoff,
+    )
+    assert counts.transactions == 0
+    st_key = side_times_key(run_id, bank_id, "acc_001")
+    assert redis_client.zcard(st_key) == 0
+
+
+def test_logged_answer_screener_raises_on_unlogged_question() -> None:
+    """
+    D3 unit test & Sabotage S3 target: Verifies that LoggedAnswerScreener answers logged
+    questions faithfully and raises LookupError on any question that was not logged.
+    """
+    logged_answers = [
+        {
+            "identifier_hash": "hash_logged_acc",
+            "identifier_type": "account",
+            "outcome": {"status": "match", "first_visible_at": "2026-10-28T10:00:00+00:00"},
+            "as_of": "2026-10-28T10:00:00+00:00",
+            "received_at": "2026-10-28T10:00:01+00:00",
+        }
+    ]
+    screener = LoggedAnswerScreener(logged_answers)
+
+    # Logged question returns recorded outcome
+    outcome = screener.screen("hash_logged_acc", "account")
+    assert isinstance(outcome, ScreenOutcome)
+    assert outcome.status == "match"
+    assert outcome.first_visible_at == datetime(2026, 10, 28, 10, 0, 0, tzinfo=timezone.utc)
+
+    # S3 target: Unlogged question must raise LookupError, not return 'no_match'
+    with pytest.raises(LookupError) as exc_info:
+        screener.screen("hash_unlogged_acc", "account")
+    assert "was not logged" in str(exc_info.value)
