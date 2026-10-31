@@ -241,7 +241,7 @@ async def measure_decision_latency(
 
     # 1. Warm-up calls (unmeasured)
     for i in range(warmup_count):
-        pid = f"{run_id}-warm-{i:04d}"
+        pid = f"{run_id}-warm-{registry_mode}-{registry_delay}-{i:04d}"
         req = DecisionRequest(
             payment_id=pid,
             sender_account_id=payer_acc,
@@ -278,7 +278,7 @@ async def measure_decision_latency(
     compute_latencies_ms: list[float] = []
 
     for i in range(timed_count):
-        pid = f"{run_id}-timed-{i:04d}"
+        pid = f"{run_id}-timed-{registry_mode}-{registry_delay}-{i:04d}"
         req = DecisionRequest(
             payment_id=pid,
             sender_account_id=payer_acc,
