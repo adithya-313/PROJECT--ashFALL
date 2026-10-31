@@ -197,6 +197,7 @@ async def post_decision(request: Request) -> ORJSONResponse:
     decision_clock = getattr(request.app.state, "decision_clock", None)
     settings = getattr(request.app.state, "account_settings", None)
     screener = getattr(request.app.state, "registry_screener", None)
+    registry = getattr(request.app.state, "registry_gateway", None)
     dpip_key = (
         config.dpip_participant_key.get_secret_value()
         if config.dpip_participant_key is not None
@@ -213,6 +214,7 @@ async def post_decision(request: Request) -> ORJSONResponse:
             settings=settings,
             screener=screener,
             dpip_key=dpip_key,
+            registry=registry,
         )
 
     return await run_idempotent_post(request, ctx, handler)

@@ -18,18 +18,30 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+import httpx
 from prometheus_client import Counter
 
+from api.v1.models import DecisionRequest
 from core.config import config
 from core.config_validator import load_yaml
-from features.account_keys import AccountFeaturesSettings, get_default_settings
+from features.account_keys import AccountFeaturesSettings, extract_run_id, get_default_settings
 from features.account_summaries import read_lifetime
+from features.ingest_watermark import get_bank_watermark
 from features.m1_intelligence import get_bank_index
 from features.registry_screening import ScreenOutcome, outcome_from_screen_result
-from nationalsim.bank_client import ScreenResult
+from nationalsim.bank_client import (
+    NationalsimBankClient,
+    ScreenResult,
+    create_shared_http_client,
+    load_bank_client_config,
+    load_registry_pool_settings,
+)
 from nationalsim.keyed_hash import compute_identifier_hash
 
 __all__ = [
+    "RegistryGateway",
+    "create_registry_gateway",
+    "prepare_registry_questions",
     "REGISTRY_TIMEOUTS_TOTAL",
     "PrefetchedScreener",
     "RegistryQuestion",
@@ -164,6 +176,90 @@ async def prefetch_registry_answers(
     """
     outcomes = await asyncio.gather(*(_answer_one(client, question, timeout_seconds) for question in questions))
     return dict(zip(questions, outcomes))
+
+
+def prepare_registry_questions(
+    redis_client: Any,
+    bank_id: str,
+    request: DecisionRequest,
+    dpip_key: str | None,
+    settings: AccountFeaturesSettings | None = None,
+) -> tuple[datetime, list[RegistryQuestion]] | None:
+    """
+    WHAT: Reads the bank watermark (the decision's arrival cutoff) and lists the registry questions the decision
+    will ask at that cutoff. Returns None when the bank has no watermark (the decision then logs no_watermark).
+
+    WHY: Blocking Redis work, so the async decision path runs it in a worker thread, then asks the registry on the
+    server's own event loop, then hands both the cutoff and the answers to the feature computation.
+    """
+    arrival_cutoff = get_bank_watermark(redis_client, bank_id)
+    if arrival_cutoff is None:
+        return None
+    questions = list_registry_questions(
+        redis_client,
+        extract_run_id(request.payment_id),
+        bank_id,
+        request.sender_account_id,
+        request.receiver_bank_id,
+        request.receiver_vpa,
+        request.event_time,
+        arrival_cutoff,
+        dpip_key,
+        settings,
+    )
+    return arrival_cutoff, questions
+
+
+class RegistryGateway:
+    """
+    WHAT: What the API needs to screen against the registry from its own event loop: the shared connection pool,
+    the registry address and the per-call timeout, all read once at startup.
+
+    WHY: One pooled AsyncClient is shared by every decision (no new client or TCP connection per call). Each
+    decision still gets its own cheap NationalsimBankClient because the bank and the run differ per request.
+    """
+
+    def __init__(
+        self,
+        http_client: httpx.AsyncClient,
+        base_url: str,
+        client_timeout_seconds: float,
+        retry_backoff_seconds: float,
+        registry_timeout_seconds: float,
+    ) -> None:
+        self.http_client = http_client
+        self.base_url = base_url
+        self.client_timeout_seconds = client_timeout_seconds
+        self.retry_backoff_seconds = retry_backoff_seconds
+        self.registry_timeout_seconds = registry_timeout_seconds
+
+    def client_for(self, bank_id: str, run_id: str) -> NationalsimBankClient:
+        """A bank client for this decision that sends its requests through the shared pool."""
+        return NationalsimBankClient(
+            self.base_url,
+            bank_id=bank_id,
+            run_id=run_id,
+            timeout_seconds=self.client_timeout_seconds,
+            retry_backoff_seconds=self.retry_backoff_seconds,
+            http_client=self.http_client,
+        )
+
+    async def aclose(self) -> None:
+        """Close the shared pool (call once, at shutdown)."""
+        await self.http_client.aclose()
+
+
+def create_registry_gateway() -> RegistryGateway:
+    """Build the gateway from configuration: pool size, address and timeouts (nationalsim.yaml), decision timeout."""
+    base_url, max_connections, max_keepalive = load_registry_pool_settings()
+    client_timeout, retry_backoff = load_bank_client_config()
+    return RegistryGateway(
+        http_client=create_shared_http_client(max_connections, max_keepalive, client_timeout),
+        base_url=base_url,
+        client_timeout_seconds=client_timeout,
+        retry_backoff_seconds=retry_backoff,
+        registry_timeout_seconds=load_registry_timeout_seconds(),
+    )
 
 
 def run_registry_prefetch(
