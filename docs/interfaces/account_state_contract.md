@@ -325,6 +325,10 @@ In a live decision with the real registry client, `compute_decision_row` lists e
 
 A call that exceeds the timeout is answered `'unknown'` (never `'no_match'`), so the dependent features are `None`. Each such timeout increments the Prometheus counter `ashfall_registry_timeouts_total{identifier_type}`. Every entry of `registry_answers` carries `outcome.timed_out` (true only for that case). Replay reads the logged `'unknown'` through `LoggedAnswerScreener`, so a logged timeout recomputes exactly. Registry answers are not cached; that belongs to Level 19.
 
+In the API the questions are asked on the server's own event loop through ONE shared connection pool (an `httpx.AsyncClient` created at startup when a DPIP participant key is set, with the TLS context built once, explicit `max_connections` / `max_keepalive_connections` from `config/nationalsim.yaml`, and closed with `aclose()` at shutdown). `record_decision` lists the questions in a worker thread, awaits the answers on the event loop, then computes the features in a worker thread from them; there is no per-decision event loop. `NationalsimBankClient` without a shared client behaves as before.
+
+`decision_registry.timeout_ms` is derived, not chosen: `max_ms - feature_computation_max_ms - other_overhead_p99 - timeout_margin_ms - clock_resolution_ms` (a result below `timeout_minimum_ms` is an error). A call is "unknown" only if it really took longer than the timeout, measured with `perf_counter`; because asyncio can fire timers up to two clock ticks early on coarse clocks (about 31 ms on Windows), the wait is allowed `timeout + two ticks` and the measured time decides. The registry wait counts against the 100 ms whole-decision limit only; the 50 ms feature limit covers our own feature code (`latency_scope` in `config/evaluation.yaml`).
+
 ### 10.4 Zero-Tolerance Parity Verification
 `recompute_logged_row` compares the logged feature vector against the recomputed feature vector. Feature parity requires exact value equality (`==`) and identical runtime types (`type(l) is type(r)`). Any numerical drift, missing field, or subtle type mismatch is captured in `RecomputeResult.mismatches`.
 
