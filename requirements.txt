@@ -29,6 +29,11 @@ orjson==3.10.18
 # asyncpg — a fast, asynchronous PostgreSQL client library.
 asyncpg==0.30.0
 
+# redis — the Redis client. The API reads live account state through it (features/velocity.py imports it when the
+# API starts). It used to arrive only as a side effect of fakeredis in requirements-test.txt, so the API image,
+# which installs this file alone, did not have it.
+redis==8.1.0
+
 # pandera — DataFrame schema validation library. Used to validate the shape and
 # types of ingested transaction data before it enters the feature pipeline.
 pandera==0.22.1

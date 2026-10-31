@@ -39,17 +39,21 @@ BASE_TIME = datetime(2026, 10, 28, 12, 0, 0, tzinfo=timezone.utc)
 class FakeWithdrawalsConnection:
     """In-memory mock database connection simulating bank_withdrawals table reads."""
 
-    def __init__(self, rows: list[dict[str, Any]]) -> None:
+    def __init__(self, rows: list[dict[str, Any]], db_now: datetime) -> None:
         self.rows = rows
+        self.db_now = db_now
         self.queries: list[tuple[str, tuple[Any, ...]]] = []
+
+    async def fetchval(self, query: str, *args: Any) -> datetime:
+        self.queries.append((query, args))
+        if query != "SELECT now()":
+            raise AssertionError(f"Unexpected query in fetchval: {query!r}")
+        return self.db_now
 
     async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
         self.queries.append((query, args))
         bank_id, after_id, limit = args
-        matching = [
-            r for r in self.rows
-            if r["bank_id"] == bank_id and r["id"] > after_id
-        ]
+        matching = [r for r in self.rows if r["bank_id"] == bank_id and r["id"] > after_id]
         matching.sort(key=lambda r: r["id"])
         return matching[:limit]
 
@@ -295,7 +299,7 @@ async def test_overlap_poller_catches_row_whose_commit_came_late(
         },
     ]
 
-    conn = FakeWithdrawalsConnection(rows)
+    conn = FakeWithdrawalsConnection(rows, db_now=BASE_TIME)
 
     # Poller with overlap re-reads from start_id = max(0, 10 - 200) = 0
     # Both row 8 and row 12 must be read and applied

@@ -27,7 +27,9 @@ from features.m1_intelligence import compute_intelligence_features
 from features.m1_payment import ProposedPayment, compute_payment_features
 from features.registry_screening import (
     FakeRegistryScreener,
+    LiveRegistryScreener,
     NationalsimRegistryScreener,
+    RecordingRegistryScreener,
     ScreenOutcome,
 )
 from nationalsim.app import create_app
@@ -308,3 +310,44 @@ def test_registry_outage_stress_layer_causes_unknown_and_none(redis_client: fake
     )
     assert pay_feats["payee_registry_match"] is None
     assert pay_feats["payee_registry_match"] is not False
+
+
+def test_live_registry_screener_ignores_as_of() -> None:
+    """
+    SABOTAGE S5 TARGET:
+    Verifies that LiveRegistryScreener always strips any passed as_of parameter and forwards as_of=None.
+    """
+    received_as_of: datetime | None | str = "uncalled"
+
+    class CapturingScreener:
+        def screen(
+            self, identifier_hash: str, identifier_type: str, as_of: datetime | None = None
+        ) -> ScreenOutcome:
+            nonlocal received_as_of
+            received_as_of = as_of
+            return ScreenOutcome(status="match", first_visible_at=None)
+
+    capturing = CapturingScreener()
+    live = LiveRegistryScreener(capturing)
+    res = live.screen("some_hash", "account", as_of=NOW_UTC)
+
+    assert res.status == "match"
+    # Live screener MUST have passed as_of=None, ignoring NOW_UTC!
+    assert received_as_of is None
+
+
+def test_recording_registry_screener_records_calls() -> None:
+    """Verifies that RecordingRegistryScreener records screening invocations and answers in memory."""
+    fake = FakeRegistryScreener()
+    recording = RecordingRegistryScreener(fake)
+    res = recording.screen("test_hash", "account", as_of=NOW_UTC)
+
+    assert res.status == "no_match"
+    assert len(recording.answers) == 1
+    ans = recording.answers[0]
+    assert ans["identifier_hash"] == "test_hash"
+    assert ans["identifier_type"] == "account"
+    assert ans["as_of"] == NOW_UTC
+    assert ans["outcome"] == res
+    assert isinstance(ans["received_at"], datetime)
+

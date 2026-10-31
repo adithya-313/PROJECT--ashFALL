@@ -20,7 +20,9 @@ from core.config import config
 from features.account_keys import AccountFeaturesSettings, get_default_settings
 from features.account_labels import apply_complaints_since, apply_feedback_since
 from features.account_records import account_event_from_row, parse_upi_event, withdrawal_from_row
+from features.account_summaries import to_unix_seconds
 from features.account_updater import apply_account_event, apply_payment_side, apply_withdrawal
+from features.ingest_watermark import record_payment_watermark, record_poller_watermark
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +85,6 @@ Kafka gives no per-account ordering here; state is correct in any order because 
                 else:
                     msg = await consumer.getone()
             except asyncio.TimeoutError:
-                # Idle timeout elapsed with no new messages available
                 break
 
             try:
@@ -104,6 +105,11 @@ Kafka gives no per-account ordering here; state is correct in any order because 
             tp = TopicPartition(msg.topic, msg.partition)
             await consumer.commit({tp: msg.offset + 1})
             processed_count += 1
+
+            # Ingestion watermark advances only on applied messages:
+            # record.arrival_time is the payload recorded_at. Never msg.timestamp, never event_time.
+            arrival_sec = int(to_unix_seconds(record.arrival_time))
+            record_payment_watermark(redis_client, msg.partition, arrival_sec - cfg.commit_grace)
     finally:
         await consumer.stop()
 
@@ -148,6 +154,8 @@ async def apply_account_events_since(
         The highest row ID processed, or after_id if no new rows were found.
     """
     cfg = settings if settings is not None else get_default_settings()
+    poll_start_db_time = await connection.fetchval("SELECT now()")
+
     batch_size = cfg.account_event_batch_size
     overlap = cfg.account_event_overlap_rows
     start_id = max(0, after_id - overlap)
@@ -165,16 +173,17 @@ async def apply_account_events_since(
         batch_size,
     )
 
-    if not rows:
-        return after_id
-
     last_id = after_id
-    for row in rows:
-        record = account_event_from_row(row)
-        apply_account_event(redis_client, record, cfg)
-        row_id = int(row["id"])
-        if row_id > last_id:
-            last_id = row_id
+    if rows:
+        for row in rows:
+            record = account_event_from_row(row)
+            apply_account_event(redis_client, record, cfg)
+            row_id = int(row["id"])
+            if row_id > last_id:
+                last_id = row_id
+
+    watermark_ts = int(to_unix_seconds(poll_start_db_time)) - cfg.commit_grace
+    record_poller_watermark(redis_client, bank_id, "events", watermark_ts)
 
     return last_id
 
@@ -215,6 +224,8 @@ async def apply_withdrawals_since(
         The highest row ID processed, or after_id if no new rows were found.
     """
     cfg = settings if settings is not None else get_default_settings()
+    poll_start_db_time = await connection.fetchval("SELECT now()")
+
     batch_size = cfg.account_event_batch_size
     overlap = cfg.account_event_overlap_rows
     start_id = max(0, after_id - overlap)
@@ -233,16 +244,17 @@ async def apply_withdrawals_since(
         batch_size,
     )
 
-    if not rows:
-        return after_id
-
     last_id = after_id
-    for row in rows:
-        record = withdrawal_from_row(row)
-        apply_withdrawal(redis_client, record, cfg)
-        row_id = int(row["id"])
-        if row_id > last_id:
-            last_id = row_id
+    if rows:
+        for row in rows:
+            record = withdrawal_from_row(row)
+            apply_withdrawal(redis_client, record, cfg)
+            row_id = int(row["id"])
+            if row_id > last_id:
+                last_id = row_id
+
+    watermark_ts = int(to_unix_seconds(poll_start_db_time)) - cfg.commit_grace
+    record_poller_watermark(redis_client, bank_id, "withdrawals", watermark_ts)
 
     return last_id
 

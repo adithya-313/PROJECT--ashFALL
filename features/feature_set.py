@@ -18,18 +18,23 @@ from pathlib import Path
 import yaml
 
 # Canonical list of approved M1 feature grouping categories per architecture plan.
-KNOWN_GROUPS: frozenset[str] = frozenset({
-    "inflow",
-    "outflow",
-    "balance_pattern",
-    "routine_life",
-    "lifecycle",
-    "control",
-    "network",
-    "intelligence",
-    "region",
-    "payment_level",
-})
+KNOWN_GROUPS: frozenset[str] = frozenset(
+    {
+        "inflow",
+        "outflow",
+        "balance_pattern",
+        "routine_life",
+        "lifecycle",
+        "control",
+        "network",
+        "intelligence",
+        "region",
+        "payment_level",
+    }
+)
+
+# the exact feature list is identified by feature_names_sha256; this names the set
+FEATURE_SET_VERSION: str = "m1"
 
 
 @dataclass(frozen=True)
@@ -189,9 +194,7 @@ def load_feature_set_m1(config_path: Path | None = None) -> M1FeatureSet:
 
         group = item.get("group")
         if not isinstance(group, str) or group not in KNOWN_GROUPS:
-            raise ValueError(
-                f"Feature {name!r} has invalid group {group!r}; must be one of {sorted(KNOWN_GROUPS)}"
-            )
+            raise ValueError(f"Feature {name!r} has invalid group {group!r}; must be one of {sorted(KNOWN_GROUPS)}")
 
         definition = item.get("definition")
         if not isinstance(definition, str) or not definition.strip():

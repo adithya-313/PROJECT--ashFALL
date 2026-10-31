@@ -49,10 +49,12 @@ class FakeDBConnection:
 
     def __init__(
         self,
+        db_now: datetime,
         feedback_rows: list[dict[str, Any]] | None = None,
         complaint_rows: list[dict[str, Any]] | None = None,
         transaction_rows: list[dict[str, Any]] | None = None,
     ) -> None:
+        self.db_now = db_now
         self.feedback_rows = feedback_rows or []
         self.complaint_rows = complaint_rows or []
         self.transaction_rows = transaction_rows or []
@@ -62,28 +64,25 @@ class FakeDBConnection:
         self.queries.append((query, args))
         if "FROM bank_feedback" in query:
             bank_id, after_id, limit = args
-            matching = [
-                r for r in self.feedback_rows
-                if r["bank_id"] == bank_id and r["id"] > after_id
-            ]
+            matching = [r for r in self.feedback_rows if r["bank_id"] == bank_id and r["id"] > after_id]
             matching.sort(key=lambda r: r["id"])
             return matching[:limit]
         elif "FROM bank_complaints" in query:
             bank_id, after_id, limit = args
-            matching = [
-                r for r in self.complaint_rows
-                if r["bank_id"] == bank_id and r["id"] > after_id
-            ]
+            matching = [r for r in self.complaint_rows if r["bank_id"] == bank_id and r["id"] > after_id]
             matching.sort(key=lambda r: r["id"])
             return matching[:limit]
         elif "FROM transactions" in query:
             bank_id, payment_id = args
-            matching = [
-                r for r in self.transaction_rows
-                if r["bank_id"] == bank_id and r["payment_id"] == payment_id
-            ]
+            matching = [r for r in self.transaction_rows if r["bank_id"] == bank_id and r["payment_id"] == payment_id]
             return matching
         raise ValueError(f"Unexpected query: {query}")
+
+    async def fetchval(self, query: str, *args: Any) -> datetime:
+        self.queries.append((query, args))
+        if query != "SELECT now()":
+            raise AssertionError(f"Unexpected query in fetchval: {query!r}")
+        return self.db_now
 
 
 @pytest.fixture
@@ -113,7 +112,7 @@ async def test_confirmed_fraud_labels_credit_side_and_not_sender(redis_client: f
             "created_at": NOW_UTC,
         }
     ]
-    conn = FakeDBConnection(feedback_rows=feedbacks, transaction_rows=txns)
+    conn = FakeDBConnection(db_now=NOW_UTC, feedback_rows=feedbacks, transaction_rows=txns)
     last_id = await apply_feedback_since(conn, redis_client, bank_id=BANK_0, after_id=0)
     assert last_id == 1
 
@@ -142,7 +141,7 @@ async def test_only_debit_side_labels_nothing(redis_client: fakeredis.FakeRedis)
             "created_at": NOW_UTC,
         }
     ]
-    conn = FakeDBConnection(feedback_rows=feedbacks, transaction_rows=txns)
+    conn = FakeDBConnection(db_now=NOW_UTC, feedback_rows=feedbacks, transaction_rows=txns)
     await apply_feedback_since(conn, redis_client, bank_id=BANK_0, after_id=0)
 
     decision_time = NOW_UTC + timedelta(seconds=10)
@@ -179,7 +178,7 @@ async def test_not_fraud_and_customer_dispute_ignored(redis_client: fakeredis.Fa
             "created_at": NOW_UTC,
         },
     ]
-    conn = FakeDBConnection(feedback_rows=feedbacks, transaction_rows=txns)
+    conn = FakeDBConnection(db_now=NOW_UTC, feedback_rows=feedbacks, transaction_rows=txns)
     last_id = await apply_feedback_since(conn, redis_client, bank_id=BANK_0, after_id=0)
     assert last_id == 11
 
@@ -216,7 +215,7 @@ async def test_complaint_about_other_bank_account_ignored(redis_client: fakeredi
             "created_at": NOW_UTC,
         },
     ]
-    conn = FakeDBConnection(complaint_rows=complaints)
+    conn = FakeDBConnection(db_now=NOW_UTC, complaint_rows=complaints)
     await apply_complaints_since(conn, redis_client, bank_id=BANK_0, after_id=0)
 
     decision_time = NOW_UTC + timedelta(seconds=10)
@@ -240,7 +239,7 @@ async def test_labels_repeat_safe(redis_client: fakeredis.FakeRedis) -> None:
             "created_at": NOW_UTC,
         }
     ]
-    conn = FakeDBConnection(feedback_rows=feedbacks, transaction_rows=txns)
+    conn = FakeDBConnection(db_now=NOW_UTC, feedback_rows=feedbacks, transaction_rows=txns)
     await apply_feedback_since(conn, redis_client, bank_id=BANK_0, after_id=0)
     key = labelled_accounts_key(RUN_ID, BANK_0)
     dump_1 = redis_client.zrange(key, 0, -1, withscores=True)
@@ -269,7 +268,7 @@ async def test_invisible_before_available_from(redis_client: fakeredis.FakeRedis
             "created_at": t_created,
         }
     ]
-    conn = FakeDBConnection(feedback_rows=feedbacks, transaction_rows=txns)
+    conn = FakeDBConnection(db_now=NOW_UTC, feedback_rows=feedbacks, transaction_rows=txns)
     await apply_feedback_since(conn, redis_client, bank_id=BANK_0, after_id=0)
 
     # 1. 1 second before available_from: invisible
@@ -290,6 +289,7 @@ async def test_overlap_poller_catches_late_committing_row(redis_client: fakeredi
     ]
     # First batch: row 10 committed first
     conn = FakeDBConnection(
+        db_now=NOW_UTC,
         feedback_rows=[
             {
                 "id": 10,
@@ -334,6 +334,7 @@ async def test_no_ttl_on_label_keys(redis_client: fakeredis.FakeRedis) -> None:
     p1 = f"{RUN_ID}-pay-0009"
     c1 = f"{RUN_ID}-cmp-0009"
     conn = FakeDBConnection(
+        db_now=NOW_UTC,
         feedback_rows=[
             {
                 "id": 1,

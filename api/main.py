@@ -45,6 +45,7 @@ logger = get_logger(__name__)
 # On Linux (Docker, CI, production) uvloop loads and is used as normal.
 try:
     import uvloop
+
     asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 except ModuleNotFoundError:
     logger.info("uvloop not available — using standard asyncio event loop (Windows or no uvloop installed)")
@@ -73,13 +74,34 @@ async def lifespan(app: fastapi.FastAPI):
     app.state.db_pool = pool
     logger.info("Database pool initialized", min_size=config.db_pool_min_size, max_size=config.db_pool_max_size)
 
+    # Initialize feature logging dependencies when shadow-logging is enabled
+    if config.decision_feature_logging_enabled:
+        import redis
+
+        from core.event_clock import WallClock
+        from features.account_keys import get_default_settings
+
+        if not hasattr(app.state, "redis_client") or app.state.redis_client is None:
+            app.state.redis_client = redis.Redis.from_url(config.redis_url)
+        if not hasattr(app.state, "decision_clock") or app.state.decision_clock is None:
+            app.state.decision_clock = WallClock()
+        if not hasattr(app.state, "account_settings") or app.state.account_settings is None:
+            app.state.account_settings = get_default_settings()
+        if not hasattr(app.state, "registry_screener"):
+            app.state.registry_screener = None
+
     # Start the GPU metrics background task. asyncio.create_task schedules it to run
     # concurrently alongside request handling. It exits on its own if nvidia-smi is absent.
     asyncio.create_task(poll_gpu_metrics())
 
     yield
 
-    # Cleanly close the pool on shutdown
+    # Cleanly close resources on shutdown
+    if hasattr(app.state, "redis_client") and app.state.redis_client is not None:
+        try:
+            app.state.redis_client.close()
+        except Exception:
+            pass
     await pool.close()
     logger.info("Worker stopped")
 

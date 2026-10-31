@@ -56,6 +56,7 @@ class AccountFeaturesSettings:
     device_change_window_seconds: int = 604800
     network_max_hops: int = 3
     network_max_nodes_visited: int = 5000
+    commit_grace: int = 5
 
     @property
     def expiry_seconds(self) -> int:
@@ -141,6 +142,7 @@ def load_account_features_settings(config_path: Path | None = None) -> AccountFe
     device_change_window_seconds = int(block.get("device_change_window_seconds", {}).get("value", 604800))
     network_max_hops = int(block.get("network_max_hops", {}).get("value", 3))
     network_max_nodes_visited = int(block.get("network_max_nodes_visited", {}).get("value", 5000))
+    commit_grace = int(block.get("commit_grace", {}).get("value", 5))
 
     return AccountFeaturesSettings(
         windows_seconds=windows_seconds,
@@ -161,6 +163,7 @@ def load_account_features_settings(config_path: Path | None = None) -> AccountFe
         device_change_window_seconds=device_change_window_seconds,
         network_max_hops=network_max_hops,
         network_max_nodes_visited=network_max_nodes_visited,
+        commit_grace=commit_grace,
     )
 
 
@@ -459,4 +462,23 @@ def namespace_pattern(run_id: str, bank_id: str) -> str:
     prefix = get_default_settings().key_prefix
     _validate_key_component("key_prefix", prefix)
     return f"{prefix}:{run_id}:{bank_id}:*"
+
+
+WATERMARK_PREFIX = "acctwm:"
+
+
+def payment_watermark_key(partition: int) -> str:
+    """Redis key for Kafka upi.payments partition watermark."""
+    return f"{WATERMARK_PREFIX}payments:{partition}"
+
+
+def payments_partitions_key() -> str:
+    """Redis set key holding known Kafka upi.payments partition numbers."""
+    return f"{WATERMARK_PREFIX}payments:partitions"
+
+
+def poller_watermark_key(bank_id: str, source: str) -> str:
+    """Redis key for bank-scoped Postgres poller watermark."""
+    _validate_key_component("bank_id", bank_id)
+    return f"{WATERMARK_PREFIX}{bank_id}:{source}"
 

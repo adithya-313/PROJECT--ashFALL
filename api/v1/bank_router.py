@@ -5,6 +5,7 @@
 # Order of work in every route: (1) authenticate the request (key, signature, freshness, nonce) BEFORE the body
 # is parsed, so an unsigned request with a broken body gets 401 and not 422; (2) parse and validate the body;
 # (3) for POST routes, claim the idempotency key and do the business write in ONE bank-scoped transaction.
+import logging
 import re
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal, TypeVar
@@ -44,7 +45,10 @@ from api.v1.models import (
     WithdrawalResponse,
 )
 from api.v1.request_auth import BankRequestContext, authenticate_bank_request, raw_request_path
+from core.config import config
 from core.event_clock import Clock, WallClock
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1")
 
@@ -180,9 +184,7 @@ async def run_idempotent_post(request: Request, ctx: BankRequestContext, handler
     return ORJSONResponse(status_code=outcome.status, content=outcome.body, headers=headers)
 
 
-@router.post(
-    "/decisions", response_model=DecisionResponse, openapi_extra=request_schema(DecisionRequest)
-)
+@router.post("/decisions", response_model=DecisionResponse, openapi_extra=request_schema(DecisionRequest))
 async def post_decision(request: Request) -> ORJSONResponse:
     """
     Records a bank's request for a decision on a payment. Scoring does not exist yet, so the answer is always
@@ -191,8 +193,27 @@ async def post_decision(request: Request) -> ORJSONResponse:
     ctx = await get_bank_context(request)
     decision_request = parse_body(ctx, DecisionRequest)
 
+    redis_client = getattr(request.app.state, "redis_client", None)
+    decision_clock = getattr(request.app.state, "decision_clock", None)
+    settings = getattr(request.app.state, "account_settings", None)
+    screener = getattr(request.app.state, "registry_screener", None)
+    dpip_key = (
+        config.dpip_participant_key.get_secret_value()
+        if config.dpip_participant_key is not None
+        else None
+    )
+
     async def handler(connection: asyncpg.Connection) -> tuple[int, dict[str, Any]]:
-        return await record_decision(connection, ctx.bank_id, decision_request)
+        return await record_decision(
+            connection,
+            ctx.bank_id,
+            decision_request,
+            redis_client=redis_client,
+            decision_clock=decision_clock,
+            settings=settings,
+            screener=screener,
+            dpip_key=dpip_key,
+        )
 
     return await run_idempotent_post(request, ctx, handler)
 

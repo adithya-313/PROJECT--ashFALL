@@ -27,6 +27,15 @@ COPY nationalsim/ nationalsim/
 COPY config/nationalsim.yaml config/nationalsim.yaml
 COPY config/bank_api.yaml config/bank_api.yaml
 
+# The API imports the feature code (live account state, decision features, the decision feature log), so it ships in
+# the image. Besides the code, copy only the four files that code reads from disk, not the whole config/ or data/:
+# account feature settings, the run id length setting, the bank index mapping and the M1 feature schema.
+COPY features/ features/
+COPY config/account_features.yaml config/account_features.yaml
+COPY config/interactive_runner.yaml config/interactive_runner.yaml
+COPY config/bank_feed.yaml config/bank_feed.yaml
+COPY data/schemas/feature_set_m1.yaml data/schemas/feature_set_m1.yaml
+
 # PYTHONPATH=/app ensures "from core.config import config" and "api.main:app" resolve.
 ENV PYTHONPATH=/app
 

@@ -15,12 +15,36 @@ pytestmark = pytest.mark.anyio
 # The transactions table columns, in order. The Level 10.5 agent reads this table, so changing it must break this
 # test on purpose and force a deliberate decision.
 EXPECTED_TRANSACTION_COLUMNS = [
-    "id", "transaction_id", "source", "account_id", "merchant_id", "amount", "device_fingerprint",
-    "geo_coordinates", "txn_type", "old_balance_orig", "new_balance_orig", "old_balance_dest",
-    "new_balance_dest", "fraud_score", "model_version", "details", "created_at",
-    "payment_id", "bank_id", "side", "counterparty_vpa", "counterparty_bank_id", "amount_paise",
-    "event_time", "status", "failure_domain", "payee_type", "channel",
-    "sender_device_fingerprint", "sender_os_generation",
+    "id",
+    "transaction_id",
+    "source",
+    "account_id",
+    "merchant_id",
+    "amount",
+    "device_fingerprint",
+    "geo_coordinates",
+    "txn_type",
+    "old_balance_orig",
+    "new_balance_orig",
+    "old_balance_dest",
+    "new_balance_dest",
+    "fraud_score",
+    "model_version",
+    "details",
+    "created_at",
+    "payment_id",
+    "bank_id",
+    "side",
+    "counterparty_vpa",
+    "counterparty_bank_id",
+    "amount_paise",
+    "event_time",
+    "status",
+    "failure_domain",
+    "payee_type",
+    "channel",
+    "sender_device_fingerprint",
+    "sender_os_generation",
     "balance_after_paise",
 ]
 
@@ -34,7 +58,8 @@ async def applied_filenames(connection: asyncpg.Connection) -> list[str]:
 async def table_names_in_schema(connection: asyncpg.Connection, schema_name: str) -> set[str]:
     """The names of the tables that exist in this test's schema only."""
     rows = await connection.fetch(
-        "SELECT table_name FROM information_schema.tables WHERE table_schema = $1", schema_name)
+        "SELECT table_name FROM information_schema.tables WHERE table_schema = $1", schema_name
+    )
     return {row["table_name"] for row in rows}
 
 
@@ -45,18 +70,29 @@ async def test_fresh_schema_applies_all_migrations_in_order(empty_schema):
 
     applied_count = await apply_pending_migrations(connection)
 
-    # All files applied (we expect 9 today), and the tracking table lists exactly those names.
-    assert applied_count == len(real_filenames) == 9
+    # All files applied (we expect 13 today), and the tracking table lists exactly those names.
+    assert applied_count == len(real_filenames) == 13
     assert await applied_filenames(connection) == real_filenames
     assert real_filenames == sorted(real_filenames)
 
     # The tables were created inside THIS schema, not in public.
     tables = await table_names_in_schema(connection, schema_name)
     expected_tables = {
-        "transactions", "outbox", "processed_events", "demo_event_counts", "outbox_dead_letter",
-        "national_outbox", "bank_api_keys", "schema_migrations",
-        "bank_request_nonces", "bank_idempotency_keys", "bank_decision_requests",
-        "bank_account_events", "bank_complaints", "bank_feedback",
+        "transactions",
+        "outbox",
+        "processed_events",
+        "demo_event_counts",
+        "outbox_dead_letter",
+        "national_outbox",
+        "bank_api_keys",
+        "schema_migrations",
+        "bank_request_nonces",
+        "bank_idempotency_keys",
+        "bank_decision_requests",
+        "bank_account_events",
+        "bank_complaints",
+        "bank_feedback",
+        "feature_log",
     }
     assert expected_tables <= tables
 
@@ -68,9 +104,9 @@ async def test_second_run_applies_nothing(empty_schema):
     first_count = await apply_pending_migrations(connection)
     second_count = await apply_pending_migrations(connection)
 
-    assert first_count == len(find_migration_files()) == 9
+    assert first_count == len(find_migration_files()) == 13
     assert second_count == 0
-    assert len(await applied_filenames(connection)) == 9
+    assert len(await applied_filenames(connection)) == 13
 
 
 async def test_failed_migration_is_not_recorded(empty_schema, tmp_path):
@@ -119,7 +155,8 @@ async def column_names_of(connection: asyncpg.Connection, schema_name: str, tabl
         WHERE table_schema = $1 AND table_name = $2
         ORDER BY ordinal_position
         """,
-        schema_name, table_name,
+        schema_name,
+        table_name,
     )
     return [row["column_name"] for row in rows]
 
@@ -135,6 +172,14 @@ async def test_outbox_and_dead_letter_columns_are_locked(isolated_schema):
 
     dead_letter_columns = await column_names_of(connection, schema_name, "outbox_dead_letter")
     assert dead_letter_columns == [
-        "id", "outbox_id", "event_id", "transaction_id", "payload", "error_type", "error_message",
-        "attempt_count", "first_failed_at", "dead_lettered_at",
+        "id",
+        "outbox_id",
+        "event_id",
+        "transaction_id",
+        "payload",
+        "error_type",
+        "error_message",
+        "attempt_count",
+        "first_failed_at",
+        "dead_lettered_at",
     ]
