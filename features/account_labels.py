@@ -17,6 +17,7 @@ WHY:
 """
 
 import logging
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
@@ -39,6 +40,77 @@ def to_unix_seconds(dt: datetime) -> int:
     if dt.tzinfo is None:
         return int(dt.replace(tzinfo=timezone.utc).timestamp())
     return int(dt.timestamp())
+
+
+async def apply_feedback_row(
+    connection: Any,
+    redis_client: Any,
+    row: Mapping[str, Any],
+    settings: AccountFeaturesSettings | None = None,
+) -> None:
+    """
+    WHAT: Applies a single bank_feedback row to Redis fraud labels.
+
+    WHY: Shared row-level handler used by live polling and history replay. Confirmed fraud
+    labels the credit-side account (mule) on the lifetime ZSET with available_from score.
+
+    Args:
+        connection: PostgreSQL connection for transaction lookups.
+        redis_client: Redis client instance.
+        row: Mapping containing bank_feedback row columns.
+        settings: Optional account feature settings.
+    """
+    outcome = row["outcome"]
+    # Architect decision 9b: confirmed_fraud feedback only; not_fraud and customer_dispute are ignored here.
+    if outcome != "confirmed_fraud":
+        logger.info(
+            "Feedback %s on payment %s outcome is %r; not confirmed_fraud, ignoring",
+            row["feedback_id"],
+            row["payment_id"],
+            outcome,
+        )
+        return
+
+    payment_id = row["payment_id"]
+    run_id = extract_run_id(payment_id)
+    bank_id = row["bank_id"]
+
+    # Look up THIS bank's transactions rows for that payment_id
+    txn_rows = await connection.fetch(
+        """
+        SELECT side, account_id
+        FROM transactions
+        WHERE bank_id = $1 AND payment_id = $2
+        """,
+        bank_id,
+        payment_id,
+    )
+
+    credit_accounts = [r["account_id"] for r in txn_rows if r["side"] == "credit"]
+    debit_accounts = [r["account_id"] for r in txn_rows if r["side"] == "debit"]
+
+    if credit_accounts:
+        # Score is available_from: max(feedback event_time, created_at)
+        available_from = max(row["event_time"], row["created_at"])
+        score = to_unix_seconds(available_from)
+        key = labelled_accounts_key(run_id, bank_id)
+        for acc_id in credit_accounts:
+            redis_client.zadd(key, {acc_id: score}, lt=True)
+    elif debit_accounts:
+        # Only debit side exists; sender is victim, do not label
+        logger.info(
+            "Feedback %s on payment %s for bank %s has only debit side; labelling nothing",
+            row["feedback_id"],
+            payment_id,
+            bank_id,
+        )
+    else:
+        logger.info(
+            "Feedback %s on payment %s for bank %s has no transaction records; labelling nothing",
+            row["feedback_id"],
+            payment_id,
+            bank_id,
+        )
 
 
 async def apply_feedback_since(
@@ -94,62 +166,49 @@ async def apply_feedback_since(
             row_id = int(row["id"])
             if row_id > last_id:
                 last_id = row_id
-
-            outcome = row["outcome"]
-            # Architect decision 9b: confirmed_fraud feedback only; not_fraud and customer_dispute are ignored here.
-            if outcome != "confirmed_fraud":
-                logger.info(
-                    "Feedback %s on payment %s outcome is %r; not confirmed_fraud, ignoring",
-                    row["feedback_id"],
-                    row["payment_id"],
-                    outcome,
-                )
-                continue
-
-            payment_id = row["payment_id"]
-            run_id = extract_run_id(payment_id)
-
-            # Look up THIS bank's transactions rows for that payment_id
-            txn_rows = await connection.fetch(
-                """
-                SELECT side, account_id
-                FROM transactions
-                WHERE bank_id = $1 AND payment_id = $2
-                """,
-                bank_id,
-                payment_id,
-            )
-
-            credit_accounts = [r["account_id"] for r in txn_rows if r["side"] == "credit"]
-            debit_accounts = [r["account_id"] for r in txn_rows if r["side"] == "debit"]
-
-            if credit_accounts:
-                # Score is available_from: max(feedback event_time, created_at)
-                available_from = max(row["event_time"], row["created_at"])
-                score = to_unix_seconds(available_from)
-                key = labelled_accounts_key(run_id, bank_id)
-                for acc_id in credit_accounts:
-                    redis_client.zadd(key, {acc_id: score}, lt=True)
-            elif debit_accounts:
-                # Only debit side exists; sender is victim, do not label
-                logger.info(
-                    "Feedback %s on payment %s for bank %s has only debit side; labelling nothing",
-                    row["feedback_id"],
-                    payment_id,
-                    bank_id,
-                )
-            else:
-                logger.info(
-                    "Feedback %s on payment %s for bank %s has no transaction records; labelling nothing",
-                    row["feedback_id"],
-                    payment_id,
-                    bank_id,
-                )
+            await apply_feedback_row(connection, redis_client, row, cfg)
 
     watermark_ts = int(to_unix_seconds(poll_start_db_time)) - cfg.commit_grace
     record_poller_watermark(redis_client, bank_id, "feedback", watermark_ts)
 
     return last_id
+
+
+def apply_complaint_row(
+    redis_client: Any,
+    row: Mapping[str, Any],
+    settings: AccountFeaturesSettings | None = None,
+) -> None:
+    """
+    WHAT: Applies a single bank_complaints row to Redis complaint labels.
+
+    WHY: Shared row-level handler used by live polling and history replay. Marks reported
+    accounts belonging to this bank on the lifetime ZSET with available_from score.
+
+    Args:
+        redis_client: Redis client instance.
+        row: Mapping containing bank_complaints row columns.
+        settings: Optional account feature settings.
+    """
+    bank_id = row["bank_id"]
+    # Mark reported_account ONLY when reported_bank_id equals this bank
+    if row["reported_bank_id"] != bank_id:
+        logger.info(
+            "Complaint %s reported_bank_id %r does not match this bank %r; ignoring",
+            row["complaint_id"],
+            row["reported_bank_id"],
+            bank_id,
+        )
+        return
+
+    complaint_id = row["complaint_id"]
+    run_id = extract_run_id(complaint_id)
+    reported_account = row["reported_account"]
+
+    available_from = max(row["received_at"], row["created_at"])
+    score = to_unix_seconds(available_from)
+    key = complained_accounts_key(run_id, bank_id)
+    redis_client.zadd(key, {reported_account: score}, lt=True)
 
 
 async def apply_complaints_since(
@@ -202,25 +261,7 @@ async def apply_complaints_since(
             row_id = int(row["id"])
             if row_id > last_id:
                 last_id = row_id
-
-            # Mark reported_account ONLY when reported_bank_id equals this bank
-            if row["reported_bank_id"] != bank_id:
-                logger.info(
-                    "Complaint %s reported_bank_id %r does not match this bank %r; ignoring",
-                    row["complaint_id"],
-                    row["reported_bank_id"],
-                    bank_id,
-                )
-                continue
-
-            complaint_id = row["complaint_id"]
-            run_id = extract_run_id(complaint_id)
-            reported_account = row["reported_account"]
-
-            available_from = max(row["received_at"], row["created_at"])
-            score = to_unix_seconds(available_from)
-            key = complained_accounts_key(run_id, bank_id)
-            redis_client.zadd(key, {reported_account: score}, lt=True)
+            apply_complaint_row(redis_client, row, cfg)
 
     watermark_ts = int(to_unix_seconds(poll_start_db_time)) - cfg.commit_grace
     record_poller_watermark(redis_client, bank_id, "complaints", watermark_ts)
@@ -307,9 +348,7 @@ def same_bank_counterparties(
                     accs.add(cp_vpa)
 
     # 2. Visible 7-day raw window records
-    snapshot = read_account_snapshot(
-        client, run_id, bank_id, account_id, decision_time, arrival_cutoff, cfg
-    )
+    snapshot = read_account_snapshot(client, run_id, bank_id, account_id, decision_time, arrival_cutoff, cfg)
     for rec in snapshot.side_records:
         if rec.status == "success" and rec.counterparty_bank_id == bank_id and rec.counterparty_vpa:
             accs.add(rec.counterparty_vpa)
