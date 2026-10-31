@@ -100,9 +100,6 @@ async def score_transaction(
         )
         raise HTTPException(status_code=500, detail="Transaction could not be stored") from error
 
-    if stored.fraud_score is None:
-        raise ValueError("Stored transaction missing required fraud_score")
-
     return ScoreResponse(
         transaction_id=stored.transaction_id,
         account_id=transaction.account_id,

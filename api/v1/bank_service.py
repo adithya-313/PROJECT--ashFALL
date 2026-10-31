@@ -536,9 +536,6 @@ class InProcessBankClient:
         if path == "/v1/decisions":
             decision_model = parse_raw_body(body_bytes, DecisionRequest)
             dpip_key = (
-                config.dpip_participant_key.get_secret_value() if config.dpip_participant_key is not None else None
-            )
-            dpip_key = (
                 config.dpip_participant_key.get_secret_value()
                 if config.dpip_participant_key is not None
                 else None

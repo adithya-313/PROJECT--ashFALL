@@ -27,7 +27,13 @@ from pydantic import SecretStr
 from api.main import app
 from api.v1.bank_keys import issue_api_key
 from api.v1.bank_scope import bank_scoped_transaction
-from api.v1.bank_service import DECISION_REASON, InProcessBankClient, get_bank_mode
+from api.v1.bank_service import (
+    DECISION_REASON,
+    InProcessBankClient,
+    get_bank_mode,
+    record_decision,
+)
+from api.v1.models import DecisionRequest
 from api.v1.signing import sign_outgoing
 from core.config import config
 from core.event_clock import IST, ManualClock
@@ -448,3 +454,34 @@ async def test_feature_logging_registry_match_with_and_without_dpip_key(env, mon
         values2 = row2.feature_values
         assert isinstance(values2, list)
         assert values2[idx_match] is None
+
+    # 3. Explicit dpip_key passed to record_decision while config.dpip_participant_key is None
+    # S14 Target: dropping dpip_key from compute_decision_row call makes this None!
+    monkeypatch.setattr(config, "dpip_participant_key", None)
+    payment_id_explicit = f"{RUN_ID}-dpip03"
+    req_explicit = DecisionRequest(
+        payment_id=payment_id_explicit,
+        sender_account_id="acc_sender_dpip",
+        receiver_bank_id="bank_0",
+        receiver_vpa="acc_payee_target",
+        payee_type="person",
+        amount_paise=50000,
+        event_time=EVENT_TIME_DT,
+    )
+    async with bank_scoped_transaction(connection, "bank_0") as scoped:
+        status3, _ = await record_decision(
+            scoped,
+            "bank_0",
+            req_explicit,
+            redis_client=redis_client,
+            decision_clock=clock,
+            screener=screener,
+            dpip_key="test_secret_dpip_key_32_bytes_!",
+        )
+        assert status3 == 200
+        row3 = await read_feature_log_row(scoped, "bank_0", payment_id_explicit)
+        assert row3 is not None
+        assert row3.status == "ok"
+        values3 = row3.feature_values
+        assert isinstance(values3, list)
+        assert values3[idx_match] is True
