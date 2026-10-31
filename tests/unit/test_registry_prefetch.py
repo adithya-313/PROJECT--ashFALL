@@ -16,6 +16,7 @@ import math
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 import fakeredis
 import pytest
@@ -310,7 +311,15 @@ COARSE_TICK = 0.015625  # the Windows monotonic clock tick
 
 
 class _CoarseClockLoop(asyncio.SelectorEventLoop):
-    """An event loop whose clock only moves in 15.6 ms steps, so its timers can fire up to one tick early."""
+    """
+    An event loop that behaves like the one on Windows: its clock only moves in 15.6 ms steps AND, as asyncio does
+    with the platform's clock resolution, it treats any timer due within one tick as ready. Together timers fire
+    up to two ticks early. (Setting the resolution makes this hold on Linux too, where the real one is 1 ns.)
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._clock_resolution = COARSE_TICK
 
     def time(self) -> float:
         return math.floor(super().time() / COARSE_TICK) * COARSE_TICK
@@ -346,10 +355,19 @@ def test_a_call_is_never_cut_before_its_real_timeout_on_a_coarse_clock(monkeypat
     assert _timed_out_count_on_coarse_clock(200, 0.020, 0.008) == 0
 
 
-def test_without_the_resolution_slack_the_same_coarse_clock_cuts_calls_early(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Control: with no slack, the same 8 ms calls are wrongly cut, so the test above really exercises the fix."""
-    monkeypatch.setattr(registry_prefetch, "clock_resolution_seconds", lambda: 0.0)
-    assert _timed_out_count_on_coarse_clock(200, 0.020, 0.008) > 0
+def test_the_wait_is_the_timeout_plus_two_clock_ticks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The deterministic form of the guard: wait_for is given timeout + 2 ticks, so an early timer cannot cut a call."""
+    given: list[float] = []
+    real_wait_for = asyncio.wait_for
+
+    async def recording_wait_for(awaitable: Any, timeout: float) -> Any:
+        given.append(timeout)
+        return await real_wait_for(awaitable, timeout)
+
+    monkeypatch.setattr(registry_prefetch.asyncio, "wait_for", recording_wait_for)
+    monkeypatch.setattr(registry_prefetch, "clock_resolution_seconds", lambda: COARSE_TICK)
+    asyncio.run(prefetch_registry_answers(_RealDurationClient(0.001), [QUESTIONS[0]], 0.020))
+    assert given == [pytest.approx(0.020 + 2 * COARSE_TICK)]
 
 
 def test_an_answer_that_arrives_after_the_timeout_is_unknown_and_counted(monkeypatch: pytest.MonkeyPatch) -> None:
