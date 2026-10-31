@@ -17,12 +17,13 @@ from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from core.event_clock import Clock
-from nationalsim.bank_client import NationalsimBankClient
+from nationalsim.bank_client import NationalsimBankClient, ScreenResult
 
 __all__ = [
     "ScreenOutcome",
     "RegistryScreener",
     "NationalsimRegistryScreener",
+    "outcome_from_screen_result",
     "FakeRegistryScreener",
     "LiveRegistryScreener",
     "RecordingRegistryScreener",
@@ -35,6 +36,8 @@ class ScreenOutcome:
 
     status: str  # 'match', 'no_match', or 'unknown'
     first_visible_at: datetime | None = None
+    # True only when the answer is 'unknown' because the per-call decision timeout expired.
+    timed_out: bool = False
 
     def __post_init__(self) -> None:
         if self.status not in ("match", "no_match", "unknown"):
@@ -65,11 +68,27 @@ class RegistryScreener(Protocol):
         ...
 
 
+def outcome_from_screen_result(res: ScreenResult) -> ScreenOutcome:
+    """Translate a client ScreenResult into a ScreenOutcome; an unavailable registry is 'unknown', never 'no_match'."""
+    if res.status == "unavailable" or res.is_unavailable or res.match is None:
+        return ScreenOutcome(status="unknown", first_visible_at=None)
+
+    if res.match is True:
+        return ScreenOutcome(status="match", first_visible_at=res.first_visible_at)
+
+    return ScreenOutcome(status="no_match", first_visible_at=None)
+
+
 class NationalsimRegistryScreener:
     """Production screener adapter delegating to NationalsimBankClient."""
 
     def __init__(self, client: NationalsimBankClient) -> None:
         self._client: NationalsimBankClient = client
+
+    @property
+    def client(self) -> NationalsimBankClient:
+        """The underlying bank client (the decision path screens through its async interface)."""
+        return self._client
 
     def screen(
         self,
@@ -83,13 +102,7 @@ class NationalsimRegistryScreener:
             identifier_type=identifier_type,
             as_of=as_of,
         )
-        if res.status == "unavailable" or res.is_unavailable or res.match is None:
-            return ScreenOutcome(status="unknown", first_visible_at=None)
-
-        if res.match is True:
-            return ScreenOutcome(status="match", first_visible_at=res.first_visible_at)
-
-        return ScreenOutcome(status="no_match", first_visible_at=None)
+        return outcome_from_screen_result(res)
 
 
 class FakeRegistryScreener:

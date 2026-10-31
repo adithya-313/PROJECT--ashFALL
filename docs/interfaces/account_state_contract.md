@@ -320,6 +320,11 @@ Identifier parsing uses `extract_run_id` to strictly validate run identifiers: a
 ### 10.3 Logged Registry Screener (`LoggedAnswerScreener`)
 Point-in-time replay eliminates external network dependency and guarantees deterministic screening by using `LoggedAnswerScreener`. The screener answers queries exclusively using the `registry_answers` audit payload captured in `feature_log` during the original decision. Any query not present in the logged answers raises a `LookupError`, ensuring no silent fallback or mock drift.
 
+### 10.3a Live Registry Prefetch and Timeout
+In a live decision with the real registry client, `compute_decision_row` lists every registry question the decision will ask (the payer account, each visible lifetime device fingerprint of the payer, and the payee account, in that order and without duplicates, built with the same hash function and visibility rules as the features) and asks them all at once with a per-call timeout (`decision_registry.timeout_ms` in `config/account_features.yaml`). The decision waits for the slowest call, not the sum. The feature code is unchanged and reads the answers through `PrefetchedScreener`, which raises `LookupError` for a question that was not prefetched.
+
+A call that exceeds the timeout is answered `'unknown'` (never `'no_match'`), so the dependent features are `None`. Each such timeout increments the Prometheus counter `ashfall_registry_timeouts_total{identifier_type}`. Every entry of `registry_answers` carries `outcome.timed_out` (true only for that case). Replay reads the logged `'unknown'` through `LoggedAnswerScreener`, so a logged timeout recomputes exactly. Registry answers are not cached; that belongs to Level 19.
+
 ### 10.4 Zero-Tolerance Parity Verification
 `recompute_logged_row` compares the logged feature vector against the recomputed feature vector. Feature parity requires exact value equality (`==`) and identical runtime types (`type(l) is type(r)`). Any numerical drift, missing field, or subtle type mismatch is captured in `RecomputeResult.mismatches`.
 
