@@ -11,6 +11,7 @@ event_time is within the sliding look-back window (decision_time - retention <= 
 AND whose ingestion arrival_time <= arrival_cutoff are admitted into the feature snapshot.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -75,6 +76,81 @@ def empty_snapshot() -> AccountSnapshot:
     )
 
 
+def _decode_members(scored_items: list[Any]) -> list[str]:
+    """Decode the members of a zrangebyscore(..., withscores=True) result to strings."""
+    return [m[0].decode("utf-8") if isinstance(m[0], bytes) else str(m[0]) for m in scored_items]
+
+
+def _visible_side_records(
+    raw_records: list[Any],
+    decision_time: datetime,
+    arrival_cutoff: datetime,
+    min_allowed_time: datetime,
+) -> list[PaymentSideRecord]:
+    """
+    WHAT: Deserialises the stored side records and keeps those inside the look-back window that had arrived
+    by the arrival cutoff, in the order given.
+
+    WHY: The one copy of the side-record visibility rule, shared by the single-account snapshot read and the
+    many-account read so the two can never disagree.
+    """
+    visible: list[PaymentSideRecord] = []
+    for raw in raw_records:
+        if raw is None:
+            continue
+        rec = deserialize_payment_side_record(raw)
+        if min_allowed_time <= rec.event_time <= decision_time and rec.arrival_time <= arrival_cutoff:
+            visible.append(rec)
+    return visible
+
+
+def read_side_records_many(
+    client: Any,
+    run_id: str,
+    bank_id: str,
+    account_ids: Sequence[str],
+    decision_time: datetime,
+    arrival_cutoff: datetime,
+    settings: AccountFeaturesSettings | None = None,
+) -> dict[str, tuple[PaymentSideRecord, ...]]:
+    """
+    WHAT: Returns, for each account, exactly read_account_snapshot(...).side_records, using two Redis round
+    trips in total (one pipeline of zrangebyscore calls, one pipeline of hmget calls) however many accounts there are.
+
+    WHY: The network features read the side records of many accounts per decision; one round trip per account
+    dominated their latency. Time window, arrival filter and order are identical to the single-account read.
+    """
+    cfg = settings if settings is not None else get_default_settings()
+    unique_accounts = list(dict.fromkeys(account_ids))
+    if not unique_accounts:
+        return {}
+
+    decision_unix = to_unix_seconds(decision_time)
+    min_unix = decision_unix - cfg.retention_seconds
+    min_allowed_time = decision_time - timedelta(seconds=cfg.retention_seconds)
+
+    times_pipe = client.pipeline(transaction=False)
+    for account_id in unique_accounts:
+        times_pipe.zrangebyscore(side_times_key(run_id, bank_id, account_id), min_unix, decision_unix, withscores=True)
+    scored_by_account = dict(zip(unique_accounts, times_pipe.execute()))
+
+    records_by_account: dict[str, tuple[PaymentSideRecord, ...]] = {account_id: () for account_id in unique_accounts}
+    with_items = [account_id for account_id in unique_accounts if scored_by_account[account_id]]
+    if not with_items:
+        return records_by_account
+
+    records_pipe = client.pipeline(transaction=False)
+    for account_id in with_items:
+        records_pipe.hmget(
+            side_records_key(run_id, bank_id, account_id), _decode_members(scored_by_account[account_id])
+        )
+    for account_id, raw_records in zip(with_items, records_pipe.execute()):
+        records_by_account[account_id] = tuple(
+            _visible_side_records(raw_records, decision_time, arrival_cutoff, min_allowed_time)
+        )
+    return records_by_account
+
+
 def read_account_snapshot(
     client: Any,
     run_id: str,
@@ -118,17 +194,8 @@ def read_account_snapshot(
     side_items = client.zrangebyscore(st_key, min_unix, max_unix, withscores=True)
     filtered_sides: list[PaymentSideRecord] = []
     if side_items:
-        side_members = [
-            m[0].decode("utf-8") if isinstance(m[0], bytes) else str(m[0])
-            for m in side_items
-        ]
-        raw_sides = client.hmget(sr_key, side_members)
-        for raw in raw_sides:
-            if raw is None:
-                continue
-            rec = deserialize_payment_side_record(raw)
-            if min_allowed_time <= rec.event_time <= decision_time and rec.arrival_time <= arrival_cutoff:
-                filtered_sides.append(rec)
+        raw_sides = client.hmget(sr_key, _decode_members(side_items))
+        filtered_sides = _visible_side_records(raw_sides, decision_time, arrival_cutoff, min_allowed_time)
 
     # 2. Query account lifecycle events within [decision_time - retention, decision_time]
     et_key = event_times_key(run_id, bank_id, account_id)
