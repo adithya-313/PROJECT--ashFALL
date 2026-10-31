@@ -45,6 +45,7 @@ from api.v1.models import (
     WithdrawalResponse,
 )
 from api.v1.request_auth import BankRequestContext, authenticate_bank_request, raw_request_path
+from core.config import config
 from core.event_clock import Clock, WallClock
 
 logger = logging.getLogger(__name__)
@@ -196,6 +197,11 @@ async def post_decision(request: Request) -> ORJSONResponse:
     decision_clock = getattr(request.app.state, "decision_clock", None)
     settings = getattr(request.app.state, "account_settings", None)
     screener = getattr(request.app.state, "registry_screener", None)
+    dpip_key = (
+        config.dpip_participant_key.get_secret_value()
+        if config.dpip_participant_key is not None
+        else None
+    )
 
     async def handler(connection: asyncpg.Connection) -> tuple[int, dict[str, Any]]:
         return await record_decision(
@@ -206,6 +212,7 @@ async def post_decision(request: Request) -> ORJSONResponse:
             decision_clock=decision_clock,
             settings=settings,
             screener=screener,
+            dpip_key=dpip_key,
         )
 
     return await run_idempotent_post(request, ctx, handler)

@@ -48,7 +48,6 @@ from features.feature_log import (
     canonical_feature_names,
     insert_feature_log_row,
 )
-from features.ingest_watermark import get_bank_watermark
 from features.registry_screening import RegistryScreener
 
 logger = logging.getLogger(__name__)
@@ -144,6 +143,7 @@ async def record_decision(
     settings: AccountFeaturesSettings | None = None,
     screener: RegistryScreener | None = None,
     feature_row: FeatureLogRow | None = None,
+    dpip_key: str | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """
     WHAT: Executes the business logic for recording a bank payment decision evaluation request.
@@ -163,6 +163,7 @@ async def record_decision(
         settings: Optional AccountFeaturesSettings.
         screener: Optional RegistryScreener instance.
         feature_row: Pre-computed FeatureLogRow to insert (if computed prior to transaction).
+        dpip_key: Optional explicit DPIP HMAC key for registry screening.
 
     Returns:
         Tuple of status code (200) and response body dictionary.
@@ -201,6 +202,7 @@ async def record_decision(
                     clock=clk,
                     settings=settings,
                     screener=screener,
+                    dpip_key=dpip_key,
                 )
             except Exception as exc:
                 logger.warning(
@@ -209,13 +211,6 @@ async def record_decision(
                     bank_id,
                     exc,
                 )
-                wm = None
-                if redis_client is not None:
-                    try:
-                        wm = get_bank_watermark(redis_client, bank_id)
-                    except Exception:
-                        wm = None
-                arrival_cutoff = wm if wm is not None else request.event_time
                 row = FeatureLogRow(
                     bank_id=bank_id,
                     payment_id=request.payment_id,
@@ -223,7 +218,7 @@ async def record_decision(
                     account_id=request.sender_account_id,
                     decision_time=request.event_time,
                     decided_at=clk.now_ist(),
-                    arrival_cutoff=arrival_cutoff,
+                    arrival_cutoff=None,
                     watermark_lag_ms=None,
                     status="error",
                     feature_values={name: None for name in canonical_feature_names()},
@@ -540,6 +535,14 @@ class InProcessBankClient:
         """
         if path == "/v1/decisions":
             decision_model = parse_raw_body(body_bytes, DecisionRequest)
+            dpip_key = (
+                config.dpip_participant_key.get_secret_value() if config.dpip_participant_key is not None else None
+            )
+            dpip_key = (
+                config.dpip_participant_key.get_secret_value()
+                if config.dpip_participant_key is not None
+                else None
+            )
 
             async def handler(connection: asyncpg.Connection) -> tuple[int, dict[str, Any]]:
                 return await record_decision(
@@ -550,6 +553,7 @@ class InProcessBankClient:
                     decision_clock=self._decision_clock,
                     settings=self._settings,
                     screener=self._screener,
+                    dpip_key=dpip_key,
                 )
 
         elif path == "/v1/transactions":

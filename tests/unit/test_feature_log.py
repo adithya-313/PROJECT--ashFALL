@@ -224,8 +224,8 @@ def test_feature_set_version_and_sha256() -> None:
 
 def test_check_constraints_rejected_on_bad_row() -> None:
     """G2 & G3: Verifies that CHECK constraints reject bad rows."""
-    # 1. arrival_cutoff IS NOT NULL OR status = 'no_watermark'
-    with pytest.raises(ValueError, match="arrival_cutoff cannot be None unless status is 'no_watermark'"):
+    # 1. arrival_cutoff IS NOT NULL OR status IN ('no_watermark', 'error')
+    with pytest.raises(ValueError, match="arrival_cutoff cannot be None unless status is 'no_watermark' or 'error'"):
         FeatureLogRow(
             bank_id="bank_0",
             payment_id="pay_01",
@@ -253,6 +253,23 @@ def test_check_constraints_rejected_on_bad_row() -> None:
         feature_values=[],
     )
     assert row_no_wm.arrival_cutoff is None
+
+    # Allowed when status is error (H1)
+    row_err = FeatureLogRow(
+        bank_id="bank_0",
+        payment_id="pay_01",
+        run_id="run_01",
+        account_id="acc_01",
+        decision_time=NOW_UTC,
+        decided_at=NOW_UTC,
+        arrival_cutoff=None,
+        watermark_lag_ms=None,
+        status="error",
+        feature_values=[],
+        error_type="ValueError",
+        error_message="failed",
+    )
+    assert row_err.arrival_cutoff is None
 
     # 2. Both error_type and error_message must be non-None when status='error'
     with pytest.raises(ValueError, match="Both error_type and error_message must be non-None"):

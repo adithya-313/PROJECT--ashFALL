@@ -22,7 +22,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from core.config import config
 from features.account_keys import (
     AccountFeaturesSettings,
     get_default_settings,
@@ -180,9 +179,6 @@ def compute_payee_vpa_payment_features(
     payee_registry_match: bool | None = None
     if screener is not None:
         resolved_key = dpip_key
-        if resolved_key is None and config.dpip_participant_key is not None:
-            resolved_key = config.dpip_participant_key.get_secret_value()
-
         if resolved_key:
             from features.m1_intelligence import get_bank_index
             from nationalsim.keyed_hash import compute_identifier_hash

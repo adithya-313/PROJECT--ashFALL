@@ -136,9 +136,9 @@ class FeatureLogRow:
         if self.created_at is not None and self.created_at.tzinfo is None:
             raise ValueError("created_at must be timezone-aware")
 
-        # G2 CHECK 1: arrival_cutoff IS NOT NULL OR status = 'no_watermark'
-        if self.arrival_cutoff is None and self.status != "no_watermark":
-            raise ValueError("arrival_cutoff cannot be None unless status is 'no_watermark'")
+        # G2 CHECK 1: arrival_cutoff IS NOT NULL OR status IN ('no_watermark', 'error')
+        if self.arrival_cutoff is None and self.status not in ("no_watermark", "error"):
+            raise ValueError("arrival_cutoff cannot be None unless status is 'no_watermark' or 'error'")
         if self.arrival_cutoff is not None and self.arrival_cutoff.tzinfo is None:
             raise ValueError("arrival_cutoff must be timezone-aware")
 

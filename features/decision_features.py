@@ -197,9 +197,9 @@ def compute_decision_row(
             arrival_cutoff=arrival_cutoff,
             settings=cfg,
         )
-        first_payment_to_payee: Any = None
-        payee_same_bank_risk: Any = None
-        payee_registry_match: Any = None
+        first_payment_to_payee: bool | None = None
+        payee_same_bank_risk: float | None = None
+        payee_registry_match: bool | None = None
 
         if request.receiver_vpa:
             vpa_feats = compute_payee_vpa_payment_features(
@@ -215,9 +215,12 @@ def compute_decision_row(
                 screener=recording_screener,
                 dpip_key=dpip_key,
             )
-            first_payment_to_payee = vpa_feats["first_payment_to_payee"]
-            payee_same_bank_risk = vpa_feats["payee_same_bank_risk"]
-            payee_registry_match = vpa_feats["payee_registry_match"]
+            v_first = vpa_feats["first_payment_to_payee"]
+            first_payment_to_payee = bool(v_first) if isinstance(v_first, bool) else None
+            v_risk = vpa_feats["payee_same_bank_risk"]
+            payee_same_bank_risk = float(v_risk) if isinstance(v_risk, (int, float)) else None
+            v_match = vpa_feats["payee_registry_match"]
+            payee_registry_match = bool(v_match) if isinstance(v_match, bool) else None
 
         payee_type = request.payee_type if request.payee_type in ("person", "merchant") else None
         payment_feats = {
