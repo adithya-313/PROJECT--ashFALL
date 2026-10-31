@@ -17,8 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import yaml
-
+from core.config_validator import load_yaml
 from features.account_keys import (
     AccountFeaturesSettings,
     get_default_settings,
@@ -78,8 +77,7 @@ def load_m1_config(config_path: Path | None = None) -> M1FeaturesConfig:
     if config_path is None:
         config_path = root_dir / "config" / "account_features.yaml"
 
-    with open(config_path, "r", encoding="utf-8") as f:
-        raw_cfg = yaml.safe_load(f)
+    raw_cfg = load_yaml(config_path)
 
     block = raw_cfg["account_features"]
     raw_thresholds = block["reporting_thresholds_paise"]["value"]
