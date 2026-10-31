@@ -107,3 +107,67 @@ async def test_write_account_snapshots_no_watermark_raises() -> None:
     # Ensure no database queries were executed
     fake_pg.execute.assert_not_called()
 
+
+def test_sizing_estimates_arithmetic_and_formatting() -> None:
+    """Verifies resource estimation arithmetic and summary table formatting with fixed inputs."""
+    from scripts.feature_log_size_estimate import (
+        compute_preset_estimates,
+        format_estimates_table,
+    )
+    from world.estimates import MachineProfile
+
+    fixed_profile = MachineProfile(
+        payments_per_second=5000.0,
+        payments_per_person_day=0.8,
+        file_bytes_per_payment=350.0,
+        memory_bytes_per_payment=1000.0,
+        calibration_payments=2915,
+    )
+    fixed_sizing_config = {
+        "payment_count_margin": {"value": 1.15},
+        "presets": {
+            "tiny": {"n_people": 60, "n_shops": 12, "n_days": 61},
+            "small": {"n_people": 300, "n_shops": 40, "n_days": 61},
+            "medium": {"n_people": 1000, "n_shops": 120, "n_days": 61},
+            "large": {"n_people": 2000, "n_shops": 250, "n_days": 61},
+        },
+    }
+
+    f_row_bytes = 650.0
+    s_row_bytes = 530.0
+    tiny_accounts = 72
+
+    estimates = compute_preset_estimates(
+        sizing_config=fixed_sizing_config,
+        profile=fixed_profile,
+        feature_log_row_bytes=f_row_bytes,
+        snapshot_row_bytes=s_row_bytes,
+        tiny_accounts=tiny_accounts,
+    )
+
+    assert len(estimates) == 4
+    tiny_est = estimates[0]
+    assert tiny_est.name == "tiny"
+    assert tiny_est.n_people == 60
+    assert tiny_est.n_shops == 12
+    assert tiny_est.n_days == 61
+    assert tiny_est.estimated_accounts == 72
+    # payments = ceil(60 * 61 * 0.8 * 1.15) = ceil(3367.2) = 3368
+    assert tiny_est.total_payments == 3368
+    expected_decisions_day = 3368 / 61
+    assert abs(tiny_est.decisions_per_day - expected_decisions_day) < 1e-6
+    expected_f_mb = (expected_decisions_day * f_row_bytes) / (1024 * 1024)
+    assert abs(tiny_est.feature_log_mb_per_day - expected_f_mb) < 1e-6
+    expected_s_mb = (72 * s_row_bytes) / (1024 * 1024)
+    assert abs(tiny_est.daily_snapshot_mb_per_day - expected_s_mb) < 1e-6
+    assert abs(tiny_est.full_snapshot_mb_per_week - expected_s_mb) < 1e-6
+
+    # Verify table formatting
+    table = format_estimates_table(estimates, f_row_bytes, s_row_bytes, tiny_accounts)
+    assert "LEVEL 15c FEATURE LOG & ACCOUNT SNAPSHOTS SIZE ESTIMATES" in table
+    assert "tiny" in table
+    assert "small" in table
+    assert "medium" in table
+    assert "large" in table
+    assert "DERIVATIONS & RATIONALE:" in table
+    assert "[TAG: ESTIMATE]" in table

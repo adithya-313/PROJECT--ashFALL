@@ -320,3 +320,27 @@ Point-in-time replay eliminates external network dependency and guarantees deter
 
 ### 10.4 Zero-Tolerance Parity Verification
 `recompute_logged_row` compares the logged feature vector against the recomputed feature vector. Feature parity requires exact value equality (`==`) and identical runtime types (`type(l) is type(r)`). Any numerical drift, missing field, or subtle type mismatch is captured in `RecomputeResult.mismatches`.
+
+---
+
+## 11. Account Feature Snapshots (Level 15c Round 2b)
+
+### 11.1 Purpose and Dual-Cadence Snapshot Strategy
+Machine learning models for live mule detection require dense, point-in-time account feature vectors for both active transacting accounts and quiet or dormant customer accounts. Taking periodic snapshots avoids online recomputation latency during training set generation:
+1. **Daily Active Snapshots (`snapshot_kind = 'daily'`)**:
+   Captures all accounts belonging to the bank that had any event arrive within the simulated day `[day_start, day_end)` across any of the 5 operational feeds:
+   - `transactions` (debit and credit payment legs posted by this bank)
+   - `bank_account_events` (lifecycle events)
+   - `bank_withdrawals` (cash withdrawals)
+   - `bank_feedback` (`confirmed_fraud` feedback linking to the credit-side mule account)
+   - `bank_complaints` (complaints naming a reported account at this bank)
+2. **Weekly Full Snapshots (`snapshot_kind = 'full'`)**:
+   Evaluated when `day_number % full_interval_days == 0` (configured as 7 days in `config/account_features.yaml`). Selects all accounts opened by or before the arrival cutoff, ensuring quiet, dormant, and non-transacting customer accounts appear in training datasets.
+
+### 11.2 Storage Schema & Ingestion Watermark Cutoff (`account_snapshots`)
+Snapshot feature vectors are stored in PostgreSQL table `account_snapshots` (migration 0014), range-partitioned daily by `snapshot_time`, with `account_snapshots_default` ensuring uninterrupted persistence, and protected by Row Level Security for role `ashfall_bank_api`:
+- **Primary Key**: `(bank_id, run_id, account_id, snapshot_time, snapshot_kind)`
+- **Arrival Cutoff Contract**: Every snapshot row enforces `arrival_cutoff = get_bank_watermark(redis, bank_id)`. If no watermark is available for the bank, snapshot writing raises `NoWatermarkError` and aborts; it never fabricates an arrival cutoff or falls back to `snapshot_time`. Any event arriving after `arrival_cutoff` is strictly excluded from computed feature state.
+- **Feature Schema**: Features are serialized as a JSONB array matching `account_feature_names()` order (the canonical 52 M1 features minus the 8 `payment_level` features = 44 account features) with `feature_names_sha256` digest verification.
+- **Intelligence Features in Level 15c**: In Level 15c, snapshots compute account features with `screener=None`. Consequently, intelligence features (`registry_match_count`, `registry_match_age_days`) evaluate to `None` (`null` in JSONB). This is intentional and preserved for full offline screener integration in Level 16.
+
