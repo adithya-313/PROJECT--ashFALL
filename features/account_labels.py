@@ -21,6 +21,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any
 
+from core.event_clock import Clock
 from features.account_keys import (
     AccountFeaturesSettings,
     complained_accounts_key,
@@ -40,6 +41,36 @@ def to_unix_seconds(dt: datetime) -> int:
     if dt.tzinfo is None:
         return int(dt.replace(tzinfo=timezone.utc).timestamp())
     return int(dt.timestamp())
+
+
+def arrival_of(row: Mapping[str, Any]) -> datetime:
+    """
+    WHAT: Resolves the effective arrival timestamp for a complaint or feedback row.
+
+    WHY: Under Ground Rule 30 and Architect Decisions A/B/D, domain visibility, cutoffs,
+    and watermarks are evaluated against arrival_time (from the injected ingestion clock).
+    However, historical rows ingested before migration 0017 and live operations running in
+    real-clock mode (clock=None per Ground Rule 13) have arrival_time=NULL in the database.
+    When arrival_time is None, this helper falls back to row['created_at']. This is the ONLY
+    place in the codebase where this legacy/real-clock fallback lives.
+
+    Args:
+        row: Mapping containing row data (must contain 'created_at' and optionally 'arrival_time').
+
+    Returns:
+        A timezone-aware datetime representing the arrival time.
+
+    Raises:
+        ValueError: If the resolved timestamp is naive or not a datetime, naming the row identifier.
+    """
+    arrival = row.get("arrival_time")
+    val = arrival if arrival is not None else row["created_at"]
+    row_id = row.get("complaint_id") or row.get("feedback_id") or row.get("id") or "unknown"
+    if not isinstance(val, datetime) or val.tzinfo is None or val.utcoffset() is None:
+        raise ValueError(
+            f"Timestamp for row {row_id!r} must be a timezone-aware datetime, got {val!r}"
+        )
+    return val
 
 
 async def apply_feedback_row(
@@ -90,8 +121,8 @@ async def apply_feedback_row(
     debit_accounts = [r["account_id"] for r in txn_rows if r["side"] == "debit"]
 
     if credit_accounts:
-        # Score is available_from: max(feedback event_time, created_at)
-        available_from = max(row["event_time"], row["created_at"])
+        # Score is available_from: max(feedback event_time, arrival_of(row))
+        available_from = max(row["event_time"], arrival_of(row))
         score = to_unix_seconds(available_from)
         key = labelled_accounts_key(run_id, bank_id)
         for acc_id in credit_accounts:
@@ -119,6 +150,7 @@ async def apply_feedback_since(
     settings: AccountFeaturesSettings | None = None,
     bank_id: str = "bank_0",
     after_id: int = 0,
+    clock: Clock | None = None,
 ) -> int:
     """
     WHAT: Queries bank_feedback for rows with id > after_id (with overlap re-read) and updates Redis labelled_accounts.
@@ -136,12 +168,17 @@ async def apply_feedback_since(
         settings: Optional AccountFeaturesSettings; defaults to repository configuration.
         bank_id: Commercial bank identifier.
         after_id: Cursor identifier; rows with id > (after_id - overlap) are selected.
+        clock: Optional domain ingestion clock. When provided, poll_start uses clock.now_ist()
+            without querying DB now(); when None, falls back to fetchval("SELECT now()").
 
     Returns:
         The highest row ID processed, or after_id if no rows were found.
     """
     cfg = settings if settings is not None else get_default_settings()
-    poll_start_db_time = await connection.fetchval("SELECT now()")
+    if clock is not None:
+        poll_start_time = clock.now_ist()
+    else:
+        poll_start_time = await connection.fetchval("SELECT now()")
 
     batch_size = cfg.account_event_batch_size
     overlap = cfg.account_event_overlap_rows
@@ -149,7 +186,7 @@ async def apply_feedback_since(
 
     rows = await connection.fetch(
         """
-        SELECT id, bank_id, feedback_id, payment_id, outcome, event_time, created_at
+        SELECT id, bank_id, feedback_id, payment_id, outcome, event_time, created_at, arrival_time
         FROM bank_feedback
         WHERE bank_id = $1 AND id > $2
         ORDER BY id
@@ -168,7 +205,7 @@ async def apply_feedback_since(
                 last_id = row_id
             await apply_feedback_row(connection, redis_client, row, cfg)
 
-    watermark_ts = int(to_unix_seconds(poll_start_db_time)) - cfg.commit_grace
+    watermark_ts = int(to_unix_seconds(poll_start_time)) - cfg.commit_grace
     record_poller_watermark(redis_client, bank_id, "feedback", watermark_ts)
 
     return last_id
@@ -205,7 +242,7 @@ def apply_complaint_row(
     run_id = extract_run_id(complaint_id)
     reported_account = row["reported_account"]
 
-    available_from = max(row["received_at"], row["created_at"])
+    available_from = max(row["received_at"], arrival_of(row))
     score = to_unix_seconds(available_from)
     key = complained_accounts_key(run_id, bank_id)
     redis_client.zadd(key, {reported_account: score}, lt=True)
@@ -217,6 +254,7 @@ async def apply_complaints_since(
     settings: AccountFeaturesSettings | None = None,
     bank_id: str = "bank_0",
     after_id: int = 0,
+    clock: Clock | None = None,
 ) -> int:
     """
     WHAT: Queries bank_complaints for rows with id > after_id and records complained accounts for this bank.
@@ -230,12 +268,17 @@ async def apply_complaints_since(
         settings: Optional AccountFeaturesSettings; defaults to repository configuration.
         bank_id: Commercial bank identifier.
         after_id: Cursor identifier; rows with id > (after_id - overlap) are selected.
+        clock: Optional domain ingestion clock. When provided, poll_start uses clock.now_ist()
+            without querying DB now(); when None, falls back to fetchval("SELECT now()").
 
     Returns:
         The highest row ID processed, or after_id if no rows were found.
     """
     cfg = settings if settings is not None else get_default_settings()
-    poll_start_db_time = await connection.fetchval("SELECT now()")
+    if clock is not None:
+        poll_start_time = clock.now_ist()
+    else:
+        poll_start_time = await connection.fetchval("SELECT now()")
 
     batch_size = cfg.account_event_batch_size
     overlap = cfg.account_event_overlap_rows
@@ -244,7 +287,7 @@ async def apply_complaints_since(
     rows = await connection.fetch(
         """
         SELECT id, bank_id, complaint_id, complainant_account, reported_account, reported_bank_id,
-               payment_ids, claimed_type, received_at, created_at
+               payment_ids, claimed_type, received_at, created_at, arrival_time
         FROM bank_complaints
         WHERE bank_id = $1 AND id > $2
         ORDER BY id
@@ -263,7 +306,7 @@ async def apply_complaints_since(
                 last_id = row_id
             apply_complaint_row(redis_client, row, cfg)
 
-    watermark_ts = int(to_unix_seconds(poll_start_db_time)) - cfg.commit_grace
+    watermark_ts = int(to_unix_seconds(poll_start_time)) - cfg.commit_grace
     record_poller_watermark(redis_client, bank_id, "complaints", watermark_ts)
 
     return last_id

@@ -420,7 +420,7 @@ def device_changes_key(run_id: str, bank_id: str, account_id: str) -> str:
 def labelled_accounts_key(run_id: str, bank_id: str) -> str:
     """
     Redis key for the sorted set (ZSET) tracking confirmed fraud labelled accounts for a bank.
-    Score: Unix epoch seconds of earliest availability max(event_time, created_at); Member: account_id.
+    Score: Unix epoch seconds of earliest availability max(event_time, arrival_of(row)); Member: account_id.
     Lifetime key: lives as long as the run's namespace; no expiry.
     """
     _validate_key_component("run_id", run_id)
@@ -433,7 +433,7 @@ def labelled_accounts_key(run_id: str, bank_id: str) -> str:
 def complained_accounts_key(run_id: str, bank_id: str) -> str:
     """
     Redis key for the sorted set (ZSET) tracking complained accounts for a bank.
-    Score: Unix epoch seconds of earliest availability max(received_at, created_at); Member: account_id.
+    Score: Unix epoch seconds of earliest availability max(received_at, arrival_of(row)); Member: account_id.
     Lifetime key: lives as long as the run's namespace; no expiry.
     """
     _validate_key_component("run_id", run_id)

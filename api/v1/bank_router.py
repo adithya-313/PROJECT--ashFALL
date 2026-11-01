@@ -73,6 +73,19 @@ def get_transport_clock(request: Request) -> Clock:
     return WallClock()
 
 
+def get_ingestion_clock(request: Request) -> Clock | None:
+    """
+    Returns the optional clock used for domain ingestion timestamps (arrival_time).
+
+    Tests put a Clock on app.state.ingestion_clock so domain ingestion time is under their control.
+    When unset, returns None, leaving arrival_time NULL per Ground Rule 13.
+    """
+    if hasattr(request.app.state, "ingestion_clock"):
+        clock: Clock | None = request.app.state.ingestion_clock
+        return clock
+    return None
+
+
 async def get_bank_context(request: Request) -> BankRequestContext:
     """
     Authenticates the request and returns who the bank is, the raw body and the idempotency key.
@@ -290,13 +303,17 @@ async def post_feedback(request: Request) -> ORJSONResponse:
     """
     ctx = await get_bank_context(request)
     feedback = parse_body(ctx, FeedbackRequest)
+    ingestion_clock = get_ingestion_clock(request)
+    arrival_time = ingestion_clock.now_ist() if ingestion_clock is not None else None
 
     async def handler(connection: asyncpg.Connection) -> tuple[int, dict[str, Any]]:
         try:
             await connection.execute(
                 """
-                INSERT INTO bank_feedback (bank_id, feedback_id, payment_id, outcome, note, event_time)
-                VALUES ($1, $2, $3, $4, $5, $6)
+                INSERT INTO bank_feedback (
+                    bank_id, feedback_id, payment_id, outcome, note, event_time, arrival_time
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
                 """,
                 ctx.bank_id,
                 feedback.feedback_id,
@@ -304,6 +321,7 @@ async def post_feedback(request: Request) -> ORJSONResponse:
                 feedback.outcome,
                 feedback.note,
                 feedback.event_time,
+                arrival_time,
             )
         except asyncpg.UniqueViolationError as error:
             raise as_duplicate_record_error(error, FEEDBACK_UNIQUE_CONSTRAINT) from error

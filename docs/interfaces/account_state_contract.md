@@ -397,3 +397,29 @@ features/gpu_geo_velocity.py:124:# It is imported conditionally by features/geo_
 ```
 
 The only files that match are `features/__init__.py` (a package docstring), `features/geo_velocity.py` and `features/gpu_geo_velocity.py` themselves.
+
+
+## 13. One Ingestion Clock for Complaint and Feedback Arrival
+
+### 13.1 Principle
+Event time is when an event occurred in the world (`received_at`, `event_time`).
+Arrival time is when ashFALL learned it (`arrival_time`).
+Under Ground Rule 30 and Architect Decisions A, B, and D, point-in-time domain visibility, label cutoffs, and watermarks compare arrival time with decision time on ONE ingestion clock. The database's server clock (`now()`, `created_at`) remains an audit stamp for physical row insertion, but never determines domain visibility, cutoffs, watermarks, or merge ordering when an ingestion clock is provided.
+
+### 13.2 Real-Clock Rule (`clock: Clock | None = None`)
+In accordance with Ground Rule 13 (backward compatibility), functions accepting a clock parameter default to `clock = None`. When `clock is None`, the behaviour is byte-for-byte identical to legacy real-clock operations:
+- Writers stamp `arrival_time = NULL` in relational tables (`bank_complaints`, `bank_feedback`).
+- Pollers derive watermarks by querying `SELECT now()` directly from PostgreSQL.
+
+### 13.3 Legacy NULL Fallback
+When reading historical rows inserted prior to migration 0017, or rows written in real-clock mode without an injected clock, `arrival_time` is `NULL`. The helper `arrival_of(row)` safely falls back to `row["created_at"]` only when `row.get("arrival_time")` is `None`. This is the single, isolated location in the codebase where this fallback lives.
+
+### 13.4 Migration Roadmap
+- **Completed in Level 16a Round 2**:
+  - `bank_complaints` and `bank_feedback` schema migration 0017 (`arrival_time` column).
+  - In-process client and HTTP router clock injection (`InProcessBankClient`, `post_feedback`).
+  - Label pollers and visibility handlers (`apply_complaints_since`, `apply_feedback_since`, `apply_complaint_row`, `apply_feedback_row`).
+- **Follow-up in Level 16a Round 3**:
+  - `account_records.py`, `account_summaries.py`, `account_stream.py`, and `account_snapshots.py`.
+- **Follow-up in Level 16b**:
+  - `feature_replay.py` switching.

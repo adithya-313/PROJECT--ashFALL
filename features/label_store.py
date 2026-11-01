@@ -9,7 +9,7 @@ from typing import Any
 
 from features.account_keys import extract_run_id
 
-LABEL_SOURCES: tuple[str, ...] = ("complaint", "registry", "analyst", "bulk_confirmation")
+LABEL_SOURCES: tuple[str, ...] = ("complaint", "registry", "analyst", "police_bulk")
 LABEL_VERDICTS: tuple[str, ...] = ("fraud", "not_fraud")
 
 
@@ -34,6 +34,7 @@ class LabelRow:
         batch_id: Bulk confirmation batch identifier or None.
         claimed_type: Raw claim string reported by complainant or None.
         recorded_at: Real database clock (clock_timestamp()) assigned on write, or None when writing.
+        via: Optional routing mechanism/batch channel (e.g. 'hold_request') or None.
     """
 
     run_id: str
@@ -48,6 +49,7 @@ class LabelRow:
     batch_id: str | None = None
     claimed_type: str | None = None
     recorded_at: datetime | None = None
+    via: str | None = None
 
     def __post_init__(self) -> None:
         if not self.bank_id or not isinstance(self.bank_id, str) or not self.bank_id.strip():
@@ -71,6 +73,9 @@ class LabelRow:
             )
         if self.region is not None and self.region < 0:
             raise ValueError(f"region must be None or >= 0, got {self.region}")
+        if self.via is not None:
+            if not isinstance(self.via, str) or not self.via.strip():
+                raise ValueError(f"via must be None or non-blank string, got {self.via!r}")
         if not isinstance(self.payment_ids, tuple):
             object.__setattr__(self, "payment_ids", tuple(self.payment_ids))
 
@@ -95,10 +100,10 @@ async def insert_labels(conn: Any, rows: Sequence[LabelRow]) -> int:
     query = """
     INSERT INTO labels (
         run_id, bank_id, label_id, source, account_id, payment_ids,
-        verdict, arrival_time, region, batch_id, claimed_type, recorded_at
+        verdict, arrival_time, region, batch_id, claimed_type, recorded_at, via
     ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-        COALESCE($12, clock_timestamp())
+        COALESCE($12, clock_timestamp()), $13
     )
     ON CONFLICT (bank_id, source, label_id, account_id) DO NOTHING
     """
@@ -119,6 +124,7 @@ async def insert_labels(conn: Any, rows: Sequence[LabelRow]) -> int:
                 row.batch_id,
                 row.claimed_type,
                 row.recorded_at,
+                row.via,
             )
             parts = res.split()
             if len(parts) == 3 and parts[0] == "INSERT":
@@ -168,7 +174,8 @@ async def read_labels_known_by(
         region,
         batch_id,
         claimed_type,
-        recorded_at
+        recorded_at,
+        via
     FROM labels
     WHERE run_id = $1 AND bank_id = $2 AND arrival_time <= $3
     ORDER BY arrival_time, source, label_id, account_id
@@ -188,6 +195,7 @@ async def read_labels_known_by(
             batch_id=r["batch_id"],
             claimed_type=r["claimed_type"],
             recorded_at=r["recorded_at"],
+            via=r["via"],
         )
         for r in records
     ]
