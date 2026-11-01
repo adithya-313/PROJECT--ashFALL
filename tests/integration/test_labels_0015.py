@@ -1,0 +1,210 @@
+# File: tests/integration/test_labels_0015.py
+# Purpose: Level 16a Round 1 - integration tests for migration 0015 (labels table, schema, checks, RLS).
+import uuid
+from datetime import datetime, timezone
+from typing import Any
+
+import asyncpg
+import pytest
+
+pytestmark = [pytest.mark.anyio, pytest.mark.needs_stack]
+
+
+async def test_labels_table_columns_and_pk_exist(isolated_schema: Any) -> None:
+    """Verifies that the labels table exists with expected columns, data types, and composite primary key."""
+    conn, schema_name = isolated_schema
+
+    col_rows = await conn.fetch(
+        """
+        SELECT column_name, data_type, is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = $1 AND table_name = 'labels'
+        ORDER BY ordinal_position
+        """,
+        schema_name,
+    )
+    col_map = {r["column_name"]: r for r in col_rows}
+    expected_cols = {
+        "run_id",
+        "bank_id",
+        "label_id",
+        "source",
+        "account_id",
+        "payment_ids",
+        "verdict",
+        "arrival_time",
+        "region",
+        "batch_id",
+        "claimed_type",
+        "recorded_at",
+    }
+    assert expected_cols <= set(col_map.keys())
+
+    # Check primary key definition: (bank_id, source, label_id, account_id)
+    pk_rows = await conn.fetch(
+        """
+        SELECT kcu.column_name
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu
+          ON tc.constraint_name = kcu.constraint_name
+         AND tc.table_schema = kcu.table_schema
+        WHERE tc.table_schema = $1
+          AND tc.table_name = 'labels'
+          AND tc.constraint_type = 'PRIMARY KEY'
+        ORDER BY kcu.ordinal_position
+        """,
+        schema_name,
+    )
+    pk_columns = [r["column_name"] for r in pk_rows]
+    assert pk_columns == ["bank_id", "source", "label_id", "account_id"]
+
+
+async def test_labels_invalid_source_rejected(isolated_schema: Any) -> None:
+    """Verifies that inserting a label with a source outside allowed sources is rejected."""
+    conn, _ = isolated_schema
+    run_id = uuid.uuid4().hex[:16]
+    label_id = f"{run_id}-lbl-001"
+    now_utc = datetime(2026, 10, 20, 12, 0, 0, tzinfo=timezone.utc)
+
+    insert_sql = """
+    INSERT INTO labels (
+        run_id, bank_id, label_id, source, account_id, payment_ids,
+        verdict, arrival_time
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    """
+
+    with pytest.raises(asyncpg.exceptions.CheckViolationError):
+        await conn.execute(
+            insert_sql,
+            run_id,
+            "bank_0",
+            label_id,
+            "unsupported_source",
+            "acc_001",
+            ["pay_001"],
+            "fraud",
+            now_utc,
+        )
+
+
+async def test_labels_invalid_label_id_prefix_rejected(isolated_schema: Any) -> None:
+    """Verifies that label_id must have prefix run_id + '-' to belong to its run namespace."""
+    conn, _ = isolated_schema
+    run_id = uuid.uuid4().hex[:16]
+    other_run = uuid.uuid4().hex[:16]
+    bad_label_id = f"{other_run}-lbl-001"
+    good_label_id = f"{run_id}-lbl-001"
+    now_utc = datetime(2026, 10, 20, 12, 0, 0, tzinfo=timezone.utc)
+
+    insert_sql = """
+    INSERT INTO labels (
+        run_id, bank_id, label_id, source, account_id, payment_ids,
+        verdict, arrival_time
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    """
+
+    # Fails when prefix does not match run_id + '-'
+    with pytest.raises(asyncpg.exceptions.CheckViolationError):
+        await conn.execute(
+            insert_sql,
+            run_id,
+            "bank_0",
+            bad_label_id,
+            "complaint",
+            "acc_001",
+            ["pay_001"],
+            "fraud",
+            now_utc,
+        )
+
+    # Succeeds when prefix matches run_id + '-'
+    await conn.execute(
+        insert_sql,
+        run_id,
+        "bank_0",
+        good_label_id,
+        "complaint",
+        "acc_001",
+        ["pay_001"],
+        "fraud",
+        now_utc,
+    )
+
+
+async def test_labels_rls_isolation(isolated_schema: Any) -> None:
+    """Verifies PostgreSQL Row Level Security enforces tenant isolation on labels for role ashfall_bank_api."""
+    conn, _ = isolated_schema
+    run_id = uuid.uuid4().hex[:16]
+    now_utc = datetime(2026, 10, 20, 12, 0, 0, tzinfo=timezone.utc)
+
+    # Insert two rows as owner/superuser: one for bank_0, one for bank_1
+    insert_sql = """
+    INSERT INTO labels (
+        run_id, bank_id, label_id, source, account_id, payment_ids,
+        verdict, arrival_time
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    """
+    await conn.execute(
+        insert_sql,
+        run_id,
+        "bank_0",
+        f"{run_id}-lbl-b0",
+        "complaint",
+        "acc_b0",
+        ["pay_b0"],
+        "fraud",
+        now_utc,
+    )
+    await conn.execute(
+        insert_sql,
+        run_id,
+        "bank_1",
+        f"{run_id}-lbl-b1",
+        "complaint",
+        "acc_b1",
+        ["pay_b1"],
+        "fraud",
+        now_utc,
+    )
+
+    # 1. Connected as ashfall_bank_api with bank_0: sees only bank_0
+    async with conn.transaction():
+        await conn.execute("SET LOCAL ROLE ashfall_bank_api")
+        await conn.execute("SELECT set_config('app.bank_id', 'bank_0', true)")
+        rows_b0 = await conn.fetch("SELECT bank_id, account_id FROM labels ORDER BY bank_id")
+        assert len(rows_b0) == 1
+        assert rows_b0[0]["bank_id"] == "bank_0"
+        assert rows_b0[0]["account_id"] == "acc_b0"
+
+    # 2. Connected as ashfall_bank_api with bank_1: sees only bank_1
+    async with conn.transaction():
+        await conn.execute("SET LOCAL ROLE ashfall_bank_api")
+        await conn.execute("SELECT set_config('app.bank_id', 'bank_1', true)")
+        rows_b1 = await conn.fetch("SELECT bank_id, account_id FROM labels ORDER BY bank_id")
+        assert len(rows_b1) == 1
+        assert rows_b1[0]["bank_id"] == "bank_1"
+        assert rows_b1[0]["account_id"] == "acc_b1"
+
+    # 3. Connected as ashfall_bank_api with bank_0: inserting bank_1 row is rejected by RLS WITH CHECK
+    async with conn.transaction():
+        await conn.execute("SET LOCAL ROLE ashfall_bank_api")
+        await conn.execute("SELECT set_config('app.bank_id', 'bank_0', true)")
+        with pytest.raises(asyncpg.exceptions.InsufficientPrivilegeError):
+            await conn.execute(
+                insert_sql,
+                run_id,
+                "bank_1",
+                f"{run_id}-lbl-forbidden",
+                "complaint",
+                "acc_b1_new",
+                ["pay_b1_new"],
+                "fraud",
+                now_utc,
+            )
+
+    # 4. Connected as ashfall_bank_api with unset bank_id: fails closed (0 rows visible)
+    async with conn.transaction():
+        await conn.execute("SET LOCAL ROLE ashfall_bank_api")
+        await conn.execute("SELECT set_config('app.bank_id', '', true)")
+        rows_empty = await conn.fetch("SELECT bank_id, account_id FROM labels")
+        assert len(rows_empty) == 0
