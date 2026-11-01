@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import os
+import threading
 import uuid
 from typing import AsyncGenerator, Generator
 
@@ -99,7 +100,7 @@ async def test_guard_2_concurrent_allocations_and_registry(
     live_redis: redis.Redis,
 ) -> None:
     """
-    GUARD 2: Allocate twice concurrently (asyncio.gather) -> different DB numbers;
+    GUARD 2: Allocate twice concurrently -> different DB numbers;
     both drop cleanly; registry entry is removed.
     """
     db_url = get_test_database_url()
@@ -107,9 +108,15 @@ async def test_guard_2_concurrent_allocations_and_registry(
     name1 = f"rpl_c1_{run_id}"
     name2 = f"rpl_c2_{run_id}"
 
+    barrier = threading.Barrier(2)
+
+    def _alloc_worker(name: str) -> ReplayWorkspace:
+        barrier.wait()
+        return asyncio.run(allocate_workspace(db_url, live_redis, name))
+
     ws1, ws2 = await asyncio.gather(
-        allocate_workspace(db_url, live_redis, name1),
-        allocate_workspace(db_url, live_redis, name2),
+        asyncio.to_thread(_alloc_worker, name1),
+        asyncio.to_thread(_alloc_worker, name2),
     )
 
     assert ws1.redis_db != ws2.redis_db
