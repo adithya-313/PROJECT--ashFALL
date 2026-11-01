@@ -230,6 +230,7 @@ def prepare_registry_questions(
     request: DecisionRequest,
     dpip_key: str | None,
     settings: AccountFeaturesSettings | None = None,
+    run_scoped_watermarks: bool = False,
 ) -> tuple[datetime, list[RegistryQuestion]] | None:
     """
     WHAT: Reads the bank watermark (the decision's arrival cutoff) and lists the registry questions the decision
@@ -238,7 +239,8 @@ def prepare_registry_questions(
     WHY: Blocking Redis work, so the async decision path runs it in a worker thread, then asks the registry on the
     server's own event loop, then hands both the cutoff and the answers to the feature computation.
     """
-    arrival_cutoff = get_bank_watermark(redis_client, bank_id)
+    run_id = extract_run_id(request.payment_id) if run_scoped_watermarks else None
+    arrival_cutoff = get_bank_watermark(redis_client, bank_id, run_id=run_id)
     if arrival_cutoff is None:
         return None
     questions = list_registry_questions(
