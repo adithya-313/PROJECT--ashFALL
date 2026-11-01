@@ -419,7 +419,39 @@ When reading historical rows inserted prior to migration 0017, or rows written i
   - `bank_complaints` and `bank_feedback` schema migration 0017 (`arrival_time` column).
   - In-process client and HTTP router clock injection (`InProcessBankClient`, `post_feedback`).
   - Label pollers and visibility handlers (`apply_complaints_since`, `apply_feedback_since`, `apply_complaint_row`, `apply_feedback_row`).
+- **Completed in Level 16a Round 2b**:
+  - Run-scoped watermark keys and forward-only refused move observability.
+  - Decision feature extraction fail-closed switch (`run_scoped_watermarks` in `compute_decision_row`).
 - **Follow-up in Level 16a Round 3**:
   - `account_records.py`, `account_summaries.py`, `account_stream.py`, and `account_snapshots.py`.
 - **Follow-up in Level 16b**:
   - `feature_replay.py` switching.
+
+### 13.5 Run-Scoped Ingestion Watermarks
+
+#### Key Layout Table
+| Source / Entity | Real-Clock Key (`run_id=None`) | World-Clock Key (`run_id` given) |
+|---|---|---|
+| Bank Poller | `acctwm:{bank_id}:{source}` | `acctwm:{run_id}:{bank_id}:{source}` |
+| Payment Partition | `acctwm:payments:{partition}` | `acctwm:{run_id}:payments:{partition}` |
+| Payment Partitions Set | `acctwm:payments:partitions` | `acctwm:{run_id}:payments:partitions` |
+
+All keys are constructed strictly via `features/account_keys.py`:
+- `watermark_key_for_poller(bank_id, source, run_id=None)`
+- `watermark_key_for_payment_partition(partition, run_id=None)`
+- `watermark_key_for_payment_partitions_set(run_id=None)`
+
+#### Forward-Only Refusal & Observability
+Watermark updates execute via `SET_WATERMARK_LUA`. If a caller attempts to move a watermark backwards:
+1. The update is refused and returns `0` (stored value remains untouched). Equal values return `1` (treated as stored-unchanged).
+2. A warning is logged at `logging.WARNING` containing the Redis key, currently stored timestamp, and refused candidate timestamp.
+3. Prometheus Counter `ashfall_watermark_rejected_moves_total` is incremented with label `source` (`"payments"` for Kafka partitions; `"events"`, `"withdrawals"`, `"feedback"`, or `"complaints"` for database pollers).
+
+#### Decision D1: Fail-Closed Decision Features
+`compute_decision_row` accepts `run_scoped_watermarks: bool = False`:
+- When `False` (legacy default): queries `get_bank_watermark(redis_client, bank_id)`.
+- When `True` (world clock): queries `get_bank_watermark(redis_client, bank_id, run_id=run_id)`.
+- If aggregate watermark is `None`, the function fails closed immediately, returning `status="no_watermark"`, all canonical features `None`, and performing zero account-state reads.
+
+#### Known Intermediate State (Removed in 16a-3)
+Until Level 16a-3, only the complaint and feedback pollers write run-scoped watermarks (`acctwm:{run_id}:{bank_id}:{source}`). The payment consumer and the events/withdrawals pollers still write legacy un-scoped keys (`acctwm:payments:...`, `acctwm:{bank_id}:events`, `acctwm:{bank_id}:withdrawals`). Consequently, world-mode decisions with `run_scoped_watermarks=True` evaluate to `no_watermark`. In Level 16a-3, when payments, events, and withdrawals also write run-scoped watermarks, `test_world_mode_decision_fails_closed_without_watermark` will transition to a complete end-to-end real-watermark test.
