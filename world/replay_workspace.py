@@ -349,14 +349,28 @@ async def drop_workspace(
     if fake_server is not None:
         import fakeredis
 
-        ws_redis = fakeredis.FakeRedis(server=fake_server, db=workspace.redis_db)
-        ws_redis.flushdb()
-    else:
-        ws_redis = workspace_redis_client(workspace)
+        fake_client = fakeredis.FakeRedis(server=fake_server, db=workspace.redis_db)
+        fake_client.flushdb()
+    elif hasattr(live_redis, "connection_pool"):
+        import redis
+
+        kw = live_redis.connection_pool.connection_kwargs
+        real_client = redis.Redis(
+            host=kw.get("host", "localhost"),
+            port=kw.get("port", 6379),
+            password=kw.get("password"),
+            db=workspace.redis_db,
+        )
         try:
-            ws_redis.flushdb()
+            real_client.flushdb()
         finally:
-            ws_redis.close()
+            real_client.close()
+    else:
+        fallback_client = workspace_redis_client(workspace)
+        try:
+            fallback_client.flushdb()
+        finally:
+            fallback_client.close()
 
     # 2. Drop PostgreSQL schema
     if admin_pg is not None:
