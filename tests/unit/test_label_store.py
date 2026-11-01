@@ -180,6 +180,31 @@ def test_valid_region_zero_and_positive() -> None:
     assert row42.region == 42
 
 
+def test_via_validation() -> None:
+    """Verifies that via must be None or a non-blank string."""
+    kwargs = _valid_row_kwargs()
+    # via=None succeeds
+    row_none = LabelRow(**kwargs, via=None)
+    assert row_none.via is None
+
+    # via='hold_request' succeeds
+    row_via = LabelRow(**kwargs, via="hold_request")
+    assert row_via.via == "hold_request"
+
+    # via='' raises ValueError
+    with pytest.raises(ValueError, match="via must be None or non-blank"):
+        LabelRow(**kwargs, via="")
+
+    # via='   ' raises ValueError
+    with pytest.raises(ValueError, match="via must be None or non-blank"):
+        LabelRow(**kwargs, via="   ")
+
+    # non-string raises ValueError
+    bad_via: Any = 123
+    with pytest.raises(ValueError, match="via must be None or non-blank"):
+        LabelRow(**kwargs, via=bad_via)
+
+
 @pytest.mark.anyio
 async def test_read_labels_known_by_naive_cutoff_raises() -> None:
     """Verifies that read_labels_known_by rejects naive cutoff datetimes."""
