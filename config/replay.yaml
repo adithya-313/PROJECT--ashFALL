@@ -1,0 +1,41 @@
+# =====================================================================
+# REPLAY WORKSPACE CONFIGURATION: configuration for Level 16b isolated
+# replay workspaces across PostgreSQL, Redis, and Kafka.
+# =====================================================================
+
+replay_workspace:
+  redis_workspace_db_min:
+    label: policy
+    value: 1
+    reason: "Lowest Redis database index reserved for isolated replay workspaces; DB 0 is preserved for live traffic."
+    derived_from: "Level 16b architect decisions C2 and 16b Q1"
+
+  redis_workspace_db_max:
+    label: policy
+    value: 15
+    reason: "Highest Redis database index reserved for replay workspaces, bounding the pool to 15 concurrent replays."
+    derived_from: "Level 16b architect decisions C2 and 16b Q1"
+
+  registry_key:
+    label: policy
+    value: "replay:workspace_registry"
+    reason: "Redis hash key storing active workspace allocations in the live database."
+    derived_from: "Level 16b architect decision 16b Q1"
+
+  registry_lock_seconds:
+    label: policy
+    value: 10
+    reason: "Lease duration in seconds for distributed lock guarding workspace allocation and release."
+    derived_from: "Level 16b architect decision 16b Q1"
+
+  drain_timeout_seconds:
+    label: policy
+    value: 30
+    reason: "safety net, reaching it fails the replay"
+    derived_from: "Level 16b architect decision 16b Q1 (safety net, reaching it fails the replay — used in 16b-3)"
+
+  kafka_topic_partitions:
+    label: policy
+    value: 1
+    reason: "Single partition per replay Kafka topic to guarantee total chronological event ordering."
+    derived_from: "Level 16b architect decisions C2 and 16b Q1"
