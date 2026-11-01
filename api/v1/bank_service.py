@@ -366,6 +366,7 @@ async def record_complaint(
     connection: asyncpg.Connection,
     bank_id: str,
     request: ComplaintRequest,
+    ingestion_clock: Clock | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """
     WHAT: Stores a customer fraud complaint referencing one or more payment identifiers into bank_complaints.
@@ -377,6 +378,8 @@ async def record_complaint(
         connection: Active bank-scoped database connection.
         bank_id: Commercial bank identifier.
         request: Validated ComplaintRequest model.
+        ingestion_clock: Optional domain ingestion clock. When provided, stamps arrival_time from
+            ingestion_clock.now_ist(); when omitted/None, stores NULL per Ground Rule 13.
 
     Returns:
         Tuple of status code (201) and response body dictionary.
@@ -384,14 +387,15 @@ async def record_complaint(
     Raises:
         ApiError: 409 'duplicate_record' if a complaint with this complaint_id already exists.
     """
+    arrival_time = ingestion_clock.now_ist() if ingestion_clock is not None else None
     try:
         await connection.execute(
             """
             INSERT INTO bank_complaints (
                 bank_id, complaint_id, complainant_account, reported_account, reported_bank_id,
-                payment_ids, claimed_type, received_at
+                payment_ids, claimed_type, received_at, arrival_time
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             """,
             bank_id,
             request.complaint_id,
@@ -401,6 +405,7 @@ async def record_complaint(
             request.payment_ids,
             request.claimed_type,
             request.received_at,
+            arrival_time,
         )
     except asyncpg.UniqueViolationError as error:
         if error.constraint_name != COMPLAINT_UNIQUE_CONSTRAINT:
@@ -519,6 +524,7 @@ class InProcessBankClient:
         decision_clock: Any = None,
         settings: Any = None,
         screener: Any = None,
+        ingestion_clock: Clock | None = None,
     ) -> None:
         """
         Initializes an in-process client instance.
@@ -531,6 +537,7 @@ class InProcessBankClient:
             decision_clock: Optional decision evaluation clock.
             settings: Optional AccountFeaturesSettings.
             screener: Optional RegistryScreener instance.
+            ingestion_clock: Optional domain ingestion clock for stamping arrival_time.
         """
         self._pool = pool
         self._bank_id = bank_id
@@ -539,6 +546,7 @@ class InProcessBankClient:
         self._decision_clock = decision_clock
         self._settings = settings
         self._screener = screener
+        self._ingestion_clock = ingestion_clock
 
     async def post(self, path: str, body_bytes: bytes, idempotency_key: str) -> IdempotentOutcome:
         """
@@ -595,7 +603,12 @@ class InProcessBankClient:
             complaint_model = parse_raw_body(body_bytes, ComplaintRequest)
 
             async def handler(connection: asyncpg.Connection) -> tuple[int, dict[str, Any]]:
-                return await record_complaint(connection, self._bank_id, complaint_model)
+                return await record_complaint(
+                    connection,
+                    self._bank_id,
+                    complaint_model,
+                    ingestion_clock=self._ingestion_clock,
+                )
 
         elif path == "/v1/withdrawals":
             withdrawal_model = parse_raw_body(body_bytes, WithdrawalRequest)
