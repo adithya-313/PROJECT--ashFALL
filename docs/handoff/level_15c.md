@@ -37,7 +37,7 @@ Register counts: built 71, partial 13, planned 10, deferred 1 (total 95). Curren
 - `py -3.12 -m pytest tests/unit/test_issue_register_v2.py -q -p no:cacheprovider`: register integrity and the pinned counts.
 - `py -3.12 -m pytest tests/unit/test_registry_prefetch.py tests/unit/test_decision_latency.py -q -p no:cacheprovider`: registry prefetch, timeout and latency method.
 - `py -3.12 -B scripts/verify_world.py`: golden checks.
-- `py -3.12 scripts/handoff_facts.py --part 15c`: regenerates the facts below. (`--check` looks for `level_15c.md`, so it does not apply to this file name.)
+- `py -3.12 scripts/handoff_facts.py --part 15c`: regenerates the facts below. Add `--check` to validate this note's structure (it looks for `docs/handoff/level_15c.md`).
 
 ---
 
