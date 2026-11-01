@@ -429,12 +429,12 @@ When reading historical rows inserted prior to migration 0017, or rows written i
   - Four Guards (GUARD 1 clock validation, GUARD 2 fail-loud on corrupt arrival/run-prefix, GUARD 3 golden byte equality, GUARD 4 arrival before event warning).
   - Shared fallback helper `arrival_from_row(row, fallback_column)` across records and labels.
   - Payment consumer watermark routing to run-scoped key `acctwm:{run_id}:payments:{partition}` for world records.
-- **Follow-up in Level 16a Round 3b**:
-  - Events and withdrawals pollers writing run-scoped watermarks (`acctwm:{run_id}:{bank_id}:events`, `acctwm:{run_id}:{bank_id}:withdrawals`).
-  - Account snapshots world-clock poller and watermark updates.
-  - Removing the `no_watermark` intermediate state and turning `test_world_mode_decision_fails_closed_without_watermark` into a real-watermark test.
+- **Completed in Level 16a Round 3b**:
+  - Events and withdrawals pollers writing run-scoped watermarks (`acctwm:{run_id}:{bank_id}:events`, `acctwm:{run_id}:{bank_id}:withdrawals`) using `Clock` without querying database `now()`.
+  - Account snapshots selection windowing by `COALESCE(arrival_time, ...)` and `write_account_snapshots` supporting run-scoped watermark cutoffs (`run_scoped_watermarks: bool = False`).
+  - Removal of the `no_watermark` intermediate state with `test_world_mode_decision_uses_real_run_watermarks` verifying all five sources through real writers.
 - **Follow-up in Level 16b**:
-  - `feature_replay.py` switching.
+  - `feature_replay.py` moves to the ingestion clock in 16b.
 
 ### 13.5 Run-Scoped Ingestion Watermarks
 
@@ -461,9 +461,6 @@ Watermark updates execute via `SET_WATERMARK_LUA`. If a caller attempts to move 
 - When `False` (legacy default): queries `get_bank_watermark(redis_client, bank_id)`.
 - When `True` (world clock): queries `get_bank_watermark(redis_client, bank_id, run_id=run_id)`.
 - If aggregate watermark is `None`, the function fails closed immediately, returning `status="no_watermark"`, all canonical features `None`, and performing zero account-state reads.
-
-#### Known Intermediate State (Removed in 16a-3)
-World-mode decisions still log no_watermark: payments now write run-scoped watermarks, but the events and withdrawals pollers still write only the shared keys until 16a-3b. 16a-3b must remove this note and turn test_world_mode_decision_fails_closed_without_watermark into a real-watermark test.
 
 ### 13.6 World Arrival for Payments, Events, and Withdrawals (Level 16a-3a)
 
