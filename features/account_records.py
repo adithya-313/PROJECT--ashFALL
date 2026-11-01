@@ -314,6 +314,66 @@ def parse_upi_event(message_value: bytes) -> PaymentSideRecord:
     return parse_upi_payload(payload)
 
 
+def arrival_from_row(row: Mapping[str, Any], fallback_column: str) -> datetime:
+    """
+    WHAT: Resolves the effective arrival timestamp for a database row.
+
+    WHY: Under Ground Rule 30 and Architect Decisions 16a-3 Q1/Q2, domain visibility, cutoffs,
+    and watermarks are evaluated against arrival_time (stamped from the injected ingestion clock).
+    However, historical rows ingested before migration 0018 and live operations running in
+    real-clock mode (clock=None per Ground Rule 13) have arrival_time=NULL in the database.
+    When arrival_time is None, this helper falls back to row[fallback_column].
+    Enforces timezone-awareness; raises ValueError naming the row identifier if naive or invalid.
+
+    Args:
+        row: Mapping containing row data.
+        fallback_column: Column name to read if arrival_time is NULL (e.g. 'created_at', 'recorded_at').
+
+    Returns:
+        Timezone-aware datetime representing effective arrival time.
+
+    Raises:
+        ValueError: If resolved timestamp is missing, naive, or not a datetime.
+    """
+    arrival = row.get("arrival_time")
+    if arrival is not None:
+        val = arrival
+    else:
+        if fallback_column not in row:
+            row_id = (
+                row.get("payment_id")
+                or row.get("event_id")
+                or row.get("withdrawal_id")
+                or row.get("complaint_id")
+                or row.get("feedback_id")
+                or row.get("id")
+                or "unknown"
+            )
+            raise ValueError(f"Row {row_id!r} missing fallback column {fallback_column!r}")
+        val = row[fallback_column]
+
+    row_id = (
+        row.get("payment_id")
+        or row.get("event_id")
+        or row.get("withdrawal_id")
+        or row.get("complaint_id")
+        or row.get("feedback_id")
+        or row.get("id")
+        or "unknown"
+    )
+
+    if isinstance(val, str):
+        try:
+            val = datetime.fromisoformat(val)
+        except Exception as exc:
+            raise ValueError(f"Row {row_id!r} has unparseable arrival timestamp: {val!r}") from exc
+
+    if not isinstance(val, datetime) or val.tzinfo is None or val.tzinfo.utcoffset(val) is None:
+        raise ValueError(f"Row {row_id!r} has naive or invalid arrival timestamp: {val!r}")
+
+    return val
+
+
 def payment_side_from_transaction_row(row: Mapping[str, Any]) -> PaymentSideRecord:
     """
     WHAT: Constructs a PaymentSideRecord directly from a database row of the transactions table.
@@ -363,6 +423,17 @@ def payment_side_from_transaction_row(row: Mapping[str, Any]) -> PaymentSideReco
             "balance_after_paise": row["balance_after_paise"],
         },
     }
+    raw_arrival_time = row.get("arrival_time")
+    if raw_arrival_time is not None:
+        if isinstance(raw_arrival_time, str):
+            envelope["arrival_time"] = raw_arrival_time
+        elif isinstance(raw_arrival_time, datetime):
+            envelope["arrival_time"] = raw_arrival_time.isoformat()
+        else:
+            raise InvalidAccountEventError(
+                f"Field 'arrival_time' must be datetime or str, got {type(raw_arrival_time)}"
+            )
+
     return parse_upi_payload(envelope)
 
 
@@ -398,13 +469,7 @@ def account_event_from_row(row: Mapping[str, Any]) -> AccountEventRecord:
     if event_time.tzinfo is None:
         event_time = event_time.replace(tzinfo=timezone.utc)
 
-    raw_created_at = row["created_at"]
-    if isinstance(raw_created_at, str):
-        created_at = datetime.fromisoformat(raw_created_at)
-    else:
-        created_at = raw_created_at
-    if created_at.tzinfo is None:
-        created_at = created_at.replace(tzinfo=timezone.utc)
+    arrival_time = arrival_from_row(row, "created_at")
 
     raw_details = row.get("details", {})
     if isinstance(raw_details, (bytes, str)):
@@ -421,7 +486,7 @@ def account_event_from_row(row: Mapping[str, Any]) -> AccountEventRecord:
         event_id=event_id,
         kind=kind,
         event_time=event_time,
-        arrival_time=created_at,  # arrival_time mapped from Postgres created_at
+        arrival_time=arrival_time,
         details=details,
     )
 
@@ -480,18 +545,8 @@ def withdrawal_from_row(row: Mapping[str, Any]) -> WithdrawalRecord:
     if event_time.tzinfo is None:
         event_time = event_time.replace(tzinfo=timezone.utc)
 
-    raw_recorded_at = row.get("recorded_at")
-    if raw_recorded_at is None:
-        raw_recorded_at = row.get("created_at")
-    if raw_recorded_at is None:
-        raise ValueError("Missing 'recorded_at' / 'created_at' timestamp for withdrawal arrival_time")
-
-    if isinstance(raw_recorded_at, str):
-        recorded_at = datetime.fromisoformat(raw_recorded_at)
-    else:
-        recorded_at = raw_recorded_at
-    if recorded_at.tzinfo is None:
-        recorded_at = recorded_at.replace(tzinfo=timezone.utc)
+    fallback_column = "recorded_at" if row.get("recorded_at") is not None else "created_at"
+    arrival_time = arrival_from_row(row, fallback_column)
 
     return WithdrawalRecord(
         run_id=run_id,
@@ -504,7 +559,7 @@ def withdrawal_from_row(row: Mapping[str, Any]) -> WithdrawalRecord:
         failure_domain=failure_domain,
         balance_after_paise=balance_after_paise,
         event_time=event_time,
-        arrival_time=recorded_at,
+        arrival_time=arrival_time,
     )
 
 
