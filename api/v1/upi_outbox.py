@@ -5,12 +5,13 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import asyncpg
 from pydantic import BaseModel
 
 from api.v1.bank_scope import UnknownBankError, load_known_banks
+from core.event_clock import Clock
 
 # Same values as world/failures.py FAILURE_DOMAINS and migration 0006's CHECK;
 # kept separate because the bank API must not depend on the simulator (ground
@@ -106,8 +107,21 @@ class UpiEventPayload(BaseModel):
     side: str
     event_time: str
     recorded_at: str
+    arrival_time: str | None = None
     source: str = "world"
     data: UpiEventData
+
+    def model_dump(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        """Omit arrival_time when None (Section 16a-3 Q1(b)) to preserve exact legacy envelope shape."""
+        if self.arrival_time is None and "exclude" not in kwargs:
+            kwargs["exclude"] = {"arrival_time"}
+        return super().model_dump(*args, **kwargs)
+
+    def model_dump_json(self, *args: Any, **kwargs: Any) -> str:
+        """Omit arrival_time when None (Section 16a-3 Q1(b)) to preserve exact legacy envelope shape."""
+        if self.arrival_time is None and "exclude" not in kwargs:
+            kwargs["exclude"] = {"arrival_time"}
+        return super().model_dump_json(*args, **kwargs)
 
 
 class StoredUpiSide(NamedTuple):
@@ -207,7 +221,11 @@ def make_upi_event_id(payment_id: str, side: str) -> uuid.UUID:
     return uuid.uuid5(UPI_EVENT_ID_NAMESPACE, f"{payment_id}:{side}")
 
 
-async def record_upi_side(conn: asyncpg.Connection, upi_side: UpiPaymentSide) -> StoredUpiSide:
+async def record_upi_side(
+    conn: asyncpg.Connection,
+    upi_side: UpiPaymentSide,
+    ingestion_clock: Clock | None = None,
+) -> StoredUpiSide:
     """
     Atomically insert a UPI payment side and its schema-2 outbox event.
 
@@ -227,6 +245,14 @@ async def record_upi_side(conn: asyncpg.Connection, upi_side: UpiPaymentSide) ->
     # Validate fields prior to database operations
     validate_side(upi_side)
 
+    # GUARD 1: When an ingestion clock is provided, arrival_time must be set and aware.
+    arrival_time: datetime | None = None
+    if ingestion_clock is not None:
+        now = ingestion_clock.now_ist()
+        if now is None or now.tzinfo is None or now.tzinfo.utcoffset(now) is None:
+            raise ValueError(f"ingestion_clock must provide timezone-aware datetime, got {now!r}")
+        arrival_time = now
+
     # Decimal amount in Rupees matching the paise integer: amount * 100 == amount_paise
     amount_rupees = (Decimal(upi_side.amount_paise) / PAISE_PER_RUPEE).quantize(Decimal("0.01"))
     event_id = make_upi_event_id(upi_side.payment_id, upi_side.side)
@@ -241,13 +267,15 @@ async def record_upi_side(conn: asyncpg.Connection, upi_side: UpiPaymentSide) ->
                 source, account_id, amount, payment_id, bank_id, side,
                 counterparty_vpa, counterparty_bank_id, amount_paise,
                 event_time, status, failure_domain, payee_type, channel,
-                sender_device_fingerprint, sender_os_generation, balance_after_paise
+                sender_device_fingerprint, sender_os_generation, balance_after_paise,
+                arrival_time
             )
             VALUES (
                 'world', $1, $2, $3, $4, $5,
                 $6, $7, $8,
                 $9, $10, $11, $12, $13,
-                $14, $15, $16
+                $14, $15, $16,
+                $17
             )
             ON CONFLICT ON CONSTRAINT uq_transactions_bank_payment_side DO NOTHING
             RETURNING transaction_id, created_at
@@ -268,12 +296,14 @@ async def record_upi_side(conn: asyncpg.Connection, upi_side: UpiPaymentSide) ->
             upi_side.sender_device_fingerprint,
             upi_side.sender_os_generation,
             upi_side.balance_after_paise,
+            arrival_time,
         )
 
         if row is not None:
             # First-time insertion: construct schema-2 payload and insert outbox row
             transaction_id = str(row["transaction_id"])
             created_at_iso = row["created_at"].isoformat()
+            arrival_time_iso = arrival_time.isoformat() if arrival_time is not None else None
 
             payload = UpiEventPayload(
                 event_type=EVENT_TYPE_UPI_PAYMENT_RECORDED,
@@ -284,6 +314,7 @@ async def record_upi_side(conn: asyncpg.Connection, upi_side: UpiPaymentSide) ->
                 side=upi_side.side,
                 event_time=upi_side.event_time.isoformat(),
                 recorded_at=created_at_iso,
+                arrival_time=arrival_time_iso,
                 source="world",
                 data=UpiEventData(
                     bank_id=upi_side.bank_id,
@@ -303,6 +334,13 @@ async def record_upi_side(conn: asyncpg.Connection, upi_side: UpiPaymentSide) ->
                 ),
             )
 
+            # When arrival_time is None (real-clock legacy mode), omit the key entirely from the JSON payload.
+            payload_json = (
+                payload.model_dump_json(exclude={"arrival_time"})
+                if payload.arrival_time is None
+                else payload.model_dump_json()
+            )
+
             await conn.execute(
                 """
                 INSERT INTO outbox (transaction_id, event_id, event_type, payload)
@@ -311,7 +349,7 @@ async def record_upi_side(conn: asyncpg.Connection, upi_side: UpiPaymentSide) ->
                 transaction_id,
                 event_id_str,
                 EVENT_TYPE_UPI_PAYMENT_RECORDED,
-                payload.model_dump_json(),
+                payload_json,
             )
 
             return StoredUpiSide(

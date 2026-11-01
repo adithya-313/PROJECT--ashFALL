@@ -30,6 +30,7 @@ from features.account_keys import (
     labelled_accounts_key,
 )
 from features.account_reader import read_side_records_many
+from features.account_records import arrival_from_row
 from features.account_summaries import read_counterparty_days_many
 from features.ingest_watermark import record_poller_watermark
 
@@ -47,12 +48,10 @@ def arrival_of(row: Mapping[str, Any]) -> datetime:
     """
     WHAT: Resolves the effective arrival timestamp for a complaint or feedback row.
 
-    WHY: Under Ground Rule 30 and Architect Decisions A/B/D, domain visibility, cutoffs,
-    and watermarks are evaluated against arrival_time (from the injected ingestion clock).
-    However, historical rows ingested before migration 0017 and live operations running in
-    real-clock mode (clock=None per Ground Rule 13) have arrival_time=NULL in the database.
-    When arrival_time is None, this helper falls back to row['created_at']. This is the ONLY
-    place in the codebase where this legacy/real-clock fallback lives.
+    WHY: Delegates to the shared arrival_from_row helper with fallback column 'created_at'.
+    Domain visibility, cutoffs, and watermarks are evaluated against arrival_time (from the
+    injected ingestion clock). When arrival_time is None (real-clock legacy mode or historical
+    rows), falls back to created_at per Ground Rule 13 and Ground Rule 30.
 
     Args:
         row: Mapping containing row data (must contain 'created_at' and optionally 'arrival_time').
@@ -61,16 +60,9 @@ def arrival_of(row: Mapping[str, Any]) -> datetime:
         A timezone-aware datetime representing the arrival time.
 
     Raises:
-        ValueError: If the resolved timestamp is naive or not a datetime, naming the row identifier.
+        ValueError: If the resolved timestamp is naive or invalid.
     """
-    arrival = row.get("arrival_time")
-    val = arrival if arrival is not None else row["created_at"]
-    row_id = row.get("complaint_id") or row.get("feedback_id") or row.get("id") or "unknown"
-    if not isinstance(val, datetime) or val.tzinfo is None or val.utcoffset() is None:
-        raise ValueError(
-            f"Timestamp for row {row_id!r} must be a timezone-aware datetime, got {val!r}"
-        )
-    return val
+    return arrival_from_row(row, "created_at")
 
 
 async def apply_feedback_row(

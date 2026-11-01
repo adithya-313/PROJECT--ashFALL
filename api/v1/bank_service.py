@@ -269,6 +269,7 @@ async def record_transaction(
     connection: asyncpg.Connection,
     bank_id: str,
     request: TransactionSideRequest,
+    ingestion_clock: Clock | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """
     WHAT: Validates and persists one side (debit or credit) of a UPI payment into transactions and outbox.
@@ -280,6 +281,7 @@ async def record_transaction(
         connection: Active bank-scoped database connection.
         bank_id: Commercial bank identifier.
         request: Validated TransactionSideRequest model.
+        ingestion_clock: Optional domain ingestion clock for stamping arrival_time.
 
     Returns:
         Tuple of status code (201) and response body dictionary.
@@ -313,7 +315,7 @@ async def record_transaction(
             422, "invalid_body", "Transaction side is inconsistent: check side, bank ids, status and failure_domain"
         ) from error
 
-    stored = await record_upi_side(connection, upi_side)
+    stored = await record_upi_side(connection, upi_side, ingestion_clock=ingestion_clock)
     response = TransactionResponse(
         transaction_id=stored.transaction_id,
         event_id=stored.event_id,
@@ -326,6 +328,7 @@ async def record_account_event(
     connection: asyncpg.Connection,
     bank_id: str,
     request: AccountEventRequest,
+    ingestion_clock: Clock | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """
     WHAT: Persists an account life-cycle security or provisioning event into bank_account_events.
@@ -338,15 +341,24 @@ async def record_account_event(
         connection: Active bank-scoped database connection.
         bank_id: Commercial bank identifier.
         request: Validated AccountEventRequest model.
+        ingestion_clock: Optional domain ingestion clock for stamping arrival_time.
 
     Returns:
         Tuple of status code (200 on duplicate, 201 on new insert) and response body dictionary.
     """
+    # GUARD 1: When an ingestion clock is provided, arrival_time must be set and aware.
+    arrival_time: datetime | None = None
+    if ingestion_clock is not None:
+        now = ingestion_clock.now_ist()
+        if now is None or now.tzinfo is None or now.tzinfo.utcoffset(now) is None:
+            raise ValueError(f"ingestion_clock must provide timezone-aware datetime, got {now!r}")
+        arrival_time = now
+
     details_json = orjson.dumps(request.details).decode("utf-8")
     inserted_id = await connection.fetchval(
         """
-        INSERT INTO bank_account_events (bank_id, event_id, account_id, kind, event_time, details)
-        VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+        INSERT INTO bank_account_events (bank_id, event_id, account_id, kind, event_time, details, arrival_time)
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
         ON CONFLICT (bank_id, event_id) DO NOTHING
         RETURNING id
         """,
@@ -356,6 +368,7 @@ async def record_account_event(
         request.kind,
         request.event_time,
         details_json,
+        arrival_time,
     )
     duplicate = inserted_id is None
     response = AccountEventResponse(event_id=request.event_id, duplicate=duplicate)
@@ -418,6 +431,7 @@ async def record_withdrawal(
     pool_or_conn: asyncpg.Pool | asyncpg.Connection,
     bank_id: str,
     request: WithdrawalRequest,
+    ingestion_clock: Clock | None = None,
 ) -> tuple[bool, Any]:
     """
     WHAT: Persists an ATM or branch cash withdrawal into bank_withdrawals.
@@ -428,6 +442,7 @@ async def record_withdrawal(
         pool_or_conn: Active connection pool or connection.
         bank_id: Authorized commercial bank identifier.
         request: Validated WithdrawalRequest model.
+        ingestion_clock: Optional domain ingestion clock for stamping arrival_time.
 
     Returns:
         Tuple of (inserted_boolean, row_record).
@@ -435,14 +450,23 @@ async def record_withdrawal(
     if request.bank_id != bank_id:
         raise ApiError(422, "invalid_body", "bank_id must match authenticated bank")
 
+    # GUARD 1: When an ingestion clock is provided, arrival_time must be set and aware.
+    arrival_time: datetime | None = None
+    if ingestion_clock is not None:
+        now = ingestion_clock.now_ist()
+        if now is None or now.tzinfo is None or now.tzinfo.utcoffset(now) is None:
+            raise ValueError(f"ingestion_clock must provide timezone-aware datetime, got {now!r}")
+        arrival_time = now
+
     async def _execute_insert(conn: asyncpg.Connection) -> tuple[bool, Any]:
         row = await conn.fetchrow(
             """
             INSERT INTO bank_withdrawals (
                 bank_id, withdrawal_id, account_id, channel, amount_paise,
-                status, failure_domain, event_time, balance_after_paise
+                status, failure_domain, event_time, balance_after_paise,
+                arrival_time
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             ON CONFLICT (bank_id, withdrawal_id) DO NOTHING
             RETURNING *
             """,
@@ -455,6 +479,7 @@ async def record_withdrawal(
             request.failure_domain,
             request.event_time,
             request.balance_after_paise,
+            arrival_time,
         )
         if row is not None:
             return True, row
@@ -591,13 +616,17 @@ class InProcessBankClient:
             tx_model = parse_raw_body(body_bytes, TransactionSideRequest)
 
             async def handler(connection: asyncpg.Connection) -> tuple[int, dict[str, Any]]:
-                return await record_transaction(connection, self._bank_id, tx_model)
+                return await record_transaction(
+                    connection, self._bank_id, tx_model, ingestion_clock=self._ingestion_clock
+                )
 
         elif path == "/v1/account-events":
             acct_model = parse_raw_body(body_bytes, AccountEventRequest)
 
             async def handler(connection: asyncpg.Connection) -> tuple[int, dict[str, Any]]:
-                return await record_account_event(connection, self._bank_id, acct_model)
+                return await record_account_event(
+                    connection, self._bank_id, acct_model, ingestion_clock=self._ingestion_clock
+                )
 
         elif path == "/v1/complaints":
             complaint_model = parse_raw_body(body_bytes, ComplaintRequest)
@@ -614,7 +643,9 @@ class InProcessBankClient:
             withdrawal_model = parse_raw_body(body_bytes, WithdrawalRequest)
 
             async def handler(connection: asyncpg.Connection) -> tuple[int, dict[str, Any]]:
-                inserted, _ = await record_withdrawal(connection, self._bank_id, withdrawal_model)
+                inserted, _ = await record_withdrawal(
+                    connection, self._bank_id, withdrawal_model, ingestion_clock=self._ingestion_clock
+                )
                 status_code = 201 if inserted else 200
                 resp_status: Literal["recorded", "duplicate"] = "recorded" if inserted else "duplicate"
                 resp = WithdrawalResponse(

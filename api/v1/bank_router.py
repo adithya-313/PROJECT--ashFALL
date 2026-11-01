@@ -246,9 +246,12 @@ async def post_transaction(request: Request) -> ORJSONResponse:
     """
     ctx = await get_bank_context(request)
     side_request = parse_body(ctx, TransactionSideRequest)
+    ingestion_clock = get_ingestion_clock(request)
 
     async def handler(connection: asyncpg.Connection) -> tuple[int, dict[str, Any]]:
-        return await record_transaction(connection, ctx.bank_id, side_request)
+        return await record_transaction(
+            connection, ctx.bank_id, side_request, ingestion_clock=ingestion_clock
+        )
 
     return await run_idempotent_post(request, ctx, handler)
 
@@ -263,9 +266,12 @@ async def post_account_event(request: Request) -> ORJSONResponse:
     """Records a life-cycle event of an account. A repeated event id is stored once and answered with 200."""
     ctx = await get_bank_context(request)
     event_request = parse_body(ctx, AccountEventRequest)
+    ingestion_clock = get_ingestion_clock(request)
 
     async def handler(connection: asyncpg.Connection) -> tuple[int, dict[str, Any]]:
-        return await record_account_event(connection, ctx.bank_id, event_request)
+        return await record_account_event(
+            connection, ctx.bank_id, event_request, ingestion_clock=ingestion_clock
+        )
 
     return await run_idempotent_post(request, ctx, handler)
 
@@ -342,9 +348,12 @@ async def post_withdrawal(request: Request) -> ORJSONResponse:
     withdrawal = parse_body(ctx, WithdrawalRequest)
     if withdrawal.bank_id != ctx.bank_id:
         raise ApiError(422, "invalid_body", "bank_id must match authenticated bank")
+    ingestion_clock = get_ingestion_clock(request)
 
     async def handler(connection: asyncpg.Connection) -> tuple[int, dict[str, Any]]:
-        inserted, _ = await record_withdrawal(connection, ctx.bank_id, withdrawal)
+        inserted, _ = await record_withdrawal(
+            connection, ctx.bank_id, withdrawal, ingestion_clock=ingestion_clock
+        )
         status_code = 201 if inserted else 200
         resp_status: Literal["recorded", "duplicate"] = "recorded" if inserted else "duplicate"
         resp = WithdrawalResponse(

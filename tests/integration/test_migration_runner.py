@@ -14,6 +14,7 @@ pytestmark = pytest.mark.anyio
 
 # The transactions table columns, in order. The Level 10.5 agent reads this table, so changing it must break this
 # test on purpose and force a deliberate decision.
+# arrival_time added in Level 16a-3a (world-clock arrival, architect decision 16a-3 Q1(a)).
 EXPECTED_TRANSACTION_COLUMNS = [
     "id",
     "transaction_id",
@@ -46,6 +47,7 @@ EXPECTED_TRANSACTION_COLUMNS = [
     "sender_device_fingerprint",
     "sender_os_generation",
     "balance_after_paise",
+    "arrival_time",
 ]
 
 
@@ -70,8 +72,8 @@ async def test_fresh_schema_applies_all_migrations_in_order(empty_schema):
 
     applied_count = await apply_pending_migrations(connection)
 
-    # All files applied (we expect 17 today), and the tracking table lists exactly those names.
-    assert applied_count == len(real_filenames) == 17
+    # All files applied (we expect 18 today), and the tracking table lists exactly those names.
+    assert applied_count == len(real_filenames) == 18
     assert await applied_filenames(connection) == real_filenames
     assert real_filenames == sorted(real_filenames)
 
@@ -106,9 +108,9 @@ async def test_second_run_applies_nothing(empty_schema):
     first_count = await apply_pending_migrations(connection)
     second_count = await apply_pending_migrations(connection)
 
-    assert first_count == len(find_migration_files()) == 17
+    assert first_count == len(find_migration_files()) == 18
     assert second_count == 0
-    assert len(await applied_filenames(connection)) == 17
+    assert len(await applied_filenames(connection)) == 18
 
 
 async def test_failed_migration_is_not_recorded(empty_schema, tmp_path):
@@ -132,7 +134,7 @@ async def test_failed_migration_is_not_recorded(empty_schema, tmp_path):
 
 
 async def test_transactions_table_column_count_is_locked(isolated_schema):
-    """The transactions table has exactly the 31 locked columns, in order."""
+    """The transactions table has exactly the 32 locked columns, in order."""
     connection, schema_name = isolated_schema
 
     rows = await connection.fetch(
@@ -145,7 +147,7 @@ async def test_transactions_table_column_count_is_locked(isolated_schema):
     )
     column_names = [row["column_name"] for row in rows]
 
-    assert len(column_names) == 31
+    assert len(column_names) == 32
     assert column_names == EXPECTED_TRANSACTION_COLUMNS
 
 
