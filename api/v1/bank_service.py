@@ -151,6 +151,8 @@ async def record_decision(
     feature_row: FeatureLogRow | None = None,
     dpip_key: str | None = None,
     registry: RegistryGateway | None = None,
+    run_scoped_watermarks: bool = False,
+    feature_logging_enabled: bool | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """
     WHAT: Executes the business logic for recording a bank payment decision evaluation request.
@@ -198,7 +200,12 @@ async def record_decision(
             raise
         raise ApiError(409, "payment_already_decided", "A decision was already requested for this payment") from error
 
-    if config.decision_feature_logging_enabled:
+    should_log_features = (
+        feature_logging_enabled
+        if feature_logging_enabled is not None
+        else config.decision_feature_logging_enabled
+    )
+    if should_log_features:
         row = feature_row
         if row is None:
             clk = decision_clock if decision_clock is not None else WallClock()
@@ -209,7 +216,13 @@ async def record_decision(
                     # (a) the blocking Redis work in a worker thread, (b) the registry questions on this event
                     # loop through the shared pool, (c) the features in a worker thread, from the answers.
                     prepared = await asyncio.to_thread(
-                        prepare_registry_questions, redis_client, bank_id, request, dpip_key, settings
+                        prepare_registry_questions,
+                        redis_client,
+                        bank_id,
+                        request,
+                        dpip_key,
+                        settings,
+                        run_scoped_watermarks=run_scoped_watermarks,
                     )
                     if prepared is not None:
                         arrival_cutoff, questions = prepared
@@ -229,6 +242,7 @@ async def record_decision(
                     screener=row_screener,
                     dpip_key=dpip_key,
                     arrival_cutoff=arrival_cutoff,
+                    run_scoped_watermarks=run_scoped_watermarks,
                 )
             except Exception as exc:
                 logger.warning(
@@ -550,6 +564,8 @@ class InProcessBankClient:
         settings: Any = None,
         screener: Any = None,
         ingestion_clock: Clock | None = None,
+        run_scoped_watermarks: bool = False,
+        decision_feature_logging: bool | None = None,
     ) -> None:
         """
         Initializes an in-process client instance.
@@ -563,6 +579,8 @@ class InProcessBankClient:
             settings: Optional AccountFeaturesSettings.
             screener: Optional RegistryScreener instance.
             ingestion_clock: Optional domain ingestion clock for stamping arrival_time.
+            run_scoped_watermarks: Whether to read run-scoped watermarks on the decisions branch.
+            decision_feature_logging: Optional override for decision feature logging on decisions branch.
         """
         self._pool = pool
         self._bank_id = bank_id
@@ -572,6 +590,8 @@ class InProcessBankClient:
         self._settings = settings
         self._screener = screener
         self._ingestion_clock = ingestion_clock
+        self._run_scoped_watermarks = run_scoped_watermarks
+        self._decision_feature_logging = decision_feature_logging
 
     async def post(self, path: str, body_bytes: bytes, idempotency_key: str) -> IdempotentOutcome:
         """
@@ -610,6 +630,8 @@ class InProcessBankClient:
                     settings=self._settings,
                     screener=self._screener,
                     dpip_key=dpip_key,
+                    run_scoped_watermarks=self._run_scoped_watermarks,
+                    feature_logging_enabled=self._decision_feature_logging,
                 )
 
         elif path == "/v1/transactions":

@@ -41,6 +41,20 @@ from world.label_records import LabelEvent
 VALID_BANK_MODES: frozenset[str] = frozenset({"shadow", "live"})
 
 
+@dataclass(frozen=True)
+class DecisionCall:
+    """
+    WHAT: Frozen value object containing evaluated decision request details for a payment.
+    WHY: Decouples decision request construction from network transmission, allowing replay
+    recording, offline logging, and independent verification without triggering bank calls.
+    """
+
+    sender_bank_id: str
+    receiver_bank_id: str
+    body_bytes: bytes
+    idempotency_key: str
+
+
 @runtime_checkable
 class TransportOutcome(Protocol):
     """
@@ -310,6 +324,68 @@ class MockBankConnectors:
         }
         self.seen_accounts: set[str] = set()
 
+    def build_decision_request(self, payment: PaymentView) -> DecisionCall:
+        """
+        WHAT: Resolves sender/receiver banks and payee type, then constructs the DecisionRequest payload.
+        WHY: Factored out of make_hook so decision requests can be built for recording, simulation, or verification
+        without initiating bank transport calls.
+
+        Args:
+            payment: PaymentView instance representing the planned payment.
+
+        Returns:
+            DecisionCall containing sender_bank_id, receiver_bank_id, body_bytes, and idempotency_key.
+
+        Raises:
+            ValueError: If sender/receiver account is unknown or receiver prefix has no mapped payee type.
+        """
+        # 1. Resolve sending and receiving bank identifiers from account mappings.
+        if payment.from_account not in self.account_bank_map:
+            raise ValueError(f"Sender account {payment.from_account!r} is not in account_bank_map")
+        sender_bank_id = self.account_bank_map[payment.from_account]
+
+        if payment.to_account not in self.account_bank_map:
+            raise ValueError(f"Receiver account {payment.to_account!r} is not in account_bank_map")
+        receiver_bank_id = self.account_bank_map[payment.to_account]
+
+        self.seen_accounts.add(payment.from_account)
+        self.seen_accounts.add(payment.to_account)
+
+        # 2. Derive bank-visible payee classification from account prefix.
+        resolved_payee_type: str | None = None
+        for prefix, ptype in self.feed_config.payee_type_by_account_prefix.items():
+            if payment.to_account.startswith(prefix):
+                resolved_payee_type = ptype
+                break
+        if resolved_payee_type is None:
+            raise ValueError(
+                f"Receiver account {payment.to_account!r} has unrecognized prefix; "
+                f"expected one of {sorted(self.feed_config.payee_type_by_account_prefix.keys())}"
+            )
+
+        # 3. Build DecisionRequest payload and deterministic idempotency key.
+        event_time_dt = world_minute_to_ist(payment.minute, self.clock_start)
+        body_dict: dict[str, Any] = {
+            "payment_id": payment.planned_payment_id,
+            "sender_account_id": payment.from_account,
+            "receiver_bank_id": receiver_bank_id,
+            "amount_paise": payment.amount_paise,
+            "event_time": event_time_dt.isoformat(),
+            "channel": self.feed_config.channel_value,
+            "payee_type": resolved_payee_type,
+        }
+        body_bytes = orjson.dumps(body_dict)
+        idempotency_key = make_decision_idempotency_key(
+            payment.planned_payment_id, self.max_identifier_length
+        )
+
+        return DecisionCall(
+            sender_bank_id=sender_bank_id,
+            receiver_bank_id=receiver_bank_id,
+            body_bytes=body_bytes,
+            idempotency_key=idempotency_key,
+        )
+
     def make_hook(self) -> Callable[[PaymentView], HookDecision]:
         """
         WHAT: Constructs a synchronous hook callable by run_interactive_world for each planned payment.
@@ -324,45 +400,8 @@ class MockBankConnectors:
             """
             Synchronously evaluates a planned payment by dispatching a decision request to the bank transport.
             """
-            # 1. Resolve sending and receiving bank identifiers from account mappings.
-            if payment.from_account not in self.account_bank_map:
-                raise ValueError(f"Sender account {payment.from_account!r} is not in account_bank_map")
-            sender_bank_id = self.account_bank_map[payment.from_account]
-
-            if payment.to_account not in self.account_bank_map:
-                raise ValueError(f"Receiver account {payment.to_account!r} is not in account_bank_map")
-            receiver_bank_id = self.account_bank_map[payment.to_account]
-
-            self.seen_accounts.add(payment.from_account)
-            self.seen_accounts.add(payment.to_account)
-
-            # 2. Derive bank-visible payee classification from account prefix.
-            resolved_payee_type: str | None = None
-            for prefix, ptype in self.feed_config.payee_type_by_account_prefix.items():
-                if payment.to_account.startswith(prefix):
-                    resolved_payee_type = ptype
-                    break
-            if resolved_payee_type is None:
-                raise ValueError(
-                    f"Receiver account {payment.to_account!r} has unrecognized prefix; "
-                    f"expected one of {sorted(self.feed_config.payee_type_by_account_prefix.keys())}"
-                )
-
-            # 3. Build DecisionRequest payload and deterministic idempotency key.
-            event_time_dt = world_minute_to_ist(payment.minute, self.clock_start)
-            body_dict: dict[str, Any] = {
-                "payment_id": payment.planned_payment_id,
-                "sender_account_id": payment.from_account,
-                "receiver_bank_id": receiver_bank_id,
-                "amount_paise": payment.amount_paise,
-                "event_time": event_time_dt.isoformat(),
-                "channel": self.feed_config.channel_value,
-                "payee_type": resolved_payee_type,
-            }
-            body_bytes = orjson.dumps(body_dict)
-            idempotency_key = make_decision_idempotency_key(
-                payment.planned_payment_id, self.max_identifier_length
-            )
+            call = self.build_decision_request(payment)
+            sender_bank_id = call.sender_bank_id
 
             if sender_bank_id not in self.transports:
                 raise ValueError(f"No transport configured for sender bank {sender_bank_id!r}")
@@ -371,7 +410,7 @@ class MockBankConnectors:
             # 4. Dispatch decision request to event loop with timeout.
             try:
                 fut = asyncio.run_coroutine_threadsafe(
-                    transport.post("/v1/decisions", body_bytes, idempotency_key),
+                    transport.post("/v1/decisions", call.body_bytes, call.idempotency_key),
                     self.loop,
                 )
                 outcome = fut.result(timeout=self.decision_timeout_seconds)
