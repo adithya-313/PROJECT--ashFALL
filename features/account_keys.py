@@ -213,6 +213,36 @@ def extract_run_id(identifier: str) -> str:
     return run_id
 
 
+def validate_run_id(run_id: str) -> None:
+    """
+    WHAT: Validates that a run identifier conforms to the simulation run format.
+
+    WHY: Run-scoped keys must use valid run identifiers matching run_id_hex_length
+    lowercase hexadecimal characters to prevent collision and malformed Redis keys.
+
+    Args:
+        run_id: Identifier string to validate.
+
+    Raises:
+        ValueError: If run_id is not a string, does not match run_id_hex_length,
+            or contains uppercase or non-hexadecimal characters.
+    """
+    if not isinstance(run_id, str):
+        raise ValueError(f"Run ID must be a string, got {type(run_id)}")
+
+    expected_length = get_default_settings().run_id_hex_length
+    if len(run_id) != expected_length:
+        raise ValueError(
+            f"Run ID {run_id!r} has invalid length {len(run_id)}; "
+            f"expected exactly {expected_length} characters"
+        )
+
+    if not all(c in HEX_DIGITS for c in run_id):
+        raise ValueError(
+            f"Run ID {run_id!r} must contain only lowercase hexadecimal digits (0-9, a-f)"
+        )
+
+
 def _validate_key_component(name: str, value: str) -> None:
     """Validates that a key segment is a non-empty string without colon delimiters."""
     if not isinstance(value, str) or not value:
@@ -467,18 +497,58 @@ def namespace_pattern(run_id: str, bank_id: str) -> str:
 WATERMARK_PREFIX = "acctwm:"
 
 
+def watermark_key_for_poller(bank_id: str, source: str, run_id: str | None = None) -> str:
+    """
+    WHAT: Builds Redis key for bank poller watermark, optionally scoped to a simulation run.
+
+    WHY: World-clock runs scope watermarks per-run ('acctwm:{run_id}:{bank_id}:{source}')
+    so historical simulation clocks never collide with real-clock watermarks.
+    """
+    _validate_key_component("bank_id", bank_id)
+    _validate_key_component("source", source)
+    if run_id is None:
+        return f"{WATERMARK_PREFIX}{bank_id}:{source}"
+    validate_run_id(run_id)
+    return f"{WATERMARK_PREFIX}{run_id}:{bank_id}:{source}"
+
+
+def watermark_key_for_payment_partition(partition: int, run_id: str | None = None) -> str:
+    """
+    WHAT: Builds Redis key for Kafka payments partition watermark, optionally scoped to a simulation run.
+
+    WHY: World-clock runs scope payment partition watermarks per-run ('acctwm:{run_id}:payments:{partition}').
+    """
+    if not isinstance(partition, int) or partition < 0:
+        raise ValueError(f"Partition must be a non-negative integer; got {partition!r}")
+    if run_id is None:
+        return f"{WATERMARK_PREFIX}payments:{partition}"
+    validate_run_id(run_id)
+    return f"{WATERMARK_PREFIX}{run_id}:payments:{partition}"
+
+
+def watermark_key_for_payment_partitions_set(run_id: str | None = None) -> str:
+    """
+    WHAT: Builds Redis set key holding known Kafka upi.payments partition numbers, optionally run-scoped.
+
+    WHY: World-clock runs track known partitions per run ('acctwm:{run_id}:payments:partitions').
+    """
+    if run_id is None:
+        return f"{WATERMARK_PREFIX}payments:partitions"
+    validate_run_id(run_id)
+    return f"{WATERMARK_PREFIX}{run_id}:payments:partitions"
+
+
 def payment_watermark_key(partition: int) -> str:
     """Redis key for Kafka upi.payments partition watermark."""
-    return f"{WATERMARK_PREFIX}payments:{partition}"
+    return watermark_key_for_payment_partition(partition=partition, run_id=None)
 
 
 def payments_partitions_key() -> str:
     """Redis set key holding known Kafka upi.payments partition numbers."""
-    return f"{WATERMARK_PREFIX}payments:partitions"
+    return watermark_key_for_payment_partitions_set(run_id=None)
 
 
 def poller_watermark_key(bank_id: str, source: str) -> str:
     """Redis key for bank-scoped Postgres poller watermark."""
-    _validate_key_component("bank_id", bank_id)
-    return f"{WATERMARK_PREFIX}{bank_id}:{source}"
+    return watermark_key_for_poller(bank_id=bank_id, source=source, run_id=None)
 
