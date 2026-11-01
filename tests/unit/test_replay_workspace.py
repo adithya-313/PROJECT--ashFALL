@@ -17,6 +17,15 @@ from world.replay_workspace import (
 pytestmark = pytest.mark.anyio
 
 
+def make_fake_factory(server: fakeredis.FakeServer):
+    """Create a workspace Redis client factory for a shared fakeredis server."""
+
+    def factory(ws: ReplayWorkspace) -> fakeredis.FakeRedis:
+        return fakeredis.FakeRedis(server=server, db=ws.redis_db)
+
+    return factory
+
+
 def test_parse_redis_db_index_from_urls() -> None:
     """Live DB number is parsed correctly from URLs with and without explicit /N path."""
     assert parse_redis_db_index("redis://localhost:6379/0") == 0
@@ -70,7 +79,8 @@ async def test_allocation_never_returns_live_db() -> None:
         live_redis=client,
         base_name="rpl_run01_1",
         settings=custom_settings,
-        live_db_override=1,
+        base_redis_url="redis://localhost:6379/1",
+        redis_client_factory=lambda ws: fakeredis.FakeRedis(server=server, db=ws.redis_db),
     )
     # 1 is live DB, so lowest free DB must be 2
     assert ws.redis_db != 1
@@ -89,18 +99,19 @@ async def test_two_allocations_get_different_numbers_and_release_frees_number() 
     server = fakeredis.FakeServer()
     client = fakeredis.FakeRedis(server=server, db=0)
     settings = get_default_replay_settings()
+    factory = make_fake_factory(server)
 
-    ws1 = await allocate_workspace(None, client, "rpl_run02_1", settings=settings)
-    ws2 = await allocate_workspace(None, client, "rpl_run02_2", settings=settings)
+    ws1 = await allocate_workspace(None, client, "rpl_run02_1", settings=settings, redis_client_factory=factory)
+    ws2 = await allocate_workspace(None, client, "rpl_run02_2", settings=settings, redis_client_factory=factory)
 
     assert ws1.redis_db == 1
     assert ws2.redis_db == 2
 
     # Drop ws1 to free DB 1
-    await drop_workspace(None, client, ws1, settings=settings)
+    await drop_workspace(None, client, ws1, settings=settings, redis_client_factory=factory)
 
     # Next allocation reclaims lowest free DB (1)
-    ws3 = await allocate_workspace(None, client, "rpl_run02_3", settings=settings)
+    ws3 = await allocate_workspace(None, client, "rpl_run02_3", settings=settings, redis_client_factory=factory)
     assert ws3.redis_db == 1
 
 
@@ -116,12 +127,13 @@ async def test_full_pool_raises_error_naming_holders() -> None:
         drain_timeout_seconds=30,
         kafka_topic_partitions=1,
     )
+    factory = make_fake_factory(server)
 
-    await allocate_workspace(None, client, "ws_alice", settings=tight_settings)
-    await allocate_workspace(None, client, "ws_bob", settings=tight_settings)
+    await allocate_workspace(None, client, "ws_alice", settings=tight_settings, redis_client_factory=factory)
+    await allocate_workspace(None, client, "ws_bob", settings=tight_settings, redis_client_factory=factory)
 
     with pytest.raises(RuntimeError, match="No free Redis databases available") as exc:
-        await allocate_workspace(None, client, "ws_charlie", settings=tight_settings)
+        await allocate_workspace(None, client, "ws_charlie", settings=tight_settings, redis_client_factory=factory)
 
     msg = str(exc.value)
     assert "Active holders:" in msg
@@ -147,7 +159,13 @@ async def test_drop_on_live_db_raises_value_error_and_flushes_nothing() -> None:
     )
 
     with pytest.raises(ValueError, match="Refusing to FLUSHDB on live Redis database"):
-        await drop_workspace(None, live_client, ws_live, live_db_override=0)
+        await drop_workspace(
+            None,
+            live_client,
+            ws_live,
+            base_redis_url="redis://localhost:6379/0",
+            redis_client_factory=lambda ws: fakeredis.FakeRedis(server=server, db=ws.redis_db),
+        )
 
     # Assert live key is completely intact
     assert live_client.get("customer_account_state:live") == b"do_not_flush"
@@ -160,12 +178,13 @@ async def test_lock_released_when_allocation_raises() -> None:
     settings = get_default_replay_settings()
     lock_key = f"{settings.registry_key}:lock"
 
+    factory = make_fake_factory(server)
     # Allocate a valid workspace
-    await allocate_workspace(None, client, "ws_existing", settings=settings)
+    await allocate_workspace(None, client, "ws_existing", settings=settings, redis_client_factory=factory)
 
     # Attempting to allocate duplicate name raises ValueError
     with pytest.raises(ValueError, match="already allocated"):
-        await allocate_workspace(None, client, "ws_existing", settings=settings)
+        await allocate_workspace(None, client, "ws_existing", settings=settings, redis_client_factory=factory)
 
     # Lock must be released (None in Redis)
     assert client.get(lock_key) is None

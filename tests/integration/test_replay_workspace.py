@@ -32,6 +32,11 @@ def host_side_redis_url() -> str:
     return raw.replace("://redis:", "://localhost:").replace("@redis:", "@localhost:")
 
 
+def host_redis_factory(ws: ReplayWorkspace) -> redis.Redis:
+    """Constructs a Redis client pointing to host-accessible URL for the workspace DB."""
+    return workspace_redis_client(ws, base_redis_url=host_side_redis_url())
+
+
 def snapshot_redis_db(client: redis.Redis) -> tuple[int, str]:
     """Snapshot total DB key count and SHA-256 over sorted key names and their dump values."""
     dbsize = client.dbsize()
@@ -75,7 +80,13 @@ async def test_guard_1_live_db_isolation(
     dbsize_before, digest_before = snapshot_redis_db(live_redis)
 
     run_id = uuid.uuid4().hex[:12]
-    ws = await allocate_workspace(pg_conn, live_redis, f"rpl_g1_{run_id}")
+    ws = await allocate_workspace(
+        pg_conn,
+        live_redis,
+        f"rpl_g1_{run_id}",
+        base_redis_url=host_side_redis_url(),
+        redis_client_factory=host_redis_factory,
+    )
 
     # Write keys into the workspace DB
     ws_redis = workspace_redis_client(ws, base_redis_url=host_side_redis_url())
@@ -88,7 +99,13 @@ async def test_guard_1_live_db_isolation(
         ws_redis.close()
 
     # Drop workspace
-    await drop_workspace(pg_conn, live_redis, ws)
+    await drop_workspace(
+        pg_conn,
+        live_redis,
+        ws,
+        base_redis_url=host_side_redis_url(),
+        redis_client_factory=host_redis_factory,
+    )
 
     # Snapshot live DB after
     dbsize_after, digest_after = snapshot_redis_db(live_redis)
@@ -112,7 +129,15 @@ async def test_guard_2_concurrent_allocations_and_registry(
 
     def _alloc_worker(name: str) -> ReplayWorkspace:
         barrier.wait()
-        return asyncio.run(allocate_workspace(db_url, live_redis, name))
+        return asyncio.run(
+            allocate_workspace(
+                db_url,
+                live_redis,
+                name,
+                base_redis_url=host_side_redis_url(),
+                redis_client_factory=host_redis_factory,
+            )
+        )
 
     ws1, ws2 = await asyncio.gather(
         asyncio.to_thread(_alloc_worker, name1),
@@ -125,8 +150,20 @@ async def test_guard_2_concurrent_allocations_and_registry(
     assert cfg.redis_workspace_db_min <= ws2.redis_db <= cfg.redis_workspace_db_max
 
     # Both drop cleanly
-    await drop_workspace(db_url, live_redis, ws1)
-    await drop_workspace(db_url, live_redis, ws2)
+    await drop_workspace(
+        db_url,
+        live_redis,
+        ws1,
+        base_redis_url=host_side_redis_url(),
+        redis_client_factory=host_redis_factory,
+    )
+    await drop_workspace(
+        db_url,
+        live_redis,
+        ws2,
+        base_redis_url=host_side_redis_url(),
+        redis_client_factory=host_redis_factory,
+    )
 
     # Registry has unmapped both
     assert not live_redis.hexists(cfg.registry_key, name1)
@@ -143,7 +180,13 @@ async def test_postgres_schema_lifecycle_and_migration_count(
     """
     num_files = len(find_migration_files())
     run_id = uuid.uuid4().hex[:12]
-    ws = await allocate_workspace(pg_conn, live_redis, f"rpl_pg_{run_id}")
+    ws = await allocate_workspace(
+        pg_conn,
+        live_redis,
+        f"rpl_pg_{run_id}",
+        base_redis_url=host_side_redis_url(),
+        redis_client_factory=host_redis_factory,
+    )
 
     # Schema exists
     exists = await pg_conn.fetchval(
@@ -159,7 +202,13 @@ async def test_postgres_schema_lifecycle_and_migration_count(
     assert applied_count == num_files
 
     # Drop workspace
-    await drop_workspace(pg_conn, live_redis, ws)
+    await drop_workspace(
+        pg_conn,
+        live_redis,
+        ws,
+        base_redis_url=host_side_redis_url(),
+        redis_client_factory=host_redis_factory,
+    )
 
     # Schema is completely gone
     exists_after = await pg_conn.fetchval(
@@ -178,14 +227,26 @@ async def test_kafka_topic_lifecycle(
     await admin.start()
     try:
         run_id = uuid.uuid4().hex[:12]
-        ws = await allocate_workspace(pg_conn, live_redis, f"rpl_k_{run_id}")
+        ws = await allocate_workspace(
+            pg_conn,
+            live_redis,
+            f"rpl_k_{run_id}",
+            base_redis_url=host_side_redis_url(),
+            redis_client_factory=host_redis_factory,
+        )
 
         # Topic exists
         metadata = await admin.describe_topics([ws.kafka_topic])
         assert any(t["topic"] == ws.kafka_topic for t in metadata)
 
         # Drop workspace
-        await drop_workspace(pg_conn, live_redis, ws)
+        await drop_workspace(
+            pg_conn,
+            live_redis,
+            ws,
+            base_redis_url=host_side_redis_url(),
+            redis_client_factory=host_redis_factory,
+        )
 
         # Topic is gone
         all_topics = await admin.list_topics()
@@ -207,4 +268,10 @@ async def test_public_and_protected_schemas_cannot_be_dropped(
         kafka_group_id="pub_ws.updater",
     )
     with pytest.raises(ValueError, match="Refusing to drop protected schema 'public'"):
-        await drop_workspace(pg_conn, live_redis, ws_pub)
+        await drop_workspace(
+            pg_conn,
+            live_redis,
+            ws_pub,
+            base_redis_url=host_side_redis_url(),
+            redis_client_factory=host_redis_factory,
+        )

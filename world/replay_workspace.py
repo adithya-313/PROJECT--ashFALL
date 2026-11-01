@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 from aiokafka.admin import AIOKafkaAdminClient, NewTopic
@@ -142,17 +142,15 @@ def parse_redis_db_index(redis_url: str) -> int:
         raise ValueError(f"Invalid Redis DB index in URL {redis_url!r}: {exc}") from exc
 
 
-def get_live_redis_db(live_redis: Any = None) -> int:
+def get_live_redis_db(base_redis_url: str | None = None) -> int:
     """
-    WHAT: Resolves the live Redis database index from a live client or application configuration.
+    WHAT: Resolves the live Redis database index from base_redis_url or config.redis_url.
 
-    WHY: Ensures workspace allocation and teardown never target the live database.
+    WHY: The live DB number comes from configuration; reading a client's kwargs could allow
+    disagreement or spoofing. Live DB and workspace clients must derive from the same base URL.
     """
-    if live_redis is not None and hasattr(live_redis, "connection_pool"):
-        db = live_redis.connection_pool.connection_kwargs.get("db")
-        if db is not None:
-            return int(db)
-    return parse_redis_db_index(config.redis_url)
+    url = base_redis_url if base_redis_url is not None else config.redis_url
+    return parse_redis_db_index(url)
 
 
 def workspace_redis_url(redis_url: str, db_index: int) -> str:
@@ -202,7 +200,8 @@ async def allocate_workspace(
     live_redis: Any,
     base_name: str,
     settings: ReplaySettings | None = None,
-    live_db_override: int | None = None,
+    base_redis_url: str | None = None,
+    redis_client_factory: Callable[[ReplayWorkspace], Any] | None = None,
 ) -> ReplayWorkspace:
     """
     WHAT: Allocates an isolated ReplayWorkspace with a dedicated Redis DB, Postgres schema, and Kafka topic.
@@ -226,7 +225,7 @@ async def allocate_workspace(
     await _acquire_registry_lock(live_redis, lock_key, token, cfg.registry_lock_seconds)
 
     try:
-        live_db = live_db_override if live_db_override is not None else get_live_redis_db(live_redis)
+        live_db = get_live_redis_db(base_redis_url)
         raw_registry = live_redis.hgetall(cfg.registry_key)
         allocated: dict[str, int] = {}
         for k, v in raw_registry.items():
@@ -309,7 +308,14 @@ async def allocate_workspace(
         except BaseException as exc:
             # Rollback allocation on setup failure
             logger.error("Failed provisioning resources for workspace %s: %s; cleaning up", name, exc)
-            await drop_workspace(admin_pg, live_redis, workspace, settings=cfg, live_db_override=live_db_override)
+            await drop_workspace(
+                admin_pg,
+                live_redis,
+                workspace,
+                settings=cfg,
+                base_redis_url=base_redis_url,
+                redis_client_factory=redis_client_factory,
+            )
             raise
 
     return workspace
@@ -320,7 +326,8 @@ async def drop_workspace(
     live_redis: Any,
     workspace: ReplayWorkspace,
     settings: ReplaySettings | None = None,
-    live_db_override: int | None = None,
+    base_redis_url: str | None = None,
+    redis_client_factory: Callable[[ReplayWorkspace], Any] | None = None,
 ) -> None:
     """
     WHAT: Tears down an isolated ReplayWorkspace and frees its resources.
@@ -330,7 +337,7 @@ async def drop_workspace(
     the workspace under a distributed lock.
     """
     cfg = settings if settings is not None else get_default_replay_settings()
-    live_db = live_db_override if live_db_override is not None else get_live_redis_db(live_redis)
+    live_db = get_live_redis_db(base_redis_url)
 
     # GUARD 1: Refuse to FLUSHDB on live Redis DB
     if workspace.redis_db == live_db:
@@ -342,35 +349,17 @@ async def drop_workspace(
         raise ValueError(f"Refusing to drop protected schema {schema!r}")
 
     # 1. Flush Redis workspace DB
-    fake_server = None
-    if hasattr(live_redis, "connection_pool"):
-        fake_server = live_redis.connection_pool.connection_kwargs.get("server")
-
-    if fake_server is not None:
-        import fakeredis
-
-        fake_client = fakeredis.FakeRedis(server=fake_server, db=workspace.redis_db)
-        fake_client.flushdb()
-    elif hasattr(live_redis, "connection_pool"):
-        import redis
-
-        kw = live_redis.connection_pool.connection_kwargs
-        real_client = redis.Redis(
-            host=kw.get("host", "localhost"),
-            port=kw.get("port", 6379),
-            password=kw.get("password"),
-            db=workspace.redis_db,
-        )
-        try:
-            real_client.flushdb()
-        finally:
-            real_client.close()
-    else:
-        fallback_client = workspace_redis_client(workspace)
-        try:
-            fallback_client.flushdb()
-        finally:
-            fallback_client.close()
+    factory = (
+        redis_client_factory
+        if redis_client_factory is not None
+        else (lambda ws: workspace_redis_client(ws, base_redis_url=base_redis_url))
+    )
+    ws_redis = factory(workspace)
+    try:
+        ws_redis.flushdb()
+    finally:
+        if hasattr(ws_redis, "close"):
+            ws_redis.close()
 
     # 2. Drop PostgreSQL schema
     if admin_pg is not None:
