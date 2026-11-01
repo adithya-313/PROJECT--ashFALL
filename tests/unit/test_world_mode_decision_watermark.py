@@ -17,7 +17,15 @@ import pytest
 
 from api.v1.models import DecisionRequest
 from core.event_clock import IST, ManualClock
+from features.account_keys import get_default_settings
+from features.account_labels import apply_complaints_since, apply_feedback_since
 from features.account_records import PaymentSideRecord
+from features.account_stream import (
+    apply_account_events_since,
+    apply_withdrawals_since,
+    record_watermark_for_side,
+)
+from features.account_summaries import to_unix_seconds
 from features.account_updater import apply_payment_side
 from features.decision_features import compute_decision_row
 from features.ingest_watermark import (
@@ -25,6 +33,8 @@ from features.ingest_watermark import (
     record_payment_watermark,
     record_poller_watermark,
 )
+
+pytestmark = pytest.mark.anyio
 
 RUN_ID = "66db9aa439b092ee"
 BANK_0 = "bank_0"
@@ -92,7 +102,83 @@ def _setup_shared_and_partial_run_watermarks(
     record_poller_watermark(client, bank_id, "feedback", t_world, run_id=RUN_ID)
 
 
-def test_world_mode_decision_fails_closed_without_watermark(
+class FakePollerConnection:
+    """Minimal fake database connection returning empty rows for watermark polling tests."""
+
+    async def fetch(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        return []
+
+
+async def test_world_mode_decision_uses_real_run_watermarks() -> None:
+    """
+    World-mode decision (run_scoped_watermarks=True) uses run-scoped watermarks written
+    through the real writers for all five sources:
+      1. complaints poller (apply_complaints_since with ManualClock + run_id)
+      2. feedback poller (apply_feedback_since with ManualClock + run_id)
+      3. events poller (apply_account_events_since with ManualClock + run_id)
+      4. withdrawals poller (apply_withdrawals_since with ManualClock + run_id)
+      5. payments watermark writer (record_watermark_for_side for world-clock payment record)
+    Verifies that status != 'no_watermark' and arrival_cutoff equals the MIN of the five.
+    """
+    client = fakeredis.FakeRedis()
+    cfg = get_default_settings()
+    t_world = datetime(2026, 9, 15, 12, 0, 0, tzinfo=timezone.utc)
+    conn = FakePollerConnection()
+
+    # 1. World-clock payment record advances payments watermark (+100s)
+    pmt_rec = PaymentSideRecord(
+        run_id=RUN_ID,
+        bank_id=BANK_0,
+        account_id="acc_sender_1",
+        payment_id=f"{RUN_ID}-pmt-watermark-01",
+        side="debit",
+        counterparty_bank_id="bank_1",
+        counterparty_vpa="acc_counter_1",
+        amount_paise=25000,
+        status="success",
+        failure_domain=None,
+        payee_type="person",
+        channel="upi_app",
+        sender_device_fingerprint="fp1",
+        sender_os_generation=1,
+        event_time=t_world,
+        arrival_time=t_world + timedelta(seconds=100),
+        arrival_from_ingestion_clock=True,
+    )
+    record_watermark_for_side(client, 0, pmt_rec, cfg)
+
+    # 2. Events poller with ManualClock (+200s)
+    clock_evt = ManualClock((t_world + timedelta(seconds=200)).astimezone(IST))
+    await apply_account_events_since(conn, client, cfg, bank_id=BANK_0, clock=clock_evt, run_id=RUN_ID)
+
+    # 3. Withdrawals poller with ManualClock (+50s) -> this is the MIN
+    clock_wth = ManualClock((t_world + timedelta(seconds=50)).astimezone(IST))
+    await apply_withdrawals_since(conn, client, cfg, bank_id=BANK_0, clock=clock_wth, run_id=RUN_ID)
+
+    # 4. Feedback poller with ManualClock (+400s)
+    clock_fb = ManualClock((t_world + timedelta(seconds=400)).astimezone(IST))
+    await apply_feedback_since(conn, client, cfg, bank_id=BANK_0, clock=clock_fb, run_id=RUN_ID)
+
+    # 5. Complaints poller with ManualClock (+500s)
+    clock_cmp = ManualClock((t_world + timedelta(seconds=500)).astimezone(IST))
+    await apply_complaints_since(conn, client, cfg, bank_id=BANK_0, clock=clock_cmp, run_id=RUN_ID)
+
+    _seed_payer_debit(client, BANK_0, "acc_sender_1", t_world)
+
+    req = _make_request(payment_id=f"{RUN_ID}-0001", event_time=t_world)
+    clock = ManualClock(t_world.astimezone(IST))
+
+    row = compute_decision_row(client, BANK_0, req, clock, run_scoped_watermarks=True)
+
+    # Withdrawals was the minimum watermark (+50s minus commit grace)
+    min_watermark_sec = to_unix_seconds(t_world + timedelta(seconds=50)) - cfg.commit_grace
+    expected_cutoff = datetime.fromtimestamp(min_watermark_sec, tz=timezone.utc)
+
+    assert row.status != "no_watermark"
+    assert row.arrival_cutoff == expected_cutoff
+
+
+def test_world_mode_decision_fails_closed_when_source_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
