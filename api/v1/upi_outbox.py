@@ -11,6 +11,7 @@ import asyncpg
 from pydantic import BaseModel
 
 from api.v1.bank_scope import UnknownBankError, load_known_banks
+from core.event_clock import Clock
 
 # Same values as world/failures.py FAILURE_DOMAINS and migration 0006's CHECK;
 # kept separate because the bank API must not depend on the simulator (ground
@@ -207,7 +208,11 @@ def make_upi_event_id(payment_id: str, side: str) -> uuid.UUID:
     return uuid.uuid5(UPI_EVENT_ID_NAMESPACE, f"{payment_id}:{side}")
 
 
-async def record_upi_side(conn: asyncpg.Connection, upi_side: UpiPaymentSide) -> StoredUpiSide:
+async def record_upi_side(
+    conn: asyncpg.Connection,
+    upi_side: UpiPaymentSide,
+    ingestion_clock: Clock | None = None,
+) -> StoredUpiSide:
     """
     Atomically insert a UPI payment side and its schema-2 outbox event.
 
@@ -227,6 +232,14 @@ async def record_upi_side(conn: asyncpg.Connection, upi_side: UpiPaymentSide) ->
     # Validate fields prior to database operations
     validate_side(upi_side)
 
+    # GUARD 1: When an ingestion clock is provided, arrival_time must be set and aware.
+    arrival_time: datetime | None = None
+    if ingestion_clock is not None:
+        now = ingestion_clock.now_ist()
+        if now is None or now.tzinfo is None or now.tzinfo.utcoffset(now) is None:
+            raise ValueError(f"ingestion_clock must provide timezone-aware datetime, got {now!r}")
+        arrival_time = now
+
     # Decimal amount in Rupees matching the paise integer: amount * 100 == amount_paise
     amount_rupees = (Decimal(upi_side.amount_paise) / PAISE_PER_RUPEE).quantize(Decimal("0.01"))
     event_id = make_upi_event_id(upi_side.payment_id, upi_side.side)
@@ -241,13 +254,15 @@ async def record_upi_side(conn: asyncpg.Connection, upi_side: UpiPaymentSide) ->
                 source, account_id, amount, payment_id, bank_id, side,
                 counterparty_vpa, counterparty_bank_id, amount_paise,
                 event_time, status, failure_domain, payee_type, channel,
-                sender_device_fingerprint, sender_os_generation, balance_after_paise
+                sender_device_fingerprint, sender_os_generation, balance_after_paise,
+                arrival_time
             )
             VALUES (
                 'world', $1, $2, $3, $4, $5,
                 $6, $7, $8,
                 $9, $10, $11, $12, $13,
-                $14, $15, $16
+                $14, $15, $16,
+                $17
             )
             ON CONFLICT ON CONSTRAINT uq_transactions_bank_payment_side DO NOTHING
             RETURNING transaction_id, created_at
@@ -268,6 +283,7 @@ async def record_upi_side(conn: asyncpg.Connection, upi_side: UpiPaymentSide) ->
             upi_side.sender_device_fingerprint,
             upi_side.sender_os_generation,
             upi_side.balance_after_paise,
+            arrival_time,
         )
 
         if row is not None:
