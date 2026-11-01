@@ -17,6 +17,7 @@ from typing import Any
 from aiokafka import AIOKafkaConsumer, TopicPartition
 
 from core.config import config
+from core.event_clock import Clock
 from features.account_keys import AccountFeaturesSettings, get_default_settings
 from features.account_labels import apply_complaints_since, apply_feedback_since
 from features.account_records import (
@@ -147,6 +148,8 @@ async def apply_account_events_since(
     settings: AccountFeaturesSettings | None = None,
     bank_id: str = "bank_0",
     after_id: int = 0,
+    clock: Clock | None = None,
+    run_id: str | None = None,
 ) -> int:
     """
     WHAT: Queries bank_account_events table for events with id > after_id and applies each to Redis.
@@ -174,12 +177,28 @@ async def apply_account_events_since(
         settings: Optional AccountFeaturesSettings; defaults to repository configuration.
         bank_id: Commercial bank identifier to query.
         after_id: Cursor identifier; only rows with id > after_id are selected.
+        clock: Optional domain ingestion clock. When provided, poll_start uses clock.now_ist()
+            without querying DB now(); when None, falls back to fetchval("SELECT now()").
+        run_id: Optional simulation run identifier. When clock is provided, run_id must also be
+            provided to write run-scoped watermarks ('acctwm:{run_id}:{bank_id}:events').
+            Run-scoped keys belong only to world-clock runs; if clock is None and run_id is given,
+            raises ValueError.
 
     Returns:
         The highest row ID processed, or after_id if no new rows were found.
     """
+    if clock is not None and run_id is None:
+        raise ValueError("When clock is provided, run_id must also be provided to write run-scoped watermarks")
+    if clock is None and run_id is not None:
+        raise ValueError(
+            "run_id cannot be provided when clock is None; run-scoped keys belong only to world-clock runs"
+        )
+
     cfg = settings if settings is not None else get_default_settings()
-    poll_start_db_time = await connection.fetchval("SELECT now()")
+    if clock is not None:
+        poll_start_db_time = clock.now_ist()
+    else:
+        poll_start_db_time = await connection.fetchval("SELECT now()")
 
     batch_size = cfg.account_event_batch_size
     overlap = cfg.account_event_overlap_rows
@@ -187,7 +206,7 @@ async def apply_account_events_since(
 
     rows = await connection.fetch(
         """
-        SELECT id, bank_id, event_id, account_id, kind, event_time, details, created_at
+        SELECT id, bank_id, event_id, account_id, kind, event_time, details, created_at, arrival_time
         FROM bank_account_events
         WHERE bank_id = $1 AND id > $2
         ORDER BY id
@@ -208,7 +227,7 @@ async def apply_account_events_since(
                 last_id = row_id
 
     watermark_ts = int(to_unix_seconds(poll_start_db_time)) - cfg.commit_grace
-    record_poller_watermark(redis_client, bank_id, "events", watermark_ts)
+    record_poller_watermark(redis_client, bank_id, "events", watermark_ts, run_id=run_id)
 
     return last_id
 
@@ -219,6 +238,8 @@ async def apply_withdrawals_since(
     settings: AccountFeaturesSettings | None = None,
     bank_id: str = "bank_0",
     after_id: int = 0,
+    clock: Clock | None = None,
+    run_id: str | None = None,
 ) -> int:
     """
     WHAT: Queries bank_withdrawals table for rows with id > after_id and applies each to Redis.
@@ -244,12 +265,28 @@ async def apply_withdrawals_since(
         settings: Optional AccountFeaturesSettings; defaults to repository configuration.
         bank_id: Commercial bank identifier to query.
         after_id: Cursor identifier; only rows with id > after_id are selected.
+        clock: Optional domain ingestion clock. When provided, poll_start uses clock.now_ist()
+            without querying DB now(); when None, falls back to fetchval("SELECT now()").
+        run_id: Optional simulation run identifier. When clock is provided, run_id must also be
+            provided to write run-scoped watermarks ('acctwm:{run_id}:{bank_id}:withdrawals').
+            Run-scoped keys belong only to world-clock runs; if clock is None and run_id is given,
+            raises ValueError.
 
     Returns:
         The highest row ID processed, or after_id if no new rows were found.
     """
+    if clock is not None and run_id is None:
+        raise ValueError("When clock is provided, run_id must also be provided to write run-scoped watermarks")
+    if clock is None and run_id is not None:
+        raise ValueError(
+            "run_id cannot be provided when clock is None; run-scoped keys belong only to world-clock runs"
+        )
+
     cfg = settings if settings is not None else get_default_settings()
-    poll_start_db_time = await connection.fetchval("SELECT now()")
+    if clock is not None:
+        poll_start_db_time = clock.now_ist()
+    else:
+        poll_start_db_time = await connection.fetchval("SELECT now()")
 
     batch_size = cfg.account_event_batch_size
     overlap = cfg.account_event_overlap_rows
@@ -258,7 +295,7 @@ async def apply_withdrawals_since(
     rows = await connection.fetch(
         """
         SELECT id, bank_id, withdrawal_id, account_id, channel, amount_paise,
-               status, failure_domain, event_time, balance_after_paise, recorded_at
+               status, failure_domain, event_time, balance_after_paise, recorded_at, arrival_time
         FROM bank_withdrawals
         WHERE bank_id = $1 AND id > $2
         ORDER BY id
@@ -279,7 +316,7 @@ async def apply_withdrawals_since(
                 last_id = row_id
 
     watermark_ts = int(to_unix_seconds(poll_start_db_time)) - cfg.commit_grace
-    record_poller_watermark(redis_client, bank_id, "withdrawals", watermark_ts)
+    record_poller_watermark(redis_client, bank_id, "withdrawals", watermark_ts, run_id=run_id)
 
     return last_id
 
