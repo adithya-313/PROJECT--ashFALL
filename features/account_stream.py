@@ -19,7 +19,12 @@ from aiokafka import AIOKafkaConsumer, TopicPartition
 from core.config import config
 from features.account_keys import AccountFeaturesSettings, get_default_settings
 from features.account_labels import apply_complaints_since, apply_feedback_since
-from features.account_records import account_event_from_row, parse_upi_event, withdrawal_from_row
+from features.account_records import (
+    PaymentSideRecord,
+    account_event_from_row,
+    parse_upi_event,
+    withdrawal_from_row,
+)
 from features.account_summaries import to_unix_seconds
 from features.account_updater import apply_account_event, apply_payment_side, apply_withdrawal
 from features.ingest_watermark import record_payment_watermark, record_poller_watermark
@@ -27,12 +32,33 @@ from features.ingest_watermark import record_payment_watermark, record_poller_wa
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "record_watermark_for_side",
     "run_payment_updater",
     "apply_account_events_since",
     "apply_withdrawals_since",
     "apply_feedback_since",
     "apply_complaints_since",
 ]
+
+
+def record_watermark_for_side(
+    redis_client: Any,
+    partition: int,
+    record: PaymentSideRecord,
+    cfg: AccountFeaturesSettings,
+) -> bool:
+    """
+    Advances the payment watermark partition offset in Redis.
+
+    If the payment side record arrived via world ingestion clock, routes the watermark
+    to the run-scoped partition key (acctwm:{run_id}:payments:{partition}) and registers the
+    partition in the run's active partitions set.
+    Otherwise (real-mode / legacy), routes to the shared partition key (acctwm:payments:{partition}).
+    """
+    arrival_sec = int(to_unix_seconds(record.arrival_time))
+    watermark_ts = arrival_sec - cfg.commit_grace
+    run_id = record.run_id if record.arrival_from_ingestion_clock else None
+    return record_payment_watermark(redis_client, partition, watermark_ts, run_id=run_id)
 
 
 async def run_payment_updater(
@@ -107,9 +133,8 @@ Kafka gives no per-account ordering here; state is correct in any order because 
             processed_count += 1
 
             # Ingestion watermark advances only on applied messages:
-            # record.arrival_time is the payload recorded_at. Never msg.timestamp, never event_time.
-            arrival_sec = int(to_unix_seconds(record.arrival_time))
-            record_payment_watermark(redis_client, msg.partition, arrival_sec - cfg.commit_grace)
+            # record.arrival_time is the payload arrival_time (or recorded_at). Never msg.timestamp, never event_time.
+            record_watermark_for_side(redis_client, msg.partition, record, cfg)
     finally:
         await consumer.stop()
 

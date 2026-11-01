@@ -11,6 +11,7 @@ and Postgres bank account events are validated for timezone-awareness, run-ID id
 and required banking fields before admission into Redis sliding-window structures.
 """
 
+import logging
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -20,6 +21,8 @@ import orjson
 
 from api.v1.upi_outbox import EVENT_TYPE_UPI_PAYMENT_RECORDED, UPI_SCHEMA_VERSION
 from features.account_keys import extract_run_id
+
+logger = logging.getLogger(__name__)
 
 
 class InvalidAccountEventError(ValueError):
@@ -71,6 +74,7 @@ class PaymentSideRecord:
     event_time: datetime
     arrival_time: datetime
     balance_after_paise: int | None = None
+    arrival_from_ingestion_clock: bool = False
 
 
 @dataclass(frozen=True)
@@ -235,6 +239,33 @@ def parse_upi_payload(payload: dict[str, Any]) -> PaymentSideRecord:
             )
         balance_after_paise = raw_balance
 
+    # Top-level arrival_time: optional schema-2 field for world-clock simulation arrival.
+    # When present, must be valid ISO and timezone-aware. NEVER fall back to recorded_at when key is present (GUARD 2).
+    # When absent, arrival_time defaults to recorded_at and arrival_from_ingestion_clock is False.
+    arrival_from_clock = False
+    if payload.get("arrival_time") is not None:
+        arrival_time_raw = payload.get("arrival_time")
+        if not isinstance(arrival_time_raw, str):
+            raise InvalidAccountEventError(f"Invalid 'arrival_time' {arrival_time_raw!r} in UPI envelope")
+        try:
+            parsed_arrival = datetime.fromisoformat(arrival_time_raw)
+        except Exception as exc:
+            raise InvalidAccountEventError(f"Unparseable ISO arrival_time {arrival_time_raw!r}: {exc}") from exc
+        if parsed_arrival.tzinfo is None or parsed_arrival.tzinfo.utcoffset(parsed_arrival) is None:
+            raise InvalidAccountEventError(f"Naive arrival_time {arrival_time_raw!r}; timezone offset required")
+        arrival_time = parsed_arrival
+        arrival_from_clock = True
+        # GUARD 4: arrival_time earlier than event_time logs warning with both values; does not reject.
+        if arrival_time < event_time:
+            logger.warning(
+                "Payment arrival_time earlier than event_time: arrival_time=%s, event_time=%s, payment_id=%s",
+                arrival_time.isoformat(),
+                event_time.isoformat(),
+                payment_id,
+            )
+    else:
+        arrival_time = recorded_at
+
     return PaymentSideRecord(
         run_id=run_id,
         bank_id=bank_id,
@@ -252,7 +283,8 @@ def parse_upi_payload(payload: dict[str, Any]) -> PaymentSideRecord:
         sender_os_generation=data.get("sender_os_generation"),
         balance_after_paise=balance_after_paise,
         event_time=event_time,
-        arrival_time=recorded_at,  # arrival_time mapped from ashFALL's storage timestamp
+        arrival_time=arrival_time,
+        arrival_from_ingestion_clock=arrival_from_clock,
     )
 
 

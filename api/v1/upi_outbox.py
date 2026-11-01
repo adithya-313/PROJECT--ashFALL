@@ -5,7 +5,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import asyncpg
 from pydantic import BaseModel
@@ -107,8 +107,21 @@ class UpiEventPayload(BaseModel):
     side: str
     event_time: str
     recorded_at: str
+    arrival_time: str | None = None
     source: str = "world"
     data: UpiEventData
+
+    def model_dump(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        """Omit arrival_time when None (Section 16a-3 Q1(b)) to preserve exact legacy envelope shape."""
+        if self.arrival_time is None and "exclude" not in kwargs:
+            kwargs["exclude"] = {"arrival_time"}
+        return super().model_dump(*args, **kwargs)
+
+    def model_dump_json(self, *args: Any, **kwargs: Any) -> str:
+        """Omit arrival_time when None (Section 16a-3 Q1(b)) to preserve exact legacy envelope shape."""
+        if self.arrival_time is None and "exclude" not in kwargs:
+            kwargs["exclude"] = {"arrival_time"}
+        return super().model_dump_json(*args, **kwargs)
 
 
 class StoredUpiSide(NamedTuple):
@@ -290,6 +303,7 @@ async def record_upi_side(
             # First-time insertion: construct schema-2 payload and insert outbox row
             transaction_id = str(row["transaction_id"])
             created_at_iso = row["created_at"].isoformat()
+            arrival_time_iso = arrival_time.isoformat() if arrival_time is not None else None
 
             payload = UpiEventPayload(
                 event_type=EVENT_TYPE_UPI_PAYMENT_RECORDED,
@@ -300,6 +314,7 @@ async def record_upi_side(
                 side=upi_side.side,
                 event_time=upi_side.event_time.isoformat(),
                 recorded_at=created_at_iso,
+                arrival_time=arrival_time_iso,
                 source="world",
                 data=UpiEventData(
                     bank_id=upi_side.bank_id,
@@ -319,6 +334,13 @@ async def record_upi_side(
                 ),
             )
 
+            # When arrival_time is None (real-clock legacy mode), omit the key entirely from the JSON payload.
+            payload_json = (
+                payload.model_dump_json(exclude={"arrival_time"})
+                if payload.arrival_time is None
+                else payload.model_dump_json()
+            )
+
             await conn.execute(
                 """
                 INSERT INTO outbox (transaction_id, event_id, event_type, payload)
@@ -327,7 +349,7 @@ async def record_upi_side(
                 transaction_id,
                 event_id_str,
                 EVENT_TYPE_UPI_PAYMENT_RECORDED,
-                payload.model_dump_json(),
+                payload_json,
             )
 
             return StoredUpiSide(
