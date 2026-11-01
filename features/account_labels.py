@@ -151,6 +151,7 @@ async def apply_feedback_since(
     bank_id: str = "bank_0",
     after_id: int = 0,
     clock: Clock | None = None,
+    run_id: str | None = None,
 ) -> int:
     """
     WHAT: Queries bank_feedback for rows with id > after_id (with overlap re-read) and updates Redis labelled_accounts.
@@ -170,10 +171,21 @@ async def apply_feedback_since(
         after_id: Cursor identifier; rows with id > (after_id - overlap) are selected.
         clock: Optional domain ingestion clock. When provided, poll_start uses clock.now_ist()
             without querying DB now(); when None, falls back to fetchval("SELECT now()").
+        run_id: Optional simulation run identifier. When clock is provided, run_id must also be
+            provided to write run-scoped watermarks ('acctwm:{run_id}:{bank_id}:feedback').
+            Run-scoped keys belong only to world-clock runs; if clock is None and run_id is given,
+            raises ValueError.
 
     Returns:
         The highest row ID processed, or after_id if no rows were found.
     """
+    if clock is not None and run_id is None:
+        raise ValueError("When clock is provided, run_id must also be provided to write run-scoped watermarks")
+    if clock is None and run_id is not None:
+        raise ValueError(
+            "run_id cannot be provided when clock is None; run-scoped keys belong only to world-clock runs"
+        )
+
     cfg = settings if settings is not None else get_default_settings()
     if clock is not None:
         poll_start_time = clock.now_ist()
@@ -206,7 +218,7 @@ async def apply_feedback_since(
             await apply_feedback_row(connection, redis_client, row, cfg)
 
     watermark_ts = int(to_unix_seconds(poll_start_time)) - cfg.commit_grace
-    record_poller_watermark(redis_client, bank_id, "feedback", watermark_ts)
+    record_poller_watermark(redis_client, bank_id, "feedback", watermark_ts, run_id=run_id)
 
     return last_id
 
@@ -255,6 +267,7 @@ async def apply_complaints_since(
     bank_id: str = "bank_0",
     after_id: int = 0,
     clock: Clock | None = None,
+    run_id: str | None = None,
 ) -> int:
     """
     WHAT: Queries bank_complaints for rows with id > after_id and records complained accounts for this bank.
@@ -270,10 +283,21 @@ async def apply_complaints_since(
         after_id: Cursor identifier; rows with id > (after_id - overlap) are selected.
         clock: Optional domain ingestion clock. When provided, poll_start uses clock.now_ist()
             without querying DB now(); when None, falls back to fetchval("SELECT now()").
+        run_id: Optional simulation run identifier. When clock is provided, run_id must also be
+            provided to write run-scoped watermarks ('acctwm:{run_id}:{bank_id}:complaints').
+            Run-scoped keys belong only to world-clock runs; if clock is None and run_id is given,
+            raises ValueError.
 
     Returns:
         The highest row ID processed, or after_id if no rows were found.
     """
+    if clock is not None and run_id is None:
+        raise ValueError("When clock is provided, run_id must also be provided to write run-scoped watermarks")
+    if clock is None and run_id is not None:
+        raise ValueError(
+            "run_id cannot be provided when clock is None; run-scoped keys belong only to world-clock runs"
+        )
+
     cfg = settings if settings is not None else get_default_settings()
     if clock is not None:
         poll_start_time = clock.now_ist()
@@ -307,7 +331,7 @@ async def apply_complaints_since(
             apply_complaint_row(redis_client, row, cfg)
 
     watermark_ts = int(to_unix_seconds(poll_start_time)) - cfg.commit_grace
-    record_poller_watermark(redis_client, bank_id, "complaints", watermark_ts)
+    record_poller_watermark(redis_client, bank_id, "complaints", watermark_ts, run_id=run_id)
 
     return last_id
 

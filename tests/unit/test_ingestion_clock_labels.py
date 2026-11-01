@@ -8,7 +8,7 @@ import fakeredis
 import pytest
 
 from core.event_clock import IST, ManualClock
-from features.account_keys import poller_watermark_key
+from features.account_keys import poller_watermark_key, watermark_key_for_poller
 from features.account_labels import (
     apply_complaint_row,
     apply_complaints_since,
@@ -214,17 +214,21 @@ async def test_w3_boundary_visibility(redis_client: fakeredis.FakeRedis) -> None
 @pytest.mark.anyio
 async def test_w4_poller_injected_clock_watermark_no_select_now(redis_client: fakeredis.FakeRedis) -> None:
     """W4: Pollers with an injected ManualClock record watermark = time - commit_grace, and never call SELECT now()."""
+    run_id = "66db9aa439b092ee"
     t_poll = datetime(2026, 9, 5, 14, 0, 0, tzinfo=IST)
     clock = ManualClock(t_poll)
     conn = FakePollerConnection(db_now=datetime(2026, 11, 1, 0, 0, 0, tzinfo=IST))
 
     # Test complaints poller
-    await apply_complaints_since(conn, redis_client, bank_id="bank_0", clock=clock)
+    await apply_complaints_since(conn, redis_client, bank_id="bank_0", clock=clock, run_id=run_id)
 
     expected_watermark = to_unix_seconds(t_poll) - 5
-    cmp_wm = redis_client.get(poller_watermark_key("bank_0", "complaints"))
+    cmp_wm = redis_client.get(watermark_key_for_poller("bank_0", "complaints", run_id=run_id))
     assert cmp_wm is not None
     assert int(cmp_wm) == expected_watermark
+
+    # Shared legacy key must NOT be set
+    assert redis_client.get(poller_watermark_key("bank_0", "complaints")) is None
 
     # Verify "SELECT now()" was NEVER called
     queries_text = [q[0] for q in conn.queries]
@@ -232,11 +236,14 @@ async def test_w4_poller_injected_clock_watermark_no_select_now(redis_client: fa
 
     # Test feedback poller
     conn.queries.clear()
-    await apply_feedback_since(conn, redis_client, bank_id="bank_0", clock=clock)
+    await apply_feedback_since(conn, redis_client, bank_id="bank_0", clock=clock, run_id=run_id)
 
-    fb_wm = redis_client.get(poller_watermark_key("bank_0", "feedback"))
+    fb_wm = redis_client.get(watermark_key_for_poller("bank_0", "feedback", run_id=run_id))
     assert fb_wm is not None
     assert int(fb_wm) == expected_watermark
+
+    # Shared legacy key must NOT be set
+    assert redis_client.get(poller_watermark_key("bank_0", "feedback")) is None
 
     queries_text = [q[0] for q in conn.queries]
     assert not any("SELECT now()" in q for q in queries_text)
