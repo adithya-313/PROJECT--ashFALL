@@ -12,14 +12,21 @@ the corresponding run's partitions and pollers.
 
 import logging
 from datetime import datetime, timezone
+from typing import Any
 
 import fakeredis
 import pytest
 from prometheus_client import REGISTRY
 
+from core.event_clock import ManualClock
 from features.account_keys import (
+    poller_watermark_key,
     validate_run_id,
     watermark_key_for_poller,
+)
+from features.account_labels import (
+    apply_complaints_since,
+    apply_feedback_since,
 )
 from features.ingest_watermark import (
     get_bank_watermark,
@@ -229,3 +236,74 @@ def test_f_validate_run_id_rejects_invalid_inputs() -> None:
     # Non-string
     with pytest.raises(ValueError, match="must be a string"):
         validate_run_id(12345)  # type: ignore[arg-type]
+
+
+class DummyPollerConnection:
+    """Mock database connection for apply_feedback_since and apply_complaints_since tests."""
+
+    def __init__(self, db_now: datetime | None = None) -> None:
+        self.db_now = db_now or datetime(2026, 11, 1, 0, 0, 0, tzinfo=timezone.utc)
+        self.queries: list[str] = []
+
+    async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
+        self.queries.append(query)
+        return []
+
+    async def fetchval(self, query: str, *args: Any) -> Any:
+        self.queries.append(query)
+        return self.db_now
+
+
+@pytest.mark.anyio
+async def test_poller_manual_clock_and_run_id_writes_run_key_not_old_key(
+    redis_client: fakeredis.FakeRedis,
+) -> None:
+    """Poller with ManualClock + run_id writes the run key and not the old key."""
+    t_clock = datetime(2026, 9, 10, 10, 0, 0, tzinfo=timezone.utc)
+    clock = ManualClock(t_clock)
+    conn = DummyPollerConnection()
+
+    # Complaints poller
+    await apply_complaints_since(conn, redis_client, bank_id="bank_0", clock=clock, run_id=RUN_ID_1)
+    expected_wm = int(t_clock.timestamp()) - 5
+    run_key_cmp = watermark_key_for_poller("bank_0", "complaints", run_id=RUN_ID_1)
+    legacy_key_cmp = poller_watermark_key("bank_0", "complaints")
+    assert redis_client.get(run_key_cmp) == str(expected_wm).encode("utf-8")
+    assert redis_client.get(legacy_key_cmp) is None
+
+    # Feedback poller
+    await apply_feedback_since(conn, redis_client, bank_id="bank_0", clock=clock, run_id=RUN_ID_1)
+    run_key_fb = watermark_key_for_poller("bank_0", "feedback", run_id=RUN_ID_1)
+    legacy_key_fb = poller_watermark_key("bank_0", "feedback")
+    assert redis_client.get(run_key_fb) == str(expected_wm).encode("utf-8")
+    assert redis_client.get(legacy_key_fb) is None
+
+
+@pytest.mark.anyio
+async def test_poller_clock_without_run_id_raises(
+    redis_client: fakeredis.FakeRedis,
+) -> None:
+    """Poller with clock and no run_id raises ValueError."""
+    t_clock = datetime(2026, 9, 10, 10, 0, 0, tzinfo=timezone.utc)
+    clock = ManualClock(t_clock)
+    conn = DummyPollerConnection()
+
+    with pytest.raises(ValueError, match="When clock is provided, run_id must also be provided"):
+        await apply_complaints_since(conn, redis_client, bank_id="bank_0", clock=clock, run_id=None)
+
+    with pytest.raises(ValueError, match="When clock is provided, run_id must also be provided"):
+        await apply_feedback_since(conn, redis_client, bank_id="bank_0", clock=clock, run_id=None)
+
+
+@pytest.mark.anyio
+async def test_poller_run_id_without_clock_raises(
+    redis_client: fakeredis.FakeRedis,
+) -> None:
+    """Poller with run_id and no clock raises ValueError."""
+    conn = DummyPollerConnection()
+
+    with pytest.raises(ValueError, match="run_id cannot be provided when clock is None"):
+        await apply_complaints_since(conn, redis_client, bank_id="bank_0", clock=None, run_id=RUN_ID_1)
+
+    with pytest.raises(ValueError, match="run_id cannot be provided when clock is None"):
+        await apply_feedback_since(conn, redis_client, bank_id="bank_0", clock=None, run_id=RUN_ID_1)
