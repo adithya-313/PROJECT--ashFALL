@@ -15,12 +15,15 @@ a payment's own sides are posted only after its decision.
 import asyncio
 import logging
 import time
+import uuid
 from collections import defaultdict
-from dataclasses import dataclass
-from datetime import datetime
-from typing import Any, Callable, cast
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, cast
 
 import asyncpg
+import orjson
 import redis
 from aiokafka import AIOKafkaConsumer, TopicPartition
 
@@ -31,6 +34,7 @@ from core.event_clock import ManualClock, WallClock
 from features.account_keys import AccountFeaturesSettings, get_default_settings
 from features.account_labels import apply_complaints_since, apply_feedback_since
 from features.account_stream import apply_account_events_since, apply_withdrawals_since, consume_available
+from features.feature_log import canonical_feature_names
 from features.ingest_watermark import get_payment_watermark
 from replay.ordering import DecisionStep, FeedStep, build_replay_steps
 from world.bank_connectors import BankTransport, MockBankConnectors, load_bank_modes
@@ -50,6 +54,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "ReplayDrainTimeout",
+    "ReplayHookContext",
     "ReplayPipelineError",
     "ReplayResult",
     "check_workspace_topic_partitions",
@@ -67,6 +72,20 @@ class ReplayPipelineError(Exception):
 
 
 @dataclass(frozen=True)
+class ReplayHookContext:
+    """
+    WHAT: Frozen context passed to test injection hooks prior to decision evaluation.
+    WHY: Level 16b-3b Ruling: allows deterministic injection of transient pipeline faults
+    (e.g. partition pause or watermark deletion) without ad-hoc inspection or mutation.
+    """
+
+    step_index: int
+    decision_step: DecisionStep
+    consumer: AIOKafkaConsumer
+    workspace: ReplayWorkspace
+
+
+@dataclass(frozen=True)
 class ReplayResult:
     """
     WHAT: Output metrics and verification metadata from a completed replay execution.
@@ -80,6 +99,9 @@ class ReplayResult:
     max_arrival_cutoff_gap_seconds: float
     longest_drain_seconds: float
     decisions_before_first_payment: int
+    unwatermarked_payment_ids: tuple[str, ...] = ()
+    logged_features_by_payment_id: dict[str, dict[str, Any]] = field(default_factory=dict)
+    missing_request_fields_by_payment_id: dict[str, list[str]] = field(default_factory=dict)
 
 
 def check_workspace_topic_partitions(consumer: AIOKafkaConsumer, topic: str) -> None:
@@ -279,13 +301,15 @@ async def drain(
 async def run_replay(
     recorded_world: RecordedWorld,
     feed: BankFeed,
+    admin_pg: str | asyncpg.Connection,
+    *,
     replay_settings: ReplaySettings | None = None,
     account_settings: AccountFeaturesSettings | None = None,
-    admin_pg: Any = None,
     live_redis: Any = None,
     base_redis_url: str | None = None,
     redis_client_factory: Callable[[ReplayWorkspace], Any] | None = None,
-    before_decision_hook: Callable[[int, DecisionStep, Any], Any] | None = None,
+    before_decision_hook: Callable[[ReplayHookContext], Awaitable[None]] | None = None,
+    workspace_name: str | None = None,
 ) -> ReplayResult:
     """
     WHAT: Drives the complete operational pipeline in world-time order to replay a recorded simulation run.
@@ -303,9 +327,21 @@ async def run_replay(
     acct_cfg = account_settings if account_settings is not None else get_default_settings()
 
     run_id = recorded_world.output.result.run_id
-    base_name = f"rpl_{run_id}"
+    base_name = workspace_name if workspace_name is not None else f"rpl_{run_id[:12]}_{uuid.uuid4().hex[:6]}"
 
-    pg_admin = admin_pg if admin_pg is not None else config.database_url
+    if isinstance(admin_pg, str):
+        pool_dsn = admin_pg
+    elif hasattr(admin_pg, "_params"):
+        user = admin_pg._params.user
+        password = admin_pg._params.password or ""
+        pw_part = f":{password}" if password else ""
+        host = admin_pg._addr[0]
+        port = admin_pg._addr[1]
+        database = admin_pg._params.database
+        pool_dsn = f"postgresql://{user}{pw_part}@{host}:{port}/{database}"
+    else:
+        raise ValueError(f"admin_pg must be a DSN string or asyncpg.Connection, got {type(admin_pg)}")
+
     if live_redis is None:
         r_url = base_redis_url if base_redis_url is not None else config.redis_url
         live_redis_client = redis.Redis.from_url(r_url)
@@ -314,7 +350,7 @@ async def run_replay(
 
     # 2. Allocate isolated workspace; ALWAYS drop in finally
     workspace = await allocate_workspace(
-        pg_admin,
+        admin_pg,
         live_redis_client,
         base_name,
         settings=r_cfg,
@@ -330,12 +366,24 @@ async def run_replay(
     try:
         # 3. Provision isolated operational connections
         workspace_pool = await asyncpg.create_pool(
-            dsn=config.database_url,
+            dsn=pool_dsn,
             server_settings={"search_path": workspace.postgres_schema},
             min_size=1,
             max_size=5,
         )
         assert workspace_pool is not None
+
+        # Pre-create daily partitions for feature_log and account_snapshots for all world dates in steps.
+        # Derives the unique calendar days in both local world-time (IST) and UTC directly from the scheduled
+        # replay steps, pre-creating feature_log and account_snapshots range partitions so that unprivileged tenant
+        # roles do not trigger on-the-fly table creation DDL.
+        partition_days = {s.world_time.date() for s in steps} | {
+            s.world_time.astimezone(timezone.utc).date() for s in steps
+        }
+        async with workspace_pool.acquire() as setup_conn:
+            for d in sorted(partition_days):
+                await setup_conn.execute("SELECT create_feature_log_partition($1::date)", d)
+                await setup_conn.execute("SELECT create_account_snapshots_partition($1::date)", d)
 
         factory = (
             redis_client_factory
@@ -444,11 +492,15 @@ async def run_replay(
                     if drain_duration > longest_drain_seconds:
                         longest_drain_seconds = drain_duration
 
-                    # Optional test injection hook (e.g. to simulate deleting watermark key)
+                    # Optional test injection hook (e.g. to simulate deleting watermark key or pausing consumer)
                     if before_decision_hook is not None:
-                        hook_res = before_decision_hook(step_idx, step, ws_redis)
-                        if asyncio.iscoroutine(hook_res):
-                            await hook_res
+                        ctx = ReplayHookContext(
+                            step_index=step_idx,
+                            decision_step=step,
+                            consumer=consumer,
+                            workspace=workspace,
+                        )
+                        await before_decision_hook(ctx)
 
                     # R2: Every partition the runner has produced at least one message to must have a watermark
                     for part in produced_partitions:
@@ -476,16 +528,38 @@ async def run_replay(
 
             # Read feature rows from feature_log table before workspace teardown
             rows = await drain_conn.fetch(
-                "SELECT status, decision_time, arrival_cutoff FROM feature_log ORDER BY id"
+                "SELECT payment_id, status, decision_time, arrival_cutoff, feature_values, missing_request_fields "
+                "FROM feature_log ORDER BY decision_time, created_at"
             )
 
         feature_rows_by_status: dict[str, int] = defaultdict(int)
         decisions_arrival_cutoff_behind = 0
         max_gap = 0.0
+        unwatermarked_ids: list[str] = []
+        features_by_pid: dict[str, dict[str, Any]] = {}
+        missing_by_pid: dict[str, list[str]] = {}
+        canonical_names = canonical_feature_names()
 
         for r in rows:
             st = str(r["status"])
+            pid = str(r["payment_id"])
             feature_rows_by_status[st] += 1
+            if st == "no_watermark":
+                unwatermarked_ids.append(pid)
+
+            missing_by_pid[pid] = list(r["missing_request_fields"] or [])
+
+            raw_vals = r["feature_values"]
+            if isinstance(raw_vals, (str, bytes)):
+                parsed_vals = orjson.loads(raw_vals)
+            else:
+                parsed_vals = raw_vals
+
+            if isinstance(parsed_vals, list) and len(parsed_vals) == len(canonical_names):
+                features_by_pid[pid] = dict(zip(canonical_names, parsed_vals))
+            elif isinstance(parsed_vals, dict):
+                features_by_pid[pid] = parsed_vals
+
             d_time = r["decision_time"]
             a_cutoff = r["arrival_cutoff"]
             if a_cutoff is not None and a_cutoff < d_time:
@@ -501,6 +575,9 @@ async def run_replay(
             max_arrival_cutoff_gap_seconds=max_gap,
             longest_drain_seconds=longest_drain_seconds,
             decisions_before_first_payment=decisions_before_first_payment,
+            unwatermarked_payment_ids=tuple(unwatermarked_ids),
+            logged_features_by_payment_id=features_by_pid,
+            missing_request_fields_by_payment_id=missing_by_pid,
         )
 
     finally:
@@ -532,7 +609,7 @@ async def run_replay(
         # Drop workspace ALWAYS
         try:
             await drop_workspace(
-                pg_admin,
+                admin_pg,
                 live_redis_client,
                 workspace,
                 settings=r_cfg,
