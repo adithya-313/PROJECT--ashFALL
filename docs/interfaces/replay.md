@@ -64,3 +64,28 @@ Workspace allocation is coordinated dynamically by `allocate_workspace`:
   ```
 - **Unaltered Baseline (`"allow"`)**: The recording pass always returns `"allow"`. This ensures the simulation produces an unblocked baseline trajectory identical to a reference run with `allow_all` (matching `run_id`, event counts, and payment sequences).
 - **Refusal of Live Bank Modes**: If any bank mode in `connectors.modes` is `"live"`, `record_world_for_replay` raises `ValueError("Live bank mode refused until Level 19")`. Replay recording runs faster than real time or in batch modes; live banking transports are strictly prohibited until live integration is supported in Level 19.
+
+---
+
+## Replay Ordering Architecture (`replay/`)
+
+### 1. Package Boundary & One-Way Import Rule
+- **Decoupled Architecture**: The `replay/` package houses pure ordering logic, step representations (`FeedStep`, `DecisionStep`), and replay runner infrastructure.
+- **Strict One-Way Dependency**:
+  - Operational packages (`api/`, `features/`, `core/`, `world/`) must never import `replay`. This is enforced statically by AST inspection in `tests/unit/test_replay_import_direction.py`.
+  - `replay/` belongs to `ashfall_packages` in `config/truth_store.yaml` and is strictly forbidden from importing `evaluation` modules or accessing hidden simulation truth.
+  - Classified under `not_engine` in `config/folder_classification.yaml` as an operational testing and replay harness.
+
+### 2. World-Time Replay Ordering Rules (`build_replay_steps`)
+During replay, events must be delivered in strict causal sequence so decision evaluations observe the exact historical stream state that existed when the payment was initiated, without future event leakage:
+1. **Preceding Feed Delivery**: Every feed record whose world time is at or before a decision's time is placed before that decision.
+2. **Own-Sides Placement**: EXCEPT a payment's own sides (the event payment ids whose planned id equals the decision's planned id, via F5 alignment): they are placed immediately after their decision (decide first, then post).
+3. **Same-Minute Decisions**: Decisions with the same world minute keep the hook's order; each is followed by its own sides before the next decision.
+4. **Deterministic Tie-Breaking**: Remaining ties between feed records are broken deterministically by fixed entity kind order (`account_event` -> `transaction` -> `withdrawal` -> `complaint`), followed by `bank_id`, and finally `record_id`.
+
+### 3. Resumed-Event Guard (`check_no_resumed_events`)
+- **Strict Prohibition**: Replay assumes zero held payments because the pass-1 hook always allows; a resumed event would carry its resume minute, not its attempt minute, and leak hold-period information into its decision.
+- **Fail-Fast Rejection**: If `events_resumed[i]` is True for any event in the recorded simulation output, `check_no_resumed_events` immediately raises a descriptive `ValueError` naming the payment identifier and minute of the violation.
+
+### 4. Roadmap Note on Execution
+Replay ordering defines the pure interleaving sequence of `FeedStep` and `DecisionStep` items. Dynamic runner execution (Kafka queue draining, step dispatch, poller timeouts, and workspace isolation) is introduced in Level 16b round 3b.
