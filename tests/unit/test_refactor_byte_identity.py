@@ -11,12 +11,13 @@ state mutations before and after extraction.
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, patch
 
 import fakeredis
 import orjson
 import pytest
+from aiokafka import AIOKafkaConsumer, TopicPartition
 
 from features.account_keys import get_default_settings
 from features.account_stream import consume_available, run_payment_updater
@@ -140,14 +141,15 @@ class FakeBatchConsumer:
         *partitions: Any,
         timeout_ms: int = 0,
         max_records: int | None = None,
-    ) -> dict[Any, list[Any]]:
+    ) -> dict[TopicPartition, list[Any]]:
         if not self.messages:
             return {}
         batch = list(self.messages)
         self.messages.clear()
-        by_tp: dict[Any, list[Any]] = {}
+        by_tp: dict[TopicPartition, list[Any]] = {}
         for m in batch:
-            by_tp.setdefault(m.partition, []).append(m)
+            tp = TopicPartition(m.topic, m.partition)
+            by_tp.setdefault(tp, []).append(m)
         return by_tp
 
     async def commit(self, offsets: dict[Any, int]) -> None:
@@ -274,7 +276,7 @@ async def test_consume_available_and_run_payment_updater_state_identity() -> Non
     consumer1 = FakeBatchConsumer([m1, m2])
     cfg = get_default_settings()
 
-    applied1 = await consume_available(consumer1, r1, cfg, timeout_ms=100)
+    applied1 = await consume_available(cast(AIOKafkaConsumer, consumer1), r1, cfg, timeout_ms=100)
     assert applied1 == 2
     assert get_payment_watermark(r1, 0, run_id=RUN_ID) == datetime(2026, 10, 28, 10, 1, 5, tzinfo=timezone.utc)
     keys1 = sorted(k.decode("utf-8") if isinstance(k, bytes) else str(k) for k in r1.keys())
