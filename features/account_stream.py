@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "consume_available",
+    "process_payment_message",
     "record_watermark_for_side",
     "run_payment_updater",
     "apply_account_events_since",
@@ -63,8 +64,42 @@ def record_watermark_for_side(
     return record_payment_watermark(redis_client, partition, watermark_ts, run_id=run_id)
 
 
-async def consume_available(
+async def process_payment_message(
     consumer: Any,
+    redis_client: Any,
+    msg: Any,
+    cfg: AccountFeaturesSettings,
+) -> None:
+    """
+    WHAT: Ingests a single schema-2 UPI payment event: parses, applies to Redis, commits offset, and records watermark.
+    WHY: Factored out into a single helper shared by both run_payment_updater (blocking loop) and
+    consume_available (batch draining) to guarantee identical processing semantics and error handling.
+    """
+    try:
+        record = parse_upi_event(msg.value)
+    except Exception as exc:
+        logger.error(
+            "Invalid account payment event on topic %s partition %s offset %s: %s",
+            msg.topic,
+            msg.partition,
+            msg.offset,
+            exc,
+        )
+        raise
+
+    apply_payment_side(redis_client, record, cfg)
+
+    # Commit offset synchronously per partition
+    tp = TopicPartition(msg.topic, msg.partition)
+    await consumer.commit({tp: msg.offset + 1})
+
+    # Ingestion watermark advances only on applied messages:
+    # record.arrival_time is the payload arrival_time (or recorded_at). Never msg.timestamp, never event_time.
+    record_watermark_for_side(redis_client, msg.partition, record, cfg)
+
+
+async def consume_available(
+    consumer: AIOKafkaConsumer,
     redis_client: Any,
     cfg: AccountFeaturesSettings,
     timeout_ms: int = 0,
@@ -75,7 +110,7 @@ async def consume_available(
     without managing consumer lifecycle or topic subscriptions.
 
     Args:
-        consumer: Active Kafka consumer instance (e.g. AIOKafkaConsumer).
+        consumer: Active AIOKafkaConsumer instance.
         redis_client: Redis client for state updates and watermarks.
         cfg: Validated AccountFeaturesSettings.
         timeout_ms: Maximum milliseconds to wait for available records.
@@ -86,56 +121,12 @@ async def consume_available(
     Raises:
         InvalidAccountEventError / Exception: If any message fails validation or processing.
     """
-    messages: list[Any] = []
-    if hasattr(consumer, "getmany"):
-        raw_batches = await consumer.getmany(timeout_ms=timeout_ms)
-        if isinstance(raw_batches, dict):
-            for batch in raw_batches.values():
-                messages.extend(batch)
-        elif hasattr(consumer, "getone"):
-            try:
-                if timeout_ms > 0:
-                    msg = await asyncio.wait_for(consumer.getone(), timeout=timeout_ms / 1000.0)
-                else:
-                    msg = await consumer.getone()
-                messages.append(msg)
-            except (asyncio.TimeoutError, StopAsyncIteration):
-                return 0
-    elif hasattr(consumer, "getone"):
-        try:
-            if timeout_ms > 0:
-                msg = await asyncio.wait_for(consumer.getone(), timeout=timeout_ms / 1000.0)
-            else:
-                msg = await consumer.getone()
-            messages.append(msg)
-        except (asyncio.TimeoutError, StopAsyncIteration):
-            return 0
-
+    raw_batches = await consumer.getmany(timeout_ms=timeout_ms)
     applied_count = 0
-    for msg in messages:
-        try:
-            record = parse_upi_event(msg.value)
-        except Exception as exc:
-            logger.error(
-                "Invalid account payment event on topic %s partition %s offset %s: %s",
-                msg.topic,
-                msg.partition,
-                msg.offset,
-                exc,
-            )
-            raise
-
-        apply_payment_side(redis_client, record, cfg)
-
-        # Commit offset synchronously per partition
-        tp = TopicPartition(msg.topic, msg.partition)
-        await consumer.commit({tp: msg.offset + 1})
-        applied_count += 1
-
-        # Ingestion watermark advances only on applied messages:
-        # record.arrival_time is the payload arrival_time (or recorded_at). Never msg.timestamp, never event_time.
-        record_watermark_for_side(redis_client, msg.partition, record, cfg)
-
+    for tp in sorted(raw_batches.keys(), key=lambda p: (p.topic, p.partition)):
+        for msg in raw_batches[tp]:
+            await process_payment_message(consumer, redis_client, msg, cfg)
+            applied_count += 1
     return applied_count
 
 
@@ -180,14 +171,19 @@ Kafka gives no per-account ordering here; state is correct in any order because 
     )
     await consumer.start()
     processed_count = 0
-    timeout_ms = int(idle_timeout_seconds * 1000) if idle_timeout_seconds is not None else 0
 
     try:
         while True:
-            consumed = await consume_available(consumer, redis_client, cfg, timeout_ms=timeout_ms)
-            if consumed == 0 and idle_timeout_seconds is not None:
+            try:
+                if idle_timeout_seconds is not None:
+                    msg = await asyncio.wait_for(consumer.getone(), timeout=idle_timeout_seconds)
+                else:
+                    msg = await consumer.getone()
+            except asyncio.TimeoutError:
                 break
-            processed_count += consumed
+
+            await process_payment_message(consumer, redis_client, msg, cfg)
+            processed_count += 1
     finally:
         await consumer.stop()
 

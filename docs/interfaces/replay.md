@@ -88,4 +88,47 @@ During replay, events must be delivered in strict causal sequence so decision ev
 - **Fail-Fast Rejection**: If `events_resumed[i]` is True for any event in the recorded simulation output, `check_no_resumed_events` immediately raises a descriptive `ValueError` naming the payment identifier and minute of the violation.
 
 ### 4. Roadmap Note on Execution
-Replay ordering defines the pure interleaving sequence of `FeedStep` and `DecisionStep` items. Dynamic runner execution (Kafka queue draining, step dispatch, poller timeouts, and workspace isolation) is introduced in Level 16b round 3b.
+Replay ordering defines the pure interleaving sequence of `FeedStep` and `DecisionStep` items. Dynamic runner execution, pipeline drain convergence, and workspace lifecycle management are implemented in `replay/runner.py`.
+
+---
+
+## Replay Runner Execution & Pipeline Convergence (`replay/runner.py`)
+
+### 1. Runner Architecture (`run_replay`)
+`run_replay(recorded_world, feed, admin_pg, ...)` drives historical simulations through the real operational stack in causal world-time sequence:
+1. **Refusal of Live Modes**: Strictly prohibits live bank modes (`ValueError`), protecting production banking credentials and external endpoints.
+2. **Hermetic Workspace Provisioning**: Invokes `allocate_workspace(admin_pg, ...)` to allocate an isolated PostgreSQL schema, dedicated Redis DB, and single-partition Kafka topic. Resources are guaranteed to be torn down via `drop_workspace` in a top-level `finally:` block.
+3. **Derived Partition Pre-Creation**: Derives unique calendar days in both local world-time (IST) and UTC directly from the scheduled replay steps (`{s.world_time.date() for s in steps} | {s.world_time.astimezone(timezone.utc).date() for s in steps}`). Pre-creates daily table partitions for `feature_log` and `account_snapshots` under superuser pool connections, ensuring unprivileged tenant roles (`ashfall_bank_api`) without schema DDL grants execute inserts without check violation errors.
+4. **World-Clock Step Dispatch**:
+   - `FeedStep`: Advances manual world clock to `step.world_time` and dispatches projected record via `connectors.send_feed_record(step.kind, step.record)`. If transaction, tracks partition 0 as produced.
+   - `DecisionStep`: Advances manual world clock to `step.world_time`, executes `drain()` to converge the operational pipeline, invokes test injection hook (`before_decision_hook`) if registered, verifies Section 9.4 invariants, and evaluates decision via `InProcessBankClient.post("/v1/decisions", ...)`.
+
+### 2. Drain Rule & Convergence Criteria (`drain`)
+Architect decision S2 mandates that all pending outbox messages, Kafka records, and database pollers are fully processed and watermarked before scoring each decision.
+- **S2.3 Continuous Polling**: `consume_available(consumer, ...)` is polled on every iteration of the outbox relay loop, preventing deadlocks when the Kafka topic buffer fills while awaiting outbox flushes.
+- **Convergence Guarantees**: A drain iteration succeeds only when all three subsystems converge:
+  1. **Outbox**: `count_waiting(workspace_conn) == 0` (all transactional outbox rows published to Kafka).
+  2. **Kafka Consumer**: For all assigned partitions, `consumer.committed(tp) >= consumer.end_offsets(tp)`.
+  3. **Table Pollers**: For every commercial bank, poller cursors reach `MAX(id)` on `bank_account_events`, `bank_withdrawals`, `bank_feedback`, and `bank_complaints`. On caught-up tables, empty-table poller passes advance run-scoped Redis watermarks to the current world clock.
+
+### 3. Timeout as Failure (`ReplayDrainTimeout`)
+If pipeline convergence exceeds `deadline = time.monotonic() + drain_timeout_seconds`, `drain` immediately raises `ReplayDrainTimeout` reporting current partition offsets and poller cursors. The exception propagates to trigger clean workspace teardown, ensuring no leaked databases, lingering topics, or corrupted state persist.
+
+### 4. Section 9.4 Architectural Rules (Ruling R1–R3)
+- **R1 (Single-Partition Invariant)**: At replay initialization, `check_workspace_topic_partitions` queries broker metadata via `consumer.partitions_for_topic(topic)`. If partition count is not exactly 1, raises `ValueError`. With one partition per topic, partitions that never receive messages cannot hold aggregate watermarks back.
+- **R2 (Produced Partition Watermark Check)**: Before evaluating every decision, after `drain()` converges, every partition the runner has produced at least one message to must possess a run-scoped payment watermark (`get_payment_watermark(ws_redis, partition=part, run_id=run_id)`). If missing, `ReplayPipelineError` is raised.
+- **R3 (Fail-Closed Initial Decisions)**: Decisions preceding the production of any payment legitimately evaluate with status `"no_watermark"` (failing closed). These are verified and counted in `ReplayResult.decisions_before_first_payment`.
+
+### 5. Redelivery Idempotency (S2.4)
+Under at-least-once message delivery, producing duplicate payment messages to the Kafka topic results in bitwise-identical Redis feature state (verified by key count and SHA-256 digest over sorted keys and dumps).
+
+### 6. Test World Measured Metrics
+*(Measured on the author's laptop)*
+- **Configuration**: Small test world `FastRunSettings(101, 20, 6, 51, 'training')` (from `tests/integration/test_bank_connectors_end_to_end.py:54`).
+- **Decisions Sent**: 795 decisions evaluated in world-time sequence.
+- **Pre-Payment Decisions (`no_watermark`)**: Exactly 1 decision (`e032d655af2c43f6-p-000000`).
+- **Post-Payment Decisions (`incomplete_request`)**: Exactly 794 decisions.
+- **Contract Gap Note**: All 794 watermarked decisions have `missing_request_fields == ["receiver_vpa"]`. *Known gap*: `build_decision_request` omits `receiver_vpa`, so payee features evaluate to `None`. Resolution is planned in Level 16c-1 (`decisions_per_event_payment` request contract). Payer-side features (`hour_ist`, `customer_failed_attempts_24h`, `outflow_to_merchant_paise_7d`) evaluate completely.
+- **Decisions Arrival Cutoff Behind**: 0 (no decision evaluated with lagging cutoff).
+- **Max Arrival Cutoff Gap**: 0.0 seconds.
+- **Longest Drain Duration**: 0.039 seconds.
