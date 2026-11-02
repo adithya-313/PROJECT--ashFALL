@@ -165,8 +165,10 @@ async def test_record_world_for_replay_records_calls_and_matches_baseline() -> N
 
     # 1. Output parity with plain allow_all execution
     assert recorded_world.output.result.run_id == plain_output.result.run_id
-    assert len(recorded_world.output.result.run_result.events) == len(plain_output.result.run_result.events)
+    assert recorded_world.output.result.run_result.events == plain_output.result.run_result.events
     assert recorded_world.output.result.payment_ids == plain_output.result.payment_ids
+    assert recorded_world.output.result.planned_payment_ids == plain_output.result.planned_payment_ids
+    assert recorded_world.output.result.events_resumed == plain_output.result.events_resumed
 
     # 2. Recorded calls non-empty and matching hook invocations in order
     assert len(recorded_world.calls) > 0
