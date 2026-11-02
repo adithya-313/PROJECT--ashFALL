@@ -393,15 +393,27 @@ class MockBankConnectors:
             idempotency_key=idempotency_key,
         )
 
-    def make_hook(self) -> Callable[[PaymentView], HookDecision]:
+    def make_hook(self, decisions_per_event_payment: bool = False) -> Callable[[PaymentView], HookDecision]:
         """
         WHAT: Constructs a synchronous hook callable by run_interactive_world for each planned payment.
         WHY: Intercepts planned payments, maps sender/receiver banks, builds decision requests, and
         dispatches them across the bank transport while respecting shadow vs live mode policies.
 
+        Args:
+            decisions_per_event_payment: If True, raises ValueError because per-event decisions
+                are replay-only (Decision D4).
+
         Returns:
             Synchronous function accepting PaymentView and returning 'allow', 'hold', or 'decline'.
+
+        Raises:
+            ValueError: If decisions_per_event_payment is True.
         """
+        if decisions_per_event_payment:
+            raise ValueError(
+                "decisions per event payment are replay-only: the event payment id does not "
+                "exist at hook time in the live world loop (deferred to Level 19)"
+            )
 
         def hook(payment: PaymentView) -> HookDecision:
             """
