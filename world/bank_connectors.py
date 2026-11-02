@@ -19,7 +19,7 @@ import orjson
 
 from core.config_validator import load_yaml
 from core.event_clock import world_minute_to_ist
-from world.bank_feed import BankFeed, project_run, resolve_bank_id
+from world.bank_feed import BankFeed, bank_visible_vpa, project_run, resolve_bank_id
 from world.bank_feed_config import (
     DEFAULT_BANK_API_CONFIG_PATH,
     BankFeedConfig,
@@ -324,14 +324,19 @@ class MockBankConnectors:
         }
         self.seen_accounts: set[str] = set()
 
-    def build_decision_request(self, payment: PaymentView) -> DecisionCall:
+    def build_decision_request(
+        self,
+        payment: PaymentView,
+        include_receiver_vpa: bool = False,
+    ) -> DecisionCall:
         """
         WHAT: Resolves sender/receiver banks and payee type, then constructs the DecisionRequest payload.
         WHY: Factored out of make_hook so decision requests can be built for recording, simulation, or verification
-        without initiating bank transport calls.
+        without initiating bank transport calls. Supports optional receiver_vpa inclusion for replay (Decision D2).
 
         Args:
             payment: PaymentView instance representing the planned payment.
+            include_receiver_vpa: If True, adds receiver_vpa to the payload; defaults to False for today's exact bytes.
 
         Returns:
             DecisionCall containing sender_bank_id, receiver_bank_id, body_bytes, and idempotency_key.
@@ -374,6 +379,8 @@ class MockBankConnectors:
             "channel": self.feed_config.channel_value,
             "payee_type": resolved_payee_type,
         }
+        if include_receiver_vpa:
+            body_dict["receiver_vpa"] = bank_visible_vpa(payment.to_account)
         body_bytes = orjson.dumps(body_dict)
         idempotency_key = make_decision_idempotency_key(
             payment.planned_payment_id, self.max_identifier_length
