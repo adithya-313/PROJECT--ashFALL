@@ -201,6 +201,22 @@ def resolve_account_type(account_id: str, config: BankFeedConfig) -> str:
     )
 
 
+def bank_visible_vpa(account_id: str) -> str:
+    """
+    WHAT: Returns the bank-visible opaque stand-in VPA for an account.
+    WHY: Architect decision 6B: opaque stand-in VPA. Features may only look it up among
+    this bank's own accounts and must never parse run, bank or account out of it.
+    Both bank feed counterparty_vpa and decision request receiver_vpa share this representation.
+
+    Args:
+        account_id: Account identifier.
+
+    Returns:
+        Opaque stand-in VPA string matching the feed representation.
+    """
+    return account_id
+
+
 @dataclass(frozen=True)
 class BankFeedAccountEvent:
     """
@@ -441,7 +457,7 @@ def project_payment(
         channel=config.channel_value,
         # Architect decision 6B: opaque stand-in VPA. Features may only look it up among
         # this bank's own accounts and must never parse run, bank or account out of it.
-        counterparty_vpa=event.to_account,
+        counterparty_vpa=bank_visible_vpa(event.to_account),
         sender_device_fingerprint=stamp.fingerprint if stamp is not None else None,
         sender_os_generation=stamp.os_generation if stamp is not None else None,
         balance_after_paise=debit_balance,
@@ -479,7 +495,7 @@ def project_payment(
             channel=config.channel_value,
             # Architect decision 6B: opaque stand-in VPA. Features may only look it up among
             # this bank's own accounts and must never parse run, bank or account out of it.
-            counterparty_vpa=event.from_account,
+            counterparty_vpa=bank_visible_vpa(event.from_account),
             sender_device_fingerprint=None,
             sender_os_generation=None,
             balance_after_paise=credit_balance,

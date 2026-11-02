@@ -154,12 +154,14 @@ async def test_end_to_end_replay_small_world(
     feed = project_run(recorded_world.output)
 
     # 3. Execute replay
+    # Legacy mode (one decision per planned payment) — the receiver_vpa gap below is OFF-mode behaviour.
     result = await run_replay(
         recorded_world,
         feed,
         admin_pg=get_test_database_url(),
         base_redis_url=host_side_redis_url(),
         redis_client_factory=host_redis_factory,
+        decisions_per_event_payment=False,
     )
 
     # 4. Verify decision counts and feature_log statuses

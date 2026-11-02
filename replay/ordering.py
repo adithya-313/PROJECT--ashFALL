@@ -94,27 +94,30 @@ def _resolve_record_id(kind: str, record: Any) -> str:
 
 
 def build_replay_steps(
-    recorded_world: RecordedWorld,
+    recorded_world: RecordedWorld | Any,
     feed: BankFeed,
+    decisions_per_event_payment: bool = False,
 ) -> list[FeedStep | DecisionStep]:
     """
     WHAT: Builds a causally ordered sequence of FeedStep and DecisionStep items for replay.
 
     WHY: Enforces deterministic world-clock interleaving so decisions execute against historically
-    accurate stream state without future information leakage.
+    accurate stream state without future information leakage. Supports both planned-payment decisions
+    (legacy mode, decisions_per_event_payment=False) and per-event decisions (Decision D5).
 
     Rules:
     1. Every feed record whose world time is at or before a decision's time is placed before that decision.
-    2. EXCEPT a payment's own sides (the event payment ids whose planned id equals the decision's planned id,
-       via F5): they are placed immediately after their decision (decide first, then post).
-    3. Decisions with the same world minute keep the hook's order; each is followed by its own sides before the
-       next decision.
-    4. Remaining ties between feed records: by (kind order: account_event, transaction, withdrawal, complaint —
-       state the order you use and keep it fixed), then bank_id, then record id.
+    2. EXCEPT a payment's own sides: in default mode, sides whose planned id equals the decision's planned id;
+       in per-event mode, sides whose payment_id equals the decision's event payment id. They are placed
+       immediately after their decision (decide first, then post).
+    3. Decisions with the same world minute keep order; each is followed by its own sides before the next decision.
+    4. Remaining ties between feed records: by (kind order: account_event, transaction, withdrawal, complaint),
+       then bank_id, then record id.
 
     Args:
         recorded_world: RecordedWorld instance containing simulation output and recorded decision calls.
         feed: BankFeed containing projected transaction sides, withdrawals, account events, and complaints.
+        decisions_per_event_payment: If True, derives one DecisionStep per executed event payment attempt (Decision D5).
 
     Returns:
         List of interleaved FeedStep and DecisionStep items ready for sequential replay.
@@ -124,44 +127,100 @@ def build_replay_steps(
     """
     check_no_resumed_events(recorded_world.output)
 
-    # 1. Map planned_payment_id -> set of event payment_ids produced by it (F5 alignment)
-    planned_to_event_ids: dict[str, set[str]] = defaultdict(set)
-    for event_pid, planned_pid in zip(
-        recorded_world.output.result.payment_ids,
-        recorded_world.output.result.planned_payment_ids,
-    ):
-        planned_to_event_ids[planned_pid].add(event_pid)
-
-    # Map each event payment_id back to its planned_payment_id for quick lookup
-    event_to_planned_id: dict[str, str] = {}
-    for event_pid, planned_pid in zip(
-        recorded_world.output.result.payment_ids,
-        recorded_world.output.result.planned_payment_ids,
-    ):
-        event_to_planned_id[event_pid] = planned_pid
-
-    # 2. Extract feed records into FeedStep instances
     clock_start = recorded_world.output.plan.clock.start_date
     general_feed_steps: list[FeedStep] = []
-    own_sides_by_planned: dict[str, list[FeedStep]] = defaultdict(list)
+    own_sides: dict[str, list[FeedStep]] = defaultdict(list)
 
-    # Transactions
-    for bank_id, sides in feed.payments_by_bank.items():
-        for side in sides:
-            rec_id = _resolve_record_id("transaction", side)
-            step = FeedStep(
-                world_time=side.event_time,
-                kind="transaction",
-                bank_id=bank_id,
-                record_id=rec_id,
-                record=side,
-            )
-            # Check if this transaction side belongs to a recorded decision
-            planned_id = event_to_planned_id.get(side.payment_id)
-            if planned_id is not None:
-                own_sides_by_planned[planned_id].append(step)
-            else:
-                general_feed_steps.append(step)
+    if decisions_per_event_payment:
+        from replay.event_decisions import build_event_decision_calls
+        from world.bank_connectors import MockBankConnectors
+        from world.bank_feed import resolve_bank_id
+        from world.bank_feed_config import load_bank_feed_config
+
+        feed_cfg = load_bank_feed_config()
+        account_bank_map: dict[str, str] = {}
+
+        if hasattr(recorded_world.output, "world") and recorded_world.output.world is not None:
+            for ledger in recorded_world.output.world.ledgers:
+                b_id = resolve_bank_id(ledger.bank_index, feed_cfg)
+                for acc in ledger.accounts:
+                    account_bank_map[acc] = b_id
+
+        if hasattr(recorded_world.output.result, "opened_accounts"):
+            for opened in recorded_world.output.result.opened_accounts:
+                account_bank_map[opened[1]] = resolve_bank_id(opened[4], feed_cfg)
+
+        for b_id, p_sides in feed.payments_by_bank.items():
+            for p_side in p_sides:
+                account_bank_map[p_side.account_id] = b_id
+                if p_side.counterparty_vpa:
+                    account_bank_map[p_side.counterparty_vpa] = p_side.counterparty_bank_id
+
+        for ev in recorded_world.output.result.run_result.events:
+            if ev.from_bank_index in feed_cfg.bank_ids_by_index:
+                account_bank_map[ev.from_account] = resolve_bank_id(ev.from_bank_index, feed_cfg)
+            if ev.to_bank_index in feed_cfg.bank_ids_by_index:
+                account_bank_map[ev.to_account] = resolve_bank_id(ev.to_bank_index, feed_cfg)
+
+        import asyncio
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+
+        connectors = MockBankConnectors(
+            transports={},
+            modes={},
+            account_bank_map=account_bank_map,
+            clock_start=clock_start,
+            feed_config=feed_cfg,
+            decision_timeout_seconds=feed_cfg.decision_timeout_seconds,
+            loop=loop,
+        )
+        event_decision_calls = build_event_decision_calls(recorded_world, connectors)
+        event_pids = set(recorded_world.output.result.payment_ids)
+
+        # Map transaction sides by event payment_id
+        for bank_id, sides in feed.payments_by_bank.items():
+            for side in sides:
+                rec_id = _resolve_record_id("transaction", side)
+                step = FeedStep(
+                    world_time=side.event_time,
+                    kind="transaction",
+                    bank_id=bank_id,
+                    record_id=rec_id,
+                    record=side,
+                )
+                if side.payment_id in event_pids:
+                    own_sides[side.payment_id].append(step)
+                else:
+                    general_feed_steps.append(step)
+
+    else:
+        # Legacy mode: Map planned_payment_id -> event_ids and lookup by planned_id
+        event_to_planned_id: dict[str, str] = {}
+        for event_pid, planned_pid in zip(
+            recorded_world.output.result.payment_ids,
+            recorded_world.output.result.planned_payment_ids,
+        ):
+            event_to_planned_id[event_pid] = planned_pid
+
+        for bank_id, sides in feed.payments_by_bank.items():
+            for side in sides:
+                rec_id = _resolve_record_id("transaction", side)
+                step = FeedStep(
+                    world_time=side.event_time,
+                    kind="transaction",
+                    bank_id=bank_id,
+                    record_id=rec_id,
+                    record=side,
+                )
+                planned_id = event_to_planned_id.get(side.payment_id)
+                if planned_id is not None:
+                    own_sides[planned_id].append(step)
+                else:
+                    general_feed_steps.append(step)
 
     # Account events
     for bank_id, acct_events in feed.account_events_by_bank.items():
@@ -210,9 +269,9 @@ def build_replay_steps(
         key=lambda s: (s.world_time, KIND_ORDER[s.kind], s.bank_id, s.record_id)
     )
 
-    # Sort own sides within each planned payment by Rule 4
-    for planned_id in own_sides_by_planned:
-        own_sides_by_planned[planned_id].sort(
+    # Sort own sides within each decision key by Rule 4
+    for key in own_sides:
+        own_sides[key].sort(
             key=lambda s: (s.world_time, KIND_ORDER[s.kind], s.bank_id, s.record_id)
         )
 
@@ -221,25 +280,47 @@ def build_replay_steps(
     feed_idx = 0
     total_feed = len(general_feed_steps)
 
-    for payment, call in recorded_world.calls:
-        dec_world_time = world_minute_to_ist(payment.minute, clock_start)
-        decision_step = DecisionStep(
-            world_time=dec_world_time,
-            planned_payment_id=payment.planned_payment_id,
-            call=call,
-        )
+    if decisions_per_event_payment:
+        for event_pid, view, call in event_decision_calls:
+            dec_world_time = world_minute_to_ist(view.minute, clock_start)
+            decision_step = DecisionStep(
+                world_time=dec_world_time,
+                planned_payment_id=event_pid,
+                call=call,
+            )
 
-        # Rule 1: Every feed record whose world time is at or before a decision's time is placed before it
-        while feed_idx < total_feed and general_feed_steps[feed_idx].world_time <= dec_world_time:
-            steps.append(general_feed_steps[feed_idx])
-            feed_idx += 1
+            # Rule 1: Every feed record whose world time is at or before a decision's time is placed before it
+            while feed_idx < total_feed and general_feed_steps[feed_idx].world_time <= dec_world_time:
+                steps.append(general_feed_steps[feed_idx])
+                feed_idx += 1
 
-        # Place the decision
-        steps.append(decision_step)
+            # Place the decision
+            steps.append(decision_step)
 
-        # Rule 2 & 3: Place own sides immediately after their decision
-        if payment.planned_payment_id in own_sides_by_planned:
-            steps.extend(own_sides_by_planned[payment.planned_payment_id])
+            # Rule 2 & 3: Place own sides immediately after their decision
+            if event_pid in own_sides:
+                steps.extend(own_sides[event_pid])
+
+    else:
+        for payment, call in recorded_world.calls:
+            dec_world_time = world_minute_to_ist(payment.minute, clock_start)
+            decision_step = DecisionStep(
+                world_time=dec_world_time,
+                planned_payment_id=payment.planned_payment_id,
+                call=call,
+            )
+
+            # Rule 1: Every feed record whose world time is at or before a decision's time is placed before it
+            while feed_idx < total_feed and general_feed_steps[feed_idx].world_time <= dec_world_time:
+                steps.append(general_feed_steps[feed_idx])
+                feed_idx += 1
+
+            # Place the decision
+            steps.append(decision_step)
+
+            # Rule 2 & 3: Place own sides immediately after their decision
+            if payment.planned_payment_id in own_sides:
+                steps.extend(own_sides[payment.planned_payment_id])
 
     # Append any remaining general feed steps occurring after the last decision
     while feed_idx < total_feed:

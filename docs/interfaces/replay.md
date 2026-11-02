@@ -128,7 +128,40 @@ Under at-least-once message delivery, producing duplicate payment messages to th
 - **Decisions Sent**: 795 decisions evaluated in world-time sequence.
 - **Pre-Payment Decisions (`no_watermark`)**: Exactly 1 decision (`e032d655af2c43f6-p-000000`).
 - **Post-Payment Decisions (`incomplete_request`)**: Exactly 794 decisions.
-- **Contract Gap Note**: All 794 watermarked decisions have `missing_request_fields == ["receiver_vpa"]`. *Known gap*: `build_decision_request` omits `receiver_vpa`, so payee features evaluate to `None`. Resolution is planned in Level 16c-1 (`decisions_per_event_payment` request contract). Payer-side features (`hour_ist`, `customer_failed_attempts_24h`, `outflow_to_merchant_paise_7d`) evaluate completely.
+- **Contract Gap Note**: In legacy mode (`decisions_per_event_payment=False`), all 794 watermarked decisions have `missing_request_fields == ["receiver_vpa"]` because `build_decision_request` omits `receiver_vpa`, causing payee features to evaluate to `None`. In Level 16c-1 (`decisions_per_event_payment=True`), `receiver_vpa` is included for each executed payment attempt, resolving this gap and evaluating payee features to `status: "ok"`. Payer-side features (`hour_ist`, `customer_failed_attempts_24h`, `outflow_to_merchant_paise_7d`) evaluate completely in both modes.
 - **Decisions Arrival Cutoff Behind**: 0 (no decision evaluated with lagging cutoff).
 - **Max Arrival Cutoff Gap**: 0.0 seconds.
 - **Longest Drain Duration**: 0.039 seconds.
+
+---
+
+## Per-Event Decisions & Receiver VPA Architecture (`Level 16c-1`)
+
+### 1. Bank-Visible Payee VPA (`bank_visible_vpa`) (Decision D1)
+- **Unified Representation**: Factored `bank_visible_vpa(account_id: str) -> str` in `world/bank_feed.py` as the single canonical source of opaque stand-in VPAs for bank views (Decision 6B).
+- **Feed & Decision Parity**: `world/bank_feed.py: project_payment` invokes `bank_visible_vpa` for both debit (`event.to_account`) and credit (`event.from_account`) sides. `world/bank_connectors.py: build_decision_request` uses it to populate `receiver_vpa` in DecisionRequest payloads, ensuring exact string identity across feed records and decision queries without altering raw feed bytes.
+
+### 2. Standalone Decision Request VPA Inclusion (Decision D2)
+- **Backward-Compatible Signature**: `MockBankConnectors.build_decision_request(payment: PaymentView, include_receiver_vpa: bool = False)` defaults to `False`, preserving byte-for-byte fidelity with pre-existing request literals.
+- **Payload Extension**: When `include_receiver_vpa=True`, the builder adds `"receiver_vpa": bank_visible_vpa(payment.to_account)` to the JSON body without introducing any other new keys.
+
+### 3. Replay-Only Per-Event Decision Calls (`replay/event_decisions.py`) (Decision D3)
+- **One Decision Per Executed Attempt**: `build_event_decision_calls(recorded_world, connectors)` constructs exactly one DecisionCall per executed `PaymentEvent` in world simulation order, setting `planned_payment_id` on the synthetic `PaymentView` to the event's unique payment identifier (`event_pid`).
+- **Resumed Event Prohibition**: Calls `check_no_resumed_events` first to fail-fast if any held-and-resumed payments exist.
+- **Strict Attempt-Time Only Constraint (Condition 1)**: Request payloads are constructed using strictly attempt-time facts (event minute, accounts, amount). Post-attempt facts (status, reason, failure_domain, balance_after_paise) are strictly excluded from the request schema and cannot leak into decision scoring.
+
+### 4. Live Hook Refusal (Decision D4)
+- **Replay-Only Boundary**: `MockBankConnectors.make_hook(decisions_per_event_payment: bool = False)` explicitly refuses `True` by raising `ValueError("decisions per event payment are replay-only: the event payment id does not exist at hook time in the live world loop (deferred to Level 19)")`.
+- **Why**: In the live interactive world loop, event payment identifiers are minted post-hook upon ledger settlement; per-event decision scoring before ledger assignment is architecturally deferred to Level 19.
+
+### 5. Per-Event Replay Interleaving & Condition 3 (`replay/ordering.py`) (Decision D5)
+- **Causal Split Payment Interleaving**: When `decisions_per_event_payment=True`, `build_replay_steps` keys each `DecisionStep` by its event payment identifier and identifies its own sides strictly as transaction sides matching that same payment ID.
+- **Condition 3 Guarantees**: For partitioned or structured split payments occurring at the exact same world minute, the runner interleaves steps as: `decision 1` -> `piece-1 sides` -> `decision 2` -> `piece-2 sides`. This guarantees that piece 2 evaluates against stream and feature state that already includes piece 1's posted ledger records.
+
+### 6. Runner Replay Configuration & DSN Strictness (`replay/runner.py`) (Decision D6)
+- **Strict DSN Input**: `run_replay` requires `admin_pg: str`, removing private attribute inspection (`_params`, `_addr`) on connection instances.
+- **Policy Default**: `decisions_per_event_payment` parameter forwards to `build_replay_steps`. When omitted, its default is loaded from `config/replay.yaml: decisions_per_event_payment` (`value: true`), establishing per-event evaluation as the operational standard for Level 16c replay and dataset generation (Architect P2(b)).
+
+### 7. Omission of Gang Payments Cut by Illicit Balance Cap
+- **Zero Attempted Transfers**: In the fraud simulation engine, gang structured forward payments that are completely cut or dropped due to the syndicate's illicit-balance cap do not generate payment events or move ledger funds.
+- **Architect Rule**: Because no physical execution or bank attempt takes place in the simulation, no decision request is constructed or dispatched in replay for capped/skipped forwards.

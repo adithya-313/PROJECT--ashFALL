@@ -39,3 +39,8 @@ replay_workspace:
     value: 1
     reason: "Single partition per replay Kafka topic to guarantee total chronological event ordering."
     derived_from: "Level 16b architect decisions C2 and 16b Q1"
+
+  decisions_per_event_payment:
+    label: policy
+    value: true
+    reason: "replay and 16c datasets use one decision per executed attempt — architect P2(b)"
