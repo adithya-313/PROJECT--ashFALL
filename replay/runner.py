@@ -298,11 +298,28 @@ async def drain(
     return time.monotonic() - t0
 
 
+def load_default_decisions_per_event_payment() -> bool:
+    """
+    WHAT: Reads the decisions_per_event_payment policy flag from config/replay.yaml.
+    WHY: Decision D6: Replay and Level 16c datasets default to one decision per executed attempt.
+    """
+    from core.config_validator import load_yaml
+    from world.replay_workspace import CONFIG_PATH
+
+    data = load_yaml(CONFIG_PATH)
+    block = data.get("replay_workspace", {})
+    entry = block.get("decisions_per_event_payment")
+    if entry is None or not isinstance(entry, dict) or "value" not in entry:
+        raise ValueError(f"Missing 'decisions_per_event_payment' policy setting in {CONFIG_PATH}")
+    return bool(entry["value"])
+
+
 async def run_replay(
     recorded_world: RecordedWorld,
     feed: BankFeed,
-    admin_pg: str | asyncpg.Connection,
+    admin_pg: str,
     *,
+    decisions_per_event_payment: bool | None = None,
     replay_settings: ReplaySettings | None = None,
     account_settings: AccountFeaturesSettings | None = None,
     live_redis: Any = None,
@@ -321,7 +338,16 @@ async def run_replay(
         if mode == "live":
             raise ValueError("Live bank mode refused until Level 19")
 
-    steps = build_replay_steps(recorded_world, feed)
+    per_event_mode = (
+        load_default_decisions_per_event_payment()
+        if decisions_per_event_payment is None
+        else decisions_per_event_payment
+    )
+    steps = build_replay_steps(
+        recorded_world,
+        feed,
+        decisions_per_event_payment=per_event_mode,
+    )
 
     r_cfg = replay_settings if replay_settings is not None else get_default_replay_settings()
     acct_cfg = account_settings if account_settings is not None else get_default_settings()
@@ -329,18 +355,9 @@ async def run_replay(
     run_id = recorded_world.output.result.run_id
     base_name = workspace_name if workspace_name is not None else f"rpl_{run_id[:12]}_{uuid.uuid4().hex[:6]}"
 
-    if isinstance(admin_pg, str):
-        pool_dsn = admin_pg
-    elif hasattr(admin_pg, "_params"):
-        user = admin_pg._params.user
-        password = admin_pg._params.password or ""
-        pw_part = f":{password}" if password else ""
-        host = admin_pg._addr[0]
-        port = admin_pg._addr[1]
-        database = admin_pg._params.database
-        pool_dsn = f"postgresql://{user}{pw_part}@{host}:{port}/{database}"
-    else:
-        raise ValueError(f"admin_pg must be a DSN string or asyncpg.Connection, got {type(admin_pg)}")
+    if not isinstance(admin_pg, str):
+        raise ValueError(f"admin_pg must be a DSN string, got {type(admin_pg)}")
+    pool_dsn = admin_pg
 
     if live_redis is None:
         r_url = base_redis_url if base_redis_url is not None else config.redis_url

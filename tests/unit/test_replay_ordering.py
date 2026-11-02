@@ -9,6 +9,7 @@ with zero leakage of hold-period information or future simulation state.
 
 from dataclasses import dataclass
 from datetime import date
+from typing import Any, cast
 
 import pytest
 
@@ -328,3 +329,108 @@ def test_resumed_event_raises_value_error_naming_id_and_minute() -> None:
 
     with pytest.raises(ValueError, match=r"pmt_resumed_99.*42"):
         build_replay_steps(rec_world, feed)
+
+
+def test_per_event_ordering_split_payment_interleaving_and_condition_3() -> None:
+    """
+    D5: Verifies per-event mode (decisions_per_event_payment=True):
+    1. Orders decision 1, piece-1 sides, decision 2, piece-2 sides.
+    2. Piece-2's decision comes strictly after piece-1's sides (Architect condition 3).
+    3. Own sides are exactly the sides with that same payment_id.
+    4. Default mode (False) remains unchanged and groups all pieces after the planned decision.
+    """
+    ev1 = PaymentEvent(
+        minute=10,
+        from_account="acc_person_01",
+        to_account="acc_shop_02",
+        amount_paise=50000,
+        from_bank_index=0,
+        to_bank_index=1,
+        status="success",
+        reason="ok",
+    )
+    ev2 = PaymentEvent(
+        minute=10,
+        from_account="acc_person_01",
+        to_account="acc_shop_02",
+        amount_paise=75000,
+        from_bank_index=0,
+        to_bank_index=1,
+        status="success",
+        reason="ok",
+    )
+    output = DummyInteractiveOutput(
+        plan=DummyWorldPlan(clock=DummyClock(start_date=START_DATE)),
+        result=DummyInteractiveResult(
+            run_id="test_run_ordering",
+            payment_ids=("pmt_piece_01", "pmt_piece_02"),
+            planned_payment_ids=("plan_split_001", "plan_split_001"),
+            events_resumed=(False, False),
+            run_result=DummyRunResult(events=(ev1, ev2)),
+        ),
+    )
+    call_planned = DecisionCall("bank_0", "bank_1", b"{}", "dec:plan_split_001")
+    pay_planned = PaymentView("plan_split_001", 10, "acc_person_01", "acc_shop_02", 125000)
+    rec_world = RecordedWorld(output=cast(Any, output), calls=((pay_planned, call_planned),))
+
+    # Sides for piece 1
+    side1_debit = make_payment_side("pmt_piece_01", "debit", 10, bank_id="bank_0", account_id="acc_person_01")
+    side1_credit = make_payment_side("pmt_piece_01", "credit", 10, bank_id="bank_1", account_id="acc_shop_02")
+    # Sides for piece 2
+    side2_debit = make_payment_side("pmt_piece_02", "debit", 10, bank_id="bank_0", account_id="acc_person_01")
+    side2_credit = make_payment_side("pmt_piece_02", "credit", 10, bank_id="bank_1", account_id="acc_shop_02")
+
+    t10 = world_minute_to_ist(10, START_DATE)
+    unrelated_acct = BankFeedAccountEvent("bank_0", "evt_prior", "acc_person_01", "account_opened", t10, {})
+
+    feed = BankFeed(
+        payments_by_bank={
+            "bank_0": (side1_debit, side2_debit),
+            "bank_1": (side1_credit, side2_credit),
+        },
+        account_events_by_bank={"bank_0": (unrelated_acct,)},
+        withdrawals_by_bank={},
+        complaints_by_bank={},
+        dropped_device_events_by_kind={},
+    )
+
+    # 1. Per-event mode: decisions_per_event_payment=True
+    steps_per_event = build_replay_steps(rec_world, feed, decisions_per_event_payment=True)
+
+    # Sequence must be:
+    # 0: unrelated_acct (Rule 1: general feed at <= t10 before decision)
+    # 1: DecisionStep for pmt_piece_01
+    # 2, 3: piece-1 sides (pmt_piece_01 debit & credit)
+    # 4: DecisionStep for pmt_piece_02
+    # 5, 6: piece-2 sides (pmt_piece_02 debit & credit)
+    assert len(steps_per_event) == 7
+    assert isinstance(steps_per_event[0], FeedStep)
+    assert steps_per_event[0].record == unrelated_acct
+
+    assert isinstance(steps_per_event[1], DecisionStep)
+    assert steps_per_event[1].planned_payment_id == "pmt_piece_01"
+
+    assert isinstance(steps_per_event[2], FeedStep)
+    assert steps_per_event[2].record.payment_id == "pmt_piece_01"  # type: ignore[union-attr]
+    assert isinstance(steps_per_event[3], FeedStep)
+    assert steps_per_event[3].record.payment_id == "pmt_piece_01"  # type: ignore[union-attr]
+
+    # Condition 3: piece-2 decision comes AFTER piece-1 sides
+    assert isinstance(steps_per_event[4], DecisionStep)
+    assert steps_per_event[4].planned_payment_id == "pmt_piece_02"
+
+    assert isinstance(steps_per_event[5], FeedStep)
+    assert steps_per_event[5].record.payment_id == "pmt_piece_02"  # type: ignore[union-attr]
+    assert isinstance(steps_per_event[6], FeedStep)
+    assert steps_per_event[6].record.payment_id == "pmt_piece_02"  # type: ignore[union-attr]
+
+    # 2. Default mode: decisions_per_event_payment=False unchanged
+    steps_default = build_replay_steps(rec_world, feed, decisions_per_event_payment=False)
+    assert len(steps_default) == 6
+    assert isinstance(steps_default[0], FeedStep)
+    assert isinstance(steps_default[1], DecisionStep)
+    assert steps_default[1].planned_payment_id == "plan_split_001"
+    # All 4 sides follow the single planned decision
+    for s in steps_default[2:]:
+        assert isinstance(s, FeedStep)
+
