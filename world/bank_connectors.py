@@ -502,100 +502,124 @@ class MockBankConnectors:
         for item in sorted_items:
             kind = item[4]
             rec = item[5]
-            target_bank_id = item[1]
+            await self.send_feed_record(kind, rec)
 
-            if target_bank_id not in self.transports:
-                raise ValueError(f"No transport configured for target bank {target_bank_id!r}")
-            transport = self.transports[target_bank_id]
+    async def send_feed_record(self, kind: str, record: Any) -> TransportOutcome:
+        """
+        WHAT: Posts a single projected feed record (transaction side, withdrawal, account event, or complaint).
+        WHY: Factored out of send_feed so individual feed records can be dispatched during replay or testing.
 
-            if kind == "transaction":
-                body_dict: dict[str, Any] = {
-                    "payment_id": rec.payment_id,
-                    "side": rec.side,
-                    "account_id": rec.account_id,
-                    "counterparty_vpa": rec.counterparty_vpa,
-                    "counterparty_bank_id": rec.counterparty_bank_id,
-                    "sender_bank_id": rec.sender_bank_id,
-                    "receiver_bank_id": rec.receiver_bank_id,
-                    "amount_paise": rec.amount_paise,
-                    "event_time": rec.event_time.isoformat(),
-                    "status": rec.status,
-                    "failure_domain": rec.failure_domain,
-                    "payee_type": rec.payee_type,
-                    "channel": rec.channel,
-                    "sender_device_fingerprint": rec.sender_device_fingerprint,
-                    "sender_os_generation": rec.sender_os_generation,
-                    "balance_after_paise": rec.balance_after_paise,
-                }
-                body_bytes = orjson.dumps(body_dict)
-                idempotency_key = make_transaction_idempotency_key(
-                    rec.payment_id, rec.side, self.max_identifier_length
-                )
-                outcome = await transport.post("/v1/transactions", body_bytes, idempotency_key)
-                if outcome.replayed:
-                    self.replayed_by_kind["transaction"] += 1
-                else:
-                    self.sent_by_kind["transaction"] += 1
+        Args:
+            kind: Record classification ('transaction', 'withdrawal', 'account_event', 'complaint').
+            record: Projected feed record instance.
 
-            elif kind == "withdrawal":
-                body_dict = {
-                    "bank_id": rec.bank_id,
-                    "withdrawal_id": rec.withdrawal_id,
-                    "account_id": rec.account_id,
-                    "channel": rec.channel,
-                    "amount_paise": rec.amount_paise,
-                    "balance_after_paise": rec.balance_after_paise,
-                    "status": rec.status,
-                    "failure_domain": rec.failure_domain,
-                    "event_time": rec.event_time.isoformat(),
-                }
-                body_bytes = orjson.dumps(body_dict)
-                idempotency_key = make_withdrawal_idempotency_key(
-                    rec.withdrawal_id, self.max_identifier_length
-                )
-                outcome = await transport.post("/v1/withdrawals", body_bytes, idempotency_key)
-                if outcome.replayed:
-                    self.replayed_by_kind["withdrawal"] += 1
-                else:
-                    self.sent_by_kind["withdrawal"] += 1
+        Returns:
+            TransportOutcome received from the destination bank transport.
 
-            elif kind == "account_event":
-                body_dict = {
-                    "event_id": rec.event_id,
-                    "account_id": rec.account_id,
-                    "kind": rec.kind,
-                    "event_time": rec.event_time.isoformat(),
-                    "details": rec.details,
-                }
-                body_bytes = orjson.dumps(body_dict)
-                idempotency_key = make_account_event_idempotency_key(
-                    rec.event_id, self.max_identifier_length
-                )
-                outcome = await transport.post("/v1/account-events", body_bytes, idempotency_key)
-                if outcome.replayed:
-                    self.replayed_by_kind["account_event"] += 1
-                else:
-                    self.sent_by_kind["account_event"] += 1
+        Raises:
+            ValueError: If target bank has no configured transport or kind is unknown.
+        """
+        target_bank_id = record.bank_id
 
-            elif kind == "complaint":
-                body_dict = {
-                    "complaint_id": rec.complaint_id,
-                    "complainant_account": rec.complainant_account,
-                    "reported_account": rec.reported_account,
-                    "reported_bank_id": rec.reported_bank_id,
-                    "payment_ids": list(rec.payment_ids),
-                    "claimed_type": rec.claimed_type,
-                    "received_at": rec.received_at.isoformat(),
-                }
-                body_bytes = orjson.dumps(body_dict)
-                idempotency_key = make_complaint_idempotency_key(
-                    rec.complaint_id, self.max_identifier_length
-                )
-                outcome = await transport.post("/v1/complaints", body_bytes, idempotency_key)
-                if outcome.replayed:
-                    self.replayed_by_kind["complaint"] += 1
-                else:
-                    self.sent_by_kind["complaint"] += 1
+        if target_bank_id not in self.transports:
+            raise ValueError(f"No transport configured for target bank {target_bank_id!r}")
+        transport = self.transports[target_bank_id]
+
+        if kind == "transaction":
+            body_dict: dict[str, Any] = {
+                "payment_id": record.payment_id,
+                "side": record.side,
+                "account_id": record.account_id,
+                "counterparty_vpa": record.counterparty_vpa,
+                "counterparty_bank_id": record.counterparty_bank_id,
+                "sender_bank_id": record.sender_bank_id,
+                "receiver_bank_id": record.receiver_bank_id,
+                "amount_paise": record.amount_paise,
+                "event_time": record.event_time.isoformat(),
+                "status": record.status,
+                "failure_domain": record.failure_domain,
+                "payee_type": record.payee_type,
+                "channel": record.channel,
+                "sender_device_fingerprint": record.sender_device_fingerprint,
+                "sender_os_generation": record.sender_os_generation,
+                "balance_after_paise": record.balance_after_paise,
+            }
+            body_bytes = orjson.dumps(body_dict)
+            idempotency_key = make_transaction_idempotency_key(
+                record.payment_id, record.side, self.max_identifier_length
+            )
+            outcome = await transport.post("/v1/transactions", body_bytes, idempotency_key)
+            if outcome.replayed:
+                self.replayed_by_kind["transaction"] += 1
+            else:
+                self.sent_by_kind["transaction"] += 1
+            return outcome
+
+        elif kind == "withdrawal":
+            body_dict = {
+                "bank_id": record.bank_id,
+                "withdrawal_id": record.withdrawal_id,
+                "account_id": record.account_id,
+                "channel": record.channel,
+                "amount_paise": record.amount_paise,
+                "balance_after_paise": record.balance_after_paise,
+                "status": record.status,
+                "failure_domain": record.failure_domain,
+                "event_time": record.event_time.isoformat(),
+            }
+            body_bytes = orjson.dumps(body_dict)
+            idempotency_key = make_withdrawal_idempotency_key(
+                record.withdrawal_id, self.max_identifier_length
+            )
+            outcome = await transport.post("/v1/withdrawals", body_bytes, idempotency_key)
+            if outcome.replayed:
+                self.replayed_by_kind["withdrawal"] += 1
+            else:
+                self.sent_by_kind["withdrawal"] += 1
+            return outcome
+
+        elif kind == "account_event":
+            body_dict = {
+                "event_id": record.event_id,
+                "account_id": record.account_id,
+                "kind": record.kind,
+                "event_time": record.event_time.isoformat(),
+                "details": record.details,
+            }
+            body_bytes = orjson.dumps(body_dict)
+            idempotency_key = make_account_event_idempotency_key(
+                record.event_id, self.max_identifier_length
+            )
+            outcome = await transport.post("/v1/account-events", body_bytes, idempotency_key)
+            if outcome.replayed:
+                self.replayed_by_kind["account_event"] += 1
+            else:
+                self.sent_by_kind["account_event"] += 1
+            return outcome
+
+        elif kind == "complaint":
+            body_dict = {
+                "complaint_id": record.complaint_id,
+                "complainant_account": record.complainant_account,
+                "reported_account": record.reported_account,
+                "reported_bank_id": record.reported_bank_id,
+                "payment_ids": list(record.payment_ids),
+                "claimed_type": record.claimed_type,
+                "received_at": record.received_at.isoformat(),
+            }
+            body_bytes = orjson.dumps(body_dict)
+            idempotency_key = make_complaint_idempotency_key(
+                record.complaint_id, self.max_identifier_length
+            )
+            outcome = await transport.post("/v1/complaints", body_bytes, idempotency_key)
+            if outcome.replayed:
+                self.replayed_by_kind["complaint"] += 1
+            else:
+                self.sent_by_kind["complaint"] += 1
+            return outcome
+
+        else:
+            raise ValueError(f"Unknown feed record kind: {kind!r}")
 
 
 @dataclass(frozen=True)
