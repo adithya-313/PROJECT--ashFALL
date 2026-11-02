@@ -68,6 +68,7 @@ folder_classification:
     - migrations
     - models
     - online_learning
+    - replay  # replay execution, ordering harness and workspaces
     - reports
     - scripts
     - serving
