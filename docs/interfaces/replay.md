@@ -165,3 +165,27 @@ Under at-least-once message delivery, producing duplicate payment messages to th
 ### 7. Omission of Gang Payments Cut by Illicit Balance Cap
 - **Zero Attempted Transfers**: In the fraud simulation engine, gang structured forward payments that are completely cut or dropped due to the syndicate's illicit-balance cap do not generate payment events or move ledger funds.
 - **Architect Rule**: Because no physical execution or bank attempt takes place in the simulation, no decision request is constructed or dispatched in replay for capped/skipped forwards.
+
+---
+
+## Replay Known Limitations & Registered Issues (Level 16c-1b)
+
+### 1. Registry Wired Marker (`registry_wired`) & Reason (Issue 16-2)
+- **Marker Invariant**: `ReplayResult` carries `registry_wired: bool = False` and `registry_wired_reason: str = "no nationalsim screener or DPIP key in replay until 16d"`.
+- **Feature Impact**: Replay executes without an in-process nationalsim screener or DPIP key; consequently, `payee_registry_match` evaluates to `None` for all decisions in historical replays.
+- **Dataset Manifest Requirement**: Level 16c dataset manifests must copy both `registry_wired` and `registry_wired_reason` fields verbatim. In Level 16d, an in-process screener and DPIP key will be wired into replay, setting `registry_wired=True` and producing non-None `payee_registry_match` features; Level 16c datasets will be regenerated and previous manifests marked superseded.
+
+### 2. Single-Partition Replay Invariant (Section 9.4 Rule R1)
+- **Causal Guarantee**: Workspace Kafka topics are strictly enforced to have exactly 1 partition (`check_workspace_topic_partitions`). This guarantees total causal ordering and ensures partitions without traffic cannot stall aggregate watermarks.
+- **Throughput Constraint**: Replay pipelines execute as single-partition consumers, constraining event ingestion throughput to sequential processing. Partitioned scaling remains an offline evaluation trade-off.
+
+### 3. Decision API Request Has No Device Field (Issue 16-3)
+- **Contract Boundary**: `DecisionRequest` in `api/v1/models.py` defines fields for `payment_id`, `sender_account_id`, `receiver_bank_id`, `receiver_vpa`, `amount_paise`, `event_time`, `channel`, and `payee_type`.
+- **Known Limitation**: Section 5 describes device attributes for scoring, but the decision serving API does not currently expose a `device` field. Adding an optional device field to `DecisionRequest` is planned for Level 19.
+
+### 4. Live-World Per-Attempt Decisions Deferred (Issue 16-1)
+- **Replay-Only Execution**: Per-attempt decision scoring is supported exclusively in historical replay (`decisions_per_event_payment=True`).
+- **Live World Loop Limitation**: In the live interactive simulation loop, event payment identifiers do not exist at hook time before ledger settlement. Resumed events also carry their resume minute rather than their initial attempt minute. Storing per-attempt decision identifiers in a nullable payment side column and preserving attempt timestamps for held payments is deferred to live mode in Level 19.
+
+### 5. Capped Gang Payments Receive No Decision
+- **Attempt-Only Rule**: Replay evaluates decisions strictly for executed payment attempts (`PaymentEvent`). Syndicate structured forwards cut by the illicit balance cap generate no ledger attempts and legitimately receive no decision calls during replay.

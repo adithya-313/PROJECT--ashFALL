@@ -487,3 +487,138 @@ async def test_drain_timeout_with_paused_consumer(
         assert schema_exists == 0
     finally:
         await pg_conn.close()
+
+
+async def test_end_to_end_replay_event_decisions(
+    pg_conn: asyncpg.Connection,
+    live_redis: redis.Redis,
+) -> None:
+    """
+    WHAT: Runs end-to-end replay with one decision per executed payment attempt (decisions_per_event_payment=True).
+    WHY: Verifies:
+      - Decisions are keyed by event payment IDs with receiver_vpa included.
+      - Exactly one feature_log row per executed payment attempt.
+      - Payee features evaluate: first_payment_to_payee non-None in >= 1 row, payee_same_bank_risk non-None in >= 1
+        same-bank row and None for all cross-bank rows, payee_registry_match None across all decisions.
+      - ReplayResult carries registry_wired=False and registry_wired_reason matching architect wording.
+      - Pre-first-payment unwatermarked status occurs only on the first decision.
+      - Live Redis DB and main database schema are completely untouched.
+    """
+    # 1. Baseline snapshots before replay
+    dbsize_before, digest_before = snapshot_redis_db(live_redis)
+    main_tx_before = await pg_conn.fetchval("SELECT count(*) FROM transactions")
+    fl_exists = await pg_conn.fetchval(
+        "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'feature_log'"
+    )
+    main_fl_before = await pg_conn.fetchval("SELECT count(*) FROM feature_log") if fl_exists else 0
+
+    # 2. Record simulation run
+    cfg = load_bank_feed_config()
+    bank_modes = load_bank_modes()
+    prepared = prepare_world(WORLD_SETTINGS, None)
+    account_bank_map: dict[str, str] = {}
+    for ledger in prepared.world.ledgers:
+        b_id = resolve_bank_id(ledger.bank_index, cfg)
+        for acc in ledger.accounts:
+            account_bank_map[acc] = b_id
+
+    loop = asyncio.get_running_loop()
+    connectors = MockBankConnectors(
+        transports={b: RejectingTransport() for b in bank_modes},
+        modes=bank_modes,
+        account_bank_map=account_bank_map,
+        clock_start=prepared.plan.clock.start_date,
+        feed_config=cfg,
+        decision_timeout_seconds=5.0,
+        loop=loop,
+    )
+    runner = RunnerSettings(fraud_enabled=True)
+    recorded_world = record_world_for_replay(WORLD_SETTINGS, runner, connectors)
+    feed = project_run(recorded_world.output)
+
+    # 3. Execute replay with decisions_per_event_payment=True
+    result = await run_replay(
+        recorded_world,
+        feed,
+        admin_pg=get_test_database_url(),
+        base_redis_url=host_side_redis_url(),
+        redis_client_factory=host_redis_factory,
+        decisions_per_event_payment=True,
+    )
+
+    # 4. Verify decision counts and feature_log statuses
+    events = recorded_world.output.result.run_result.events
+    event_pids = set(recorded_world.output.result.payment_ids)
+    assert len(events) == result.decisions_sent
+    assert sum(result.feature_rows_by_status.values()) == len(events)
+    assert result.decisions_before_first_payment == 1
+    assert result.feature_rows_by_status["no_watermark"] == 1
+    assert result.feature_rows_by_status["ok"] == len(events) - 1
+    assert result.feature_rows_by_status.get("incomplete_request", 0) == 0
+    assert set(result.feature_rows_by_status.keys()) == {"no_watermark", "ok"}
+
+    # 5. Unwatermarked decisions
+    first_pid = recorded_world.output.result.payment_ids[0]
+    assert set(result.unwatermarked_payment_ids) == {first_pid}
+
+    # 6. Every logged feature row corresponds to an event payment ID
+    assert len(result.logged_features_by_payment_id) == len(events) == result.decisions_sent
+    for pid in result.logged_features_by_payment_id:
+        assert pid in event_pids
+
+    # 7. Registry wired marker
+    assert result.registry_wired is False
+    assert result.registry_wired_reason == "no nationalsim screener or DPIP key in replay until 16d"
+
+    # 8. Payee features
+    # payee_registry_match is always None (no screener until 16d)
+    assert all(f.get("payee_registry_match") is None for f in result.logged_features_by_payment_id.values())
+    # first_payment_to_payee evaluated and non-None in at least one decision
+    assert any(f.get("first_payment_to_payee") is not None for f in result.logged_features_by_payment_id.values())
+
+    # payee_same_bank_risk non-None in >= 1 same-bank row, None for all cross-bank rows
+    same_bank_pids = {
+        pid
+        for pid, ev in zip(recorded_world.output.result.payment_ids, events)
+        if ev.from_bank_index == ev.to_bank_index
+    }
+    cross_bank_pids = {
+        pid
+        for pid, ev in zip(recorded_world.output.result.payment_ids, events)
+        if ev.from_bank_index != ev.to_bank_index
+    }
+    logged_same_bank_pids = [pid for pid in same_bank_pids if pid in result.logged_features_by_payment_id]
+    logged_cross_bank_pids = [pid for pid in cross_bank_pids if pid in result.logged_features_by_payment_id]
+
+    assert any(
+        result.logged_features_by_payment_id[pid].get("payee_same_bank_risk") is not None
+        for pid in logged_same_bank_pids
+    )
+    assert all(
+        result.logged_features_by_payment_id[pid].get("payee_same_bank_risk") is None
+        for pid in logged_cross_bank_pids
+    )
+
+    # 9. Condition 3 check: split payments in this world
+    planned_counts: dict[str, int] = {}
+    for p_id in recorded_world.output.result.planned_payment_ids:
+        planned_counts[p_id] = planned_counts.get(p_id, 0) + 1
+    split_pids = [p_id for p_id, count in planned_counts.items() if count > 1]
+    assert len(split_pids) == 0
+
+    # 10. Payer features still computed
+    second_pid = recorded_world.output.result.payment_ids[1]
+    second_features = result.logged_features_by_payment_id[second_pid]
+    assert second_features["hour_ist"] is not None
+    assert second_features["customer_failed_attempts_24h"] is not None
+    assert second_features["outflow_to_merchant_paise_7d"] is not None
+
+    # 11. Live DB and main schema untouched
+    dbsize_after, digest_after = snapshot_redis_db(live_redis)
+    assert dbsize_after == dbsize_before
+    assert digest_after == digest_before
+
+    main_tx_after = await pg_conn.fetchval("SELECT count(*) FROM transactions")
+    main_fl_after = await pg_conn.fetchval("SELECT count(*) FROM feature_log") if fl_exists else 0
+    assert main_tx_after == main_tx_before
+    assert main_fl_after == main_fl_before

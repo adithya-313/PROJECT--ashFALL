@@ -91,6 +91,7 @@ class ReplayResult:
     WHAT: Output metrics and verification metadata from a completed replay execution.
     WHY: Provides fail-closed observability across decision counts, feature row statuses,
     arrival cutoff lag, and drain convergence times.
+    Level 16c dataset manifests must copy both registry_wired and registry_wired_reason fields.
     """
 
     decisions_sent: int
@@ -102,6 +103,8 @@ class ReplayResult:
     unwatermarked_payment_ids: tuple[str, ...] = ()
     logged_features_by_payment_id: dict[str, dict[str, Any]] = field(default_factory=dict)
     missing_request_fields_by_payment_id: dict[str, list[str]] = field(default_factory=dict)
+    registry_wired: bool = False
+    registry_wired_reason: str = "no nationalsim screener or DPIP key in replay until 16d"
 
 
 def check_workspace_topic_partitions(consumer: AIOKafkaConsumer, topic: str) -> None:
@@ -595,6 +598,8 @@ async def run_replay(
             unwatermarked_payment_ids=tuple(unwatermarked_ids),
             logged_features_by_payment_id=features_by_pid,
             missing_request_fields_by_payment_id=missing_by_pid,
+            registry_wired=False,
+            registry_wired_reason="no nationalsim screener or DPIP key in replay until 16d",
         )
 
     finally:
