@@ -11,9 +11,12 @@ an intercepting hook that always allows captures the unaltered baseline run whil
 refusing live bank modes to prevent accidental external traffic.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from world.bank_connectors import DecisionCall, MockBankConnectors
+from world.gang_config import GangConfig
 from world.interactive_records import (
     HookDecision,
     InteractiveWorldOutput,
@@ -24,6 +27,12 @@ from world.interactive_runner import (
     RunnerSettings,
     run_interactive_world,
 )
+from world.sampled_world import (
+    pinned_configs,
+    resolve_sampled_world_gangs,
+    run_sampled_world,
+)
+from world.world_sampler import WorldSpec
 
 
 @dataclass(frozen=True)
@@ -35,6 +44,31 @@ class RecordedWorld:
 
     output: InteractiveWorldOutput
     calls: tuple[tuple[PaymentView, DecisionCall], ...]
+    world_id: str | None = None
+    split: str | None = None
+    seed: int | None = None
+    gang_families: tuple[str | None, ...] | None = None
+
+
+def _check_no_live_bank_modes(connectors: MockBankConnectors) -> None:
+    """Refuses live bank modes to prevent accidental external traffic during replay recording."""
+    for mode in connectors.modes.values():
+        if mode == "live":
+            raise ValueError("Live bank mode refused until Level 19")
+
+
+def _make_recording_hook(
+    connectors: MockBankConnectors,
+    recorded: list[tuple[PaymentView, DecisionCall]],
+) -> Callable[[PaymentView], HookDecision]:
+    """Builds the intercepting hook that accumulates (PaymentView, DecisionCall) pairs and returns 'allow'."""
+
+    def recording_hook(payment: PaymentView) -> HookDecision:
+        call = connectors.build_decision_request(payment)
+        recorded.append((payment, call))
+        return "allow"
+
+    return recording_hook
 
 
 def record_world_for_replay(
@@ -58,16 +92,64 @@ def record_world_for_replay(
     Raises:
         ValueError: If any bank mode in connectors.modes is 'live'.
     """
-    for mode in connectors.modes.values():
-        if mode == "live":
-            raise ValueError("Live bank mode refused until Level 19")
+    _check_no_live_bank_modes(connectors)
 
     recorded: list[tuple[PaymentView, DecisionCall]] = []
+    hook = _make_recording_hook(connectors, recorded)
 
-    def recording_hook(payment: PaymentView) -> HookDecision:
-        call = connectors.build_decision_request(payment)
-        recorded.append((payment, call))
-        return "allow"
-
-    output = run_interactive_world(fast_settings, runner_settings, hook=recording_hook)
+    output = run_interactive_world(fast_settings, runner_settings, hook=hook)
     return RecordedWorld(output=output, calls=tuple(recorded))
+
+
+def record_sampled_world_for_replay(
+    spec: WorldSpec,
+    preset_name: str,
+    gang_configs: tuple[GangConfig, ...] | None,
+    sampler_cfg: dict[str, Any],
+    code_version: str,
+    connectors: MockBankConnectors,
+) -> RecordedWorld:
+    """
+    WHAT: Runs a sampled world simulation while recording decision requests constructed by connectors.
+    WHY: Implements Decision D4. Enables replay execution across sampled multi-world partitions,
+    recording gang families and world metadata without reading from the hidden truth store.
+
+    Args:
+        spec: Sampled world specification.
+        preset_name: World sizing preset name (e.g. 'tiny').
+        gang_configs: Explicit gangs tuple (at least one), or None to generate the mix from spec.
+        sampler_cfg: Dictionary loaded from config/world_sampler.yaml.
+        code_version: Code version identifier recorded in run_id.
+        connectors: MockBankConnectors used to build DecisionCall requests.
+
+    Returns:
+        RecordedWorld containing output, calls, world_id, split, seed, and gang_families.
+
+    Raises:
+        ValueError: If any bank mode in connectors.modes is 'live'.
+    """
+    _check_no_live_bank_modes(connectors)
+
+    configs = pinned_configs(spec, sampler_cfg)
+    gangs = resolve_sampled_world_gangs(spec, preset_name, gang_configs, sampler_cfg, configs)
+    gang_families: tuple[str | None, ...] = tuple(g.family for g in gangs)
+
+    recorded: list[tuple[PaymentView, DecisionCall]] = []
+    hook = _make_recording_hook(connectors, recorded)
+
+    output = run_sampled_world(
+        spec=spec,
+        preset_name=preset_name,
+        gang_configs=gangs,
+        sampler_cfg=sampler_cfg,
+        code_version=code_version,
+        hook=hook,
+    )
+    return RecordedWorld(
+        output=output,
+        calls=tuple(recorded),
+        world_id=spec.world_id,
+        split=spec.split,
+        seed=spec.seed,
+        gang_families=gang_families,
+    )

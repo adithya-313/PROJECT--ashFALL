@@ -20,7 +20,7 @@ import uuid
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
 import asyncpg
@@ -34,9 +34,11 @@ from core.config import config
 from core.event_clock import ManualClock, WallClock
 from features.account_keys import AccountFeaturesSettings, get_default_settings
 from features.account_labels import apply_complaints_since, apply_feedback_since
+from features.account_snapshots import select_daily_snapshot_accounts, write_account_snapshots
 from features.account_stream import apply_account_events_since, apply_withdrawals_since, consume_available
 from features.feature_log import canonical_feature_names
 from features.ingest_watermark import get_payment_watermark
+from features.label_consumer import consume_complaint_labels_since
 from replay.ordering import DecisionStep, FeedStep, build_replay_steps
 from world.bank_connectors import BankTransport, MockBankConnectors, load_bank_modes
 from world.bank_feed import BankFeed, resolve_bank_id
@@ -61,6 +63,7 @@ __all__ = [
     "ReplayResult",
     "check_workspace_topic_partitions",
     "compute_feature_log_sha256",
+    "day_boundaries_between",
     "drain",
     "run_replay",
 ]
@@ -190,6 +193,48 @@ def check_workspace_topic_partitions(consumer: AIOKafkaConsumer, topic: str) -> 
             f"Section 9.4 R1 violation: workspace topic {topic!r} must have exactly 1 partition, "
             f"got {len(parts) if parts is not None else 0} partitions: {parts}"
         )
+
+
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def day_boundaries_between(
+    prev_world_time: datetime,
+    next_world_time: datetime,
+) -> list[datetime]:
+    """
+    WHAT: Pure function returning all IST midnight boundaries strictly between prev_world_time and next_world_time.
+    WHY: Implements architect decision D2: identifies completed simulation world days in IST
+    to trigger daily account snapshot computation during replay.
+    """
+    t_prev = (
+        prev_world_time
+        if prev_world_time.tzinfo is not None
+        else prev_world_time.replace(tzinfo=IST)
+    ).astimezone(IST)
+    t_next = (
+        next_world_time
+        if next_world_time.tzinfo is not None
+        else next_world_time.replace(tzinfo=IST)
+    ).astimezone(IST)
+
+    if t_next < t_prev:
+        raise ValueError(
+            f"next_world_time ({next_world_time}) is earlier than prev_world_time ({prev_world_time})"
+        )
+
+    prev_date = t_prev.date()
+    cur_midnight = datetime(
+        prev_date.year, prev_date.month, prev_date.day, 0, 0, 0, tzinfo=IST
+    ) + timedelta(days=1)
+
+    boundaries: list[datetime] = []
+    while cur_midnight < t_next:
+        if cur_midnight > t_prev:
+            boundaries.append(cur_midnight)
+        cur_midnight += timedelta(days=1)
+
+    return boundaries
 
 
 async def drain(
@@ -329,6 +374,19 @@ async def drain(
                     break
                 poller_cursors[bank_id]["complaints"] = c
 
+            # Labels (from complaints)
+            while poller_cursors[bank_id]["labels"] < max_cmp:
+                c_lbl = await consume_complaint_labels_since(
+                    workspace_conn,
+                    bank_id=bank_id,
+                    run_id=run_id,
+                    after_id=poller_cursors[bank_id]["labels"],
+                    batch_size=batch_size,
+                )
+                if c_lbl <= poller_cursors[bank_id]["labels"]:
+                    break
+                poller_cursors[bank_id]["labels"] = c_lbl
+
             # Advance clock watermarks on empty or caught-up tables
             c_ev = await apply_account_events_since(
                 workspace_conn, redis_client, settings=acct_settings, bank_id=bank_id,
@@ -359,6 +417,7 @@ async def drain(
                 or poller_cursors[bank_id]["withdrawals"] < max_wth
                 or poller_cursors[bank_id]["feedback"] < max_fb
                 or poller_cursors[bank_id]["complaints"] < max_cmp
+                or poller_cursors[bank_id]["labels"] < max_cmp
             ):
                 pollers_caught_up = False
 
@@ -457,6 +516,66 @@ async def pace_step(
     return pace
 
 
+async def _snapshot_completed_day(
+    drain_conn: asyncpg.Connection,
+    boundary: datetime,
+    workspace: ReplayWorkspace,
+    ws_redis: Any,
+    producer: Any,
+    consumer: AIOKafkaConsumer,
+    acct_cfg: AccountFeaturesSettings,
+    banks: list[str],
+    world_clock: ManualClock,
+    run_id: str,
+    poller_cursors: dict[str, dict[str, int]],
+    drain_timeout_seconds: float,
+    step_idx: int,
+) -> float:
+    """
+    WHAT: Drains the operational pipeline up to boundary and writes daily account snapshots for completed day.
+    WHY: Implements architect decision D2: snapshots active accounts for [boundary - 1d, boundary) at each IST midnight.
+    """
+    world_clock.set_time(boundary)
+    deadline = time.monotonic() + drain_timeout_seconds
+    drain_duration = await drain(
+        step_index=step_idx,
+        workspace_conn=drain_conn,
+        producer=producer,
+        consumer=consumer,
+        workspace=workspace,
+        redis_client=ws_redis,
+        acct_settings=acct_cfg,
+        banks=banks,
+        world_clock=world_clock,
+        run_id=run_id,
+        poller_cursors=poller_cursors,
+        deadline=deadline,
+    )
+    day_start = boundary - timedelta(days=1)
+    day_end = boundary
+    for bank_id in banks:
+        account_ids = await select_daily_snapshot_accounts(
+            drain_conn,
+            run_id=run_id,
+            bank_id=bank_id,
+            day_start=day_start,
+            day_end=day_end,
+        )
+        if account_ids:
+            await write_account_snapshots(
+                drain_conn,
+                ws_redis,
+                run_id=run_id,
+                bank_id=bank_id,
+                snapshot_time=boundary,
+                snapshot_kind="daily",
+                account_ids=account_ids,
+                settings=acct_cfg,
+                run_scoped_watermarks=True,
+            )
+    return drain_duration
+
+
 async def run_replay(
     recorded_world: RecordedWorld,
     feed: BankFeed,
@@ -550,6 +669,13 @@ async def run_replay(
         partition_days = {s.world_time.date() for s in steps} | {
             s.world_time.astimezone(timezone.utc).date() for s in steps
         }
+        if steps:
+            last_dt = steps[-1].world_time
+            next_dt = last_dt + timedelta(days=1)
+            partition_days |= {
+                next_dt.date(),
+                next_dt.astimezone(timezone.utc).date(),
+            }
         async with workspace_pool.acquire() as setup_conn:
             for d in sorted(partition_days):
                 await setup_conn.execute("SELECT create_feature_log_partition($1::date)", d)
@@ -584,6 +710,12 @@ async def run_replay(
 
         feed_cfg = load_bank_feed_config()
         clock_start = recorded_world.output.plan.clock.start_date
+        if isinstance(clock_start, datetime):
+            sim_start_dt = clock_start.astimezone(IST)
+        else:
+            sim_start_dt = datetime(
+                clock_start.year, clock_start.month, clock_start.day, 0, 0, 0, tzinfo=IST
+            )
 
         account_bank_map: dict[str, str] = {}
         for ledger in recorded_world.output.world.ledgers:
@@ -622,7 +754,7 @@ async def run_replay(
 
         banks = sorted(bank_modes.keys())
         poller_cursors: dict[str, dict[str, int]] = {
-            b: {"events": 0, "withdrawals": 0, "feedback": 0, "complaints": 0}
+            b: {"events": 0, "withdrawals": 0, "feedback": 0, "complaints": 0, "labels": 0}
             for b in banks
         }
 
@@ -636,6 +768,32 @@ async def run_replay(
         async with workspace_pool.acquire() as drain_conn:
             for step_idx, step in enumerate(steps):
                 await pace_step(prev_world_time, step.world_time, current_speed, sleep=sleep)
+
+                if prev_world_time is not None:
+                    boundaries = [
+                        b
+                        for b in day_boundaries_between(prev_world_time, step.world_time)
+                        if b > sim_start_dt
+                    ]
+                    for boundary in boundaries:
+                        dur = await _snapshot_completed_day(
+                            drain_conn=drain_conn,
+                            boundary=boundary,
+                            workspace=workspace,
+                            ws_redis=ws_redis,
+                            producer=producer,
+                            consumer=consumer,
+                            acct_cfg=acct_cfg,
+                            banks=banks,
+                            world_clock=world_clock,
+                            run_id=run_id,
+                            poller_cursors=poller_cursors,
+                            drain_timeout_seconds=r_cfg.drain_timeout_seconds,
+                            step_idx=step_idx,
+                        )
+                        if dur > longest_drain_seconds:
+                            longest_drain_seconds = dur
+
                 prev_world_time = step.world_time
 
                 if isinstance(step, FeedStep):
@@ -699,6 +857,34 @@ async def run_replay(
                         step.call.idempotency_key,
                     )
                     decisions_sent += 1
+
+            if prev_world_time is not None:
+                prev_ist = (
+                    prev_world_time
+                    if prev_world_time.tzinfo is not None
+                    else prev_world_time.replace(tzinfo=IST)
+                ).astimezone(IST)
+                final_boundary = datetime(
+                    prev_ist.year, prev_ist.month, prev_ist.day, 0, 0, 0, tzinfo=IST
+                ) + timedelta(days=1)
+                if final_boundary > sim_start_dt:
+                    dur = await _snapshot_completed_day(
+                        drain_conn=drain_conn,
+                        boundary=final_boundary,
+                        workspace=workspace,
+                        ws_redis=ws_redis,
+                        producer=producer,
+                        consumer=consumer,
+                        acct_cfg=acct_cfg,
+                        banks=banks,
+                        world_clock=world_clock,
+                        run_id=run_id,
+                        poller_cursors=poller_cursors,
+                        drain_timeout_seconds=r_cfg.drain_timeout_seconds,
+                        step_idx=len(steps),
+                    )
+                    if dur > longest_drain_seconds:
+                        longest_drain_seconds = dur
 
             # Read feature rows from feature_log table before workspace teardown
             rows = await drain_conn.fetch(
