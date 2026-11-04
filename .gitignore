@@ -35,6 +35,7 @@ models/**/*.parquet
 catboost_info/
 mlruns/
 data/processed/
+data/datasets/
 data/enriched/*.bak
 graphify-out/
 

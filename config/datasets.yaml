@@ -1,0 +1,14 @@
+# =====================================================================
+# DATASET GENERATION CONFIGURATION: configuration for Level 16c
+# dataset builder and split world counts.
+# =====================================================================
+
+datasets:
+  worlds_per_split:
+    label: policy
+    value:
+      training: 2
+      validation: 1
+      test: 1
+      stress: 1
+    reason: "Level 16 proves the path end to end; full scale is issue 16-4 (architect Q5)"

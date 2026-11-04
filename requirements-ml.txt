@@ -26,7 +26,6 @@ shap==0.49.1
 
 # === Data ===
 pandas==2.3.3
-pyarrow==23.0.1
 numpy==1.26.4
 
 # === Visualization ===
