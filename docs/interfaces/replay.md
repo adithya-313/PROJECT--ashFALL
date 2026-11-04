@@ -189,3 +189,52 @@ Under at-least-once message delivery, producing duplicate payment messages to th
 
 ### 5. Capped Gang Payments Receive No Decision
 - **Attempt-Only Rule**: Replay evaluates decisions strictly for executed payment attempts (`PaymentEvent`). Syndicate structured forwards cut by the illicit balance cap generate no ledger attempts and legitimately receive no decision calls during replay.
+
+---
+
+## Replay Speed, Determinism Hash & History Recompute (Level 16b Round 4)
+
+### 1. Replay Speed Control (`replay_speed`) & Pacing Rule (Decision D2)
+- **Configuration**: `config/replay.yaml` policy key `replay_speed` defaults to `"max"` (policy decision for Level 16 task 2).
+- **Behavior Modes**:
+  - `"max"`: Replay executes without sleeping, paced solely by pipeline drain convergence (`drain()`).
+  - Numeric Speed ($> 0$): Specifies world seconds per real-time second. For example, a speed of `60.0` paces a 120-second simulated world gap with 2.0 seconds of real-clock sleep.
+- **Pacing Mathematics**: Pure function `pace_seconds(previous_world_time, next_world_time, speed) -> float`:
+  - Returns `0.0` if `speed == "max"`, `previous_world_time is None`, or `gap == 0.0`.
+  - Calculates `gap / speed` for positive time gaps.
+  - Rejects zero, negative, or unrecognized string speeds with a descriptive `ValueError`.
+  - Rejects backwards world time (`next_world_time < previous_world_time`) with `ValueError`, enforcing monotonic world-time ordering across all replay steps.
+- **Async Execution**: `run_replay` accepts `replay_speed: str | float | None = None` (falling back to `load_default_replay_speed()`) and `sleep: Callable[[float], Awaitable[None]] = asyncio.sleep`. Before dispatching each step, the runner awaits `pace_step(previous_world_time, step.world_time, current_speed, sleep=sleep)`.
+
+### 2. Determinism Hash (`feature_log_sha256`) (Decision D3)
+- **Purpose**: Computes a canonical SHA-256 digest over all workspace `feature_log` rows to prove bitwise replay reproducibility across distinct runs on the same recorded world.
+- **Ordering**: Rows are sorted strictly by `(bank_id, payment_id, decision_time)`.
+- **Canonical Serialization**: Serialized as canonical JSON using `orjson.dumps(..., option=orjson.OPT_SORT_KEYS)` with recursive dictionary key sorting and ISO-8601 UTC timestamps.
+- **Schema Column Selection (17 Total Columns in `feature_log`)**:
+  - **16 Deterministic Columns (Included)**:
+    `account_id`, `arrival_cutoff`, `bank_id`, `decided_at`, `decision_time`, `error_message`, `error_type`, `feature_names_sha256`, `feature_set_version`, `feature_values`, `missing_request_fields`, `payment_id`, `registry_answers`, `run_id`, `status`, `watermark_lag_ms`.
+  - **1 Real-Clock Column (Excluded)**:
+    `created_at` (defined with `DEFAULT clock_timestamp()` in PostgreSQL schema). This column captures the host machine's physical wall-clock timestamp during SQL `INSERT` and legitimately varies across executions; only real-clock columns are excluded.
+- **Verification Result**: Populated directly on `ReplayResult.feature_log_sha256`.
+
+### 3. History Recompute Verification & Before-Drop Hook (Decisions D1, D4)
+- **Arrival Column Recompute Filter (Decision D1)**:
+  - `features/feature_replay.py: replay_history_into_redis` queries all 5 historical event tables (`transactions`, `bank_account_events`, `bank_withdrawals`, `bank_feedback`, `bank_complaints`) filtering by `COALESCE(arrival_time, <legacy_col>) <= cutoff`.
+  - Merge order uses `arrival_from_row(row, <legacy_col>)`. When `arrival_time` is NULL, queries fall back to legacy columns (`created_at` / `recorded_at`) with byte-for-byte fidelity.
+- **Teardown Lifecycle Hook (Decision D4)**:
+  - `run_replay` provides `before_drop_hook: Callable[[ReplayDropContext], Awaitable[None]] | None = None`.
+  - Invoked after all steps have converged and feature logs are persisted, but prior to dropping the workspace.
+  - `ReplayDropContext`: Frozen dataclass exposing `(workspace: ReplayWorkspace, workspace_dsn: str, logged_payment_ids_by_bank: dict[str, list[str]])`, where `workspace_dsn` carries `options=-csearch_path%3D{workspace.postgres_schema}`.
+- **Recompute Parity**:
+  - In integration tests, `before_drop_hook` iterates over every logged payment ID and calls `recompute_logged_row` with an in-memory scratch Redis (`fakeredis.FakeRedis()`).
+  - For all decisions with status `"ok"` (794 in test world), recomputed feature values strictly match logged values with zero mismatches (`mismatches == []` and `logged == recomputed`).
+  - For decisions with status `"no_watermark"` (the initial pre-payment decision), `recompute_logged_row` consistently raises `ValueError("Feature log row status is 'no_watermark'; nothing to recompute")`.
+
+### 4. Measured Execution Times
+*(Measured on host Windows machine using `py -3.12`)*
+- **Commit 1 Unit Tests** (`test_feature_replay_arrival.py`, `test_feature_replay.py`, `test_replay_bad_ids.py`): 20 passed in 0.84s.
+- **Commit 1 Existing Integration Test** (`test_recompute_from_history.py`): 3 passed in 14.16s unedited.
+- **Commit 2 Speed Control Tests** (`test_replay_speed.py`): 17 passed in 0.88s.
+- **Commit 3 Determinism Integration Test** (`test_replay_determinism.py` covering Replay A, 795 recomputed decisions, and Replay B): 1 passed in 1684.62s (~28 min 04s).
+- **Break-It 3 Test Run** (`test_replay_determinism.py` with `created_at` included in hash): 1 failed in 1931.60s (~32 min 11s).
+
