@@ -317,12 +317,84 @@ def load_default_decisions_per_event_payment() -> bool:
     return bool(entry["value"])
 
 
+def validate_replay_speed(speed: Any) -> None:
+    """
+    WHAT: Enforces validity of replay_speed setting.
+    WHY: Decision D2: Speed must be 'max' or a float/int strictly greater than 0.
+    """
+    if speed == "max":
+        return
+    if isinstance(speed, (int, float)) and not isinstance(speed, bool):
+        if speed > 0:
+            return
+        raise ValueError(f"replay_speed must be > 0, got {speed!r}")
+    raise ValueError(f"replay_speed must be 'max' or a number > 0, got {speed!r}")
+
+
+def load_default_replay_speed() -> str | float:
+    """
+    WHAT: Reads the replay_speed policy setting from config/replay.yaml.
+    WHY: Level 16 task 2: Replay pacing defaults to 'max' (no sleeping).
+    """
+    from core.config_validator import load_yaml
+    from world.replay_workspace import CONFIG_PATH
+
+    data = load_yaml(CONFIG_PATH)
+    block = data.get("replay_workspace", {})
+    entry = block.get("replay_speed")
+    if entry is None or not isinstance(entry, dict) or "value" not in entry:
+        raise ValueError(f"Missing 'replay_speed' policy setting in {CONFIG_PATH}")
+    val = entry["value"]
+    validate_replay_speed(val)
+    return val
+
+
+def pace_seconds(
+    previous_world_time: datetime | None,
+    next_world_time: datetime,
+    speed: str | float,
+) -> float:
+    """
+    WHAT: Pure function computing real seconds to sleep between replay steps.
+    WHY: Decision D2: 0 for 'max'; (next_world_time - previous_world_time) / speed otherwise.
+    Raises ValueError on negative gap (backwards world time).
+    """
+    validate_replay_speed(speed)
+    if speed == "max" or previous_world_time is None:
+        return 0.0
+    if not isinstance(speed, (int, float)):
+        raise ValueError(f"replay_speed must be a positive number, got {speed!r}")
+    gap = (next_world_time - previous_world_time).total_seconds()
+    if gap < 0:
+        raise ValueError(
+            f"Backwards world time gap ({gap}s): previous {previous_world_time} > next {next_world_time}"
+        )
+    return float(gap / speed)
+
+
+async def pace_step(
+    previous_world_time: datetime | None,
+    next_world_time: datetime,
+    speed: str | float,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> float:
+    """
+    WHAT: Pacing helper evaluating pace_seconds and awaiting sleep(pace) before each replay step.
+    WHY: Encapsulates step pacing logic for standalone unit testing and run_replay invocation.
+    """
+    pace = pace_seconds(previous_world_time, next_world_time, speed)
+    await sleep(pace)
+    return pace
+
+
 async def run_replay(
     recorded_world: RecordedWorld,
     feed: BankFeed,
     admin_pg: str,
     *,
     decisions_per_event_payment: bool | None = None,
+    replay_speed: str | float | None = None,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     replay_settings: ReplaySettings | None = None,
     account_settings: AccountFeaturesSettings | None = None,
     live_redis: Any = None,
@@ -351,6 +423,13 @@ async def run_replay(
         feed,
         decisions_per_event_payment=per_event_mode,
     )
+
+    current_speed = (
+        load_default_replay_speed()
+        if replay_speed is None
+        else replay_speed
+    )
+    validate_replay_speed(current_speed)
 
     r_cfg = replay_settings if replay_settings is not None else get_default_replay_settings()
     acct_cfg = account_settings if account_settings is not None else get_default_settings()
@@ -482,8 +561,12 @@ async def run_replay(
         produced_partitions: set[int] = set()
 
         # 5 & 6. Execute replay steps
+        prev_world_time: datetime | None = None
         async with workspace_pool.acquire() as drain_conn:
             for step_idx, step in enumerate(steps):
+                await pace_step(prev_world_time, step.world_time, current_speed, sleep=sleep)
+                prev_world_time = step.world_time
+
                 if isinstance(step, FeedStep):
                     # 5. FeedStep: set world clock, then post feed record
                     world_clock.set_time(step.world_time)

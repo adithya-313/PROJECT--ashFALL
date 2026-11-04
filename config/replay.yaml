@@ -44,3 +44,9 @@ replay_workspace:
     label: policy
     value: true
     reason: "replay and 16c datasets use one decision per executed attempt — architect P2(b)"
+
+  replay_speed:
+    label: policy
+    value: "max"
+    reason: 'Level 16 task 2 — "max" = no sleeping, limited only by the drain wait (architect Q3); a number = world seconds per real second'
+    derived_from: "Level 16 task 2 and architect Q3"
