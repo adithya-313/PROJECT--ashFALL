@@ -704,7 +704,9 @@ async def run_replay(
         check_workspace_topic_partitions(consumer, workspace.kafka_topic)
 
         # 4. Set up clocks and bank connector transports
-        initial_time = steps[0].world_time if steps else datetime.now()
+        if not steps:
+            raise ValueError("Cannot replay an empty step list: no replay steps were generated")
+        initial_time = steps[0].world_time
         world_clock = ManualClock(initial_time)
         transport_clock = WallClock()
 
