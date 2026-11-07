@@ -48,6 +48,7 @@ def _make_dummy_extract(
     payment_rows: list[dict[str, Any]] | None = None,
     snapshot_rows: list[dict[str, Any]] | None = None,
     label_rows: list[dict[str, Any]] | None = None,
+    clock_start: str = "2026-09-01",
 ) -> WorldExtract:
     canon = canonical_feature_names()
     acct = account_feature_names()
@@ -111,6 +112,7 @@ def _make_dummy_extract(
         payment_rows=payment_rows,
         snapshot_rows=snapshot_rows,
         label_rows=label_rows,
+        clock_start=clock_start,
     )
 
 
@@ -198,6 +200,7 @@ def test_build_dataset_r2_cutoff_filtering() -> None:
     p_before = {
         "bank_id": "b0",
         "payment_id": "p_before",
+        "receiver_account_id": "acc_receiver_1",
         "decision_time": datetime(2026, 9, 10, 9, 59, 59, tzinfo=UTC),
         "status": "ok",
         "feature_values": {name: 1.0 for name in canon},
@@ -205,6 +208,7 @@ def test_build_dataset_r2_cutoff_filtering() -> None:
     p_exact = {
         "bank_id": "b0",
         "payment_id": "p_exact",
+        "receiver_account_id": "acc_1",
         "decision_time": cutoff,
         "status": "ok",
         "feature_values": {name: 1.0 for name in canon},
@@ -212,6 +216,7 @@ def test_build_dataset_r2_cutoff_filtering() -> None:
     p_after = {
         "bank_id": "b0",
         "payment_id": "p_after",
+        "receiver_account_id": "acc_2",
         "decision_time": datetime(2026, 9, 10, 10, 0, 1, tzinfo=UTC),
         "status": "ok",
         "feature_values": {name: 1.0 for name in canon},
@@ -349,6 +354,7 @@ def test_build_dataset_r5_no_watermark_rows_and_none_shares() -> None:
     p1 = {
         "bank_id": "b0",
         "payment_id": "p1",
+        "receiver_account_id": "acc_receiver_1",
         "decision_time": datetime(2026, 9, 10, tzinfo=UTC),
         "status": "no_watermark",
         "feature_values": {name: None for name in canon},
@@ -356,6 +362,7 @@ def test_build_dataset_r5_no_watermark_rows_and_none_shares() -> None:
     p2 = {
         "bank_id": "b0",
         "payment_id": "p2",
+        "receiver_account_id": "acc_receiver_1",
         "decision_time": datetime(2026, 9, 10, tzinfo=UTC),
         "status": "ok",
         "feature_values": {name: (1.0 if name != "payee_registry_match" else None) for name in canon},
@@ -442,3 +449,37 @@ def test_build_dataset_r8_manifest_and_write_dataset(tmp_path: Path) -> None:
         content = (out_dir / fname).read_bytes()
         expected_sha = hashlib.sha256(content).hexdigest()
         assert dataset.manifest["files"][fname] == expected_sha
+
+
+def test_build_dataset_manifest_worlds_carry_clock_start() -> None:
+    """Verifies that each world entry in manifest['worlds'] records clock_start."""
+    e = _make_dummy_extract(world_id="w_custom_clock", clock_start="2026-10-01")
+    cutoff = datetime(2026, 10, 15, tzinfo=UTC)
+    dataset = build_dataset([e], split="training", cutoff=cutoff)
+
+    assert len(dataset.manifest["worlds"]) == 1
+    w_meta = dataset.manifest["worlds"][0]
+    assert w_meta["world_id"] == "w_custom_clock"
+    assert w_meta["clock_start"] == "2026-10-01"
+
+
+def test_build_dataset_missing_receiver_account_raises_value_error() -> None:
+    """Verifies that payment rows missing receiver_account_id fail fast with ValueError."""
+    canon = canonical_feature_names()
+    p_bad = {
+        "bank_id": "b0",
+        "payment_id": "p_missing_rec",
+        "decision_time": datetime(2026, 9, 10, 10, 0, 0, tzinfo=UTC),
+        "status": "ok",
+        "feature_values": {name: 1.0 for name in canon},
+        # receiver_account_id is omitted
+    }
+    extract = _make_dummy_extract(payment_rows=[p_bad])
+    cutoff = datetime(2026, 9, 15, tzinfo=UTC)
+
+    with pytest.raises(
+        ValueError,
+        match="Payment row 'p_missing_rec' is missing required 'receiver_account_id'",
+    ):
+        build_dataset([extract], split="training", cutoff=cutoff)
+
