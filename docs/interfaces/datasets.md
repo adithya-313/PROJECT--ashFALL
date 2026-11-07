@@ -1,0 +1,89 @@
+# Point-in-Time Dataset Construction (`replay/dataset_builder.py`)
+
+## Architectural Overview
+
+The dataset builder constructs immutable point-in-time training, validation, test, and stress datasets from historical simulation replay workspaces. It extracts relational simulation telemetry, point-in-time feature vectors, daily account snapshots, and complaint fraud labels into structured PyArrow tables and persists them as Parquet files accompanied by a cryptographic metadata manifest.
+
+Point-in-time datasets enforce absolute causal hygiene: all features, labels, and account snapshots are evaluated against a strict world-clock cutoff timestamp ($C$), preventing lookahead bias and future state leakage.
+
+---
+
+## Core Data Structures
+
+### 1. `WorldExtract`
+An in-memory frozen snapshot extracted from an isolated replay workspace prior to workspace teardown (`extract_world`):
+- `world_id`: Provenance simulation world identifier.
+- `split`: Dataset partition (`training`, `validation`, `test`, `stress`).
+- `seed`: World builder random seed.
+- `run_id`: 16-character fingerprint of the replay run.
+- `gang_families`: Tuple of active syndicate tactic families present in the world.
+- `decisions_per_event_payment`: Boolean flag confirming decisions were evaluated for all event payments.
+- `registry_wired`: Boolean flag indicating whether the pre-decision registry was active.
+- `registry_wired_reason`: Text explanation for registry wiring state.
+- `payment_rows`: Decision feature rows extracted from `feature_log` (real-clock column `created_at` omitted).
+- `snapshot_rows`: Daily account snapshots extracted from `account_snapshots` (real-clock column `logged_at` omitted).
+- `label_rows`: Fraud complaint labels extracted from `labels` (real-clock column `recorded_at` omitted).
+
+### 2. `Dataset`
+A point-in-time bundle consisting of:
+- `payments`: PyArrow table containing event payment features, decision metadata, and convenience label columns.
+- `snapshots`: PyArrow table containing point-in-time customer account snapshot features evaluated at IST midnight boundaries.
+- `labels`: PyArrow table containing complaint fraud labels known by the cutoff.
+- `manifest`: Structured dictionary detailing dataset provenance, row counts, feature definitions, and cryptographic checksums.
+
+---
+
+## Design Rules (R1–R8)
+
+### R1. Multi-World Concatenation
+Extracts across multiple simulation worlds within the same split are concatenated into unified tables. Every row in `payments`, `snapshots`, and `labels` preserves its provenance via an explicit `world_id` column.
+
+### R2. Strict Cutoff Filtering
+A single simulation world-clock timestamp ($C$) governs inclusion across all three tables:
+- **Payments**: `decision_time <= C`
+- **Snapshots**: `snapshot_time <= C`
+- **Labels**: `arrival_time <= C`
+Events occurring strictly after $C$ are excluded.
+
+### R3. Convenience Label Columns
+To facilitate offline model training without manual multi-table joins, the `payments` table includes two point-in-time boolean convenience columns:
+1. `label_receiver_reported_by_cutoff`: Evaluates to `True` if any label known by $C$ (`arrival_time <= C`) targets the payment's receiving account (`account_id`), regardless of final verdict.
+2. `label_payment_named_by_cutoff`: Evaluates to `True` if the payment identifier appears in the `payment_ids` array of any label known by $C$.
+*Note*: False complaints (`verdict == 'not_fraud'`) count as reported, as a receiving account subject to an investigated complaint is operationally flagged prior to final resolution.
+
+### R4. Feature Columns Specification
+The manifest explicitly enumerates all 52 dense feature columns (`feature_columns`) loaded from `canonical_feature_names()`. No column beginning with the `label_` prefix is ever included in the feature column specification, preventing target leakage during automated vector assembly.
+
+### R5. Preservation of Unwatermarked Rows & Missingness Accounting
+Payments logged with status `no_watermark` (e.g. before initial bank watermarks are established) are preserved as first-class training rows. The manifest records:
+- `no_watermark_count`: Integer count of `no_watermark` rows in the dataset.
+- `feature_none_shares`: Exact proportion of null (`None`) values per feature column (e.g., `payee_registry_match: 1.0` while registry wiring is deferred).
+- `label_maturity_note`: Explicit notation that fraud labels arriving near cutoff $C$ contain unadjusted reporting latency.
+
+### R6. Canonical Content Hash (`content_hash`)
+A deterministic SHA-256 fingerprint generated across all three tables:
+- Rows are sorted canonically:
+  - Payments: `(world_id, decision_time, payment_id)`
+  - Snapshots: `(world_id, snapshot_time, bank_id, account_id, snapshot_kind)`
+  - Labels: `(world_id, arrival_time, label_id, account_id)`
+- Column keys are serialized in sorted alphabetical order.
+- Real wall-clock timestamps (`created_at`, `logged_at`, `recorded_at`) are excluded.
+- Identical simulation replays produce bitwise identical content hashes regardless of host execution speed or row extraction order.
+
+### R7. Fail-Closed Refusals
+`build_dataset` refuses invalid dataset requests by raising `ValueError`:
+1. `decisions_per_event_payment == False`: Replay must evaluate decisions for all event payments.
+2. **Held-Out Tactics in Training**: Any training split dataset containing active held-out tactic families (`slow_drip`, `device_rotation` from `config/evaluation.yaml`) is immediately refused.
+3. **Split Mismatch**: Every constituent extract must match the target split (`training`, `validation`, `test`, `stress`).
+4. **Empty Sequence**: Building from an empty extract list is prohibited.
+
+### R8. Storage Format & Manifest Integrity (`write_dataset`)
+Datasets are serialized to disk under `<root>/<split>-<cutoff yyyymmddTHHMM>-<content_hash[:12]>`:
+```
+data/datasets/training-20260915T0000-a1b2c3d4e5f6/
+├── payments.parquet
+├── snapshots.parquet
+├── labels.parquet
+└── manifest.json
+```
+`write_dataset` computes SHA-256 digests for each Parquet file and embeds them into `manifest.json["files"]`.

@@ -12,11 +12,13 @@ D2: Replay runner identifies completed world days in IST, draining and writing d
 """
 
 import asyncio
+import dataclasses
 import os
 import uuid
 from collections import defaultdict
 from collections.abc import AsyncGenerator, Generator
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import asyncpg
 import orjson
@@ -24,6 +26,7 @@ import pytest
 import redis
 
 from core.config import config
+from core.config_validator import load_yaml
 from features.account_keys import get_default_settings
 from features.account_records import account_event_from_row
 from features.account_snapshots import (
@@ -35,12 +38,14 @@ from features.account_stream import apply_account_event
 from features.ingest_watermark import record_payment_watermark, record_poller_watermark
 from features.m1_features import SUPPORTED_GROUPS, compute_account_features
 from replay.ordering import FeedStep, build_replay_steps
+from replay.pipeline import feed_with_labels
 from replay.runner import IST, ReplayDropContext, run_replay
 from tests.integration.conftest import get_test_database_url
 from tests.integration.test_replay_recording import RejectingTransport
 from world.bank_connectors import MockBankConnectors, load_bank_modes
-from world.bank_feed import project_run, resolve_bank_id
+from world.bank_feed import BankFeedPaymentSide, resolve_bank_id
 from world.bank_feed_config import load_bank_feed_config
+from world.gang_config import BlockStep, GangConfig, gang_config_from_plain
 from world.interactive_records import RunnerSettings
 from world.interactive_runner import FastRunSettings, prepare_world
 from world.replay_recording import record_world_for_replay
@@ -217,14 +222,38 @@ async def test_boundary_daily_snapshots(
     assert late_feats["sim_swapped"] == 0
 
 
+def _load_adapted_complaint_gang() -> GangConfig:
+    """
+    WHAT: Loads showcase/fixtures/level_12/gang_complaints.yaml adapted for the 20-person small world.
+    WHY: Architect ruling: small world has 14 eligible victims; adapt gang to 1 receiving mule,
+    12 victims, and family 'fast_pass_through' without modifying the fixture file on disk.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    gang_path = repo_root / "showcase" / "fixtures" / "level_12" / "gang_complaints.yaml"
+    base_gang = gang_config_from_plain(load_yaml(gang_path))
+
+    new_steps = []
+    for s in base_gang.steps:
+        if s.block == "scam":
+            p = dict(s.params)
+            p["receiving_mules"] = 1
+            p["victims_per_receiving_mule"] = 12
+            new_steps.append(BlockStep(block="scam", params=tuple(p.items())))
+        else:
+            new_steps.append(s)
+
+    return dataclasses.replace(base_gang, family="fast_pass_through", steps=tuple(new_steps))
+
+
 async def test_end_to_end_replay_labels_snapshots(
     live_redis: redis.Redis,
 ) -> None:
     """
     WHAT: Runs end-to-end replay verifying complaint label consumption and daily account snapshots.
     WHY: Implements architect decisions D1, D2:
-      - Labels table receives complaint labels during replay drain (0 for small world).
+      - Labels table receives complaint labels during replay drain (>0 with adapted gang).
       - Account snapshots table receives >= 1 daily snapshot per bank per active world day.
+      - Daily snapshot reflects transaction from the last step of the completed day.
     """
     cfg = load_bank_feed_config()
     bank_modes = load_bank_modes()
@@ -246,15 +275,40 @@ async def test_end_to_end_replay_labels_snapshots(
         loop=loop,
     )
     runner = RunnerSettings(fraud_enabled=True)
-    recorded_world = record_world_for_replay(WORLD_SETTINGS, runner, connectors)
-    feed = project_run(recorded_world.output)
+    adapted_gang = _load_adapted_complaint_gang()
+    recorded_world = record_world_for_replay(
+        WORLD_SETTINGS, runner, connectors, gang_configs=(adapted_gang,)
+    )
+    feed = feed_with_labels(recorded_world)
+
+    steps = build_replay_steps(recorded_world, feed, decisions_per_event_payment=True)
+    cs = recorded_world.output.plan.clock.start_date
+    sim_start_date = cs.astimezone(IST).date() if isinstance(cs, datetime) else cs
+    day1_boundary = (
+        datetime(sim_start_date.year, sim_start_date.month, sim_start_date.day, 0, 0, 0, tzinfo=IST)
+        + timedelta(days=1)
+    )
+    day1_payments = [
+        s for s in steps
+        if sim_start_date <= s.world_time.astimezone(IST).date() < day1_boundary.date()
+        and isinstance(s, FeedStep)
+        and isinstance(s.record, BankFeedPaymentSide)
+    ]
+    assert len(day1_payments) > 0, "Expected payments on first simulation day"
+    last_day1_step = day1_payments[-1]
+    assert isinstance(last_day1_step, FeedStep)
+    assert isinstance(last_day1_step.record, BankFeedPaymentSide)
+    target_bank = last_day1_step.record.bank_id
+    target_account = last_day1_step.record.account_id
+    target_side = last_day1_step.record.side
 
     labels_count = -1
     snapshots_by_bank_day: dict[tuple[str, datetime], int] = defaultdict(int)
     total_snapshots = 0
+    last_step_feature_values: list[float | int | None] | None = None
 
     async def inspect_hook(drop_ctx: ReplayDropContext) -> None:
-        nonlocal labels_count, snapshots_by_bank_day, total_snapshots
+        nonlocal labels_count, snapshots_by_bank_day, total_snapshots, last_step_feature_values
         ws_conn = await asyncpg.connect(drop_ctx.workspace_dsn)
         try:
             labels_count = await ws_conn.fetchval("SELECT count(*) FROM labels")
@@ -266,6 +320,20 @@ async def test_end_to_end_replay_labels_snapshots(
                 b_id = str(r["bank_id"])
                 s_time = r["snapshot_time"].astimezone(timezone.utc)
                 snapshots_by_bank_day[(b_id, s_time)] += 1
+
+            snap_val_query = (
+                "SELECT feature_values FROM account_snapshots "
+                "WHERE bank_id = $1 AND account_id = $2 AND snapshot_time = $3 AND snapshot_kind = 'daily'"
+            )
+            snap_val_row = await ws_conn.fetchrow(
+                snap_val_query,
+                target_bank,
+                target_account,
+                day1_boundary.astimezone(timezone.utc),
+            )
+            if snap_val_row is not None:
+                raw_v = snap_val_row["feature_values"]
+                last_step_feature_values = orjson.loads(raw_v) if isinstance(raw_v, str) else raw_v
         finally:
             await ws_conn.close()
 
@@ -279,23 +347,29 @@ async def test_end_to_end_replay_labels_snapshots(
         before_drop_hook=inspect_hook,
     )
 
-    # 1. Decisions sent
-    assert result.decisions_sent == 795
+    # 1. Decisions sent: exactly matches event count from simulation run
+    events = recorded_world.output.result.run_result.events
+    assert result.decisions_sent == len(events)
 
     # 2. Complaint labels (Decision D1):
-    # Small world FastRunSettings(101, 20, 6, 51, "training") has 0 complaints in its projected feed.
-    expected_complaints = sum(len(cmps) for cmps in feed.complaints_by_bank.values())
-    assert expected_complaints == 0
-    assert labels_count == 0
+    all_complaints = [c for cmps in feed.complaints_by_bank.values() for c in cmps]
+    same_bank_cmps = [c for c in all_complaints if c.reported_bank_id == c.bank_id]
+    cross_bank_cmps = [c for c in all_complaints if c.reported_bank_id != c.bank_id]
+
+    assert len(same_bank_cmps) >= 2, f"Expected >= 2 same-bank complaints, found {len(same_bank_cmps)}"
+    received_times = {c.received_at for c in same_bank_cmps}
+    assert len(received_times) == len(same_bank_cmps), "Expected distinct received_at times for same-bank complaints"
+
+    assert labels_count == len(same_bank_cmps)
+    assert labels_count > 0
+    if cross_bank_cmps:
+        assert labels_count < len(all_complaints)
+    else:
+        assert labels_count == len(all_complaints)
 
     # 3. Daily account snapshots (Decision D2):
     assert total_snapshots > 0
 
-    # Check snapshots: >= 1 snapshot row per bank per world day that had activity (derived from steps)
-    cs = recorded_world.output.plan.clock.start_date
-    sim_start_date = cs.astimezone(IST).date() if isinstance(cs, datetime) else cs
-
-    steps = build_replay_steps(recorded_world, feed, decisions_per_event_payment=True)
     active_bank_days: set[tuple[str, datetime]] = set()
     for s in steps:
         s_date = s.world_time.astimezone(IST).date()
@@ -305,3 +379,15 @@ async def test_end_to_end_replay_labels_snapshots(
 
     for bank_id, boundary_utc in active_bank_days:
         assert snapshots_by_bank_day[(bank_id, boundary_utc)] >= 1
+
+    # 4. Snapshot ordering check: daily snapshot at Day 1 boundary reflects the last transaction on Day 1
+    assert last_step_feature_values is not None, f"Snapshot for {target_account} at {day1_boundary} must exist"
+    feature_names = account_feature_names()
+    if target_side == "credit":
+        payer_idx = feature_names.index("distinct_payers_24h")
+        val = last_step_feature_values[payer_idx]
+        assert isinstance(val, (int, float)) and val >= 1
+    else:
+        outflow_idx = feature_names.index("outflow_to_merchant_paise_7d")
+        val = last_step_feature_values[outflow_idx]
+        assert isinstance(val, (int, float)) and val > 0

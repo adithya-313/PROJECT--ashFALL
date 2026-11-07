@@ -75,6 +75,9 @@ def record_world_for_replay(
     fast_settings: FastRunSettings,
     runner_settings: RunnerSettings,
     connectors: MockBankConnectors,
+    *,
+    gang_configs: tuple[GangConfig, ...] = (),
+    world_split: str | None = None,
 ) -> RecordedWorld:
     """
     WHAT: Runs an interactive world simulation while recording decision requests constructed by connectors.
@@ -85,6 +88,8 @@ def record_world_for_replay(
         fast_settings: Simulation settings (seed, population size, shops, days, split).
         runner_settings: Runner settings including the fraud switch.
         connectors: MockBankConnectors used to build DecisionCall requests.
+        gang_configs: Optional tuple of GangConfig instances executing when fraud switch is on.
+        world_split: Optional world split identifier (e.g. 'training').
 
     Returns:
         RecordedWorld containing the full InteractiveWorldOutput and recorded (PaymentView, DecisionCall) pairs.
@@ -97,8 +102,21 @@ def record_world_for_replay(
     recorded: list[tuple[PaymentView, DecisionCall]] = []
     hook = _make_recording_hook(connectors, recorded)
 
-    output = run_interactive_world(fast_settings, runner_settings, hook=hook)
-    return RecordedWorld(output=output, calls=tuple(recorded))
+    output = run_interactive_world(
+        fast_settings,
+        runner_settings,
+        hook=hook,
+        gang_configs=gang_configs,
+        world_split=world_split,
+    )
+    return RecordedWorld(
+        output=output,
+        calls=tuple(recorded),
+        world_id=output.result.run_id,
+        split=world_split if world_split is not None else fast_settings.range_name,
+        seed=fast_settings.seed,
+        gang_families=tuple(g.family for g in gang_configs),
+    )
 
 
 def record_sampled_world_for_replay(

@@ -264,12 +264,21 @@ Under at-least-once message delivery, producing duplicate payment messages to th
 - **Metadata Extension**: `RecordedWorld` in `world/replay_recording.py` supports optional fields `world_id`, `split`, `seed`, and `gang_families`.
 - **Sampled-World Recorder**: `record_sampled_world_for_replay` runs `run_sampled_world` with an intercepting hook returning `"allow"`. It extracts gang tactic families from resolved gangs (rejecting live bank modes) and populates `RecordedWorld` with full simulation provenance for dataset generation.
 
-### 5. Measured Execution Times
+### 5. Replay Pipeline & Feed With Labels (Level 16c Round 2b)
+- **Feed With Labels**: `replay/pipeline.py: feed_with_labels(recorded_world: RecordedWorld) -> BankFeed` compiles simulation outputs into tenant-isolated BankFeed event streams alongside complaint labels constructed via `world/label_builder.py: build_label_events`.
+- **Pre-Simulation Snapshot Skip (Decision D1c)**: Boundaries preceding `plan.clock.start_date` are skipped; pre-simulation account openings represent static ledger setup rather than transactional simulation days.
+- **Fail-Fast Empty Step Refusal (Decision D1b)**: `run_replay` strictly requires a non-empty step list. If `not steps`, it raises `ValueError("Cannot replay an empty step list: no replay steps were generated")`, removing the unwatermarked fallback to wall-clock `datetime.now()`.
+- **Campaign Parameter Forwarding**: `record_world_for_replay` accepts keyword-only `gang_configs: tuple[GangConfig, ...] = ()` and `world_split: str | None = None`, forwarding campaign itineraries to `run_interactive_world` and recording gang families on the resulting `RecordedWorld`.
+
+### 6. Measured Execution Times
 *(Measured on host Windows machine using `py -3.12`)*
 - **Commit 1 Groundwork Tests** (`test_issue_register_v2.py`): 18 passed in 3.21s.
 - **Commit 2 Sampled-World Recording Tests** (`test_sampled_world_hook.py`): 4 passed in 4.41s.
 - **Commit 3 Day Boundaries Unit Tests** (`test_replay_day_boundaries.py`): 5 passed in 1.41s.
 - **Commit 3 Fast Boundary Snapshot Test** (`test_boundary_daily_snapshots`): 1 passed in 2.19s.
 - **Commit 3 Full Replay with Daily Snapshots** (`test_end_to_end_replay_labels_snapshots` across 51 world days): 1 passed in 711.80s (~11m 51s, matching the ~12 min issue 16-4 estimate).
+- **16c-2b Commit 1 Replay Labels & Snapshot Ordering** (`test_replay_labels_snapshots.py`): 2 passed in 733.16s (~12m 13s).
+- **16c-2b Commit 2 Dataset Builder Unit Tests** (`test_dataset_builder.py`): 10 passed in 3.98s.
+- **16c-2b Commit 3 Dual Replay Parity Integration Test** (`test_dataset_end_to_end.py`): 1 passed in 1481.40s (~24m 41s).
 
 
