@@ -280,5 +280,37 @@ Under at-least-once message delivery, producing duplicate payment messages to th
 - **16c-2b Commit 1 Replay Labels & Snapshot Ordering** (`test_replay_labels_snapshots.py`): 2 passed in 733.16s (~12m 13s).
 - **16c-2b Commit 2 Dataset Builder Unit Tests** (`test_dataset_builder.py`): 10 passed in 3.98s.
 - **16c-2b Commit 3 Dual Replay Parity Integration Test** (`test_dataset_end_to_end.py`): 1 passed in 1481.40s (~24m 41s).
+- **16c-3a Commit 2 Dual Replay Watermark Advance Integration Test** (`test_replay_labels_snapshots.py`): 2 passed in 1501.68s (~25m 01s).
+
+## Idle-Partition Payment Watermark Advance (Level 16c Round 3a)
+
+### 1. Watermark Lag on Quiet Partitions
+In operational stream processing, ingestion watermarks advance according to `watermark = arrival - commit_grace` (where `commit_grace = 5s`). When a bank or partition is idle (no new transactions arrive), the watermark remains frozen at the timestamp of the last observed message. At midnight day boundaries or subsequent decision steps, this lag excludes legitimate transactions that completed earlier in the day from account feature windows or snapshot computations (e.g. `distinct_payers_24h` undercounting by 1).
+
+### 2. Dual Replay Proofs (`idle_advance_target`)
+In simulation replay, the runner can safely advance the partition watermark to `clock_now - commit_grace` because two conditions are strictly proven:
+1. **Drain Proof**: All messages produced to Kafka and the transactional outbox have been completely relayed, processed, and committed (`partition_drained=True`).
+2. **In-Flight / Ordering Proof**: Replay steps are strictly chronologically ordered. Therefore, if `next_unsent_arrival is None or next_unsent_arrival > clock_now - commit_grace`, no record exists in the simulation that could arrive <= target.
+
+When both proofs hold, `idle_advance_target(clock_now, commit_grace, partition_drained, next_unsent_arrival)` yields `(clock_now - commit_grace, "advance")`, and the runner updates the run-scoped partition watermark in Redis.
+
+### 3. Policy Configuration & Switch (`idle_partition_advance`)
+- **Setting**: `idle_partition_advance` under `replay_runner` in `config/replay.yaml` (default: `true`).
+- **Live-Mode Deferral**: Live stream processing cannot rely on a deterministic future queue to prove no messages are in-flight; live idle-partition timeout is tracked under Issue 16-5 and deferred to Level 19.
+
+### 4. Residual 5-Second Gap & Empirical Verification
+- **Residual Gap**: Transactions arriving in the interval `[midnight - commit_grace, midnight)` (within 5 seconds before the midnight boundary) remain unwatermarked at midnight by design, as the watermark reaches `midnight - 5s`. In the test world (51 days), the measured residual gap count in this interval is **0**.
+- **Determinism Hash & Metrics Comparison** (measured via `test_replay_labels_snapshots.py` across 51 world days):
+  - **OFF** (`idle_partition_advance=False`):
+    - `feature_log_sha256`: `d698efc5800c7958bbfbeb3ab36a17af2512d16ab2457d42fc55ee9f0041ef4c`
+    - `decisions_arrival_cutoff_behind`: 839
+    - `max_arrival_cutoff_gap_seconds`: 54125.000s (~15.03 hours of stall)
+    - `distinct_payers_24h`: 2 (undercounts; last transaction excluded)
+  - **ON** (`idle_partition_advance=True`):
+    - `feature_log_sha256`: `cebe9039b6dff16ae483028d2afb9f592a689d8844a33bc86c9f1e9a2c459066`
+    - `decisions_arrival_cutoff_behind`: 839
+    - `max_arrival_cutoff_gap_seconds`: 5.000s (tightly bounded to `commit_grace`)
+    - `distinct_payers_24h`: 3 (correct; includes last transaction)
+
 
 
