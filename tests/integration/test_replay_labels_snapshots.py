@@ -300,15 +300,15 @@ async def test_end_to_end_replay_labels_snapshots(
     assert isinstance(last_day1_step.record, BankFeedPaymentSide)
     target_bank = last_day1_step.record.bank_id
     target_account = last_day1_step.record.account_id
-    target_side = last_day1_step.record.side
+    assert last_day1_step.record.side == "credit"
 
     labels_count = -1
     snapshots_by_bank_day: dict[tuple[str, datetime], int] = defaultdict(int)
     total_snapshots = 0
-    last_step_feature_values: list[float | int | None] | None = None
+    last_step_feature_values_off: list[float | int | None] | None = None
 
-    async def inspect_hook(drop_ctx: ReplayDropContext) -> None:
-        nonlocal labels_count, snapshots_by_bank_day, total_snapshots, last_step_feature_values
+    async def inspect_hook_off(drop_ctx: ReplayDropContext) -> None:
+        nonlocal labels_count, snapshots_by_bank_day, total_snapshots, last_step_feature_values_off
         ws_conn = await asyncpg.connect(drop_ctx.workspace_dsn)
         try:
             labels_count = await ws_conn.fetchval("SELECT count(*) FROM labels")
@@ -333,23 +333,60 @@ async def test_end_to_end_replay_labels_snapshots(
             )
             if snap_val_row is not None:
                 raw_v = snap_val_row["feature_values"]
-                last_step_feature_values = orjson.loads(raw_v) if isinstance(raw_v, str) else raw_v
+                last_step_feature_values_off = orjson.loads(raw_v) if isinstance(raw_v, str) else raw_v
         finally:
             await ws_conn.close()
 
-    result = await run_replay(
+    # Run 1: idle_partition_advance=False (legacy behaviour)
+    result_off = await run_replay(
         recorded_world,
         feed,
         admin_pg=get_test_database_url(),
         base_redis_url=host_side_redis_url(),
         redis_client_factory=host_redis_factory,
         decisions_per_event_payment=True,
-        before_drop_hook=inspect_hook,
+        idle_partition_advance=False,
+        before_drop_hook=inspect_hook_off,
+    )
+
+    # Run 2: idle_partition_advance=True (new behaviour)
+    last_step_feature_values_on: list[float | int | None] | None = None
+
+    async def inspect_hook_on(drop_ctx: ReplayDropContext) -> None:
+        nonlocal last_step_feature_values_on
+        ws_conn = await asyncpg.connect(drop_ctx.workspace_dsn)
+        try:
+            snap_val_query = (
+                "SELECT feature_values FROM account_snapshots "
+                "WHERE bank_id = $1 AND account_id = $2 AND snapshot_time = $3 AND snapshot_kind = 'daily'"
+            )
+            snap_val_row = await ws_conn.fetchrow(
+                snap_val_query,
+                target_bank,
+                target_account,
+                day1_boundary.astimezone(timezone.utc),
+            )
+            if snap_val_row is not None:
+                raw_v = snap_val_row["feature_values"]
+                last_step_feature_values_on = orjson.loads(raw_v) if isinstance(raw_v, str) else raw_v
+        finally:
+            await ws_conn.close()
+
+    result_on = await run_replay(
+        recorded_world,
+        feed,
+        admin_pg=get_test_database_url(),
+        base_redis_url=host_side_redis_url(),
+        redis_client_factory=host_redis_factory,
+        decisions_per_event_payment=True,
+        idle_partition_advance=True,
+        before_drop_hook=inspect_hook_on,
     )
 
     # 1. Decisions sent: exactly matches event count from simulation run
     events = recorded_world.output.result.run_result.events
-    assert result.decisions_sent == len(events)
+    assert result_off.decisions_sent == len(events)
+    assert result_on.decisions_sent == len(events)
 
     # 2. Complaint labels (Decision D1):
     all_complaints = [c for cmps in feed.complaints_by_bank.values() for c in cmps]
@@ -381,13 +418,62 @@ async def test_end_to_end_replay_labels_snapshots(
         assert snapshots_by_bank_day[(bank_id, boundary_utc)] >= 1
 
     # 4. Snapshot ordering check: daily snapshot at Day 1 boundary reflects the last transaction on Day 1
-    assert last_step_feature_values is not None, f"Snapshot for {target_account} at {day1_boundary} must exist"
+    assert last_step_feature_values_off is not None, (
+        f"Snapshot for {target_account} at {day1_boundary} must exist (off)"
+    )
+    assert last_step_feature_values_on is not None, (
+        f"Snapshot for {target_account} at {day1_boundary} must exist (on)"
+    )
     feature_names = account_feature_names()
-    if target_side == "credit":
-        payer_idx = feature_names.index("distinct_payers_24h")
-        val = last_step_feature_values[payer_idx]
-        assert isinstance(val, (int, float)) and val >= 1
-    else:
-        outflow_idx = feature_names.index("outflow_to_merchant_paise_7d")
-        val = last_step_feature_values[outflow_idx]
-        assert isinstance(val, (int, float)) and val > 0
+
+    def _counterparty(r: BankFeedPaymentSide) -> str:
+        return f"{r.counterparty_bank_id}:{r.counterparty_vpa}" if r.counterparty_vpa else r.counterparty_bank_id
+
+    expected_with_last = len({
+        _counterparty(s.record)
+        for s in day1_payments
+        if s.record.account_id == target_account and s.record.side == "credit" and s.record.status == "success"
+    })
+    expected_without_last = len({
+        _counterparty(s.record)
+        for s in day1_payments[:-1]
+        if s.record.account_id == target_account and s.record.side == "credit" and s.record.status == "success"
+    })
+    assert expected_with_last != expected_without_last, (
+        "Test setup error: expected last payment to introduce a new distinct counterparty"
+    )
+    payer_idx = feature_names.index("distinct_payers_24h")
+    val_off = last_step_feature_values_off[payer_idx]
+    val_on = last_step_feature_values_on[payer_idx]
+    assert val_off == expected_without_last, (
+        f"Expected off run to undercount: got {val_off}, expected {expected_without_last}"
+    )
+    assert val_on == expected_with_last, (
+        f"Expected on run to include last step: got {val_on}, expected {expected_with_last}"
+    )
+
+    # Residual gap: count feed payments whose arrival falls in the last commit_grace seconds before any day boundary
+    residual_gap_payments = 0
+    commit_grace = 5
+    for s in steps:
+        if isinstance(s, FeedStep) and isinstance(s.record, BankFeedPaymentSide):
+            w_time = s.world_time.astimezone(IST)
+            b = datetime(w_time.year, w_time.month, w_time.day, 0, 0, 0, tzinfo=IST) + timedelta(days=1)
+            gap_start = b - timedelta(seconds=commit_grace)
+            if gap_start <= w_time < b:
+                residual_gap_payments += 1
+
+    print("\n[REPLAY METRICS]")
+    print(f"OFF: feature_log_sha256={result_off.feature_log_sha256}")
+    print(
+        f"OFF: decisions_arrival_cutoff_behind={result_off.decisions_arrival_cutoff_behind}, "
+        f"max_gap={result_off.max_arrival_cutoff_gap_seconds:.3f}s"
+    )
+    print(f"OFF: distinct_payers_24h={val_off} (expected_without_last={expected_without_last})")
+    print(f"ON:  feature_log_sha256={result_on.feature_log_sha256}")
+    print(
+        f"ON:  decisions_arrival_cutoff_behind={result_on.decisions_arrival_cutoff_behind}, "
+        f"max_gap={result_on.max_arrival_cutoff_gap_seconds:.3f}s"
+    )
+    print(f"ON:  distinct_payers_24h={val_on} (expected_with_last={expected_with_last})")
+    print(f"Residual gap payments count (within {commit_grace}s of midnight): {residual_gap_payments}")
