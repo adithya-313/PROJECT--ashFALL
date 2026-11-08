@@ -1061,3 +1061,10 @@ issues:
     levels: [18]
     parts: []
     later_work: ["Level 18a: build datasets for the sampler-planned world counts and make the replay drain faster (~12 min per small world measured on the author's Windows laptop)"]
+  16-5:
+    title: "Idle-partition watermark advance for the live payment consumer"
+    origin: revision_2
+    status: planned
+    levels: [19]
+    parts: []
+    later_work: ["Level 19: a quiet partition stalls the live payment watermark; replay solves it with a drain proof, live needs an idle timeout"]
