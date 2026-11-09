@@ -41,6 +41,8 @@ from features.ingest_watermark import get_payment_watermark, record_payment_wate
 from features.label_consumer import consume_complaint_labels_since
 from nationalsim.national_outbox import relay_national_outbox
 from replay.ordering import DecisionStep, FeedStep, build_replay_steps
+from replay.registry_driver import RegistryDriver, build_registry_driver
+from replay.registry_replay import REGISTRY_INGEST, REGISTRY_VISIBLE
 from world.bank_connectors import BankTransport, MockBankConnectors, load_bank_modes
 from world.bank_feed import BankFeed, resolve_bank_id
 from world.bank_feed_config import load_bank_feed_config
@@ -514,6 +516,22 @@ def load_default_kyc_phone_on_account_opened() -> bool:
     return bool(entry["value"])
 
 
+def load_default_world_registry_reporting() -> bool:
+    """
+    WHAT: Reads the world_registry_reporting policy flag from config/replay.yaml.
+    WHY: Architect 16d-1: replay sends world reports and the pre-world seed through the in-process registry; the
+    live default (config/nationalsim.yaml) is off.
+    """
+    from core.config_validator import load_yaml
+    from world.replay_workspace import CONFIG_PATH
+
+    data = load_yaml(CONFIG_PATH)
+    entry = data.get("replay_workspace", {}).get("world_registry_reporting")
+    if entry is None or not isinstance(entry, dict) or "value" not in entry:
+        raise ValueError(f"Missing 'world_registry_reporting' policy setting in {CONFIG_PATH}")
+    return bool(entry["value"])
+
+
 def validate_replay_speed(speed: Any) -> None:
     """
     WHAT: Enforces validity of replay_speed setting.
@@ -734,6 +752,7 @@ async def run_replay(
     before_drop_hook: Callable[[ReplayDropContext], Awaitable[None]] | None = None,
     workspace_name: str | None = None,
     idle_partition_advance: bool | None = None,
+    world_registry_reporting: bool | None = None,
 ) -> ReplayResult:
     """
     WHAT: Drives the complete operational pipeline in world-time order to replay a recorded simulation run.
@@ -756,10 +775,18 @@ async def run_replay(
         if decisions_per_event_payment is None
         else decisions_per_event_payment
     )
+    registry_on = (
+        load_default_world_registry_reporting() if world_registry_reporting is None else world_registry_reporting
+    )
+    world_clock = ManualClock()
+    registry_driver: RegistryDriver | None = (
+        build_registry_driver(recorded_world, world_clock) if registry_on else None
+    )
     steps = build_replay_steps(
         recorded_world,
         feed,
         decisions_per_event_payment=per_event_mode,
+        registry_steps=registry_driver.steps() if registry_driver is not None else (),
     )
 
     current_speed = (
@@ -869,7 +896,9 @@ async def run_replay(
         if not steps:
             raise ValueError("Cannot replay an empty step list: no replay steps were generated")
         initial_time = steps[0].world_time
-        world_clock = ManualClock(initial_time)
+        world_clock.set_time(initial_time)
+        if registry_driver is not None:
+            registry_driver.ingest_seed(world_clock, initial_time)
         transport_clock = WallClock()
 
         feed_cfg = load_bank_feed_config()
@@ -967,9 +996,13 @@ async def run_replay(
                 if isinstance(step, FeedStep):
                     # 5. FeedStep: set world clock, then post feed record
                     world_clock.set_time(step.world_time)
-                    await connectors.send_feed_record(step.kind, step.record)
-                    if step.kind == "transaction":
-                        produced_partitions.add(0)
+                    if step.kind in (REGISTRY_INGEST, REGISTRY_VISIBLE):
+                        assert registry_driver is not None
+                        await registry_driver.run_step(step, drain_conn)
+                    else:
+                        await connectors.send_feed_record(step.kind, step.record)
+                        if step.kind == "transaction":
+                            produced_partitions.add(0)
 
                 elif isinstance(step, DecisionStep):
                     # 6. DecisionStep: set world clock, drain, check R2/R3, post decision
