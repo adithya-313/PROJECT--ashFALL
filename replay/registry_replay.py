@@ -53,6 +53,7 @@ class RegistryReplaySettings:
         bank_settings: bank id -> settings (dpip_participation).
         seed_share_range: (low, high) of the pre-world listing share for the run's split.
         reporter_choice: How the seed reporter is chosen; only uniform over participants is supported.
+        screen_delay_ms: (low, high) of the per-question screen delay (config screen_added_delay_ms).
     Example:
         RegistryReplaySettings(timedelta(minutes=15), timedelta(minutes=60), {"bank_0": {...}}, (0.2, 0.6), "x")
     """
@@ -62,6 +63,7 @@ class RegistryReplaySettings:
     bank_settings: dict[str, dict[str, Any]]
     seed_share_range: tuple[float, float]
     reporter_choice: str
+    screen_delay_ms: tuple[float, float] = (2.0, 15.0)
 
     @property
     def participants(self) -> list[str]:
@@ -132,6 +134,7 @@ def load_registry_replay_settings(split: str, path: Path | None = None) -> Regis
         bank_settings={str(k): dict(v) for k, v in block["banks"].items()},
         seed_share_range=(low, high),
         reporter_choice=choice,
+        screen_delay_ms=(float(block["screen_added_delay_ms"]["min"]), float(block["screen_added_delay_ms"]["max"])),
     )
     if not settings.participants:
         raise ValueError("config/nationalsim.yaml lists no DPIP participant bank")

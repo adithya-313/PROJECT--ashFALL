@@ -567,6 +567,7 @@ class InProcessBankClient:
         ingestion_clock: Clock | None = None,
         run_scoped_watermarks: bool = False,
         decision_feature_logging: bool | None = None,
+        dpip_key: str | None = None,
     ) -> None:
         """
         Initializes an in-process client instance.
@@ -582,6 +583,7 @@ class InProcessBankClient:
             ingestion_clock: Optional domain ingestion clock for stamping arrival_time.
             run_scoped_watermarks: Whether to read run-scoped watermarks on the decisions branch.
             decision_feature_logging: Optional override for decision feature logging on decisions branch.
+            dpip_key: Optional DPIP key for registry screening; None falls back to config.dpip_participant_key.
         """
         self._pool = pool
         self._bank_id = bank_id
@@ -590,6 +592,7 @@ class InProcessBankClient:
         self._decision_clock = decision_clock
         self._settings = settings
         self._screener = screener
+        self._dpip_key = dpip_key
         self._ingestion_clock = ingestion_clock
         self._run_scoped_watermarks = run_scoped_watermarks
         self._decision_feature_logging = decision_feature_logging
@@ -615,11 +618,9 @@ class InProcessBankClient:
         """
         if path == "/v1/decisions":
             decision_model = parse_raw_body(body_bytes, DecisionRequest)
-            dpip_key = (
-                config.dpip_participant_key.get_secret_value()
-                if config.dpip_participant_key is not None
-                else None
-            )
+            dpip_key = self._dpip_key
+            if dpip_key is None and config.dpip_participant_key is not None:
+                dpip_key = config.dpip_participant_key.get_secret_value()
 
             async def handler(connection: asyncpg.Connection) -> tuple[int, dict[str, Any]]:
                 return await record_decision(

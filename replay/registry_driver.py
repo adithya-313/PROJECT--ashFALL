@@ -17,11 +17,12 @@ none (a later issue tracks that).
 """
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
 
 from core.event_clock import IST, ManualClock
+from features.registry_prefetch import load_registry_timeout_seconds
 from nationalsim.adapter import IngestionItem, registry_report_to_ingestions
 from nationalsim.national_outbox import write_event
 from nationalsim.registry import RegistryCore, RegistryEntry
@@ -36,6 +37,7 @@ from replay.registry_replay import (
     replay_dpip_key,
     visible_world_time,
 )
+from replay.registry_screener import CoreRegistryScreener, ScreenStats
 from world.interactive_loop import build_component_streams
 from world.label_builder import build_label_events, build_registry_reports
 from world.replay_recording import RecordedWorld
@@ -44,6 +46,7 @@ from world.run_identity import load_runner_config
 __all__ = ["RegistryDriver", "build_registry_driver", "registry_event_payload"]
 
 SEED_STREAM_NAME = "registry_seed"
+SCREEN_DELAY_STREAM_NAME = "registry_screen_delay"
 
 
 def registry_event_payload(item: IngestionItem, entry: RegistryEntry) -> dict[str, Any]:
@@ -88,6 +91,30 @@ class RegistryDriver:
     seed: list[RegistryListing]
     world: list[RegistryListing]
     world_start: date
+    run_id: str = ""
+    clock: Any = None
+    screen_rng: Any = None
+    screen_delay_ms: tuple[float, float] = (2.0, 15.0)
+    screen_timeout_ms: float = 33.19
+    stats: ScreenStats = field(default_factory=ScreenStats)
+
+    def screener_for(self, bank_id: str) -> CoreRegistryScreener | None:
+        """
+        WHAT: The screener for one bank, or None for a bank that is not a DPIP participant.
+        WHY: A non-participant never screens; its registry features stay None by design.
+        Args:
+            bank_id: The bank id, e.g. "bank_0".
+        Returns:
+            A CoreRegistryScreener, or None.
+        Example:
+            driver.screener_for("bank_0")
+        """
+        if not self.core.is_participant(bank_id):
+            return None
+        return CoreRegistryScreener(
+            self.core, bank_id, self.run_id, self.clock, self.screen_rng, self.screen_delay_ms,
+            self.screen_timeout_ms, self.stats,
+        )
 
     def steps(self) -> list[FeedStep]:
         """The registry_ingest steps of the in-world reports and the registry_visible steps of every listing."""
@@ -192,4 +219,10 @@ def build_registry_driver(
             world.append(RegistryListing(item, visible, False))
 
     core = RegistryCore(clock, reg.listing_delay, reg.bank_settings, reg.dispute_resolution_delay)
-    return RegistryDriver(core, key, seed, world, world_start)
+    delay_stream = build_component_streams(
+        effective["settings"]["seed"], {SCREEN_DELAY_STREAM_NAME: children[SCREEN_DELAY_STREAM_NAME]}
+    )[SCREEN_DELAY_STREAM_NAME]
+    return RegistryDriver(
+        core, key, seed, world, world_start, run_id=run_id, clock=clock, screen_rng=delay_stream,
+        screen_delay_ms=reg.screen_delay_ms, screen_timeout_ms=load_registry_timeout_seconds() * 1000.0,
+    )

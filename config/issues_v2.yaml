@@ -1043,10 +1043,13 @@ issues:
   16-2:
     title: "Registry wired into replay (payee_registry_match always None in replay)"
     origin: revision_2
-    status: planned
+    status: built
     levels: [16]
     parts: []
-    later_work: ["Level 16d: in-process nationalsim screener + DPIP key in the replay; registry_wired true; payee_registry_match non-None in at least one decision; 16c datasets rebuilt and old manifests marked superseded"]
+    evidence:
+      - {kind: test, file: tests/unit/test_registry_screener.py, name: test_entry_is_seen_only_once_visible_as_of_the_decision}
+      - {kind: test, file: tests/unit/test_registry_screener.py, name: test_a_forced_slow_range_gives_unknown_never_no_match}
+    later_work: ["Level 16d: 16c datasets rebuilt and old manifests marked superseded"]
   16-3:
     title: "Decision API request has no device field (Section 5 lists it)"
     origin: revision_2
