@@ -39,6 +39,7 @@ from features.account_stream import apply_account_events_since, apply_withdrawal
 from features.feature_log import canonical_feature_names
 from features.ingest_watermark import get_payment_watermark, record_payment_watermark
 from features.label_consumer import consume_complaint_labels_since
+from features.registry_label_consumer import consume_registry_events
 from nationalsim.national_outbox import relay_national_outbox
 from replay.ordering import DecisionStep, FeedStep, build_replay_steps
 from replay.registry_driver import RegistryDriver, build_registry_driver
@@ -253,16 +254,17 @@ class RegistryDrain:
 
     consumer: AIOKafkaConsumer
     topic: str
-    handler: Callable[[list[Any]], Awaitable[None]] | None = None
+    handler: Callable[[list[Any], Any], Awaitable[None]] | None = None
 
 
-async def drain_registry(registry: RegistryDrain, timeout_ms: int = 20) -> bool:
+async def drain_registry(registry: RegistryDrain, conn: Any, timeout_ms: int = 20) -> bool:
     """
     WHAT: Reads the available registry messages, hands them to the handler, commits, and says whether the consumer is
     caught up (committed offset >= end offset on every partition).
     WHY: One step of the registry half of the drain loop.
     Args:
         registry: The registry consumer, topic and handler.
+        conn: Workspace database connection handed to the handler.
         timeout_ms: Longest wait for new records.
     Returns:
         True when nothing is left to read on the registry topic.
@@ -273,7 +275,7 @@ async def drain_registry(registry: RegistryDrain, timeout_ms: int = 20) -> bool:
     records = [rec for tp in sorted(batches, key=lambda t: (t.topic, t.partition)) for rec in batches[tp]]
     if records:
         if registry.handler is not None:
-            await registry.handler(records)
+            await registry.handler(records, conn)
         await registry.consumer.commit()
     parts = registry.consumer.partitions_for_topic(registry.topic) or {0}
     tps = [TopicPartition(registry.topic, p) for p in sorted(parts)]
@@ -338,7 +340,7 @@ async def drain(
                 workspace_conn, producer, batch_size=batch_size,
                 topic_map={"registry.events": registry.topic},
             )
-            registry_caught_up = await drain_registry(registry)
+            registry_caught_up = await drain_registry(registry, workspace_conn)
 
         # b. Consumer: consume available messages until committed offset >= end offset for all partitions
         await consume_available(consumer, redis_client, acct_settings, timeout_ms=20)
@@ -779,15 +781,21 @@ async def run_replay(
         load_default_world_registry_reporting() if world_registry_reporting is None else world_registry_reporting
     )
     world_clock = ManualClock()
-    registry_driver: RegistryDriver | None = (
-        build_registry_driver(recorded_world, world_clock) if registry_on else None
-    )
     steps = build_replay_steps(
         recorded_world,
         feed,
         decisions_per_event_payment=per_event_mode,
-        registry_steps=registry_driver.steps() if registry_driver is not None else (),
     )
+    registry_driver: RegistryDriver | None = None
+    if registry_on and steps:
+        # Registry steps are merged in only when there is something to replay (an empty list keeps its own error).
+        registry_driver = build_registry_driver(recorded_world, world_clock)
+        steps = build_replay_steps(
+            recorded_world,
+            feed,
+            decisions_per_event_payment=per_event_mode,
+            registry_steps=registry_driver.steps(),
+        )
 
     current_speed = (
         load_default_replay_speed()
@@ -890,7 +898,17 @@ async def run_replay(
         )
         await registry_consumer.start()
         check_workspace_topic_partitions(registry_consumer, workspace.registry_topic)
-        registry = RegistryDrain(registry_consumer, workspace.registry_topic)
+        registry_handler = None
+        if registry_driver is not None:
+            driver = registry_driver
+
+            async def registry_handler(records: list[Any], conn: Any) -> None:
+                """Turns a batch of registry messages into bank-side registry labels at the replay world time."""
+                events = [orjson.loads(rec.value)["data"] for rec in records]
+                participation = {b: driver.core.is_participant(b) for b in sorted(bank_modes)}
+                await consume_registry_events(conn, events, participation, driver.key, run_id, world_clock.now_ist())
+
+        registry = RegistryDrain(registry_consumer, workspace.registry_topic, registry_handler)
 
         # 4. Set up clocks and bank connector transports
         if not steps:

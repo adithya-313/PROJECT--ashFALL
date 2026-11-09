@@ -16,6 +16,7 @@ never shown before it is received. Revoke and dispute are hand-made actions on t
 none (a later issue tracks that).
 """
 
+import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
@@ -61,6 +62,9 @@ def registry_event_payload(item: IngestionItem, entry: RegistryEntry) -> dict[st
     payload = item.to_dict()
     payload["visible_at"] = entry.visible_at.isoformat()
     payload["status"] = entry.status
+    # A deterministic event id and the world time keep the staged row reproducible and idempotent.
+    payload["event_id"] = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{item.run_id}:{item.report_id}:{item.identifier_type}"))
+    payload["occurred_at"] = entry.visible_at.isoformat()
     return payload
 
 
