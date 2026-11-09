@@ -27,6 +27,7 @@ from nationalsim.adapter import IngestionItem, registry_report_to_ingestions
 from nationalsim.keyed_hash import compute_identifier_hash
 from nationalsim.national_outbox import write_event
 from nationalsim.registry import RegistryCore, RegistryEntry
+from replay.hold_requests import HOLD_REQUEST, HoldEvent, plan_hold_requests
 from replay.ordering import FeedStep
 from replay.registry_replay import (
     REGISTRY_INGEST,
@@ -40,6 +41,7 @@ from replay.registry_replay import (
     visible_world_time,
 )
 from replay.registry_screener import CoreRegistryScreener, ScreenStats
+from world.hold_replay import load_hold_configuration
 from world.interactive_loop import build_component_streams
 from world.label_builder import build_bulk_confirmations, build_label_events, build_registry_reports
 from world.replay_recording import RecordedWorld
@@ -50,6 +52,7 @@ __all__ = ["RegistryDriver", "build_registry_driver", "registry_event_payload"]
 SEED_STREAM_NAME = "registry_seed"
 SCREEN_DELAY_STREAM_NAME = "registry_screen_delay"
 POLICE_BULK = "police_bulk"
+HOLD_STREAM_NAME = "hold_request"
 
 
 def registry_event_payload(item: IngestionItem, entry: RegistryEntry) -> dict[str, Any]:
@@ -85,6 +88,8 @@ class RegistryDriver:
         seed: Pre-world listings.
         world: In-world listings.
         bulk: Police bulk confirmation events (one per confirmed account).
+        holds: Hold request events for cross-bank complaints.
+        hold_missed: Cross-bank hold requests the bank never acted on.
         world_start: World start date.
     Example:
         driver = build_registry_driver(recorded_world, world_clock)
@@ -96,6 +101,8 @@ class RegistryDriver:
     world: list[RegistryListing]
     world_start: date
     bulk: list[BulkEvent] = field(default_factory=list)
+    holds: list[HoldEvent] = field(default_factory=list)
+    hold_missed: int = 0
     run_id: str = ""
     clock: Any = None
     screen_rng: Any = None
@@ -134,7 +141,8 @@ class RegistryDriver:
                 FeedStep(listing.visible_time, REGISTRY_VISIBLE, listing.item.bank_id,
                          listing.item.report_id + ":" + listing.item.identifier_type, listing)
             )
-        for event in self.bulk:
+        extra_events: list[BulkEvent | HoldEvent] = [*self.bulk, *self.holds]
+        for event in extra_events:
             out.append(
                 FeedStep(event.visible_time, REGISTRY_VISIBLE, event.item.bank_id,
                          event.item.report_id + ":" + event.item.identifier_type, event)
@@ -178,14 +186,20 @@ class RegistryDriver:
         Example:
             await driver.run_step(step, conn)
         """
-        if isinstance(step.record, BulkEvent):
+        if isinstance(step.record, (BulkEvent, HoldEvent)):
             event = step.record
             payload = event.item.to_dict()
             payload.update(
-                event_type=POLICE_BULK, batch_id=event.batch_id, region=event.region,
                 event_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{event.item.run_id}:{event.item.report_id}")),
                 occurred_at=event.visible_time.isoformat(),
             )
+            if isinstance(event, BulkEvent):
+                payload.update(event_type=POLICE_BULK, batch_id=event.batch_id, region=event.region)
+            else:
+                payload.update(
+                    event_type=HOLD_REQUEST, label_id=event.label_id, payment_ids=list(event.payment_ids),
+                    claimed_type=event.claimed_type, complaint_id=event.complaint_id,
+                )
             bank_index = int(event.item.bank_id.removeprefix("bank_"))
             await write_event(conn, "registry.events", event.item.run_id, bank_index, payload)
             return
@@ -256,11 +270,21 @@ def build_registry_driver(
             )
             bulk.append(BulkEvent(item, arrival, crackdown.batch_id, crackdown.region))
 
+    hold_stream = build_component_streams(
+        effective["settings"]["seed"], {HOLD_STREAM_NAME: children[HOLD_STREAM_NAME]}
+    )[HOLD_STREAM_NAME]
+    complaints = build_label_events(output)
+    holds, hold_missed = plan_hold_requests(
+        complaints, effective["world_configs"]["world_ranges"], split, load_hold_configuration(),
+        [bank.hold_delay_factor for bank in output.world.banks], hold_stream, run_id, key, world_start,
+    )
+
     core = RegistryCore(clock, reg.listing_delay, reg.bank_settings, reg.dispute_resolution_delay)
     delay_stream = build_component_streams(
         effective["settings"]["seed"], {SCREEN_DELAY_STREAM_NAME: children[SCREEN_DELAY_STREAM_NAME]}
     )[SCREEN_DELAY_STREAM_NAME]
     return RegistryDriver(
-        core, key, seed, world, world_start, bulk=bulk, run_id=run_id, clock=clock, screen_rng=delay_stream,
+        core, key, seed, world, world_start, bulk=bulk, holds=holds, hold_missed=hold_missed, run_id=run_id,
+        clock=clock, screen_rng=delay_stream,
         screen_delay_ms=reg.screen_delay_ms, screen_timeout_ms=load_registry_timeout_seconds() * 1000.0,
     )

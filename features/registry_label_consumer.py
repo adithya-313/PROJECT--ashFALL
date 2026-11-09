@@ -38,6 +38,7 @@ __all__ = [
 
 REGISTRY_SOURCE = "registry"
 POLICE_BULK = "police_bulk"
+HOLD_REQUEST = "hold_request"
 
 
 @dataclass(frozen=True)
@@ -132,8 +133,9 @@ def match_registry_event(event: Mapping[str, Any], own: OwnIdentifiers) -> list[
     """
     identifier_hash = str(event["identifier_hash"])
     kind = str(event["identifier_type"])
-    if event.get("event_type") == POLICE_BULK:
-        # A police crackdown goes to the holding bank whether or not it takes part in DPIP; only its own hash matches.
+    if event.get("event_type") in (POLICE_BULK, HOLD_REQUEST):
+        # A police crackdown or a 1930 hold request goes to the holding bank whether or not it takes part in DPIP;
+        # only its own hash matches.
         found_bulk = own.accounts_by_account_hash.get(identifier_hash) if kind == "account" else None
         return [found_bulk] if found_bulk is not None else []
     if not own.participant:
@@ -172,6 +174,15 @@ def registry_label_rows(
         registry_label_rows(event, ["acc_1"], own, "r1", now)
     """
     label_id = f"{event['report_id']}:{event['identifier_type']}"
+    if event.get("event_type") == HOLD_REQUEST:
+        return [
+            LabelRow(
+                run_id=run_id, bank_id=own.bank_id, label_id=str(event["label_id"]), source="complaint",
+                account_id=account, payment_ids=tuple(event.get("payment_ids") or ()), verdict="fraud",
+                arrival_time=arrival_time, claimed_type=event.get("claimed_type"), via=HOLD_REQUEST,
+            )
+            for account in accounts
+        ]
     if event.get("event_type") == POLICE_BULK:
         return [
             LabelRow(

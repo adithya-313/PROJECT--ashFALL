@@ -213,8 +213,8 @@ async def test_identical_replays_give_identical_datasets(
 
     # 7. Verify strict label growth / subset progression
     def complaint_ids(dataset: Any) -> set[str]:
-        """Label ids of the complaint-source labels only (registry labels are counted elsewhere)."""
-        return {r["label_id"] for r in dataset.labels.to_pylist() if r["source"] == "complaint"}
+        """Label ids of the direct complaint labels only (source complaint, via IS NULL) (registry labels are counted elsewhere)."""
+        return {r["label_id"] for r in dataset.labels.to_pylist() if r["source"] == "complaint" and r.get("via") is None}
 
     labels_c1 = complaint_ids(ds_a1)
     labels_c2 = complaint_ids(ds_a2)
