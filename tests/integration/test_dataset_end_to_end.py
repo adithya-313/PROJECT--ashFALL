@@ -16,6 +16,7 @@ import os
 from collections.abc import Generator
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 import redis
@@ -203,9 +204,15 @@ async def test_identical_replays_give_identical_datasets(
     assert ds_a3.manifest["content_hash"] == ds_b3.manifest["content_hash"]
 
     # 7. Verify strict label growth / subset progression
-    labels_c1 = set(ds_a1.labels["label_id"].to_pylist())
-    labels_c2 = set(ds_a2.labels["label_id"].to_pylist())
-    labels_c3 = set(ds_a3.labels["label_id"].to_pylist())
+    def complaint_ids(dataset: Any) -> set[str]:
+        """Label ids of the complaint-source labels only (registry labels are counted elsewhere)."""
+        return {r["label_id"] for r in dataset.labels.to_pylist() if r["source"] == "complaint"}
+
+    labels_c1 = complaint_ids(ds_a1)
+    labels_c2 = complaint_ids(ds_a2)
+    labels_c3 = complaint_ids(ds_a3)
+    registry_c3 = [r for r in ds_a3.labels.to_pylist() if r["source"] == "registry"]
+    print("REGISTRY LABELS IN DATASET AT C3:", len(registry_c3))
 
     assert labels_c1 < labels_c2 < labels_c3
     assert len(labels_c1) == 0

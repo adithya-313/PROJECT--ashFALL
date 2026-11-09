@@ -311,7 +311,11 @@ async def test_end_to_end_replay_labels_snapshots(
         nonlocal labels_count, snapshots_by_bank_day, total_snapshots, last_step_feature_values_off
         ws_conn = await asyncpg.connect(drop_ctx.workspace_dsn)
         try:
-            labels_count = await ws_conn.fetchval("SELECT count(*) FROM labels")
+            labels_count = await ws_conn.fetchval("SELECT count(*) FROM labels WHERE source = 'complaint'")
+            by_source = await ws_conn.fetch(
+                "SELECT bank_id, source, count(*) AS n FROM labels GROUP BY 1, 2 ORDER BY 1, 2"
+            )
+            print("LABELS PER SOURCE PER BANK:", [(r["bank_id"], r["source"], r["n"]) for r in by_source])
             snap_rows = await ws_conn.fetch(
                 "SELECT bank_id, snapshot_time, account_id FROM account_snapshots WHERE snapshot_kind = 'daily'"
             )

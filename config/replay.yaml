@@ -51,6 +51,12 @@ replay_workspace:
     reason: "replay feeds carry the KYC phone on account_opened so banks can match phone hashes in the registry — architect 16d-0"
     derived_from: "architect 16d-0"
 
+  world_registry_reporting:
+    label: policy
+    value: true
+    reason: "replay datasets carry registry labels: world reports and the pre-world seed go through the in-process registry — architect 16d-1"
+    derived_from: "architect 16d-1"
+
   replay_speed:
     label: policy
     value: "max"

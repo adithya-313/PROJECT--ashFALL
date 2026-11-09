@@ -73,7 +73,7 @@ async def test_fresh_schema_applies_all_migrations_in_order(empty_schema):
     applied_count = await apply_pending_migrations(connection)
 
     # All files applied (we expect 18 today), and the tracking table lists exactly those names.
-    assert applied_count == len(real_filenames) == 19
+    assert applied_count == len(real_filenames) == 20
     assert await applied_filenames(connection) == real_filenames
     assert real_filenames == sorted(real_filenames)
 
@@ -108,9 +108,9 @@ async def test_second_run_applies_nothing(empty_schema):
     first_count = await apply_pending_migrations(connection)
     second_count = await apply_pending_migrations(connection)
 
-    assert first_count == len(find_migration_files()) == 19
+    assert first_count == len(find_migration_files()) == 20
     assert second_count == 0
-    assert len(await applied_filenames(connection)) == 19
+    assert len(await applied_filenames(connection)) == 20
 
 
 async def test_failed_migration_is_not_recorded(empty_schema, tmp_path):

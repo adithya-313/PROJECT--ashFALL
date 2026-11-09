@@ -75,6 +75,11 @@ class ReplayWorkspace:
     kafka_topic: str
     kafka_group_id: str
 
+    @property
+    def registry_topic(self) -> str:
+        """The workspace registry topic, named after the payments topic: '<name>.registry.events'."""
+        return self.kafka_topic.removesuffix(".payments") + ".registry.events"
+
 
 def load_replay_settings(config_path: Path | str | None = None) -> ReplaySettings:
     """
@@ -301,7 +306,12 @@ async def allocate_workspace(
                     num_partitions=cfg.kafka_topic_partitions,
                     replication_factor=1,
                 )
-                await admin_client.create_topics([topic])
+                registry_topic = NewTopic(
+                    name=workspace.registry_topic,
+                    num_partitions=cfg.kafka_topic_partitions,
+                    replication_factor=1,
+                )
+                await admin_client.create_topics([topic, registry_topic])
             finally:
                 await admin_client.close()
 
@@ -379,7 +389,7 @@ async def drop_workspace(
         admin_client = AIOKafkaAdminClient(bootstrap_servers=config.kafka_bootstrap_servers)
         try:
             await admin_client.start()
-            await admin_client.delete_topics([workspace.kafka_topic])
+            await admin_client.delete_topics([workspace.kafka_topic, workspace.registry_topic])
         except Exception as exc:
             logger.warning("Could not delete kafka topic %s: %s", workspace.kafka_topic, exc)
         finally:

@@ -11,6 +11,7 @@ import asyncio
 import json
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -188,6 +189,7 @@ async def relay_national_outbox(
     conn: asyncpg.Connection,
     producer: AIOKafkaProducer,
     batch_size: int = 100,
+    topic_map: Mapping[str, str] | None = None,
 ) -> int:
     """Relays unprocessed national outbox rows to Kafka, marking rows processed only after broker ACK.
 
@@ -200,6 +202,8 @@ async def relay_national_outbox(
         conn: Open asyncpg Connection to the application database.
         producer: Started AIOKafkaProducer instance with acks='all'.
         batch_size: Maximum number of unprocessed rows to publish in this batch.
+        topic_map: Optional row topic -> Kafka topic mapping (a replay workspace publishes to its own topics).
+            None publishes each row to its own topic, exactly as before.
 
     What it returns:
         Integer count of successfully published and acknowledged messages.
@@ -234,7 +238,7 @@ async def relay_national_outbox(
         )
 
         for row in rows:
-            topic = row["topic"]
+            topic = row["topic"] if topic_map is None else topic_map.get(row["topic"], row["topic"])
             key_bytes = row["bank_key"].encode("utf-8")
             # asyncpg returns JSONB as text or dict
             payload_str = row["payload"] if isinstance(row["payload"], str) else json.dumps(row["payload"])

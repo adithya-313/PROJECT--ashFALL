@@ -11,6 +11,7 @@ the decision, while preventing future events or decision outcomes from leaking i
 """
 
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -25,6 +26,8 @@ KIND_ORDER: dict[str, int] = {
     "transaction": 1,
     "withdrawal": 2,
     "complaint": 3,
+    "registry_ingest": 4,
+    "registry_visible": 5,
 }
 
 
@@ -97,6 +100,7 @@ def build_replay_steps(
     recorded_world: RecordedWorld | Any,
     feed: BankFeed,
     decisions_per_event_payment: bool = False,
+    registry_steps: Sequence[FeedStep] = (),
 ) -> list[FeedStep | DecisionStep]:
     """
     WHAT: Builds a causally ordered sequence of FeedStep and DecisionStep items for replay.
@@ -118,6 +122,7 @@ def build_replay_steps(
         recorded_world: RecordedWorld instance containing simulation output and recorded decision calls.
         feed: BankFeed containing projected transaction sides, withdrawals, account events, and complaints.
         decisions_per_event_payment: If True, derives one DecisionStep per executed event payment attempt (Decision D5).
+        registry_steps: Optional registry_ingest and registry_visible steps merged into the general feed steps.
 
     Returns:
         List of interleaved FeedStep and DecisionStep items ready for sequential replay.
@@ -263,6 +268,9 @@ def build_replay_steps(
                     record=complaint,
                 )
             )
+
+    # Registry steps (registry_ingest 4, registry_visible 5) sort after complaints at the same world time.
+    general_feed_steps.extend(registry_steps)
 
     # Sort general feed records by (world_time, kind_order, bank_id, record_id)
     general_feed_steps.sort(
