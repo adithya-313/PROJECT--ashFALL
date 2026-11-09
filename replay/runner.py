@@ -39,6 +39,7 @@ from features.account_stream import apply_account_events_since, apply_withdrawal
 from features.feature_log import canonical_feature_names
 from features.ingest_watermark import get_payment_watermark, record_payment_watermark
 from features.label_consumer import consume_complaint_labels_since
+from nationalsim.national_outbox import relay_national_outbox
 from replay.ordering import DecisionStep, FeedStep, build_replay_steps
 from world.bank_connectors import BankTransport, MockBankConnectors, load_bank_modes
 from world.bank_feed import BankFeed, resolve_bank_id
@@ -239,6 +240,46 @@ def day_boundaries_between(
     return boundaries
 
 
+@dataclass
+class RegistryDrain:
+    """
+    WHAT: The registry side of a replay drain: a consumer on the workspace registry topic and an optional handler
+    that receives each batch of registry messages before the offsets are committed.
+    WHY: Registry events travel national_outbox -> workspace registry topic -> bank-side consumer; the drain must
+    wait for them like it waits for payments, so a decision never reads labels that are still in flight.
+    """
+
+    consumer: AIOKafkaConsumer
+    topic: str
+    handler: Callable[[list[Any]], Awaitable[None]] | None = None
+
+
+async def drain_registry(registry: RegistryDrain, timeout_ms: int = 20) -> bool:
+    """
+    WHAT: Reads the available registry messages, hands them to the handler, commits, and says whether the consumer is
+    caught up (committed offset >= end offset on every partition).
+    WHY: One step of the registry half of the drain loop.
+    Args:
+        registry: The registry consumer, topic and handler.
+        timeout_ms: Longest wait for new records.
+    Returns:
+        True when nothing is left to read on the registry topic.
+    Example:
+        caught_up = await drain_registry(registry)
+    """
+    batches = await registry.consumer.getmany(timeout_ms=timeout_ms)
+    records = [rec for tp in sorted(batches, key=lambda t: (t.topic, t.partition)) for rec in batches[tp]]
+    if records:
+        if registry.handler is not None:
+            await registry.handler(records)
+        await registry.consumer.commit()
+    parts = registry.consumer.partitions_for_topic(registry.topic) or {0}
+    tps = [TopicPartition(registry.topic, p) for p in sorted(parts)]
+    end_dict = await registry.consumer.end_offsets(tps)
+    committed = {tp: await registry.consumer.committed(tp) for tp in tps}
+    return all((committed.get(tp) or 0) >= end_dict.get(tp, 0) for tp in tps)
+
+
 async def drain(
     step_index: int,
     workspace_conn: asyncpg.Connection,
@@ -253,6 +294,7 @@ async def drain(
     poller_cursors: dict[str, dict[str, int]],
     deadline: float,
     batch_size: int = 100,
+    registry: RegistryDrain | None = None,
 ) -> float:
     """
     WHAT: Drains the outbox, consumer, and table pollers until pipeline convergence or deadline.
@@ -286,6 +328,15 @@ async def drain(
             )
             # S2.3: poll consumer on every loop
             await consume_available(consumer, redis_client, acct_settings, timeout_ms=20)
+
+        # a2. National outbox: registry events go to the workspace registry topic (payments outbox is separate)
+        registry_caught_up = True
+        if registry is not None:
+            await relay_national_outbox(
+                workspace_conn, producer, batch_size=batch_size,
+                topic_map={"registry.events": registry.topic},
+            )
+            registry_caught_up = await drain_registry(registry)
 
         # b. Consumer: consume available messages until committed offset >= end offset for all partitions
         await consume_available(consumer, redis_client, acct_settings, timeout_ms=20)
@@ -424,7 +475,7 @@ async def drain(
                 pollers_caught_up = False
 
         waiting_count = await count_waiting(workspace_conn)
-        if waiting_count == 0 and consumer_caught_up and pollers_caught_up:
+        if waiting_count == 0 and consumer_caught_up and pollers_caught_up and registry_caught_up:
             break
 
         await asyncio.sleep(0.01)
@@ -608,6 +659,7 @@ async def _snapshot_completed_day(
     idle_advance: bool = False,
     produced_partitions: set[int] | None = None,
     next_unsent_arrival: datetime | None = None,
+    registry: RegistryDrain | None = None,
 ) -> float:
     """
     WHAT: Drains the operational pipeline up to boundary and writes daily account snapshots for completed day.
@@ -628,6 +680,7 @@ async def _snapshot_completed_day(
         run_id=run_id,
         poller_cursors=poller_cursors,
         deadline=deadline,
+        registry=registry,
     )
     if idle_advance and produced_partitions:
         target_ts, reason = idle_advance_target(
@@ -744,6 +797,8 @@ async def run_replay(
 
     producer = None
     consumer = None
+    registry_consumer = None
+    registry: RegistryDrain | None = None
     workspace_pool = None
     ws_redis = None
 
@@ -797,6 +852,18 @@ async def run_replay(
         # R1: At replay start: read workspace topic's real partition count from Kafka (aiokafka metadata).
         # Must be exactly 1; otherwise raise ValueError.
         check_workspace_topic_partitions(consumer, workspace.kafka_topic)
+
+        # The registry topic gets its own consumer and the same single-partition check.
+        registry_consumer = AIOKafkaConsumer(
+            workspace.registry_topic,
+            bootstrap_servers=config.kafka_bootstrap_servers,
+            group_id=f"{workspace.name}.registry",
+            enable_auto_commit=False,
+            auto_offset_reset="earliest",
+        )
+        await registry_consumer.start()
+        check_workspace_topic_partitions(registry_consumer, workspace.registry_topic)
+        registry = RegistryDrain(registry_consumer, workspace.registry_topic)
 
         # 4. Set up clocks and bank connector transports
         if not steps:
@@ -890,6 +957,7 @@ async def run_replay(
                             idle_advance=idle_advance,
                             produced_partitions=produced_partitions,
                             next_unsent_arrival=step.world_time,
+                            registry=registry,
                         )
                         if dur > longest_drain_seconds:
                             longest_drain_seconds = dur
@@ -920,6 +988,7 @@ async def run_replay(
                         run_id=run_id,
                         poller_cursors=poller_cursors,
                         deadline=deadline,
+                        registry=registry,
                     )
                     if drain_duration > longest_drain_seconds:
                         longest_drain_seconds = drain_duration
@@ -997,6 +1066,7 @@ async def run_replay(
                         idle_advance=idle_advance,
                         produced_partitions=produced_partitions,
                         next_unsent_arrival=None,
+                        registry=registry,
                     )
                     if dur > longest_drain_seconds:
                         longest_drain_seconds = dur
@@ -1082,6 +1152,12 @@ async def run_replay(
                 await consumer.stop()
             except Exception as exc:
                 logger.warning("Error stopping consumer: %s", exc)
+
+        if registry_consumer is not None:
+            try:
+                await registry_consumer.stop()
+            except Exception as exc:
+                logger.warning("Error stopping registry consumer: %s", exc)
 
         if producer is not None:
             try:
