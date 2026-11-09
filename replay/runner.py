@@ -448,6 +448,21 @@ def load_default_decisions_per_event_payment() -> bool:
     return bool(entry["value"])
 
 
+def load_default_kyc_phone_on_account_opened() -> bool:
+    """
+    WHAT: Reads the kyc_phone_on_account_opened policy flag from config/replay.yaml.
+    WHY: Architect 16d-0: replay feeds carry the KYC phone on account_opened; the live feed keeps it off.
+    """
+    from core.config_validator import load_yaml
+    from world.replay_workspace import CONFIG_PATH
+
+    data = load_yaml(CONFIG_PATH)
+    entry = data.get("replay_workspace", {}).get("kyc_phone_on_account_opened")
+    if entry is None or not isinstance(entry, dict) or "value" not in entry:
+        raise ValueError(f"Missing 'kyc_phone_on_account_opened' policy setting in {CONFIG_PATH}")
+    return bool(entry["value"])
+
+
 def validate_replay_speed(speed: Any) -> None:
     """
     WHAT: Enforces validity of replay_speed setting.

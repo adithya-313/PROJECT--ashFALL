@@ -371,8 +371,8 @@ async def record_account_event(
     details_json = orjson.dumps(request.details).decode("utf-8")
     inserted_id = await connection.fetchval(
         """
-        INSERT INTO bank_account_events (bank_id, event_id, account_id, kind, event_time, details, arrival_time)
-        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+        INSERT INTO bank_account_events (bank_id, event_id, account_id, kind, event_time, details, arrival_time, phone)
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
         ON CONFLICT (bank_id, event_id) DO NOTHING
         RETURNING id
         """,
@@ -383,6 +383,7 @@ async def record_account_event(
         request.event_time,
         details_json,
         arrival_time,
+        request.details.get("phone"),
     )
     duplicate = inserted_id is None
     response = AccountEventResponse(event_id=request.event_id, duplicate=duplicate)

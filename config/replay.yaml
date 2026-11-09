@@ -45,6 +45,12 @@ replay_workspace:
     value: true
     reason: "replay and 16c datasets use one decision per executed attempt — architect P2(b)"
 
+  kyc_phone_on_account_opened:
+    label: policy
+    value: true
+    reason: "replay feeds carry the KYC phone on account_opened so banks can match phone hashes in the registry — architect 16d-0"
+    derived_from: "architect 16d-0"
+
   replay_speed:
     label: policy
     value: "max"
