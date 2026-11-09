@@ -1075,3 +1075,17 @@ issues:
     levels: [18]
     parts: []
     later_work: ["Level 18a (needed before 18a starts): model phone changes during a run (SIM swap, linked-number switch); control-change bank events and the Level 15 phone-change feature have no source until then"]
+  16-7:
+    title: "World generates revoke/dispute for wrong listings"
+    origin: revision_2
+    status: planned
+    levels: [21]
+    parts: []
+    later_work: ["Level 21: the world makes registry revokes and customer disputes for wrong listings (innocent holders of recycled numbers); until then revoke and dispute are hand-made actions on labels"]
+  16-8:
+    title: "Registry coverage by mule depth (N2) not implemented; one uniform reporting share"
+    origin: revision_2
+    status: planned
+    levels: [18]
+    parts: []
+    later_work: ["Level 18a (needed before 18a starts): world registry reports use the layer-1 and deeper mule coverage shares (registry_coverage_layer1_mule_share, registry_coverage_deeper_mule_share); today one uniform bank reporting share applies to every confirmed account"]

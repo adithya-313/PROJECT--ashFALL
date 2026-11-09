@@ -11,6 +11,7 @@ from features.account_keys import extract_run_id
 
 LABEL_SOURCES: tuple[str, ...] = ("complaint", "registry", "analyst", "police_bulk")
 LABEL_VERDICTS: tuple[str, ...] = ("fraud", "not_fraud")
+LABEL_STATUS_CHANGES: tuple[str, ...] = ("revoked", "contested")
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,8 @@ class LabelRow:
         claimed_type: Raw claim string reported by complainant or None.
         recorded_at: Real database clock (clock_timestamp()) assigned on write, or None when writing.
         via: Optional routing mechanism/batch channel (e.g. 'hold_request') or None.
+        contested: True when a 'contested' status change arrived at or before the reader's cutoff (set by the
+            reader; a contested label is still counted).
     """
 
     run_id: str
@@ -50,6 +53,7 @@ class LabelRow:
     claimed_type: str | None = None
     recorded_at: datetime | None = None
     via: str | None = None
+    contested: bool = False
 
     def __post_init__(self) -> None:
         if not self.bank_id or not isinstance(self.bank_id, str) or not self.bank_id.strip():
@@ -133,6 +137,44 @@ async def insert_labels(conn: Any, rows: Sequence[LabelRow]) -> int:
     return inserted_count
 
 
+async def record_label_status_change(
+    conn: Any,
+    run_id: str,
+    bank_id: str,
+    source: str,
+    label_id: str,
+    account_id: str,
+    change: str,
+    arrival_time: datetime,
+) -> None:
+    """
+    WHAT: Appends one status change ('revoked' or 'contested') for a label, with the world time the bank learned it.
+    WHY: The labels row is never edited; history is kept as rows of label_status_changes.
+    Args:
+        conn: asyncpg database connection.
+        run_id: Run namespace.
+        bank_id: Bank owning the label.
+        source: Label source.
+        label_id: Label id.
+        account_id: Labelled account.
+        change: 'revoked' or 'contested'.
+        arrival_time: Aware world time of the change.
+    Raises:
+        ValueError: If change is unknown or arrival_time is naive.
+    Example:
+        await record_label_status_change(conn, run, "bank_0", "registry", lid, "acc_1", "revoked", t)
+    """
+    if change not in LABEL_STATUS_CHANGES:
+        raise ValueError(f"Invalid change {change!r}; must be one of {LABEL_STATUS_CHANGES}")
+    if arrival_time.tzinfo is None or arrival_time.utcoffset() is None:
+        raise ValueError("arrival_time must be a timezone-aware datetime")
+    await conn.execute(
+        "INSERT INTO label_status_changes (run_id, bank_id, source, label_id, account_id, change, arrival_time) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        run_id, bank_id, source, label_id, account_id, change, arrival_time,
+    )
+
+
 async def read_labels_known_by(
     conn: Any,
     run_id: str,
@@ -175,9 +217,19 @@ async def read_labels_known_by(
         batch_id,
         claimed_type,
         recorded_at,
-        via
+        via,
+        EXISTS (
+            SELECT 1 FROM label_status_changes s
+            WHERE s.bank_id = labels.bank_id AND s.source = labels.source AND s.label_id = labels.label_id
+              AND s.account_id = labels.account_id AND s.change = 'contested' AND s.arrival_time <= $3
+        ) AS contested
     FROM labels
     WHERE run_id = $1 AND bank_id = $2 AND arrival_time <= $3
+      AND NOT EXISTS (
+        SELECT 1 FROM label_status_changes s
+        WHERE s.bank_id = labels.bank_id AND s.source = labels.source AND s.label_id = labels.label_id
+          AND s.account_id = labels.account_id AND s.change = 'revoked' AND s.arrival_time <= $3
+      )
     ORDER BY arrival_time, source, label_id, account_id
     """
     records = await conn.fetch(query, run_id, bank_id, cutoff)
@@ -196,6 +248,7 @@ async def read_labels_known_by(
             claimed_type=r["claimed_type"],
             recorded_at=r["recorded_at"],
             via=r["via"],
+            contested=bool(r["contested"]),
         )
         for r in records
     ]

@@ -14,7 +14,7 @@ WHY: Level 16c-2 / Architect decisions Q2-Q5:
 import hashlib
 import os
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -64,6 +64,7 @@ class WorldExtract:
     snapshot_rows: list[dict[str, Any]]
     label_rows: list[dict[str, Any]]
     clock_start: str = "2026-09-01"
+    label_status_rows: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -157,6 +158,16 @@ async def extract_world(
             d = dict(r)
             d.pop("recorded_at", None)
             label_rows.append(d)
+
+        # 4b. Label status changes (revoked / contested); the labels rows themselves are never edited
+        s_records = await ws_conn.fetch(
+            """
+            SELECT bank_id, source, label_id, account_id, change, arrival_time
+            FROM label_status_changes
+            ORDER BY arrival_time, id
+            """
+        )
+        label_status_rows = [dict(r) for r in s_records]
     finally:
         await ws_conn.close()
 
@@ -201,6 +212,7 @@ async def extract_world(
         payment_rows=payment_rows,
         snapshot_rows=snapshot_rows,
         label_rows=label_rows,
+        label_status_rows=label_status_rows,
         clock_start=clock_start,
     )
 
@@ -367,10 +379,22 @@ def build_dataset(
     reported_payment_ids: set[str] = set()
     reported_accounts: set[str] = set()
 
+    revoked_labels: set[tuple[str, str, str, str, str]] = set()
+    contested_labels: set[tuple[str, str, str, str, str]] = set()
+    for e in extracts:
+        for s in e.label_status_rows:
+            if _ensure_utc(s["arrival_time"]) <= cutoff_utc:  # a change after the cutoff does not exist yet
+                status_key = (e.world_id, s["bank_id"], s["source"], s["label_id"], s["account_id"])
+                (revoked_labels if s["change"] == "revoked" else contested_labels).add(status_key)
+    revoked_excluded = 0
+
     for e in extracts:
         for r in e.label_rows:
             arr_time = _ensure_utc(r["arrival_time"])
             if arr_time <= cutoff_utc:
+                if (e.world_id, r["bank_id"], r["source"], r["label_id"], r["account_id"]) in revoked_labels:
+                    revoked_excluded += 1
+                    continue
                 p_ids = list(r.get("payment_ids") or [])
                 l_dict = {
                     "world_id": e.world_id,
@@ -534,6 +558,8 @@ def build_dataset(
         "feature_columns": feature_cols,
         "feature_none_shares": none_shares,
         "labels_note": "False complaints count as reported by cutoff.",
+        "labels_revoked_excluded": revoked_excluded,
+        "labels_contested": sorted(":".join(k) for k in contested_labels - revoked_labels),
         "label_maturity_note": "Label maturity near cutoff contains unadjusted reporting lag.",
         "worlds": [
             {
