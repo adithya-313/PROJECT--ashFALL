@@ -489,7 +489,7 @@ def load_default_idle_partition_advance() -> bool:
     from world.replay_workspace import CONFIG_PATH
 
     data = load_yaml(CONFIG_PATH)
-    block = data.get("replay_runner", {})
+    block = data.get("replay_workspace", {})
     entry = block.get("idle_partition_advance")
     if entry is None or not isinstance(entry, dict) or "value" not in entry:
         raise ValueError(f"Missing 'idle_partition_advance' policy setting in {CONFIG_PATH}")

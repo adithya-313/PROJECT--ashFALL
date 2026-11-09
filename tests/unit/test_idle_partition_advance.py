@@ -16,10 +16,20 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from replay.runner import idle_advance_target, run_replay
+from replay.runner import (
+    idle_advance_target,
+    load_default_idle_partition_advance,
+    run_replay,
+)
 from world.replay_workspace import ReplayWorkspace
 
 UTC = timezone.utc
+
+
+def test_default_reads_true_from_real_config() -> None:
+    """Verifies that load_default_idle_partition_advance reads True from config/replay.yaml without mocks."""
+    val = load_default_idle_partition_advance()
+    assert val is True
 
 
 def test_idle_advance_target_when_drained_and_nothing_in_flight() -> None:
