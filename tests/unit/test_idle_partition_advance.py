@@ -198,6 +198,7 @@ async def test_switch_off_path_never_calls_record_payment_watermark(monkeypatch:
         admin_pg="postgresql://dummy",
         base_redis_url="redis://dummy",
         idle_partition_advance=False,
+        world_registry_reporting=False,
     )
 
     # Spy must confirm record_payment_watermark was NEVER called

@@ -40,7 +40,7 @@ nationalsim:
 
   pre_world_listing_share:
     label: assumption
-    issue_ids_v2: [16-2]
+    issue_ids_v2: [16-9]
     derived_from: "architect 16d-1 seeding answer"
     reason: "Assumed share of recycled phone numbers whose previous (mule) holder was listed in the registry before day 0, so the entry matches the innocent new holder; no published figure. One share is drawn per world inside the split's range."
     training: [0.2, 0.6]
@@ -50,7 +50,7 @@ nationalsim:
   pre_world_reporter_choice:
     value: uniform_over_dpip_participants
     label: assumption
-    issue_ids_v2: [16-2]
+    issue_ids_v2: [16-9]
     derived_from: "architect 16d-1 seeding answer"
     reason: "Assumed that the bank that reported a pre-world listing is any DPIP participant with equal chance; no published figure."
 

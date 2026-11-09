@@ -788,11 +788,9 @@ async def run_replay(
         decisions_per_event_payment=per_event_mode,
     )
     registry_driver: RegistryDriver | None = None
-    if registry_on and steps and not isinstance(recorded_world.phone_book, PhoneBook):
-        if world_registry_reporting:
-            raise ValueError("world_registry_reporting needs a recorded world with a phone book")
-        logger.warning("Registry reporting skipped: the recorded world has no phone book")
-    elif registry_on and steps:
+    if registry_on and not isinstance(recorded_world.phone_book, PhoneBook):
+        raise ValueError("world_registry_reporting needs a recorded world with a phone book")
+    if registry_on and steps:
         # Registry steps are merged in only when there is something to replay (an empty list keeps its own error).
         registry_driver = build_registry_driver(recorded_world, world_clock)
         steps = build_replay_steps(

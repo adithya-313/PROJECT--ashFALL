@@ -1089,3 +1089,10 @@ issues:
     levels: [18]
     parts: []
     later_work: ["Level 18a (needed before 18a starts): world registry reports use the layer-1 and deeper mule coverage shares (registry_coverage_layer1_mule_share, registry_coverage_deeper_mule_share); today one uniform bank reporting share applies to every confirmed account"]
+  16-9:
+    title: "Pre-world registry seed share and uniform reporter are assumptions; calibrate"
+    origin: revision_2
+    status: planned
+    levels: [28]
+    parts: []
+    later_work: ["Level 28: calibrate pre_world_listing_share and pre_world_reporter_choice (config/nationalsim.yaml) in the evaluation suite, which already measures registry coverage (issue N2 names Level 28)"]

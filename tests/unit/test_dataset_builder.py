@@ -172,6 +172,7 @@ async def test_run_replay_refuses_empty_step_list(monkeypatch: pytest.MonkeyPatc
             dummy_feed,
             admin_pg="postgresql://dummy",
             base_redis_url="redis://dummy",
+            world_registry_reporting=False,
         )
 
 

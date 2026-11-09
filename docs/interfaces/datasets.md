@@ -106,3 +106,9 @@ While `content_hash` guarantees strict bitwise equivalence of the extracted data
 **Minute rule.** Each row is looked up at its own world minute: `ist_to_world_minute(row time, clock_start)`, i.e. whole minutes (floored) since IST midnight of the world's `clock_start` date. The row time is `decision_time` (payments) or `snapshot_time` (snapshots). `run_id` and `clock_start` come from the matching entry in `manifest["worlds"]` (matched by the row's `world_id`). Spans are half-open: `valid_from` counts, `valid_to` does not. A missing `run_id`/`clock_start`, an unknown `world_id`, or a row time before `clock_start` raises `ValueError`.
 
 **Where it may run.** Evaluation, showcase and test code only. `replay/`, `features/` and the other operational packages must not import `evaluation.dataset_truth_join` or `evaluation.truth`; `load_truth` also raises `PermissionError` when called directly from them. The joined tables are for scoring and must never be fed back into training or serving features.
+
+## Labels from the registry, revokes and disputes (Level 16d)
+
+- **`label_receiver_reported_by_cutoff`** is true when the receiver account has any label the bank held by the cutoff, whatever its source (complaint, registry, and so on). A revoked label does not count (below).
+- **Manifest keys.** `labels_revoked_excluded` is the number of labels left out because a `revoked` status change had arrived at or before the cutoff. `labels_contested` lists the labels (`world_id:bank_id:source:label_id:account_id`) with a `contested` status change by the cutoff; they are still counted. A change that arrives after the cutoff does not exist yet for that cutoff. These keys are not part of `content_hash`.
+- **Replay DPIP key.** A replay hashes every registry identifier with `replay_dpip_key(run_id)` (`replay/registry_replay.py`), a key derived from the run id. It is synthetic, reproducible and holds no secret; the live key is `config.dpip_participant_key`.
