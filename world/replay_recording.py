@@ -27,6 +27,7 @@ from world.interactive_runner import (
     RunnerSettings,
     run_interactive_world,
 )
+from world.phone_book import PhoneBook, build_phone_book
 from world.sampled_world import (
     pinned_configs,
     resolve_sampled_world_gangs,
@@ -40,6 +41,7 @@ class RecordedWorld:
     """
     WHAT: Holds the interactive simulation output and the ordered sequence of decision calls generated.
     WHY: Enables replay runs to evaluate decisions deterministically without re-running world simulation.
+    The phone book is built once here by world.phone_book.build_phone_book on its own seeded stream.
     """
 
     output: InteractiveWorldOutput
@@ -48,6 +50,7 @@ class RecordedWorld:
     split: str | None = None
     seed: int | None = None
     gang_families: tuple[str | None, ...] | None = None
+    phone_book: PhoneBook | None = None
 
 
 def _check_no_live_bank_modes(connectors: MockBankConnectors) -> None:
@@ -116,6 +119,7 @@ def record_world_for_replay(
         split=world_split if world_split is not None else fast_settings.range_name,
         seed=fast_settings.seed,
         gang_families=tuple(g.family for g in gang_configs),
+        phone_book=build_phone_book(output, run_seed=fast_settings.seed),
     )
 
 
@@ -170,4 +174,5 @@ def record_sampled_world_for_replay(
         split=spec.split,
         seed=spec.seed,
         gang_families=gang_families,
+        phone_book=build_phone_book(output, run_seed=spec.seed),
     )
