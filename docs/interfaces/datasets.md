@@ -90,7 +90,19 @@ data/datasets/training-20260915T0000-a1b2c3d4e5f6/
 ├── labels.parquet
 └── manifest.json
 ```
-`write_dataset` computes SHA-256 digests for each Parquet file and embeds them into `manifest.json["files"]`. Each constituent world's `clock_start` is stored in ISO-8601 format under `manifest["worlds"][world_id]["clock_start"]`.
+`write_dataset` computes SHA-256 digests for each Parquet file and embeds them into `manifest.json["files"]`. Each constituent world's `clock_start` is stored in ISO-8601 format in the `manifest["worlds"]` list (one entry per world, with `world_id`, `run_id`, `clock_start`).
 
 #### Parquet Byte-Identity Note
 While `content_hash` guarantees strict bitwise equivalence of the extracted dataset rows across identical replays, individual `.parquet` files serialized via PyArrow may exhibit minor byte differences across Python sessions due to metadata header timestamps or dictionary page order. Downstream consumers should verify dataset parity via the manifest's `content_hash` rather than raw Parquet file hashes.
+
+## Joining truth (evaluation only)
+
+`evaluation/dataset_truth_join.py::join_truth(dataset_dir, truth_root)` returns the `payments` and `snapshots` tables of a built dataset with hidden-truth columns added. It reads the dataset folder and never writes into it; original columns are unchanged.
+
+**What it adds**
+- `payments`: `truth_role_receiver` (role of `receiver_account_id`; `genuine` when no span applies), `truth_owner` (gang id or null), `truth_depth` (mule depth or null).
+- `snapshots`: `truth_role`, `truth_owner`, `truth_depth` for `account_id`.
+
+**Minute rule.** Each row is looked up at its own world minute: `ist_to_world_minute(row time, clock_start)`, i.e. whole minutes (floored) since IST midnight of the world's `clock_start` date. The row time is `decision_time` (payments) or `snapshot_time` (snapshots). `run_id` and `clock_start` come from the matching entry in `manifest["worlds"]` (matched by the row's `world_id`). Spans are half-open: `valid_from` counts, `valid_to` does not. A missing `run_id`/`clock_start`, an unknown `world_id`, or a row time before `clock_start` raises `ValueError`.
+
+**Where it may run.** Evaluation, showcase and test code only. `replay/`, `features/` and the other operational packages must not import `evaluation.dataset_truth_join` or `evaluation.truth`; `load_truth` also raises `PermissionError` when called directly from them. The joined tables are for scoring and must never be fed back into training or serving features.
