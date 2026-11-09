@@ -1272,6 +1272,13 @@ def _plan_campaign_steps(
         money += cost.money_paise; time += cost.time_minutes; prob_safe *= (1.0 - cost.risk)
         _check_running_budget(config.gang_id, config.budget, money, time, 1.0 - prob_safe, step.block)
 
+    # Scam receiving mules that no step gave a mule span (a route step gives its layer mules one) get one here.
+    if mule_inflows is not None:
+        spanned = {role.account_id for role in roles if role.role == "mule"}
+        for receiver in mule_inflows:
+            if receiver not in spanned:
+                roles.append(_mule_role_span(config.gang_id, receiver, 1, acq_min, mule_origin_map.get(receiver)))
+
     if mule_inflows is not None and scam_active_from is not None:
         updated_roles: list[RoleSpan] = []
         for role in roles:
