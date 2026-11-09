@@ -37,6 +37,7 @@ __all__ = [
 ]
 
 REGISTRY_SOURCE = "registry"
+POLICE_BULK = "police_bulk"
 
 
 @dataclass(frozen=True)
@@ -119,7 +120,8 @@ def match_registry_event(event: Mapping[str, Any], own: OwnIdentifiers) -> list[
     reporting bank skips only the reported account itself (its own hash equals the event's linked_account_hash);
     a different account at the reporting bank that shares the phone or device is returned. Nothing else is filtered.
     WHY: The skip rule must never hide a real shared-identifier match, and a pre-world seed (no linked account) is
-    never skipped.
+    never skipped. A police_bulk event ignores DPIP participation and matches only the holding bank's own
+    account hash.
     Args:
         event: The registry.events payload (identifier_hash, identifier_type, bank_id, linked_account_hash).
         own: The bank's own identifiers.
@@ -128,10 +130,14 @@ def match_registry_event(event: Mapping[str, Any], own: OwnIdentifiers) -> list[
     Example:
         match_registry_event({"identifier_hash": h, "identifier_type": "phone", "bank_id": "bank_1"}, own)
     """
-    if not own.participant:
-        return []
     identifier_hash = str(event["identifier_hash"])
     kind = str(event["identifier_type"])
+    if event.get("event_type") == POLICE_BULK:
+        # A police crackdown goes to the holding bank whether or not it takes part in DPIP; only its own hash matches.
+        found_bulk = own.accounts_by_account_hash.get(identifier_hash) if kind == "account" else None
+        return [found_bulk] if found_bulk is not None else []
+    if not own.participant:
+        return []
     if kind == "account":
         found = own.accounts_by_account_hash.get(identifier_hash)
         matched = [found] if found is not None else []
@@ -166,6 +172,15 @@ def registry_label_rows(
         registry_label_rows(event, ["acc_1"], own, "r1", now)
     """
     label_id = f"{event['report_id']}:{event['identifier_type']}"
+    if event.get("event_type") == POLICE_BULK:
+        return [
+            LabelRow(
+                run_id=run_id, bank_id=own.bank_id, label_id=label_id, source=POLICE_BULK, account_id=account,
+                payment_ids=(), verdict="fraud", arrival_time=arrival_time, region=event.get("region"),
+                batch_id=event.get("batch_id"), via=None,
+            )
+            for account in accounts
+        ]
     return [
         LabelRow(
             run_id=run_id, bank_id=own.bank_id, label_id=label_id, source=REGISTRY_SOURCE, account_id=account,

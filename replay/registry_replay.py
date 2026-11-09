@@ -30,6 +30,7 @@ __all__ = [
     "REGISTRY_VISIBLE",
     "RegistryReplaySettings",
     "RegistryListing",
+    "BulkEvent",
     "load_registry_replay_settings",
     "replay_dpip_key",
     "plan_registry_seed",
@@ -87,6 +88,27 @@ class RegistryListing:
     item: IngestionItem
     visible_time: datetime
     seed: bool
+
+
+@dataclass(frozen=True)
+class BulkEvent:
+    """
+    WHAT: One police crackdown confirmation of one account, as a registry.events event for the holding bank.
+    WHY: A police bulk confirmation is not a DPIP report: it goes only to the bank that holds the account, whether or
+    not that bank takes part in DPIP, so it is staged as an event and never enters the registry's listings.
+    Args:
+        item: Ingestion item (account type, the account's hash with its own bank index, reason police_bulk).
+        visible_time: Aware IST time the confirmation arrives (the crackdown's arrival minute).
+        batch_id: The crackdown's batch id.
+        region: The crackdown's region.
+    Example:
+        BulkEvent(item, arrival, "r-B000001", 2)
+    """
+
+    item: IngestionItem
+    visible_time: datetime
+    batch_id: str
+    region: int
 
 
 def replay_dpip_key(run_id: str) -> str:
