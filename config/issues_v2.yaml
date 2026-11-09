@@ -1068,3 +1068,10 @@ issues:
     levels: [19]
     parts: []
     later_work: ["Level 19: a quiet partition stalls the live payment watermark; replay solves it with a drain proof, live needs an idle timeout"]
+  16-6:
+    title: "Phone changes during a run (SIM swap, linked-number switch) are not modelled; needed before Level 18a"
+    origin: revision_2
+    status: planned
+    levels: [18]
+    parts: []
+    later_work: ["Level 18a (needed before 18a starts): model phone changes during a run (SIM swap, linked-number switch); control-change bank events and the Level 15 phone-change feature have no source until then"]

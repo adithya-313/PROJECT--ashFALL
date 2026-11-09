@@ -108,3 +108,9 @@ bank_feed:
     reason: "Commercial banks require account_opened lifecycle events for pre-existing accounts at simulation start."
     derived_from: "Level 15 architect decision 3A"
 
+  kyc_phone_on_account_opened:
+    label: policy
+    value: false
+    reason: "A bank holds the KYC phone of its own account holder from opening; the live feed keeps the phone off, and the replay turns it on (config/replay.yaml) so banks can match phone hashes in the registry. architect 16d-0."
+    derived_from: "architect 16d-0"
+

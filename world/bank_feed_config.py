@@ -41,6 +41,7 @@ class BankFeedConfig:
     unmapped_gang_device_kinds: tuple[str, ...]
     allowed_account_event_kinds: tuple[str, ...]
     emit_opening_for_existing_accounts: bool
+    kyc_phone_on_account_opened: bool = False
     account_type_by_account_prefix: dict[str, str] = field(default_factory=dict)
 
 
@@ -180,6 +181,11 @@ def load_bank_feed_config(path: Path | str | None = None) -> BankFeedConfig:
         raise ValueError("emit_opening_for_existing_accounts.value must be a boolean")
     emit_opening_for_existing_accounts = bool(raw_emit_opening)
 
+    # 10. Extract kyc_phone_on_account_opened policy flag (live default false).
+    raw_kyc_phone = feed_data.get("kyc_phone_on_account_opened", {}).get("value")
+    if not isinstance(raw_kyc_phone, bool):
+        raise ValueError("kyc_phone_on_account_opened.value must be a boolean")
+
     return BankFeedConfig(
         bank_ids_by_index=bank_ids_by_index,
         payee_type_by_account_prefix=payee_type_by_account_prefix,
@@ -191,4 +197,5 @@ def load_bank_feed_config(path: Path | str | None = None) -> BankFeedConfig:
         unmapped_gang_device_kinds=unmapped_gang_device_kinds,
         allowed_account_event_kinds=allowed_account_event_kinds,
         emit_opening_for_existing_accounts=emit_opening_for_existing_accounts,
+        kyc_phone_on_account_opened=raw_kyc_phone,
     )

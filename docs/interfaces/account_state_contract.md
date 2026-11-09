@@ -96,6 +96,14 @@ Allowed details fields per event kind:
 - `account_opened`: empty or initial metadata
 - `account_reactivated`: empty or reactivation channel
 
+### KYC phone on `account_opened` (switch `kyc_phone_on_account_opened`)
+
+A bank holds the phone of its own account holder from opening. When the switch is on, the `account_opened` details carry one extra key, `phone` (the synthetic KYC phone string from the phone book, or `null` for an account that has none, never `""`). The key is added to day-0 openings (accounts that existed when the run started) and to openings during the run alike. A bank stores it in the nullable `phone` column of `bank_account_events` (migration 0019).
+
+- **Live default:** `false` in `config/bank_feed.yaml`. The details keep only `home_region` and `account_type`, the `phone` column stays `NULL`, and the feed is byte-identical to before.
+- **Replay:** `true` in `config/replay.yaml`; `replay/pipeline.py` passes the recorded world's phone book to `project_run`.
+- **Not modelled:** phone changes during a run (SIM swap, linked-number switch) are tracked as issue 16-6, needed before Level 18a.
+
 ---
 
 ## 3. Partitioning and Ordering Guarantees
