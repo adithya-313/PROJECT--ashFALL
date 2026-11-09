@@ -63,6 +63,7 @@ class WorldExtract:
     payment_rows: list[dict[str, Any]]
     snapshot_rows: list[dict[str, Any]]
     label_rows: list[dict[str, Any]]
+    clock_start: str = "2026-09-01"
 
 
 @dataclass
@@ -96,7 +97,8 @@ async def extract_world(
 ) -> WorldExtract:
     """
     WHAT: Queries workspace feature_log, account_snapshots, and labels tables before workspace drop.
-    WHY: Extracts simulation telemetry and ground truth into a WorldExtract, dropping real-clock columns.
+    WHY: Extracts simulation telemetry and operational decisions into a WorldExtract, reading workspace
+    tables and recorded world events without accessing the hidden truth store, dropping real-clock columns.
     """
     # 1. Map payment identifiers to receiving accounts from simulation output and recorded calls
     payment_to_receiver: dict[str, str] = {}
@@ -162,6 +164,8 @@ async def extract_world(
     run_id = recorded_world.output.result.run_id
     world_id = recorded_world.world_id or run_id
     split = recorded_world.split or "training"
+    cs = recorded_world.output.plan.clock.start_date
+    clock_start = cs.isoformat() if hasattr(cs, "isoformat") else str(cs)
     seed = (
         recorded_world.seed
         if recorded_world.seed is not None
@@ -197,6 +201,7 @@ async def extract_world(
         payment_rows=payment_rows,
         snapshot_rows=snapshot_rows,
         label_rows=label_rows,
+        clock_start=clock_start,
     )
 
 
@@ -398,11 +403,11 @@ def build_dataset(
                 if r.get("status") == "no_watermark":
                     no_watermark_count += 1
 
-                rec_acc = (
-                    r.get("receiver_account_id")
-                    or r.get("to_account")
-                    or r.get("receiver_account")
-                )
+                if "receiver_account_id" not in r or r["receiver_account_id"] is None:
+                    raise ValueError(
+                        f"Payment row {r.get('payment_id')!r} is missing required 'receiver_account_id'"
+                    )
+                rec_acc = str(r["receiver_account_id"])
                 p_dict: dict[str, Any] = {
                     "world_id": e.world_id,
                     "bank_id": r["bank_id"],
@@ -536,6 +541,7 @@ def build_dataset(
                 "split": e.split,
                 "seed": e.seed,
                 "run_id": e.run_id,
+                "clock_start": e.clock_start,
                 "gang_families": list(e.gang_families),
             }
             for e in extracts

@@ -16,11 +16,12 @@ An in-memory frozen snapshot extracted from an isolated replay workspace prior t
 - `split`: Dataset partition (`training`, `validation`, `test`, `stress`).
 - `seed`: World builder random seed.
 - `run_id`: 16-character fingerprint of the replay run.
+- `clock_start`: Simulation world start datetime (used as the chronological baseline).
 - `gang_families`: Tuple of active syndicate tactic families present in the world.
 - `decisions_per_event_payment`: Boolean flag confirming decisions were evaluated for all event payments.
 - `registry_wired`: Boolean flag indicating whether the pre-decision registry was active.
 - `registry_wired_reason`: Text explanation for registry wiring state.
-- `payment_rows`: Decision feature rows extracted from `feature_log` (real-clock column `created_at` omitted).
+- `payment_rows`: Decision feature rows extracted from `feature_log` (real-clock column `created_at` omitted; `receiver_account_id` required).
 - `snapshot_rows`: Daily account snapshots extracted from `account_snapshots` (real-clock column `logged_at` omitted).
 - `label_rows`: Fraud complaint labels extracted from `labels` (real-clock column `recorded_at` omitted).
 
@@ -45,11 +46,14 @@ A single simulation world-clock timestamp ($C$) governs inclusion across all thr
 - **Labels**: `arrival_time <= C`
 Events occurring strictly after $C$ are excluded.
 
-### R3. Convenience Label Columns
+### R3. Convenience Label Columns & Exact Counterparty Matching
 To facilitate offline model training without manual multi-table joins, the `payments` table includes two point-in-time boolean convenience columns:
-1. `label_receiver_reported_by_cutoff`: Evaluates to `True` if any label known by $C$ (`arrival_time <= C`) targets the payment's receiving account (`account_id`), regardless of final verdict.
+1. `label_receiver_reported_by_cutoff`: Evaluates to `True` if any label known by $C$ (`arrival_time <= C`) targets the payment's receiving account (`receiver_account_id`), regardless of final verdict.
 2. `label_payment_named_by_cutoff`: Evaluates to `True` if the payment identifier appears in the `payment_ids` array of any label known by $C$.
 *Note*: False complaints (`verdict == 'not_fraud'`) count as reported, as a receiving account subject to an investigated complaint is operationally flagged prior to final resolution.
+
+#### Strict Receiver Account Validation (Decision D1)
+In fraud decision contexts, `account_id` on the payment row represents the payer/sender account. The payee/receiver account must be explicitly populated via `receiver_account_id` (extracted from the underlying transaction). `build_dataset` requires `receiver_account_id` on every payment row; if missing, it raises a plain `ValueError` without silent fallback to `account_id`.
 
 ### R4. Feature Columns Specification
 The manifest explicitly enumerates all 52 dense feature columns (`feature_columns`) loaded from `canonical_feature_names()`. No column beginning with the `label_` prefix is ever included in the feature column specification, preventing target leakage during automated vector assembly.
@@ -77,7 +81,7 @@ A deterministic SHA-256 fingerprint generated across all three tables:
 3. **Split Mismatch**: Every constituent extract must match the target split (`training`, `validation`, `test`, `stress`).
 4. **Empty Sequence**: Building from an empty extract list is prohibited.
 
-### R8. Storage Format & Manifest Integrity (`write_dataset`)
+### R8. Storage Format, Byte Identity & Manifest Integrity (`write_dataset`)
 Datasets are serialized to disk under `<root>/<split>-<cutoff yyyymmddTHHMM>-<content_hash[:12]>`:
 ```
 data/datasets/training-20260915T0000-a1b2c3d4e5f6/
@@ -86,4 +90,7 @@ data/datasets/training-20260915T0000-a1b2c3d4e5f6/
 ├── labels.parquet
 └── manifest.json
 ```
-`write_dataset` computes SHA-256 digests for each Parquet file and embeds them into `manifest.json["files"]`.
+`write_dataset` computes SHA-256 digests for each Parquet file and embeds them into `manifest.json["files"]`. Each constituent world's `clock_start` is stored in ISO-8601 format under `manifest["worlds"][world_id]["clock_start"]`.
+
+#### Parquet Byte-Identity Note
+While `content_hash` guarantees strict bitwise equivalence of the extracted dataset rows across identical replays, individual `.parquet` files serialized via PyArrow may exhibit minor byte differences across Python sessions due to metadata header timestamps or dictionary page order. Downstream consumers should verify dataset parity via the manifest's `content_hash` rather than raw Parquet file hashes.

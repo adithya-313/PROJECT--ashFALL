@@ -85,8 +85,8 @@ def errors_of(register: dict[str, Any]) -> str:
 
 def test_real_register_passes() -> None:
     """
-    WHAT: Checks that the real config/issues_v2.yaml has no errors, covers exactly the 81 revision_2 IDs
-    from Section 27, and holds the 18 level_11 IDs that later levels carry on (99 entries in total).
+    WHAT: Checks that the real config/issues_v2.yaml has no errors, covers exactly the 82 revision_2 IDs
+    from Section 27, and holds the 18 level_11 IDs that later levels carry on (100 entries in total).
 
     WHY: This is the main promise of the register. It also fixes the totals, so an ID cannot be added
     or dropped without this test noticing.
@@ -126,10 +126,10 @@ def test_real_register_passes() -> None:
     register = real_register()
     assert check_register(register, REPO_ROOT) == []
     issues = register["issues"]
-    assert len(EXPECTED_V2_IDS) == 81
-    assert len(issues) == 99
+    assert len(EXPECTED_V2_IDS) == 82
+    assert len(issues) == 100
     # Level 15
-    assert count_statuses(issues) == {"built": 71, "partial": 13, "planned": 13, "deferred": 2}
+    assert count_statuses(issues) == {"built": 71, "partial": 13, "planned": 14, "deferred": 2}
 
 
 def test_missing_id_is_rejected() -> None:
@@ -143,7 +143,7 @@ def test_missing_id_is_rejected() -> None:
         None.
 
     Example:
-        With "13-17" removed, 80 of 81 revision_2 IDs remain, and the message says
+        With "13-17" removed, 81 of 82 revision_2 IDs remain, and the message says
         "Missing revision_2 IDs (1): ['13-17']".
     """
     register = real_register()
@@ -162,7 +162,7 @@ def test_extra_unknown_id_is_rejected() -> None:
         None.
 
     Example:
-        With "Z9" added there are 82 revision_2 IDs against 81 expected, and the message says
+        With "Z9" added there are 83 revision_2 IDs against 82 expected, and the message says
         "Unknown revision_2 IDs (1): ['Z9']".
     """
     register = real_register()

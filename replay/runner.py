@@ -37,7 +37,7 @@ from features.account_labels import apply_complaints_since, apply_feedback_since
 from features.account_snapshots import select_daily_snapshot_accounts, write_account_snapshots
 from features.account_stream import apply_account_events_since, apply_withdrawals_since, consume_available
 from features.feature_log import canonical_feature_names
-from features.ingest_watermark import get_payment_watermark
+from features.ingest_watermark import get_payment_watermark, record_payment_watermark
 from features.label_consumer import consume_complaint_labels_since
 from replay.ordering import DecisionStep, FeedStep, build_replay_steps
 from world.bank_connectors import BankTransport, MockBankConnectors, load_bank_modes
@@ -65,6 +65,8 @@ __all__ = [
     "compute_feature_log_sha256",
     "day_boundaries_between",
     "drain",
+    "idle_advance_target",
+    "load_default_idle_partition_advance",
     "run_replay",
 ]
 
@@ -478,6 +480,64 @@ def load_default_replay_speed() -> str | float:
     return val
 
 
+def load_default_idle_partition_advance() -> bool:
+    """
+    WHAT: Reads the idle_partition_advance policy setting from config/replay.yaml.
+    WHY: Architect 16c-3 (b): Drained idle payment partitions advance their watermark to clock_now - commit_grace.
+    """
+    from core.config_validator import load_yaml
+    from world.replay_workspace import CONFIG_PATH
+
+    data = load_yaml(CONFIG_PATH)
+    block = data.get("replay_workspace", {})
+    entry = block.get("idle_partition_advance")
+    if entry is None or not isinstance(entry, dict) or "value" not in entry:
+        raise ValueError(f"Missing 'idle_partition_advance' policy setting in {CONFIG_PATH}")
+    return bool(entry["value"])
+
+
+def idle_advance_target(
+    clock_now: datetime,
+    commit_grace_seconds: int | float,
+    partition_drained: bool,
+    next_unsent_arrival: datetime | None,
+) -> tuple[datetime | None, str]:
+    """
+    WHAT: Evaluates whether a drained, idle payment partition may safely advance its watermark.
+    WHY: Architect 16c-3 (b): In replay, when a partition is drained and no unsent record has arrival <= target,
+    the partition is proven idle and its watermark advances to clock_now - commit_grace (matching pollers).
+
+    Args:
+        clock_now: Current simulation world clock datetime (must be timezone-aware).
+        commit_grace_seconds: Ingestion watermark lag / grace period in seconds.
+        partition_drained: Boolean indicating whether all pending events have been relayed and consumed.
+        next_unsent_arrival: World time of the next scheduled step not yet dispatched, or None if at replay end.
+
+    Returns:
+        tuple[datetime | None, str]: (target, "advance") if safe to advance; otherwise (None, reason).
+    """
+    if clock_now.tzinfo is None:
+        raise ValueError("clock_now must be timezone-aware")
+
+    target = clock_now - timedelta(seconds=float(commit_grace_seconds))
+
+    if not partition_drained:
+        return None, "partition not drained"
+
+    if next_unsent_arrival is not None and next_unsent_arrival <= target:
+        return (
+            None,
+            f"next unsent record arrival {next_unsent_arrival.isoformat()} <= target {target.isoformat()} (in flight)",
+        )
+
+    # Steps are ordered chronologically; next_unsent_arrival proves every record with arrival <= target was already sent
+    assert next_unsent_arrival is None or next_unsent_arrival > target, (
+        f"Unsent step at {next_unsent_arrival} violates advance target {target}"
+    )
+
+    return target, "advance"
+
+
 def pace_seconds(
     previous_world_time: datetime | None,
     next_world_time: datetime,
@@ -530,6 +590,9 @@ async def _snapshot_completed_day(
     poller_cursors: dict[str, dict[str, int]],
     drain_timeout_seconds: float,
     step_idx: int,
+    idle_advance: bool = False,
+    produced_partitions: set[int] | None = None,
+    next_unsent_arrival: datetime | None = None,
 ) -> float:
     """
     WHAT: Drains the operational pipeline up to boundary and writes daily account snapshots for completed day.
@@ -551,6 +614,16 @@ async def _snapshot_completed_day(
         poller_cursors=poller_cursors,
         deadline=deadline,
     )
+    if idle_advance and produced_partitions:
+        target_ts, reason = idle_advance_target(
+            clock_now=boundary,
+            commit_grace_seconds=acct_cfg.commit_grace,
+            partition_drained=True,
+            next_unsent_arrival=next_unsent_arrival,
+        )
+        if target_ts is not None:
+            for part in produced_partitions:
+                record_payment_watermark(ws_redis, partition=part, timestamp=target_ts, run_id=run_id)
     day_start = boundary - timedelta(days=1)
     day_end = boundary
     for bank_id in banks:
@@ -592,6 +665,7 @@ async def run_replay(
     before_decision_hook: Callable[[ReplayHookContext], Awaitable[None]] | None = None,
     before_drop_hook: Callable[[ReplayDropContext], Awaitable[None]] | None = None,
     workspace_name: str | None = None,
+    idle_partition_advance: bool | None = None,
 ) -> ReplayResult:
     """
     WHAT: Drives the complete operational pipeline in world-time order to replay a recorded simulation run.
@@ -602,6 +676,12 @@ async def run_replay(
     for mode in bank_modes.values():
         if mode == "live":
             raise ValueError("Live bank mode refused until Level 19")
+
+    idle_advance = (
+        load_default_idle_partition_advance()
+        if idle_partition_advance is None
+        else bool(idle_partition_advance)
+    )
 
     per_event_mode = (
         load_default_decisions_per_event_payment()
@@ -792,6 +872,9 @@ async def run_replay(
                             poller_cursors=poller_cursors,
                             drain_timeout_seconds=r_cfg.drain_timeout_seconds,
                             step_idx=step_idx,
+                            idle_advance=idle_advance,
+                            produced_partitions=produced_partitions,
+                            next_unsent_arrival=step.world_time,
                         )
                         if dur > longest_drain_seconds:
                             longest_drain_seconds = dur
@@ -825,6 +908,18 @@ async def run_replay(
                     )
                     if drain_duration > longest_drain_seconds:
                         longest_drain_seconds = drain_duration
+
+                    if idle_advance and produced_partitions:
+                        next_unsent = steps[step_idx + 1].world_time if step_idx + 1 < len(steps) else None
+                        target_ts, reason = idle_advance_target(
+                            clock_now=step.world_time,
+                            commit_grace_seconds=acct_cfg.commit_grace,
+                            partition_drained=True,
+                            next_unsent_arrival=next_unsent,
+                        )
+                        if target_ts is not None:
+                            for part in produced_partitions:
+                                record_payment_watermark(ws_redis, partition=part, timestamp=target_ts, run_id=run_id)
 
                     # Optional test injection hook (e.g. to simulate deleting watermark key or pausing consumer)
                     if before_decision_hook is not None:
@@ -884,6 +979,9 @@ async def run_replay(
                         poller_cursors=poller_cursors,
                         drain_timeout_seconds=r_cfg.drain_timeout_seconds,
                         step_idx=len(steps),
+                        idle_advance=idle_advance,
+                        produced_partitions=produced_partitions,
+                        next_unsent_arrival=None,
                     )
                     if dur > longest_drain_seconds:
                         longest_drain_seconds = dur

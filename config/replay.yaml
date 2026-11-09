@@ -50,3 +50,9 @@ replay_workspace:
     value: "max"
     reason: 'Level 16 task 2 — "max" = no sleeping, limited only by the drain wait (architect Q3); a number = world seconds per real second'
     derived_from: "Level 16 task 2 and architect Q3"
+
+  idle_partition_advance:
+    label: policy
+    value: true
+    reason: "architect 16c-3 (b) — a quiet payment partition stalls the watermark; the replay proves the drain, so it may advance like the pollers"
+    derived_from: "architect 16c-3 (b)"
