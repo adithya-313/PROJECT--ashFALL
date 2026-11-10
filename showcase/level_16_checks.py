@@ -281,7 +281,8 @@ async def check_16_6_no_future_leakage(workspace: Any) -> CheckOutcome:
 async def check_16_7_four_label_paths(workspace: Any) -> CheckOutcome:
     """
     Check 16-7 (normal): complaint, registry, police_bulk and hold_request labels all exist, each at the banks the plan
-    says: complaints at the victim's bank, bulk labels at the holding bank, hold labels at the receiving bank, and
+    says: complaint labels at the reported account's bank, bulk labels at the holding bank, hold labels at the
+    receiving bank, and
     registry labels only at DPIP participants.
     """
     st = await get_state()
@@ -303,10 +304,11 @@ async def check_16_7_four_label_paths(workspace: Any) -> CheckOutcome:
     end_minute = int(st.cfg["world"]["n_days"]) * 1440
     events = {e.label_id: e for e in build_label_events(output) if e.kind == "complaint"}
     expected_complaint = {
-        (f"bank_{e.complainant_bank_index}", e.reported_account)
+        (f"bank_{e.reported_bank_index}", e.reported_account)
         for e in events.values()
-        if e.arrival_minute <= end_minute and e.complainant_bank_index is not None
+        if e.arrival_minute <= end_minute and e.reported_bank_index is not None
     }
+    complaint_labels = {(r["bank_id"], r["account_id"]) for r in rows if r["source"] == "complaint"}
     expected_bulk = {
         (f"bank_{b}", a)
         for c in build_bulk_confirmations(output).confirmations
@@ -318,6 +320,7 @@ async def check_16_7_four_label_paths(workspace: Any) -> CheckOutcome:
         for h in st.driver.holds
         if h.complaint_id in events and h.latency_minutes + events[h.complaint_id].arrival_minute <= end_minute
     }
+    got["complaint"] = complaint_labels
     for name, expected in (
         ("complaint", expected_complaint),
         ("police_bulk", expected_bulk),
@@ -364,8 +367,7 @@ async def check_16_8_innocent_holder(workspace: Any) -> CheckOutcome:
     first = hits[0]
     return CheckOutcome(
         key_number=(
-            f"{first['account_id']} at {first['bank_id']} is labelled fraud by the registry; "
-            f"truth role {roles[0][0]}"
+            f"{first['account_id']} at {first['bank_id']} is labelled fraud by the registry; truth role {roles[0][0]}"
         ),
         evidence={
             "innocent_holders_planned": sorted(expected),
