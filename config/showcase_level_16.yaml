@@ -48,6 +48,13 @@ pins:
     values: {training: [50, 50], test: [50, 50], stress: [50, 50]}
     reason: "showcase-only: stress-range false-complaint rate so a false report occurs"
 
+# Registry settings for the showcase replay (passed to run_replay; config/nationalsim.yaml is not edited).
+registry:
+  label: policy
+  showcase_only: true
+  non_participants: [bank_2]
+  reason: "showcase-only: bank_2 does not take part in DPIP so check 9 can show payee_registry_match is None at a non-participant; the config file enrols every bank."
+
 # Smallest counts the committed seed must reach (the unit test plans the world and checks each).
 minimums:
   label: policy
@@ -57,13 +64,15 @@ minimums:
   g3_complaints_on_one_account: 3
   g3_spread_days: 14
   false_reported_accounts: 1
+  hold_requests: 1
+  innocent_holder_listings: 1
   reason: "Every check passes only on real counts above zero; these are the floors the scan had to clear."
 
-# What the scan found (filled in when the seed was chosen).
+# What the scan found (seeds 1-93 planned with the pins and registry settings above; no replay).
 scan:
   label: policy
-  seeds_scanned: 66
-  seeds_passing: [27, 39, 61, 65, 66]
+  seeds_scanned: 93
+  seeds_passing: [27, 39, 61, 65, 76, 81, 84, 93]
   chosen_seed: 65
   chosen_seed_counts:
     bulk_confirmations_with_accounts: 2
@@ -73,4 +82,6 @@ scan:
     g3_victims: 6
     g3_spread_days: 16.2
     false_reported_accounts: 3
-  reason: "Seeds 1-66 were planned (no replay) and stopped after five passed; seed 65 has the widest margins of the five."
+    hold_requests: 5
+    innocent_holder_listings: 1
+  reason: "The scan stopped after eight seeds passed every floor; seed 65 has the widest margins of the first four."

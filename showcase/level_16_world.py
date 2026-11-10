@@ -14,13 +14,15 @@ TERM: pin: a world_ranges parameter set to one value for this showcase world onl
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from core.config_validator import load_yaml
 from core.event_clock import ManualClock
+from nationalsim.keyed_hash import compute_identifier_hash
 from replay.registry_driver import build_registry_driver
+from replay.registry_replay import RegistryReplaySettings, load_registry_replay_settings
 from world.edge_cases import apply_edge_case_layer
 from world.fast_mode import FastRunSettings
 from world.gang_config import GangConfig, gang_config_from_plain
@@ -36,6 +38,7 @@ __all__ = [
     "load_level_16_config",
     "level_16_world_configs",
     "level_16_gang",
+    "level_16_registry_settings",
     "level_16_fast_settings",
     "plan_level_16_world",
     "guarantee_counts",
@@ -60,8 +63,11 @@ class GuaranteeCounts:
         g3_victims: Distinct complainants on that account.
         g3_spread_days: Days between the first and last complaint on that account.
         false_reported_accounts: Distinct reported accounts that hold no mule-side role.
+        hold_requests: Hold requests that reach a receiving bank (cross-bank complaints whose hold is not missed).
+        innocent_holder_listings: Pre-world listings whose recycled phone now belongs to a non-mule account at a
+            DPIP participant bank, so the bank labels an innocent holder (N1).
     Example:
-        GuaranteeCounts(1, 2, 1, 4, 4, 20.5, 1)
+        GuaranteeCounts(1, 2, 1, 4, 4, 20.5, 1, 3, 1)
     """
 
     bulk_confirmations_with_accounts: int
@@ -71,6 +77,8 @@ class GuaranteeCounts:
     g3_victims: int
     g3_spread_days: float
     false_reported_accounts: int
+    hold_requests: int
+    innocent_holder_listings: int
 
 
 def load_level_16_config(path: Path | None = None) -> dict[str, Any]:
@@ -117,6 +125,25 @@ def level_16_gang() -> GangConfig:
     return gang_config_from_plain(load_yaml(GANG_PATH))
 
 
+def level_16_registry_settings(cfg: dict[str, Any]) -> RegistryReplaySettings:
+    """
+    WHAT: The registry replay settings of the showcase: the file settings for the split, with the banks named under
+    registry.non_participants switched to dpip_participation false.
+    WHY: Check 9 needs a bank that does not take part in DPIP; config/nationalsim.yaml enrols every bank and is not
+    edited, so the showcase replay passes its own settings (showcase-only).
+    Args:
+        cfg: The parsed showcase config.
+    Returns:
+        RegistryReplaySettings with the non-participants switched off.
+    Example:
+        level_16_registry_settings(cfg).participants == ["bank_0", "bank_1"]
+    """
+    base = load_registry_replay_settings(str(cfg["world"]["range_name"]))
+    off = set(cfg["registry"]["non_participants"])
+    banks = {b: ({**s, "dpip_participation": False} if b in off else dict(s)) for b, s in base.bank_settings.items()}
+    return replace(base, bank_settings=banks)
+
+
 def level_16_fast_settings(cfg: dict[str, Any], seed: int | None = None) -> FastRunSettings:
     """
     WHAT: Builds the FastRunSettings of the showcase world (optionally for another seed, for the scan).
@@ -158,12 +185,13 @@ def plan_level_16_world(cfg: dict[str, Any], seed: int | None = None) -> Recorde
     )
 
 
-def guarantee_counts(world: RecordedWorld) -> GuaranteeCounts:
+def guarantee_counts(world: RecordedWorld, registry: RegistryReplaySettings | None = None) -> GuaranteeCounts:
     """
     WHAT: Counts the five guarantees in a planned world.
     WHY: Truth is read from the in-memory world only to say which reported accounts hold no mule-side role.
     Args:
         world: A planned or recorded world.
+        registry: The showcase registry settings (default: the config file settings).
     Returns:
         GuaranteeCounts.
     Example:
@@ -181,7 +209,19 @@ def guarantee_counts(world: RecordedWorld) -> GuaranteeCounts:
     spread = 0.0
     if best:
         spread = (max(e.arrival_minute for e in best) - min(e.arrival_minute for e in best)) / MINUTES_PER_DAY
-    driver = build_registry_driver(world, ManualClock(), None)
+    driver = build_registry_driver(world, ManualClock(), registry)
+    participants = set((registry or load_registry_replay_settings(str(world.split))).participants)
+    bank_of = {acc: f"bank_{ledger.bank_index}" for ledger in output.world.ledgers for acc in ledger.accounts}
+    phone_hashes = {
+        compute_identifier_hash(driver.key, output.result.run_id, "phone", r.phone_number): r
+        for r in (world.phone_book.records.values() if world.phone_book else ())
+        if r.is_recycled
+    }
+    innocent = 0
+    for listing in driver.seed:
+        holder = phone_hashes.get(listing.item.identifier_hash)
+        if holder and holder.account_id not in mule_accounts and bank_of.get(holder.account_id) in participants:
+            innocent += 1
     return GuaranteeCounts(
         bulk_confirmations_with_accounts=len(bulk),
         cross_bank_complaints=sum(1 for e in complaints if e.complainant_bank_index != e.reported_bank_index),
@@ -190,6 +230,8 @@ def guarantee_counts(world: RecordedWorld) -> GuaranteeCounts:
         g3_victims=len({e.complainant_account for e in best}),
         g3_spread_days=spread,
         false_reported_accounts=len({a for a in by_account if a not in mule_accounts}),
+        hold_requests=len(driver.holds),
+        innocent_holder_listings=innocent,
     )
 
 
@@ -214,5 +256,7 @@ def unmet_guarantees(counts: GuaranteeCounts, cfg: dict[str, Any]) -> list[str]:
         "g3_complaints_on_one_account": counts.g3_complaints >= m["g3_complaints_on_one_account"],
         "g3_spread_days": counts.g3_spread_days >= m["g3_spread_days"],
         "false_reported_accounts": counts.false_reported_accounts >= m["false_reported_accounts"],
+        "hold_requests": counts.hold_requests >= m["hold_requests"],
+        "innocent_holder_listings": counts.innocent_holder_listings >= m["innocent_holder_listings"],
     }
     return [name for name, ok in checks.items() if not ok]
