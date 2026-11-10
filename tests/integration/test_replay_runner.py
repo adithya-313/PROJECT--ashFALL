@@ -309,6 +309,8 @@ async def test_r2_raises_when_produced_partition_missing_watermark(
             base_redis_url=host_side_redis_url(),
             redis_client_factory=host_redis_factory,
             before_decision_hook=delete_watermark_hook,
+            # Stalled-partition path: idle advance would write the watermark this test deletes.
+            idle_partition_advance=False,
             workspace_name=workspace_name,
         )
 
@@ -475,6 +477,8 @@ async def test_drain_timeout_with_paused_consumer(
             base_redis_url=host_side_redis_url(),
             redis_client_factory=host_redis_factory,
             before_decision_hook=pause_hook,
+            # Stalled-partition path: idle advance would let the paused drain finish.
+            idle_partition_advance=False,
             workspace_name=workspace_name,
         )
 

@@ -43,7 +43,7 @@ from features.registry_label_consumer import consume_registry_events
 from nationalsim.national_outbox import relay_national_outbox
 from replay.ordering import DecisionStep, FeedStep, build_replay_steps
 from replay.registry_driver import RegistryDriver, build_registry_driver
-from replay.registry_replay import REGISTRY_INGEST, REGISTRY_VISIBLE, RegistryReplaySettings
+from replay.registry_replay import REGISTRY_INGEST, REGISTRY_VISIBLE, RegistryReplaySettings, replay_dpip_key
 from world.bank_connectors import BankTransport, MockBankConnectors, load_bank_modes
 from world.bank_feed import BankFeed, resolve_bank_id
 from world.bank_feed_config import load_bank_feed_config
@@ -109,6 +109,7 @@ class ReplayDropContext:
     workspace: ReplayWorkspace
     workspace_dsn: str
     logged_payment_ids_by_bank: dict[str, list[str]]
+    dpip_key: str
     registry_wired: bool = False
     registry_wired_reason: str = "no nationalsim screener or DPIP key in replay until 16d"
 
@@ -1193,6 +1194,7 @@ async def run_replay(
                 workspace=workspace,
                 workspace_dsn=workspace_dsn,
                 logged_payment_ids_by_bank=dict(logged_payment_ids_by_bank),
+                dpip_key=replay_dpip_key(run_id),
                 registry_wired=registry_driver is not None,
                 registry_wired_reason=(
                     REGISTRY_WIRED_REASON if registry_driver is not None else REGISTRY_NOT_WIRED_REASON
