@@ -148,7 +148,7 @@ async def extract_world(
         l_records = await ws_conn.fetch(
             """
             SELECT run_id, bank_id, label_id, source, account_id, payment_ids,
-                   verdict, arrival_time, region, batch_id, claimed_type
+                   verdict, arrival_time, region, batch_id, claimed_type, via
             FROM labels
             ORDER BY arrival_time, label_id
             """
@@ -285,6 +285,7 @@ def _labels_schema() -> pa.Schema:
             ("region", pa.int32()),
             ("batch_id", pa.string()),
             ("claimed_type", pa.string()),
+            ("via", pa.string()),
         ]
     )
 
@@ -409,6 +410,7 @@ def build_dataset(
                     "region": r.get("region"),
                     "batch_id": r.get("batch_id"),
                     "claimed_type": r.get("claimed_type"),
+                    "via": r.get("via"),
                 }
                 labels_rows.append(l_dict)
                 reported_accounts.add(r["account_id"])

@@ -7,7 +7,7 @@ WHY: Level 16c-2 / Architect decisions Q2-Q5:
   - Verifies that Replay A and Replay B produce identical content hashes at all cutoffs.
   - Verifies strict label progression across cutoffs (earlier labels < later labels).
   - Asserts payments table row count equals the total simulation event count.
-  - Confirms manifest records registry_wired: false and accurate metadata.
+  - Confirms manifest records registry_wired: true (screener wired) and accurate metadata.
 """
 
 import asyncio
@@ -93,7 +93,7 @@ async def test_identical_replays_give_identical_datasets(
       - Replay A and Replay B produce identical canonical content hashes across cutoffs.
       - Earlier labels form a strict subset of later labels across cutoffs C1, C2, C3.
       - Total payments at C3 equals total simulation event count.
-      - Manifest records registry_wired: false.
+      - Manifest records registry_wired: true.
     """
     cfg = load_bank_feed_config()
     bank_modes = load_bank_modes()
@@ -152,7 +152,11 @@ async def test_identical_replays_give_identical_datasets(
         extract_a = await extract_world(
             drop_ctx,
             recorded_world,
-            {"decisions_per_event_payment": True, "registry_wired": False},
+            {
+                "decisions_per_event_payment": True,
+                "registry_wired": drop_ctx.registry_wired,
+                "registry_wired_reason": drop_ctx.registry_wired_reason,
+            },
         )
 
     result_a = await run_replay(
@@ -174,7 +178,11 @@ async def test_identical_replays_give_identical_datasets(
         extract_b = await extract_world(
             drop_ctx,
             recorded_world,
-            {"decisions_per_event_payment": True, "registry_wired": False},
+            {
+                "decisions_per_event_payment": True,
+                "registry_wired": drop_ctx.registry_wired,
+                "registry_wired_reason": drop_ctx.registry_wired_reason,
+            },
         )
 
     result_b = await run_replay(
@@ -205,8 +213,8 @@ async def test_identical_replays_give_identical_datasets(
 
     # 7. Verify strict label growth / subset progression
     def complaint_ids(dataset: Any) -> set[str]:
-        """Label ids of the complaint-source labels only (registry labels are counted elsewhere)."""
-        return {r["label_id"] for r in dataset.labels.to_pylist() if r["source"] == "complaint"}
+        """Label ids of the direct complaint labels only (source complaint, via IS NULL) (registry labels are counted elsewhere)."""
+        return {r["label_id"] for r in dataset.labels.to_pylist() if r["source"] == "complaint" and r.get("via") is None}
 
     labels_c1 = complaint_ids(ds_a1)
     labels_c2 = complaint_ids(ds_a2)
@@ -226,5 +234,5 @@ async def test_identical_replays_give_identical_datasets(
     assert result_b.decisions_sent == len(events)
 
     # 9. Verify manifest registry status
-    assert ds_a3.manifest["registry_wired"] is False
-    assert ds_b3.manifest["registry_wired"] is False
+    assert ds_a3.manifest["registry_wired"] is True
+    assert ds_b3.manifest["registry_wired"] is True

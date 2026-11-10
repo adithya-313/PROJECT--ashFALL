@@ -20,6 +20,7 @@ WHY: Verifies:
 """
 
 import asyncio
+import dataclasses
 import hashlib
 import os
 import uuid
@@ -36,7 +37,9 @@ from api.services.outbox_relay import start_producer
 from core.config import config
 from features.account_keys import get_default_settings, watermark_key_for_payment_partition
 from features.account_stream import consume_available
+from replay.registry_replay import load_registry_replay_settings
 from replay.runner import (
+    REGISTRY_WIRED_REASON,
     ReplayDrainTimeout,
     ReplayHookContext,
     ReplayPipelineError,
@@ -289,10 +292,13 @@ async def test_r2_raises_when_produced_partition_missing_watermark(
 
     # Hook deleting the run-scoped payment watermark on partition 0 before decision 1 (after payment 0 was produced)
     hook_called = False
+    first_decision_index: list[int] = []
 
     async def delete_watermark_hook(ctx: ReplayHookContext) -> None:
         nonlocal hook_called
-        if ctx.step_index > 26 and not hook_called:  # Step > 26 is after first payment has been produced
+        # The hook runs only before decisions, so the first call is decision 0 (its index shifts with registry steps).
+        first_decision_index.append(ctx.step_index) if not first_decision_index else None
+        if ctx.step_index > first_decision_index[0] and not hook_called:  # after the first payment has been produced
             ws_redis = host_redis_factory(ctx.workspace)
             key = watermark_key_for_payment_partition(0, run_id=run_id)
             ws_redis.delete(key)
@@ -306,6 +312,8 @@ async def test_r2_raises_when_produced_partition_missing_watermark(
             base_redis_url=host_side_redis_url(),
             redis_client_factory=host_redis_factory,
             before_decision_hook=delete_watermark_hook,
+            # Stalled-partition path: idle advance would write the watermark this test deletes.
+            idle_partition_advance=False,
             workspace_name=workspace_name,
         )
 
@@ -445,9 +453,13 @@ async def test_drain_timeout_with_paused_consumer(
 
     pause_hook_called = False
 
+    first_decision_index: list[int] = []
+
     async def pause_hook(ctx: ReplayHookContext) -> None:
         nonlocal pause_hook_called
-        if ctx.step_index == 26:  # At decision 0, pause consumer for subsequent decisions
+        # The hook runs only before decisions, so the first call is decision 0 (its index shifts with registry steps).
+        first_decision_index.append(ctx.step_index) if not first_decision_index else None
+        if ctx.step_index == first_decision_index[0]:  # At decision 0, pause consumer for subsequent decisions
             topic = f"{workspace_name}.payments"
             parts = ctx.consumer.partitions_for_topic(topic) or {0}
             ctx.consumer.pause(*[TopicPartition(topic, p) for p in parts])
@@ -472,6 +484,8 @@ async def test_drain_timeout_with_paused_consumer(
             base_redis_url=host_side_redis_url(),
             redis_client_factory=host_redis_factory,
             before_decision_hook=pause_hook,
+            # Stalled-partition path: idle advance would let the paused drain finish.
+            idle_partition_advance=False,
             workspace_name=workspace_name,
         )
 
@@ -500,7 +514,8 @@ async def test_end_to_end_replay_event_decisions(
       - Exactly one feature_log row per executed payment attempt.
       - Payee features evaluate: first_payment_to_payee non-None in >= 1 row, payee_same_bank_risk non-None in >= 1
         same-bank row and None for all cross-bank rows, payee_registry_match None across all decisions.
-      - ReplayResult carries registry_wired=False and registry_wired_reason matching architect wording.
+      - ReplayResult carries registry_wired=True and the 16d reason; payee_registry_match is non-None at DPIP
+        participant banks and None at a non-participant bank.
       - Pre-first-payment unwatermarked status occurs only on the first decision.
       - Live Redis DB and main database schema are completely untouched.
     """
@@ -537,6 +552,10 @@ async def test_end_to_end_replay_event_decisions(
     feed = project_run(recorded_world.output)
 
     # 3. Execute replay with decisions_per_event_payment=True
+    registry_settings = load_registry_replay_settings("training")
+    banks_cfg = {b: dict(s) for b, s in registry_settings.bank_settings.items()}
+    banks_cfg["bank_2"]["dpip_participation"] = False  # one non-participant bank
+    registry_settings = dataclasses.replace(registry_settings, bank_settings=banks_cfg)
     result = await run_replay(
         recorded_world,
         feed,
@@ -544,6 +563,7 @@ async def test_end_to_end_replay_event_decisions(
         base_redis_url=host_side_redis_url(),
         redis_client_factory=host_redis_factory,
         decisions_per_event_payment=True,
+        registry_settings=registry_settings,
     )
 
     # 4. Verify decision counts and feature_log statuses
@@ -567,12 +587,25 @@ async def test_end_to_end_replay_event_decisions(
         assert pid in event_pids
 
     # 7. Registry wired marker
-    assert result.registry_wired is False
-    assert result.registry_wired_reason == "no nationalsim screener or DPIP key in replay until 16d"
+    assert result.registry_wired is True
+    assert result.registry_wired_reason == REGISTRY_WIRED_REASON
 
     # 8. Payee features
-    # payee_registry_match is always None (no screener until 16d)
-    assert all(f.get("payee_registry_match") is None for f in result.logged_features_by_payment_id.values())
+    # payee_registry_match: not None at DPIP-participant banks (once a decision has features), None at bank_2
+    sender_bank = {
+        pid: account_bank_map[ev.from_account]
+        for pid, ev in zip(recorded_world.output.result.payment_ids, events, strict=True)
+    }
+    participant_rows = [
+        f for pid, f in result.logged_features_by_payment_id.items()
+        if sender_bank[pid] != "bank_2" and pid not in result.unwatermarked_payment_ids
+    ]
+    non_participant_rows = [
+        f for pid, f in result.logged_features_by_payment_id.items() if sender_bank[pid] == "bank_2"
+    ]
+    assert participant_rows and non_participant_rows
+    assert all(f.get("payee_registry_match") is not None for f in participant_rows)
+    assert all(f.get("payee_registry_match") is None for f in non_participant_rows)
     # first_payment_to_payee evaluated and non-None in at least one decision
     assert any(f.get("first_payment_to_payee") is not None for f in result.logged_features_by_payment_id.values())
 

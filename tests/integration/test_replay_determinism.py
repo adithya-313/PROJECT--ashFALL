@@ -118,6 +118,7 @@ async def test_replay_determinism_and_recomputed_features(
                             scratch_redis=scratch_redis,
                             bank_id=bank_id,
                             payment_id=payment_id,
+                            dpip_key=ctx.dpip_key,
                         )
                         if len(rec_res.mismatches) == 0 and rec_res.logged == rec_res.recomputed:
                             recompute_matches.append(payment_id)

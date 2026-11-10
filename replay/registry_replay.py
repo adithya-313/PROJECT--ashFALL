@@ -30,6 +30,7 @@ __all__ = [
     "REGISTRY_VISIBLE",
     "RegistryReplaySettings",
     "RegistryListing",
+    "BulkEvent",
     "load_registry_replay_settings",
     "replay_dpip_key",
     "plan_registry_seed",
@@ -53,6 +54,7 @@ class RegistryReplaySettings:
         bank_settings: bank id -> settings (dpip_participation).
         seed_share_range: (low, high) of the pre-world listing share for the run's split.
         reporter_choice: How the seed reporter is chosen; only uniform over participants is supported.
+        screen_delay_ms: (low, high) of the per-question screen delay (config screen_added_delay_ms).
     Example:
         RegistryReplaySettings(timedelta(minutes=15), timedelta(minutes=60), {"bank_0": {...}}, (0.2, 0.6), "x")
     """
@@ -62,6 +64,7 @@ class RegistryReplaySettings:
     bank_settings: dict[str, dict[str, Any]]
     seed_share_range: tuple[float, float]
     reporter_choice: str
+    screen_delay_ms: tuple[float, float] = (2.0, 15.0)
 
     @property
     def participants(self) -> list[str]:
@@ -85,6 +88,27 @@ class RegistryListing:
     item: IngestionItem
     visible_time: datetime
     seed: bool
+
+
+@dataclass(frozen=True)
+class BulkEvent:
+    """
+    WHAT: One police crackdown confirmation of one account, as a registry.events event for the holding bank.
+    WHY: A police bulk confirmation is not a DPIP report: it goes only to the bank that holds the account, whether or
+    not that bank takes part in DPIP, so it is staged as an event and never enters the registry's listings.
+    Args:
+        item: Ingestion item (account type, the account's hash with its own bank index, reason police_bulk).
+        visible_time: Aware IST time the confirmation arrives (the crackdown's arrival minute).
+        batch_id: The crackdown's batch id.
+        region: The crackdown's region.
+    Example:
+        BulkEvent(item, arrival, "r-B000001", 2)
+    """
+
+    item: IngestionItem
+    visible_time: datetime
+    batch_id: str
+    region: int
 
 
 def replay_dpip_key(run_id: str) -> str:
@@ -132,6 +156,7 @@ def load_registry_replay_settings(split: str, path: Path | None = None) -> Regis
         bank_settings={str(k): dict(v) for k, v in block["banks"].items()},
         seed_share_range=(low, high),
         reporter_choice=choice,
+        screen_delay_ms=(float(block["screen_added_delay_ms"]["min"]), float(block["screen_added_delay_ms"]["max"])),
     )
     if not settings.participants:
         raise ValueError("config/nationalsim.yaml lists no DPIP participant bank")

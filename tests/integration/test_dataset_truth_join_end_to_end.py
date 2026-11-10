@@ -82,7 +82,9 @@ async def test_truth_join_on_replayed_dataset(live_redis: redis.Redis, tmp_path:
     async def hook(drop_ctx: ReplayDropContext) -> None:
         nonlocal extract
         extract = await extract_world(
-            drop_ctx, recorded_world, {"decisions_per_event_payment": True, "registry_wired": False}
+            drop_ctx,
+            recorded_world,
+            {"decisions_per_event_payment": True, "registry_wired": drop_ctx.registry_wired},
         )
 
     await run_replay(

@@ -43,7 +43,7 @@ from features.registry_label_consumer import consume_registry_events
 from nationalsim.national_outbox import relay_national_outbox
 from replay.ordering import DecisionStep, FeedStep, build_replay_steps
 from replay.registry_driver import RegistryDriver, build_registry_driver
-from replay.registry_replay import REGISTRY_INGEST, REGISTRY_VISIBLE
+from replay.registry_replay import REGISTRY_INGEST, REGISTRY_VISIBLE, RegistryReplaySettings, replay_dpip_key
 from world.bank_connectors import BankTransport, MockBankConnectors, load_bank_modes
 from world.bank_feed import BankFeed, resolve_bank_id
 from world.bank_feed_config import load_bank_feed_config
@@ -109,6 +109,9 @@ class ReplayDropContext:
     workspace: ReplayWorkspace
     workspace_dsn: str
     logged_payment_ids_by_bank: dict[str, list[str]]
+    dpip_key: str
+    registry_wired: bool = False
+    registry_wired_reason: str = "no nationalsim screener or DPIP key in replay until 16d"
 
 
 @dataclass(frozen=True)
@@ -131,6 +134,8 @@ class ReplayResult:
     missing_request_fields_by_payment_id: dict[str, list[str]] = field(default_factory=dict)
     registry_wired: bool = False
     registry_wired_reason: str = "no nationalsim screener or DPIP key in replay until 16d"
+    registry_screens: int = 0
+    registry_screens_unknown: int = 0
     feature_log_sha256: str = ""
 
 
@@ -242,6 +247,10 @@ def day_boundaries_between(
         cur_midnight += timedelta(days=1)
 
     return boundaries
+
+
+REGISTRY_WIRED_REASON = "in-process nationalsim registry screener and replay DPIP key (16d)"
+REGISTRY_NOT_WIRED_REASON = "no nationalsim screener or DPIP key in replay until 16d"
 
 
 @dataclass
@@ -756,6 +765,7 @@ async def run_replay(
     workspace_name: str | None = None,
     idle_partition_advance: bool | None = None,
     world_registry_reporting: bool | None = None,
+    registry_settings: RegistryReplaySettings | None = None,
 ) -> ReplayResult:
     """
     WHAT: Drives the complete operational pipeline in world-time order to replay a recorded simulation run.
@@ -788,13 +798,11 @@ async def run_replay(
         decisions_per_event_payment=per_event_mode,
     )
     registry_driver: RegistryDriver | None = None
-    if registry_on and steps and not isinstance(recorded_world.phone_book, PhoneBook):
-        if world_registry_reporting:
-            raise ValueError("world_registry_reporting needs a recorded world with a phone book")
-        logger.warning("Registry reporting skipped: the recorded world has no phone book")
-    elif registry_on and steps:
+    if registry_on and not isinstance(recorded_world.phone_book, PhoneBook):
+        raise ValueError("world_registry_reporting needs a recorded world with a phone book")
+    if registry_on and steps:
         # Registry steps are merged in only when there is something to replay (an empty list keeps its own error).
-        registry_driver = build_registry_driver(recorded_world, world_clock)
+        registry_driver = build_registry_driver(recorded_world, world_clock, registry_settings)
         steps = build_replay_steps(
             recorded_world,
             feed,
@@ -946,6 +954,7 @@ async def run_replay(
 
         clients: dict[str, InProcessBankClient] = {}
         for bank_id in bank_modes:
+            bank_screener = registry_driver.screener_for(bank_id) if registry_driver is not None else None
             clients[bank_id] = InProcessBankClient(
                 pool=workspace_pool,
                 bank_id=bank_id,
@@ -956,6 +965,8 @@ async def run_replay(
                 ingestion_clock=world_clock,
                 run_scoped_watermarks=True,
                 decision_feature_logging=True,
+                screener=bank_screener,
+                dpip_key=registry_driver.key if bank_screener is not None and registry_driver is not None else None,
             )
 
         connectors = MockBankConnectors(
@@ -1183,6 +1194,11 @@ async def run_replay(
                 workspace=workspace,
                 workspace_dsn=workspace_dsn,
                 logged_payment_ids_by_bank=dict(logged_payment_ids_by_bank),
+                dpip_key=replay_dpip_key(run_id),
+                registry_wired=registry_driver is not None,
+                registry_wired_reason=(
+                    REGISTRY_WIRED_REASON if registry_driver is not None else REGISTRY_NOT_WIRED_REASON
+                ),
             )
             await before_drop_hook(drop_ctx)
 
@@ -1196,8 +1212,12 @@ async def run_replay(
             unwatermarked_payment_ids=tuple(unwatermarked_ids),
             logged_features_by_payment_id=features_by_pid,
             missing_request_fields_by_payment_id=missing_by_pid,
-            registry_wired=False,
-            registry_wired_reason="no nationalsim screener or DPIP key in replay until 16d",
+            registry_wired=registry_driver is not None,
+            registry_wired_reason=(
+                REGISTRY_WIRED_REASON if registry_driver is not None else REGISTRY_NOT_WIRED_REASON
+            ),
+            registry_screens=registry_driver.stats.screens if registry_driver is not None else 0,
+            registry_screens_unknown=registry_driver.stats.unknown if registry_driver is not None else 0,
             feature_log_sha256=sha256_hash,
         )
 
