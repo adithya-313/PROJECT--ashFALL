@@ -1,0 +1,87 @@
+# =====================================================================
+# LEVEL 16 SHOWCASE: the committed world for `python -m showcase --level 16`
+# =====================================================================
+#
+# What this file is
+#   Level 16 turns a replayed world into labelled datasets. Its showcase has 12 checks and they all need one world
+#   that really contains the things the checks talk about: a police crackdown, a complaint whose payee is at another
+#   bank, a recycled phone number that was listed before day 0, one account collecting complaints from several
+#   victims over weeks, and a falsely reported account. This file pins that world.
+#
+# Who reads it
+#   showcase/level_16_world.py (load_level_16_config) and tests/unit/showcase/test_level_16_world.py.
+#
+# Words used below
+#   pin           set a world_ranges parameter to one value ([v, v]) for this showcase world only.
+#   showcase-only a choice made so the checks have something to look at; it is not a claim about the real world.
+#   seed scan     planning worlds seed after seed (no replay) until one meets every guarantee.
+#   G3            one receiving account collecting complaints from several victims over weeks.
+#
+# Checked by: tests/unit/showcase/test_level_16_world.py (plans the world, no replay)
+# =====================================================================
+
+world:
+  label: policy
+  derived_from: "architect 16d-3 ruling: 40 people, 90 days, seed found by scan (Level 12 pattern)"
+  reason: "Small enough to replay in under an hour, long enough for crackdowns and complaints that arrive weeks apart."
+  seed: 65
+  n_people: 40
+  n_shops: 8
+  n_days: 90
+  range_name: training
+
+# Pins applied through world.edge_cases.apply_edge_case_layer (nesting training inside test inside stress holds).
+pins:
+  bulk_confirmation_events_per_year:
+    label: policy
+    showcase_only: true
+    values: {training: [6, 6]}
+    reason: "showcase-only: the training maximum of crackdowns per year, so a bulk confirmation occurs in 90 days."
+  victim_complaint_share:
+    label: policy
+    showcase_only: true
+    values: {training: [0.7, 0.7]}
+    reason: "showcase-only: the training maximum share of victims who complain, so one receiving account gets several complaints."
+  false_complaints_per_100000_genuine_payments:
+    label: policy
+    showcase_only: true
+    values: {training: [50, 50], test: [50, 50], stress: [50, 50]}
+    reason: "showcase-only: stress-range false-complaint rate so a false report occurs"
+
+# Registry settings for the showcase replay (passed to run_replay; config/nationalsim.yaml is not edited).
+registry:
+  label: policy
+  showcase_only: true
+  non_participants: [bank_2]
+  reason: "showcase-only: bank_2 does not take part in DPIP so check 9 can show payee_registry_match is None at a non-participant; the config file enrols every bank."
+
+# Smallest counts the committed seed must reach (the unit test plans the world and checks each).
+minimums:
+  label: policy
+  bulk_confirmations_with_accounts: 1
+  cross_bank_complaints: 1
+  recycled_numbers_listed_before_day_0: 1
+  g3_complaints_on_one_account: 3
+  g3_spread_days: 14
+  false_reported_accounts: 1
+  hold_requests: 1
+  innocent_holder_listings: 1
+  reason: "Every check passes only on real counts above zero; these are the floors the scan had to clear."
+
+# What the scan found (seeds 1-93 planned with the pins and registry settings above; no replay).
+scan:
+  label: policy
+  seeds_scanned: 93
+  seeds_passing: [27, 39, 61, 65, 76, 81, 84, 93]
+  chosen_seed: 65
+  chosen_seed_counts:
+    bulk_confirmations_with_accounts: 2
+    cross_bank_complaints: 6
+    recycled_numbers_listed_before_day_0: 1
+    g3_complaints_on_one_account: 6
+    g3_victims: 6
+    g3_spread_days: 16.2
+    false_reported_accounts: 3
+    hold_requests: 5
+    innocent_holder_listings: 1
+  reason: "The scan stopped after eight seeds passed every floor; seed 65 has the widest margins of the first four."

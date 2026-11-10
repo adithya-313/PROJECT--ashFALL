@@ -1,0 +1,25 @@
+# Gang fixture for the Level 16 showcase world (config/showcase_level_16.yaml).
+#
+# TERM: scam gang = syndicate funded through victim fraud payments.
+# TERM: receiving mule = an acquired mule account that victims pay.
+# TERM: stacking (G3) = several victims complaining about the same receiving account over weeks.
+#
+# Two receiving mules with eight victims each: with the showcase's pinned complaint share (0.7) some mule collects
+# complaints from several victims whose arrivals spread over weeks (the complaint delay is days for scams).
+
+gang:
+  gang_id: gang_level_16
+  strength: 1
+  budget:
+    money_paise: 50000000
+    time_minutes: 500000
+    max_risk: 0.99
+  start_minute: 1440
+  steps:
+    - block: acquire
+      params:
+        count: 6
+    - block: scam
+      params:
+        receiving_mules: 2
+        victims_per_receiving_mule: 8

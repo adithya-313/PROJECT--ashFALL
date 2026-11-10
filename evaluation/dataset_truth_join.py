@@ -13,7 +13,7 @@ TERM: truth join: looking up role, owner and depth at the row's own world minute
 """
 
 import json
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +23,7 @@ import pyarrow.parquet as pq
 from core.event_clock import ist_to_world_minute
 from evaluation.truth import TruthStore, load_truth
 
-__all__ = ["join_truth"]
+__all__ = ["join_truth", "roles_at"]
 
 
 def _world_entries(manifest: dict[str, Any]) -> dict[str, tuple[str, date]]:
@@ -169,7 +169,9 @@ def _join_table(
     )
 
 
-def join_truth(dataset_dir: Path, truth_root: Path) -> tuple[pa.Table, pa.Table]:
+def join_truth(
+    dataset_dir: Path, truth_root: Path, allow_superseded: bool = False
+) -> tuple[pa.Table, pa.Table]:
     """
     WHAT: Returns (payments, snapshots) tables with hidden-truth columns added, looked up at each row's
     own world minute. Payments get truth_role_receiver; snapshots get truth_role; both get truth_owner
@@ -180,18 +182,24 @@ def join_truth(dataset_dir: Path, truth_root: Path) -> tuple[pa.Table, pa.Table]
     Args:
         dataset_dir: Folder written by write_dataset (payments.parquet, snapshots.parquet, manifest.json).
         truth_root: Root folder holding one truth folder per run_id.
+        allow_superseded: True to join a dataset whose manifest says superseded_by (refused by default).
 
     Returns:
         (payments_with_truth, snapshots_with_truth).
 
     Raises:
-        ValueError: If the manifest lacks run_id/clock_start or a row time is before clock_start.
+        ValueError: If the manifest lacks run_id/clock_start, a row time is before clock_start, or the dataset is
+            superseded and allow_superseded is False.
         PermissionError: If called from an operational package (raised by load_truth).
 
     Example:
         # payments, snapshots = join_truth(Path("data/datasets/training-..."), Path("runs/truth"))
     """
     manifest = json.loads((dataset_dir / "manifest.json").read_text(encoding="utf-8"))
+    if manifest.get("superseded_by") and not allow_superseded:
+        raise ValueError(
+            f"{dataset_dir.name} is superseded by {manifest['superseded_by']}; pass allow_superseded=True to use it"
+        )
     entries = _world_entries(manifest)
     stores = {run_id: load_truth(truth_root, run_id) for run_id, _ in entries.values()}
     payments = pq.read_table(dataset_dir / "payments.parquet")
@@ -200,3 +208,44 @@ def join_truth(dataset_dir: Path, truth_root: Path) -> tuple[pa.Table, pa.Table]
         _join_table(payments, "receiver_account_id", "decision_time", "truth_role_receiver", entries, stores),
         _join_table(snapshots, "account_id", "snapshot_time", "truth_role", entries, stores),
     )
+
+
+def roles_at(
+    dataset_dir: Path,
+    truth_root: Path,
+    queries: list[tuple[str, str, datetime]],
+    allow_superseded: bool = False,
+) -> list[tuple[str, str | None]]:
+    """
+    WHAT: Looks up the hidden truth role and owner of single accounts at single moments: for each (world_id,
+    account_id, time) query it returns (role, owner) at that time's world minute. Nothing is written.
+    WHY: Showcase checks and evaluation need to ask "what was this account really at that moment" for accounts that
+    have no payment row, for example the account a label names. Truth is read here and nowhere else in the showcase.
+    Args:
+        dataset_dir: Folder written by write_dataset (only manifest.json is read).
+        truth_root: Root folder holding one truth folder per run_id.
+        queries: (world_id, account_id, aware time) triples.
+        allow_superseded: True to ask about a dataset whose manifest says superseded_by.
+    Returns:
+        One (role, owner) per query, in order.
+    Raises:
+        ValueError: If a world_id is not in the manifest, a time is before clock_start, or the dataset is superseded.
+        PermissionError: If called from an operational package (raised by load_truth).
+    Example:
+        # roles_at(Path("data/datasets/training-..."), Path("runs/truth"), [("w", "acc_1", when)])
+    """
+    manifest = json.loads((dataset_dir / "manifest.json").read_text(encoding="utf-8"))
+    if manifest.get("superseded_by") and not allow_superseded:
+        raise ValueError(
+            f"{dataset_dir.name} is superseded by {manifest['superseded_by']}; pass allow_superseded=True to use it"
+        )
+    entries = _world_entries(manifest)
+    stores = {run_id: load_truth(truth_root, run_id) for run_id, _ in entries.values()}
+    out: list[tuple[str, str | None]] = []
+    for world_id, account, moment in queries:
+        if world_id not in entries:
+            raise ValueError(f"world_id {world_id!r} is not listed in the dataset manifest.")
+        run_id, start = entries[world_id]
+        minute = _minute_of(moment, start, "query time")
+        out.append((stores[run_id].role_at(account, minute), stores[run_id].owner_at(account, minute)))
+    return out
