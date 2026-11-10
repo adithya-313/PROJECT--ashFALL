@@ -33,6 +33,7 @@ from world.sampled_world import (
     resolve_sampled_world_gangs,
     run_sampled_world,
 )
+from world.world_configs import WorldConfigs
 from world.world_sampler import WorldSpec
 
 
@@ -81,6 +82,7 @@ def record_world_for_replay(
     *,
     gang_configs: tuple[GangConfig, ...] = (),
     world_split: str | None = None,
+    configs: WorldConfigs | None = None,
 ) -> RecordedWorld:
     """
     WHAT: Runs an interactive world simulation while recording decision requests constructed by connectors.
@@ -93,6 +95,7 @@ def record_world_for_replay(
         connectors: MockBankConnectors used to build DecisionCall requests.
         gang_configs: Optional tuple of GangConfig instances executing when fraud switch is on.
         world_split: Optional world split identifier (e.g. 'training').
+        configs: Optional world configs (for example a showcase's pinned world ranges); None reads the files.
 
     Returns:
         RecordedWorld containing the full InteractiveWorldOutput and recorded (PaymentView, DecisionCall) pairs.
@@ -109,6 +112,7 @@ def record_world_for_replay(
         fast_settings,
         runner_settings,
         hook=hook,
+        configs=configs,
         gang_configs=gang_configs,
         world_split=world_split,
     )
