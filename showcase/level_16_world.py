@@ -42,6 +42,7 @@ __all__ = [
     "level_16_fast_settings",
     "plan_level_16_world",
     "guarantee_counts",
+    "innocent_holders",
     "unmet_guarantees",
 ]
 
@@ -156,8 +157,13 @@ def level_16_fast_settings(cfg: dict[str, Any], seed: int | None = None) -> Fast
         level_16_fast_settings(cfg, 7)
     """
     w = cfg["world"]
-    return FastRunSettings(int(w["seed"] if seed is None else seed), int(w["n_people"]), int(w["n_shops"]),
-                           int(w["n_days"]), str(w["range_name"]))
+    return FastRunSettings(
+        int(w["seed"] if seed is None else seed),
+        int(w["n_people"]),
+        int(w["n_shops"]),
+        int(w["n_days"]),
+        str(w["range_name"]),
+    )
 
 
 def plan_level_16_world(cfg: dict[str, Any], seed: int | None = None) -> RecordedWorld:
@@ -176,12 +182,20 @@ def plan_level_16_world(cfg: dict[str, Any], seed: int | None = None) -> Recorde
     settings = level_16_fast_settings(cfg, seed)
     gang = level_16_gang()
     output = run_interactive_world(
-        settings, RunnerSettings(fraud_enabled=True), configs=level_16_world_configs(cfg), gang_configs=(gang,),
+        settings,
+        RunnerSettings(fraud_enabled=True),
+        configs=level_16_world_configs(cfg),
+        gang_configs=(gang,),
         world_split=settings.range_name,
     )
     return RecordedWorld(
-        output=output, calls=(), world_id=output.result.run_id, split=settings.range_name, seed=settings.seed,
-        gang_families=(gang.family,), phone_book=build_phone_book(output, run_seed=settings.seed),
+        output=output,
+        calls=(),
+        world_id=output.result.run_id,
+        split=settings.range_name,
+        seed=settings.seed,
+        gang_families=(gang.family,),
+        phone_book=build_phone_book(output, run_seed=settings.seed),
     )
 
 
@@ -210,18 +224,7 @@ def guarantee_counts(world: RecordedWorld, registry: RegistryReplaySettings | No
     if best:
         spread = (max(e.arrival_minute for e in best) - min(e.arrival_minute for e in best)) / MINUTES_PER_DAY
     driver = build_registry_driver(world, ManualClock(), registry)
-    participants = set((registry or load_registry_replay_settings(str(world.split))).participants)
-    bank_of = {acc: f"bank_{ledger.bank_index}" for ledger in output.world.ledgers for acc in ledger.accounts}
-    phone_hashes = {
-        compute_identifier_hash(driver.key, output.result.run_id, "phone", r.phone_number): r
-        for r in (world.phone_book.records.values() if world.phone_book else ())
-        if r.is_recycled
-    }
-    innocent = 0
-    for listing in driver.seed:
-        holder = phone_hashes.get(listing.item.identifier_hash)
-        if holder and holder.account_id not in mule_accounts and bank_of.get(holder.account_id) in participants:
-            innocent += 1
+    innocent = len(innocent_holders(world, registry))
     return GuaranteeCounts(
         bulk_confirmations_with_accounts=len(bulk),
         cross_bank_complaints=sum(1 for e in complaints if e.complainant_bank_index != e.reported_bank_index),
@@ -233,6 +236,38 @@ def guarantee_counts(world: RecordedWorld, registry: RegistryReplaySettings | No
         hold_requests=len(driver.holds),
         innocent_holder_listings=innocent,
     )
+
+
+def innocent_holders(world: RecordedWorld, registry: RegistryReplaySettings | None = None) -> list[tuple[str, str]]:
+    """
+    WHAT: Lists (account, bank) of every innocent current holder of a recycled phone whose previous holder was listed
+    in the registry before day 0, at a DPIP participant bank. These are the accounts the N1 path labels wrongly.
+    WHY: Check 8 compares the labels it finds with this plan, and the guarantee count uses its length.
+    Args:
+        world: A planned or recorded world with a phone book.
+        registry: The showcase registry settings (default: the config file settings).
+    Returns:
+        (account id, bank id) pairs in listing order.
+    Example:
+        innocent_holders(world, level_16_registry_settings(cfg))
+    """
+    output = world.output
+    reg = registry or load_registry_replay_settings(str(world.split))
+    driver = build_registry_driver(world, ManualClock(), reg)
+    bank_of = {acc: f"bank_{ledger.bank_index}" for ledger in output.world.ledgers for acc in ledger.accounts}
+    mule_roles = {"mule", "collector", "cash_out"}
+    mule_accounts = {s.account_id for s in output.result.truth.roles if s.role in mule_roles}
+    phone_hashes = {
+        compute_identifier_hash(driver.key, output.result.run_id, "phone", r.phone_number): r
+        for r in (world.phone_book.records.values() if world.phone_book else ())
+        if r.is_recycled
+    }
+    found: list[tuple[str, str]] = []
+    for listing in driver.seed:
+        holder = phone_hashes.get(listing.item.identifier_hash)
+        if holder and holder.account_id not in mule_accounts and bank_of.get(holder.account_id) in reg.participants:
+            found.append((holder.account_id, bank_of[holder.account_id]))
+    return found
 
 
 def unmet_guarantees(counts: GuaranteeCounts, cfg: dict[str, Any]) -> list[str]:
@@ -248,11 +283,11 @@ def unmet_guarantees(counts: GuaranteeCounts, cfg: dict[str, Any]) -> list[str]:
     """
     m = cfg["minimums"]
     checks = {
-        "bulk_confirmations_with_accounts":
-            counts.bulk_confirmations_with_accounts >= m["bulk_confirmations_with_accounts"],
+        "bulk_confirmations_with_accounts": counts.bulk_confirmations_with_accounts
+        >= m["bulk_confirmations_with_accounts"],
         "cross_bank_complaints": counts.cross_bank_complaints >= m["cross_bank_complaints"],
-        "recycled_numbers_listed_before_day_0":
-            counts.recycled_numbers_listed >= m["recycled_numbers_listed_before_day_0"],
+        "recycled_numbers_listed_before_day_0": counts.recycled_numbers_listed
+        >= m["recycled_numbers_listed_before_day_0"],
         "g3_complaints_on_one_account": counts.g3_complaints >= m["g3_complaints_on_one_account"],
         "g3_spread_days": counts.g3_spread_days >= m["g3_spread_days"],
         "false_reported_accounts": counts.false_reported_accounts >= m["false_reported_accounts"],
