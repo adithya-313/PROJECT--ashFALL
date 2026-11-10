@@ -112,3 +112,11 @@ While `content_hash` guarantees strict bitwise equivalence of the extracted data
 - **`label_receiver_reported_by_cutoff`** is true when the receiver account has any label the bank held by the cutoff, whatever its source (complaint, registry, and so on). A revoked label does not count (below).
 - **Manifest keys.** `labels_revoked_excluded` is the number of labels left out because a `revoked` status change had arrived at or before the cutoff. `labels_contested` lists the labels (`world_id:bank_id:source:label_id:account_id`) with a `contested` status change by the cutoff; they are still counted. A change that arrives after the cutoff does not exist yet for that cutoff. These keys are not part of `content_hash`.
 - **Replay DPIP key.** A replay hashes every registry identifier with `replay_dpip_key(run_id)` (`replay/registry_replay.py`), a key derived from the run id. It is synthetic, reproducible and holds no secret; the live key is `config.dpip_participant_key`.
+
+## Superseded datasets (Level 16d-3)
+
+A rebuilt dataset replaces an older one. `replay.dataset_builder.mark_superseded(old_dir, new_dir)` writes the new
+folder name into the old `manifest.json` as `superseded_by` and keeps every old file. New manifests carry
+`"superseded_by": null`; the key is not part of `content_hash`. `load_dataset(dir)` and
+`evaluation.dataset_truth_join.join_truth(dir, truth_root)` refuse a dataset whose `superseded_by` is set unless the
+caller passes `allow_superseded=True`.

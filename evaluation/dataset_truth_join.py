@@ -169,7 +169,9 @@ def _join_table(
     )
 
 
-def join_truth(dataset_dir: Path, truth_root: Path) -> tuple[pa.Table, pa.Table]:
+def join_truth(
+    dataset_dir: Path, truth_root: Path, allow_superseded: bool = False
+) -> tuple[pa.Table, pa.Table]:
     """
     WHAT: Returns (payments, snapshots) tables with hidden-truth columns added, looked up at each row's
     own world minute. Payments get truth_role_receiver; snapshots get truth_role; both get truth_owner
@@ -180,18 +182,24 @@ def join_truth(dataset_dir: Path, truth_root: Path) -> tuple[pa.Table, pa.Table]
     Args:
         dataset_dir: Folder written by write_dataset (payments.parquet, snapshots.parquet, manifest.json).
         truth_root: Root folder holding one truth folder per run_id.
+        allow_superseded: True to join a dataset whose manifest says superseded_by (refused by default).
 
     Returns:
         (payments_with_truth, snapshots_with_truth).
 
     Raises:
-        ValueError: If the manifest lacks run_id/clock_start or a row time is before clock_start.
+        ValueError: If the manifest lacks run_id/clock_start, a row time is before clock_start, or the dataset is
+            superseded and allow_superseded is False.
         PermissionError: If called from an operational package (raised by load_truth).
 
     Example:
         # payments, snapshots = join_truth(Path("data/datasets/training-..."), Path("runs/truth"))
     """
     manifest = json.loads((dataset_dir / "manifest.json").read_text(encoding="utf-8"))
+    if manifest.get("superseded_by") and not allow_superseded:
+        raise ValueError(
+            f"{dataset_dir.name} is superseded by {manifest['superseded_by']}; pass allow_superseded=True to use it"
+        )
     entries = _world_entries(manifest)
     stores = {run_id: load_truth(truth_root, run_id) for run_id, _ in entries.values()}
     payments = pq.read_table(dataset_dir / "payments.parquet")

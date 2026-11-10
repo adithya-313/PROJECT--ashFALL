@@ -37,12 +37,25 @@ IST = ZoneInfo("Asia/Kolkata")
 
 __all__ = [
     "Dataset",
+    "SupersededDatasetError",
     "WorldExtract",
     "build_dataset",
     "content_hash",
     "extract_world",
+    "load_dataset",
+    "mark_superseded",
     "write_dataset",
 ]
+
+
+class SupersededDatasetError(ValueError):
+    """
+    WHAT: Raised when a dataset whose manifest says superseded_by is loaded without asking for it explicitly.
+    WHY: A superseded dataset was replaced (for example by a rebuild with the registry wired); using it by accident
+    would train or score on the old content.
+    Example:
+        raise SupersededDatasetError("training-20260101T0000-abc is superseded by training-20260101T0000-def")
+    """
 
 
 @dataclass(frozen=True)
@@ -559,6 +572,7 @@ def build_dataset(
         "no_watermark_count": no_watermark_count,
         "feature_columns": feature_cols,
         "feature_none_shares": none_shares,
+        "superseded_by": None,
         "labels_note": "False complaints count as reported by cutoff.",
         "labels_revoked_excluded": revoked_excluded,
         "labels_contested": sorted(":".join(k) for k in contested_labels - revoked_labels),
@@ -623,3 +637,55 @@ def write_dataset(
     (dir_path / "manifest.json").write_bytes(manifest_bytes)
 
     return dir_path
+
+
+def mark_superseded(old_dir: Path, new_dir: Path) -> None:
+    """
+    WHAT: Records in the old dataset manifest.json that the new dataset replaced it (superseded_by = the new
+    folder name). Every file of the old dataset is kept.
+    WHY: Rebuilds must not delete history, but nobody should use the old content by mistake.
+    Args:
+        old_dir: Folder written by write_dataset that is being replaced.
+        new_dir: Folder of the replacement dataset (must hold a manifest.json).
+    Raises:
+        ValueError: If the two folders are the same or the new folder has no manifest.
+    Example:
+        mark_superseded(Path("data/datasets/training-old"), Path("data/datasets/training-new"))
+    """
+    if old_dir.resolve() == new_dir.resolve():
+        raise ValueError("A dataset cannot supersede itself")
+    if not (new_dir / "manifest.json").is_file():
+        raise ValueError(f"{new_dir} has no manifest.json; it is not a dataset folder")
+    manifest = orjson.loads((old_dir / "manifest.json").read_bytes())
+    manifest["superseded_by"] = new_dir.name
+    payload = orjson.dumps(manifest, option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS)
+    (old_dir / "manifest.json").write_bytes(payload)
+
+
+def load_dataset(dataset_dir: Path, allow_superseded: bool = False) -> Dataset:
+    """
+    WHAT: Reads a dataset folder (payments, snapshots, labels, manifest) back into a Dataset. A dataset whose manifest
+    names a successor in superseded_by is refused unless allow_superseded is True.
+    WHY: Using an old dataset must be a deliberate choice.
+    Args:
+        dataset_dir: Folder written by write_dataset.
+        allow_superseded: True to load a superseded dataset anyway.
+    Returns:
+        The Dataset.
+    Raises:
+        SupersededDatasetError: If the dataset is superseded and allow_superseded is False.
+    Example:
+        load_dataset(Path("data/datasets/training-new"))
+    """
+    manifest = orjson.loads((dataset_dir / "manifest.json").read_bytes())
+    successor = manifest.get("superseded_by")
+    if successor and not allow_superseded:
+        raise SupersededDatasetError(
+            f"{dataset_dir.name} is superseded by {successor}; pass allow_superseded=True to load it"
+        )
+    return Dataset(
+        payments=pq.read_table(dataset_dir / "payments.parquet"),
+        snapshots=pq.read_table(dataset_dir / "snapshots.parquet"),
+        labels=pq.read_table(dataset_dir / "labels.parquet"),
+        manifest=manifest,
+    )
