@@ -292,10 +292,13 @@ async def test_r2_raises_when_produced_partition_missing_watermark(
 
     # Hook deleting the run-scoped payment watermark on partition 0 before decision 1 (after payment 0 was produced)
     hook_called = False
+    first_decision_index: list[int] = []
 
     async def delete_watermark_hook(ctx: ReplayHookContext) -> None:
         nonlocal hook_called
-        if ctx.step_index > 26 and not hook_called:  # Step > 26 is after first payment has been produced
+        # The hook runs only before decisions, so the first call is decision 0 (its index shifts with registry steps).
+        first_decision_index.append(ctx.step_index) if not first_decision_index else None
+        if ctx.step_index > first_decision_index[0] and not hook_called:  # after the first payment has been produced
             ws_redis = host_redis_factory(ctx.workspace)
             key = watermark_key_for_payment_partition(0, run_id=run_id)
             ws_redis.delete(key)
@@ -450,9 +453,13 @@ async def test_drain_timeout_with_paused_consumer(
 
     pause_hook_called = False
 
+    first_decision_index: list[int] = []
+
     async def pause_hook(ctx: ReplayHookContext) -> None:
         nonlocal pause_hook_called
-        if ctx.step_index == 26:  # At decision 0, pause consumer for subsequent decisions
+        # The hook runs only before decisions, so the first call is decision 0 (its index shifts with registry steps).
+        first_decision_index.append(ctx.step_index) if not first_decision_index else None
+        if ctx.step_index == first_decision_index[0]:  # At decision 0, pause consumer for subsequent decisions
             topic = f"{workspace_name}.payments"
             parts = ctx.consumer.partitions_for_topic(topic) or {0}
             ctx.consumer.pause(*[TopicPartition(topic, p) for p in parts])
