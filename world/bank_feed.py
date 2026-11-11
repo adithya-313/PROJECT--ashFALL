@@ -577,6 +577,9 @@ def project_run(
         account_to_region[p.account_id] = p.region
     for s in output.world.shops:
         account_to_region[s.account_id] = s.region
+    for opened in output.result.opened_accounts:
+        if len(opened) >= 7 and opened[6] is not None:
+            account_to_region[opened[1]] = opened[6]
 
     balance_replay = replay_balances(output.world)
     people_by_id = {p.person_id: p for p in output.world.people}
@@ -666,9 +669,12 @@ def project_run(
         event_time = world_minute_to_ist(op_minute, clock_start)
         event_id = f"{run_id}-open-{op_account_id}"
 
-        if op_account_id not in account_to_region:
+        if len(opened) >= 7 and opened[6] is not None:
+            region = opened[6]
+        elif op_account_id in account_to_region:
+            region = account_to_region[op_account_id]
+        else:
             raise ValueError(f"Account {op_account_id!r} has no home region")
-        region = account_to_region[op_account_id]
         acct_type = resolve_account_type(op_account_id, config)
         details = {"home_region": region, "account_type": acct_type}
         if kyc_phone_on:

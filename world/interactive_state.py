@@ -91,7 +91,8 @@ class RunnerState:
         money_created_paise: Opening balances of registered accounts, in paise.
         next_person_index: Next sequential index for person account opening.
         next_shop_index: Next sequential index for shop account opening.
-        opened_accounts: Forensic audit log of accounts registered mid-run.
+        opened_accounts: Forensic audit log of accounts registered mid-run:
+            (minute, account_id, owner_kind, opening_stream, bank_index, opening_balance_paise, region).
 
     Returns:
         A RunnerState.
@@ -108,7 +109,7 @@ class RunnerState:
     money_created_paise: int = 0
     next_person_index: int = 0
     next_shop_index: int = 0
-    opened_accounts: list[tuple[int, str, str, str, int, int]] = field(default_factory=list)
+    opened_accounts: list[tuple[int, str, str, str, int, int, int]] = field(default_factory=list)
 
     def register_account(
         self, account_id: str, bank_index: int, person: Any = None, opening_balance_paise: int = 0, minute: int = 0
@@ -180,6 +181,7 @@ class RunnerState:
             account_id = person.account_id
             bank_index = person.bank_index
             opening_balance_paise = person.opening_balance_paise
+            region = person.region
             self.register_account(
                 account_id, bank_index, person=person, opening_balance_paise=opening_balance_paise, minute=minute
             )
@@ -187,7 +189,7 @@ class RunnerState:
             shop_idx = self.next_shop_index
             self.next_shop_index += 1
             _ = determine_shop_kind(shop_idx, rng)
-            _ = assign_region(n_regions, rng)
+            region = assign_region(n_regions, rng)
             b_idx = choose_bank_index(banks, rng)
             account_id = shop_account_id(shop_idx)
             opening_balance_paise = rupees_to_paise(SHOP_OPENING_BALANCE_RUPEES)
@@ -197,7 +199,7 @@ class RunnerState:
             bank_index = b_idx
 
         self.opened_accounts.append(
-            (minute, account_id, owner_kind, opening_stream, bank_index, opening_balance_paise)
+            (minute, account_id, owner_kind, opening_stream, bank_index, opening_balance_paise, region)
         )
         return account_id
 

@@ -105,8 +105,11 @@ def record_world_for_replay(
     """
     _check_no_live_bank_modes(connectors)
 
-    recorded: list[tuple[PaymentView, DecisionCall]] = []
-    hook = _make_recording_hook(connectors, recorded)
+    recorded_payments: list[PaymentView] = []
+
+    def hook(payment: PaymentView) -> HookDecision:
+        recorded_payments.append(payment)
+        return "allow"
 
     output = run_interactive_world(
         fast_settings,
@@ -116,6 +119,13 @@ def record_world_for_replay(
         gang_configs=gang_configs,
         world_split=world_split,
     )
+
+    connectors.opened_accounts = list(output.result.opened_accounts)
+    recorded: list[tuple[PaymentView, DecisionCall]] = []
+    for payment in recorded_payments:
+        call = connectors.build_decision_request(payment)
+        recorded.append((payment, call))
+
     return RecordedWorld(
         output=output,
         calls=tuple(recorded),
@@ -160,8 +170,11 @@ def record_sampled_world_for_replay(
     gangs = resolve_sampled_world_gangs(spec, preset_name, gang_configs, sampler_cfg, configs)
     gang_families: tuple[str | None, ...] = tuple(g.family for g in gangs)
 
-    recorded: list[tuple[PaymentView, DecisionCall]] = []
-    hook = _make_recording_hook(connectors, recorded)
+    recorded_payments: list[PaymentView] = []
+
+    def hook(payment: PaymentView) -> HookDecision:
+        recorded_payments.append(payment)
+        return "allow"
 
     output = run_sampled_world(
         spec=spec,
@@ -171,6 +184,13 @@ def record_sampled_world_for_replay(
         code_version=code_version,
         hook=hook,
     )
+
+    connectors.opened_accounts = list(output.result.opened_accounts)
+    recorded: list[tuple[PaymentView, DecisionCall]] = []
+    for payment in recorded_payments:
+        call = connectors.build_decision_request(payment)
+        recorded.append((payment, call))
+
     return RecordedWorld(
         output=output,
         calls=tuple(recorded),
