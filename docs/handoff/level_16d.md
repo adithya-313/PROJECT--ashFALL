@@ -7,13 +7,15 @@ Level 16 covers historical simulation replay, four-path label ingestion, and poi
 - Part 16a (PRs #103 to #108): ingestion clock and labels table; run-scoped watermarks; arrival times on payments, events, and withdrawals.
 - Part 16b (PRs #109 to #114): replay workspaces with PostgreSQL schema isolation, Redis DB isolation, and single-partition Kafka topic; replay wiring and standalone decision request builder; world-time step ordering; determinism hash (`feature_log` SHA-256) and history recompute.
 - Part 16c (PRs #115 to #120): per-event decision scoring (`decisions_per_event_payment=True`) and receiver VPA inclusion; labels and daily account snapshots in replay; idle-partition payment watermark advance; dataset builder producing PyArrow tables and Parquet files with cryptographic manifests; evaluation truth join.
-- Part 16d (PRs #121 to #124 and current): phone visibility (KYC phone on account opening events); registry seed and world reports in replay through an in-process registry; in-process nationalsim screener and seeded screen delay; police bulk labels and hold request labels at receiving banks; committed Level 16 showcase world (seed 65) with 12 checks; dataset rebuild across splits with superseded marking.
+- Part 16d (PRs #121 to #124 and current): phone visibility (KYC phone on account opening events); registry seed and world reports in replay through an in-process registry; in-process nationalsim screener and seeded screen delay; police bulk labels and hold request labels at receiving banks; committed Level 16 showcase world (seed 65) with 13 checks; dataset rebuild deferred to full-scale round with superseded marking.
 
-Showcase: 12/12 checks passing (`python -m showcase --level 16`).
+Showcase: 13/13 checks passing (`python -m showcase --level 16`).
 Register state: 104 issues checked (built 72, partial 13, planned 17, deferred 2).
 
 ## Decisions and why
-- Sizing: Preset `tiny` (60 people, 12 shops, 61 days) used for multi-world split datasets; full scale remains Issue 16-4 for Level 18a.
+- Sizing: Preset `small` (300 people) evaluated for multi-world split datasets; full-scale rebuild deferred to Issue 16-4 for Level 18a.
+- Dataset rebuild deferred to full-scale round (Issue 16-4): no current non-superseded dataset exists until that round; `data/datasets/` is empty on this laptop (Level 16c datasets only ever existed in test temp folders); the commit 2df7a87 workaround was rejected and reverted.
+- `scripts/build_level_16_datasets.py` is kept in tree, but must fail loudly on errors (no workarounds).
 - Single dataset per split: Extracts across constituent worlds are combined into one unified dataset with provenance preserved by `world_id`.
 - Simulation horizon cutoff: Cutoff timestamp evaluated at midnight IST of clock start date plus simulation duration `n_days` (`midnight + timedelta(days=n_days)`), capturing all simulated events without lookahead bias.
 - Unpinned gangs in build: Sampler resolves gang mixes dynamically per split.
@@ -35,15 +37,16 @@ Generated dynamically from `config/replay.yaml` via `python scripts/list_level_1
 ## Known gaps and future work (open items)
 1. 16-1: Live-world decisions per attempt and held-payment attempt minute deferred to Level 19.
 2. 16-3: Decision API request has no device field (deferred to Level 19).
-3. 16-4: Full-scale dataset building and a faster replay drain planned for Level 18a.
+3. 16-4: Full-scale dataset building, rebuilding the 5 splits after the mid-run account fix, and a faster replay drain planned for Level 18a.
 4. 16-5: Idle-partition watermark advance for the live payment consumer planned for Level 19.
 5. 16-6: Phone changes during a run (SIM swap, linked-number switch) needed before Level 18a.
 6. 16-7: World generates revoke/dispute for wrong listings planned for Level 21.
 7. 16-8: Registry coverage by mule depth planned for Level 18a.
 8. 16-9: Pre-world registry seed share calibration planned for Level 28.
+9. Worlds with fixture-source gangs (test fixtures) can't be replayed: the source has no region; sampled worlds never create one.
 
 ## Verification commands
-- `py -3.12 -m showcase --level 16`: all 12 Level 16 checks.
+- `py -3.12 -m showcase --level 16`: all 13 Level 16 checks.
 - `py -3.12 -B scripts/verify_world.py`: golden checks.
 - `py -3.12 -m core.issue_register_v2`: issue register verification.
 - `py -3.12 -m core.folder_check`: folder classification check.
