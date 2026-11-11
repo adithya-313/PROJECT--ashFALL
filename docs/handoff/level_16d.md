@@ -20,6 +20,18 @@ Register state: 104 issues checked (built 72, partial 13, planned 17, deferred 2
 - Direct complaint separation: Check 16-7 separates direct complaints (same-bank, via None) from cross-bank hold requests (via 'hold_request').
 - Superseded datasets: Rebuilt datasets mark previous manifests of the same split with `superseded_by`; `load_dataset` and `join_truth` fail closed unless `allow_superseded=True` is explicitly passed.
 
+## Level 16 Switches
+
+Generated dynamically from `config/replay.yaml` via `python scripts/list_level_16_switches.py`:
+
+| Switch Name | Configuration File | Default Live | Replay Value | What OFF Reproduces |
+| :--- | :--- | :--- | :--- | :--- |
+| `decisions_per_event_payment` | `config/replay.yaml` | `false` | `true` | Level 16b per-batch payment attempt scoring (decisions evaluated per attempt) |
+| `idle_partition_advance` | `config/replay.yaml` | `false` | `true` | Level 16c-2 quiet payment partition watermark stalling |
+| `kyc_phone_on_account_opened` | `config/replay.yaml` | `false` | `true` | Level 16c feeds without KYC phone payload on account_opened events |
+| `world_registry_reporting` | `config/replay.yaml` | `false` | `true` | Level 16c replays without in-process DPIP registry labels |
+| `replay_speed` | `config/replay.yaml` | `1.0` | `"max"` | Real-time paced replay execution (with inter-step sleep delays) |
+
 ## Known gaps and future work (open items)
 1. 16-1: Live-world decisions per attempt and held-payment attempt minute deferred to Level 19.
 2. 16-3: Decision API request has no device field (deferred to Level 19).
