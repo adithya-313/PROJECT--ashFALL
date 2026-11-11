@@ -17,9 +17,15 @@ from typing import Any
 from aiokafka import AIOKafkaConsumer, TopicPartition
 
 from core.config import config
+from core.event_clock import Clock
 from features.account_keys import AccountFeaturesSettings, get_default_settings
 from features.account_labels import apply_complaints_since, apply_feedback_since
-from features.account_records import account_event_from_row, parse_upi_event, withdrawal_from_row
+from features.account_records import (
+    PaymentSideRecord,
+    account_event_from_row,
+    parse_upi_event,
+    withdrawal_from_row,
+)
 from features.account_summaries import to_unix_seconds
 from features.account_updater import apply_account_event, apply_payment_side, apply_withdrawal
 from features.ingest_watermark import record_payment_watermark, record_poller_watermark
@@ -27,12 +33,101 @@ from features.ingest_watermark import record_payment_watermark, record_poller_wa
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "consume_available",
+    "process_payment_message",
+    "record_watermark_for_side",
     "run_payment_updater",
     "apply_account_events_since",
     "apply_withdrawals_since",
     "apply_feedback_since",
     "apply_complaints_since",
 ]
+
+
+def record_watermark_for_side(
+    redis_client: Any,
+    partition: int,
+    record: PaymentSideRecord,
+    cfg: AccountFeaturesSettings,
+) -> bool:
+    """
+    Advances the payment watermark partition offset in Redis.
+
+    If the payment side record arrived via world ingestion clock, routes the watermark
+    to the run-scoped partition key (acctwm:{run_id}:payments:{partition}) and registers the
+    partition in the run's active partitions set.
+    Otherwise (real-mode / legacy), routes to the shared partition key (acctwm:payments:{partition}).
+    """
+    arrival_sec = int(to_unix_seconds(record.arrival_time))
+    watermark_ts = arrival_sec - cfg.commit_grace
+    run_id = record.run_id if record.arrival_from_ingestion_clock else None
+    return record_payment_watermark(redis_client, partition, watermark_ts, run_id=run_id)
+
+
+async def process_payment_message(
+    consumer: Any,
+    redis_client: Any,
+    msg: Any,
+    cfg: AccountFeaturesSettings,
+) -> None:
+    """
+    WHAT: Ingests a single schema-2 UPI payment event: parses, applies to Redis, commits offset, and records watermark.
+    WHY: Factored out into a single helper shared by both run_payment_updater (blocking loop) and
+    consume_available (batch draining) to guarantee identical processing semantics and error handling.
+    """
+    try:
+        record = parse_upi_event(msg.value)
+    except Exception as exc:
+        logger.error(
+            "Invalid account payment event on topic %s partition %s offset %s: %s",
+            msg.topic,
+            msg.partition,
+            msg.offset,
+            exc,
+        )
+        raise
+
+    apply_payment_side(redis_client, record, cfg)
+
+    # Commit offset synchronously per partition
+    tp = TopicPartition(msg.topic, msg.partition)
+    await consumer.commit({tp: msg.offset + 1})
+
+    # Ingestion watermark advances only on applied messages:
+    # record.arrival_time is the payload arrival_time (or recorded_at). Never msg.timestamp, never event_time.
+    record_watermark_for_side(redis_client, msg.partition, record, cfg)
+
+
+async def consume_available(
+    consumer: AIOKafkaConsumer,
+    redis_client: Any,
+    cfg: AccountFeaturesSettings,
+    timeout_ms: int = 0,
+) -> int:
+    """
+    WHAT: Drains available UPI payment events from the consumer up to timeout_ms, applies each to Redis, and commits.
+    WHY: Factored out of run_payment_updater so batch draining and replay consumers can process available messages
+    without managing consumer lifecycle or topic subscriptions.
+
+    Args:
+        consumer: Active AIOKafkaConsumer instance.
+        redis_client: Redis client for state updates and watermarks.
+        cfg: Validated AccountFeaturesSettings.
+        timeout_ms: Maximum milliseconds to wait for available records.
+
+    Returns:
+        Integer count of successfully processed and applied payment sides.
+
+    Raises:
+        InvalidAccountEventError / Exception: If any message fails validation or processing.
+    """
+    raw_batches = await consumer.getmany(timeout_ms=timeout_ms)
+    applied_count = 0
+    for tp in sorted(raw_batches.keys(), key=lambda p: (p.topic, p.partition)):
+        for msg in raw_batches[tp]:
+            await process_payment_message(consumer, redis_client, msg, cfg)
+            applied_count += 1
+    return applied_count
 
 
 async def run_payment_updater(
@@ -87,29 +182,8 @@ Kafka gives no per-account ordering here; state is correct in any order because 
             except asyncio.TimeoutError:
                 break
 
-            try:
-                record = parse_upi_event(msg.value)
-            except Exception as exc:
-                logger.error(
-                    "Invalid account payment event on topic %s partition %s offset %s: %s",
-                    msg.topic,
-                    msg.partition,
-                    msg.offset,
-                    exc,
-                )
-                raise
-
-            apply_payment_side(redis_client, record, cfg)
-
-            # Commit offset synchronously per partition
-            tp = TopicPartition(msg.topic, msg.partition)
-            await consumer.commit({tp: msg.offset + 1})
+            await process_payment_message(consumer, redis_client, msg, cfg)
             processed_count += 1
-
-            # Ingestion watermark advances only on applied messages:
-            # record.arrival_time is the payload recorded_at. Never msg.timestamp, never event_time.
-            arrival_sec = int(to_unix_seconds(record.arrival_time))
-            record_payment_watermark(redis_client, msg.partition, arrival_sec - cfg.commit_grace)
     finally:
         await consumer.stop()
 
@@ -122,6 +196,8 @@ async def apply_account_events_since(
     settings: AccountFeaturesSettings | None = None,
     bank_id: str = "bank_0",
     after_id: int = 0,
+    clock: Clock | None = None,
+    run_id: str | None = None,
 ) -> int:
     """
     WHAT: Queries bank_account_events table for events with id > after_id and applies each to Redis.
@@ -149,12 +225,28 @@ async def apply_account_events_since(
         settings: Optional AccountFeaturesSettings; defaults to repository configuration.
         bank_id: Commercial bank identifier to query.
         after_id: Cursor identifier; only rows with id > after_id are selected.
+        clock: Optional domain ingestion clock. When provided, poll_start uses clock.now_ist()
+            without querying DB now(); when None, falls back to fetchval("SELECT now()").
+        run_id: Optional simulation run identifier. When clock is provided, run_id must also be
+            provided to write run-scoped watermarks ('acctwm:{run_id}:{bank_id}:events').
+            Run-scoped keys belong only to world-clock runs; if clock is None and run_id is given,
+            raises ValueError.
 
     Returns:
         The highest row ID processed, or after_id if no new rows were found.
     """
+    if clock is not None and run_id is None:
+        raise ValueError("When clock is provided, run_id must also be provided to write run-scoped watermarks")
+    if clock is None and run_id is not None:
+        raise ValueError(
+            "run_id cannot be provided when clock is None; run-scoped keys belong only to world-clock runs"
+        )
+
     cfg = settings if settings is not None else get_default_settings()
-    poll_start_db_time = await connection.fetchval("SELECT now()")
+    if clock is not None:
+        poll_start_db_time = clock.now_ist()
+    else:
+        poll_start_db_time = await connection.fetchval("SELECT now()")
 
     batch_size = cfg.account_event_batch_size
     overlap = cfg.account_event_overlap_rows
@@ -162,7 +254,7 @@ async def apply_account_events_since(
 
     rows = await connection.fetch(
         """
-        SELECT id, bank_id, event_id, account_id, kind, event_time, details, created_at
+        SELECT id, bank_id, event_id, account_id, kind, event_time, details, created_at, arrival_time
         FROM bank_account_events
         WHERE bank_id = $1 AND id > $2
         ORDER BY id
@@ -183,7 +275,7 @@ async def apply_account_events_since(
                 last_id = row_id
 
     watermark_ts = int(to_unix_seconds(poll_start_db_time)) - cfg.commit_grace
-    record_poller_watermark(redis_client, bank_id, "events", watermark_ts)
+    record_poller_watermark(redis_client, bank_id, "events", watermark_ts, run_id=run_id)
 
     return last_id
 
@@ -194,6 +286,8 @@ async def apply_withdrawals_since(
     settings: AccountFeaturesSettings | None = None,
     bank_id: str = "bank_0",
     after_id: int = 0,
+    clock: Clock | None = None,
+    run_id: str | None = None,
 ) -> int:
     """
     WHAT: Queries bank_withdrawals table for rows with id > after_id and applies each to Redis.
@@ -219,12 +313,28 @@ async def apply_withdrawals_since(
         settings: Optional AccountFeaturesSettings; defaults to repository configuration.
         bank_id: Commercial bank identifier to query.
         after_id: Cursor identifier; only rows with id > after_id are selected.
+        clock: Optional domain ingestion clock. When provided, poll_start uses clock.now_ist()
+            without querying DB now(); when None, falls back to fetchval("SELECT now()").
+        run_id: Optional simulation run identifier. When clock is provided, run_id must also be
+            provided to write run-scoped watermarks ('acctwm:{run_id}:{bank_id}:withdrawals').
+            Run-scoped keys belong only to world-clock runs; if clock is None and run_id is given,
+            raises ValueError.
 
     Returns:
         The highest row ID processed, or after_id if no new rows were found.
     """
+    if clock is not None and run_id is None:
+        raise ValueError("When clock is provided, run_id must also be provided to write run-scoped watermarks")
+    if clock is None and run_id is not None:
+        raise ValueError(
+            "run_id cannot be provided when clock is None; run-scoped keys belong only to world-clock runs"
+        )
+
     cfg = settings if settings is not None else get_default_settings()
-    poll_start_db_time = await connection.fetchval("SELECT now()")
+    if clock is not None:
+        poll_start_db_time = clock.now_ist()
+    else:
+        poll_start_db_time = await connection.fetchval("SELECT now()")
 
     batch_size = cfg.account_event_batch_size
     overlap = cfg.account_event_overlap_rows
@@ -233,7 +343,7 @@ async def apply_withdrawals_since(
     rows = await connection.fetch(
         """
         SELECT id, bank_id, withdrawal_id, account_id, channel, amount_paise,
-               status, failure_domain, event_time, balance_after_paise, recorded_at
+               status, failure_domain, event_time, balance_after_paise, recorded_at, arrival_time
         FROM bank_withdrawals
         WHERE bank_id = $1 AND id > $2
         ORDER BY id
@@ -254,7 +364,7 @@ async def apply_withdrawals_since(
                 last_id = row_id
 
     watermark_ts = int(to_unix_seconds(poll_start_db_time)) - cfg.commit_grace
-    record_poller_watermark(redis_client, bank_id, "withdrawals", watermark_ts)
+    record_poller_watermark(redis_client, bank_id, "withdrawals", watermark_ts, run_id=run_id)
 
     return last_id
 

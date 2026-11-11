@@ -31,6 +31,29 @@ nationalsim:
     derived_from: policy
     reason: "Assumed share of genuine customer accounts whose assigned mobile number was previously held by a mule account deactivated before day 0; no official industry figure is published."
 
+  world_registry_reporting:
+    value: false
+    label: policy
+    derived_from: "architect 16d-1"
+    reason: "Live default: no world reports go through the in-process registry. The replay turns it on (config/replay.yaml) so datasets carry registry labels."
+    issue_ids_v2: [16-2]
+
+  pre_world_listing_share:
+    label: assumption
+    issue_ids_v2: [16-9]
+    derived_from: "architect 16d-1 seeding answer"
+    reason: "Assumed share of recycled phone numbers whose previous (mule) holder was listed in the registry before day 0, so the entry matches the innocent new holder; no published figure. One share is drawn per world inside the split's range."
+    training: [0.2, 0.6]
+    test: [0.1, 0.8]
+    stress: [0.05, 1.0]
+
+  pre_world_reporter_choice:
+    value: uniform_over_dpip_participants
+    label: assumption
+    issue_ids_v2: [16-9]
+    derived_from: "architect 16d-1 seeding answer"
+    reason: "Assumed that the bank that reported a pre-world listing is any DPIP participant with equal chance; no published figure."
+
   dispute_resolution_minutes:
     value: 60
     label: assumption

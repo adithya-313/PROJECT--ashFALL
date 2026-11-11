@@ -96,6 +96,14 @@ Allowed details fields per event kind:
 - `account_opened`: empty or initial metadata
 - `account_reactivated`: empty or reactivation channel
 
+### KYC phone on `account_opened` (switch `kyc_phone_on_account_opened`)
+
+A bank holds the phone of its own account holder from opening. When the switch is on, the `account_opened` details carry one extra key, `phone` (the synthetic KYC phone string from the phone book, or `null` for an account that has none, never `""`). The key is added to day-0 openings (accounts that existed when the run started) and to openings during the run alike. A bank stores it in the nullable `phone` column of `bank_account_events` (migration 0019).
+
+- **Live default:** `false` in `config/bank_feed.yaml`. The details keep only `home_region` and `account_type`, the `phone` column stays `NULL`, and the feed is byte-identical to before.
+- **Replay:** `true` in `config/replay.yaml`; `replay/pipeline.py` passes the recorded world's phone book to `project_run`.
+- **Not modelled:** phone changes during a run (SIM swap, linked-number switch) are tracked as issue 16-6, needed before Level 18a.
+
 ---
 
 ## 3. Partitioning and Ordering Guarantees
@@ -397,3 +405,89 @@ features/gpu_geo_velocity.py:124:# It is imported conditionally by features/geo_
 ```
 
 The only files that match are `features/__init__.py` (a package docstring), `features/geo_velocity.py` and `features/gpu_geo_velocity.py` themselves.
+
+
+## 13. One Ingestion Clock for Complaint and Feedback Arrival
+
+### 13.1 Principle
+Event time is when an event occurred in the world (`received_at`, `event_time`).
+Arrival time is when ashFALL learned it (`arrival_time`).
+Under Ground Rule 30 and Architect Decisions A, B, and D, point-in-time domain visibility, label cutoffs, and watermarks compare arrival time with decision time on ONE ingestion clock. The database's server clock (`now()`, `created_at`) remains an audit stamp for physical row insertion, but never determines domain visibility, cutoffs, watermarks, or merge ordering when an ingestion clock is provided.
+
+### 13.2 Real-Clock Rule (`clock: Clock | None = None`)
+In accordance with Ground Rule 13 (backward compatibility), functions accepting a clock parameter default to `clock = None`. When `clock is None`, the behaviour is byte-for-byte identical to legacy real-clock operations:
+- Writers stamp `arrival_time = NULL` in relational tables (`bank_complaints`, `bank_feedback`).
+- Pollers derive watermarks by querying `SELECT now()` directly from PostgreSQL.
+
+### 13.3 Legacy NULL Fallback
+When reading historical rows inserted prior to migration 0017, or rows written in real-clock mode without an injected clock, `arrival_time` is `NULL`. The helper `arrival_of(row)` safely falls back to `row["created_at"]` only when `row.get("arrival_time")` is `None`. This is the single, isolated location in the codebase where this fallback lives.
+
+### 13.4 Migration Roadmap
+- **Completed in Level 16a Round 2**:
+  - `bank_complaints` and `bank_feedback` schema migration 0017 (`arrival_time` column).
+  - In-process client and HTTP router clock injection (`InProcessBankClient`, `post_feedback`).
+  - Label pollers and visibility handlers (`apply_complaints_since`, `apply_feedback_since`, `apply_complaint_row`, `apply_feedback_row`).
+- **Completed in Level 16a Round 2b**:
+  - Run-scoped watermark keys and forward-only refused move observability.
+  - Decision feature extraction fail-closed switch (`run_scoped_watermarks` in `compute_decision_row`).
+- **Completed in Level 16a Round 3a**:
+  - `transactions`, `bank_account_events`, and `bank_withdrawals` schema migration 0018 (`arrival_time` column).
+  - Ingestion clock stamping on all writers (`record_transaction`, `record_upi_side`, `record_account_event`, `record_withdrawal`).
+  - Schema-2 outbox payload optional `arrival_time` key with strict omission rule when `None`.
+  - Four Guards (GUARD 1 clock validation, GUARD 2 fail-loud on corrupt arrival/run-prefix, GUARD 3 golden byte equality, GUARD 4 arrival before event warning).
+  - Shared fallback helper `arrival_from_row(row, fallback_column)` across records and labels.
+  - Payment consumer watermark routing to run-scoped key `acctwm:{run_id}:payments:{partition}` for world records.
+- **Completed in Level 16a Round 3b**:
+  - Events and withdrawals pollers writing run-scoped watermarks (`acctwm:{run_id}:{bank_id}:events`, `acctwm:{run_id}:{bank_id}:withdrawals`) using `Clock` without querying database `now()`.
+  - Account snapshots selection windowing by `COALESCE(arrival_time, ...)` and `write_account_snapshots` supporting run-scoped watermark cutoffs (`run_scoped_watermarks: bool = False`).
+  - Removal of the `no_watermark` intermediate state with `test_world_mode_decision_uses_real_run_watermarks` verifying all five sources through real writers.
+- **Follow-up in Level 16b**:
+  - `feature_replay.py` moves to the ingestion clock in 16b.
+
+### 13.5 Run-Scoped Ingestion Watermarks
+
+#### Key Layout Table
+| Source / Entity | Real-Clock Key (`run_id=None`) | World-Clock Key (`run_id` given) |
+|---|---|---|
+| Bank Poller | `acctwm:{bank_id}:{source}` | `acctwm:{run_id}:{bank_id}:{source}` |
+| Payment Partition | `acctwm:payments:{partition}` | `acctwm:{run_id}:payments:{partition}` |
+| Payment Partitions Set | `acctwm:payments:partitions` | `acctwm:{run_id}:payments:partitions` |
+
+All keys are constructed strictly via `features/account_keys.py`:
+- `watermark_key_for_poller(bank_id, source, run_id=None)`
+- `watermark_key_for_payment_partition(partition, run_id=None)`
+- `watermark_key_for_payment_partitions_set(run_id=None)`
+
+#### Forward-Only Refusal & Observability
+Watermark updates execute via `SET_WATERMARK_LUA`. If a caller attempts to move a watermark backwards:
+1. The update is refused and returns `0` (stored value remains untouched). Equal values return `1` (treated as stored-unchanged).
+2. A warning is logged at `logging.WARNING` containing the Redis key, currently stored timestamp, and refused candidate timestamp.
+3. Prometheus Counter `ashfall_watermark_rejected_moves_total` is incremented with label `source` (`"payments"` for Kafka partitions; `"events"`, `"withdrawals"`, `"feedback"`, or `"complaints"` for database pollers).
+
+#### Decision D1: Fail-Closed Decision Features
+`compute_decision_row` accepts `run_scoped_watermarks: bool = False`:
+- When `False` (legacy default): queries `get_bank_watermark(redis_client, bank_id)`.
+- When `True` (world clock): queries `get_bank_watermark(redis_client, bank_id, run_id=run_id)`.
+- If aggregate watermark is `None`, the function fails closed immediately, returning `status="no_watermark"`, all canonical features `None`, and performing zero account-state reads.
+
+### 13.6 World Arrival for Payments, Events, and Withdrawals (Level 16a-3a)
+
+#### Schema-2 Envelope Field and Omission Rule
+The schema-2 outbox payload (`UpiEventPayload`) includes an optional top-level `arrival_time: str | None = None`:
+- When written with an injected clock, `arrival_time` contains the timezone-aware ISO string formatted timestamp.
+- When written in legacy / real-clock mode (`clock=None`), `arrival_time` is `None` and the key is omitted entirely from the serialized JSON payload via selective field exclusion (`exclude={"arrival_time"}`). Global `exclude_none` is strictly forbidden because domain fields (such as `data.failure_domain`) are legitimately `null`.
+- `schema_version` remains `"2"`.
+
+#### The Four Guards
+1. **GUARD 1 (Strict Clock Validation)**: When an `ingestion_clock` is provided to any writer (`record_transaction`, `record_upi_side`, `record_account_event`, `record_withdrawal`), it MUST return a valid timezone-aware `datetime`. If the clock returns `None` or a naive datetime, a plain `ValueError` is raised immediately before executing SQL, ensuring no database row is written.
+2. **GUARD 2 (Fail-Loud Consumer Validation)**: In `parse_upi_payload`, if `arrival_time` is present but unparseable or naive, or if `extract_run_id(payment_id)` fails, the parser raises `InvalidAccountEventError`. The live Kafka updater logs the topic, partition, offset, and error, and re-raises immediately. The parser NEVER falls back to `recorded_at` or legacy keys when `arrival_time` is present.
+3. **GUARD 3 (Golden Byte Compatibility)**: A `clock=None` transaction produces a payload byte-for-byte identical to the pre-16a-3 baseline, containing no `arrival_time` key.
+4. **GUARD 4 (Chronological Ordering Warning)**: If `arrival_time` is earlier than the transaction's `event_time`, a warning is logged at `logging.WARNING` recording both timestamps and the `payment_id`. The event is not rejected.
+
+#### Shared Fallback Helper (`arrival_from_row`)
+All domain record converters and label visibility handlers resolve arrival timestamps through a single shared helper:
+`arrival_from_row(row: Mapping[str, Any], fallback_column: str) -> datetime`:
+- Returns `row["arrival_time"]` when non-NULL.
+- Falls back to `row[fallback_column]` when `arrival_time` is NULL.
+- Enforces timezone awareness, raising `ValueError` naming the row identifier if naive or invalid.
+- Used in `account_event_from_row` (fallback `"created_at"`), `withdrawal_from_row` (fallback `"recorded_at"` then `"created_at"`), `payment_side_from_transaction_row` (stamping `arrival_time` into the envelope when non-NULL), and `features/account_labels.py::arrival_of` (delegating to `arrival_from_row(row, "created_at")`).

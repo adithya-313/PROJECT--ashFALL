@@ -1032,3 +1032,73 @@ issues:
     v1_status: deferred
     later_work: ["Level 35: decide whether arms-race design changes are built"]
     reason: "Awaiting a decision before Level 35; nothing is built or planned until that decision is made."
+  16-1:
+    title: "Live-world decisions per attempt and held-payment attempt minute"
+    origin: revision_2
+    status: deferred
+    levels: [16, 19]
+    parts: []
+    later_work: ["Level 19: per-attempt decision id stored on payment sides (new nullable column) and attempt minute kept for held payments"]
+    reason: "Only needed when bank decisions can hold or change payments (live mode, Level 19): the event payment id does not exist at hook time in the live world loop, and a resumed event carries its resume minute, not its attempt minute."
+  16-2:
+    title: "Registry wired into replay (payee_registry_match always None in replay)"
+    origin: revision_2
+    status: built
+    levels: [16]
+    parts: []
+    evidence:
+      - {kind: test, file: tests/unit/test_registry_screener.py, name: test_entry_is_seen_only_once_visible_as_of_the_decision}
+      - {kind: test, file: tests/unit/test_registry_screener.py, name: test_a_forced_slow_range_gives_unknown_never_no_match}
+      - {kind: test, file: tests/unit/test_dataset_build_plan.py, name: test_supersede_prior_datasets_updates_matching_split_only}
+    later_work: []
+  16-3:
+    title: "Decision API request has no device field (Section 5 lists it)"
+    origin: revision_2
+    status: planned
+    levels: [19]
+    parts: []
+    later_work: ["Level 19: add an optional device field when serving decisions"]
+  16-4:
+    title: "Full-scale dataset building and a faster replay drain"
+    origin: revision_2
+    status: planned
+    levels: [18]
+    parts: []
+    later_work:
+      - "Level 18a: build datasets for the sampler-planned world counts and make the replay drain faster (~12 min per small world measured on the author's Windows laptop)"
+      - "Level 18a: rebuild the 5 splits after the mid-run account fix"
+  16-5:
+    title: "Idle-partition watermark advance for the live payment consumer"
+    origin: revision_2
+    status: planned
+    levels: [19]
+    parts: []
+    later_work: ["Level 19: a quiet partition stalls the live payment watermark; replay solves it with a drain proof, live needs an idle timeout"]
+  16-6:
+    title: "Phone changes during a run (SIM swap, linked-number switch) are not modelled; needed before Level 18a"
+    origin: revision_2
+    status: planned
+    levels: [18]
+    parts: []
+    later_work: ["Level 18a (needed before 18a starts): model phone changes during a run (SIM swap, linked-number switch); control-change bank events and the Level 15 phone-change feature have no source until then"]
+  16-7:
+    title: "World generates revoke/dispute for wrong listings"
+    origin: revision_2
+    status: planned
+    levels: [21]
+    parts: []
+    later_work: ["Level 21: the world makes registry revokes and customer disputes for wrong listings (innocent holders of recycled numbers); until then revoke and dispute are hand-made actions on labels"]
+  16-8:
+    title: "Registry coverage by mule depth (N2) not implemented; one uniform reporting share"
+    origin: revision_2
+    status: planned
+    levels: [18]
+    parts: []
+    later_work: ["Level 18a (needed before 18a starts): world registry reports use the layer-1 and deeper mule coverage shares (registry_coverage_layer1_mule_share, registry_coverage_deeper_mule_share); today one uniform bank reporting share applies to every confirmed account"]
+  16-9:
+    title: "Pre-world registry seed share and uniform reporter are assumptions; calibrate"
+    origin: revision_2
+    status: planned
+    levels: [28]
+    parts: []
+    later_work: ["Level 28: calibrate pre_world_listing_share and pre_world_reporter_choice (config/nationalsim.yaml) in the evaluation suite, which already measures registry coverage (issue N2 names Level 28)"]

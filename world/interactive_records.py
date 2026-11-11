@@ -360,7 +360,7 @@ class InteractiveRunResult:
         truth: Hidden truth facts (roles, device control spans, payment stories) associated with the run.
         skipped_forwards: Adjustments where forwards were skipped due to lack of received illicit money.
         capped_forwards: Adjustments where forwards were capped to the illicit balance received.
-        opened_accounts: (minute, account_id, owner_kind, opening_stream, bank_index, opening_balance_paise)
+        opened_accounts: (minute, account_id, owner_kind, opening_stream, bank_index, opening_balance_paise, region)
             for accounts registered mid-run.
         paused_owner_payments: Genuine payments of rented mules' owners that were paused (no event, no money moved).
 
@@ -387,7 +387,7 @@ class InteractiveRunResult:
     truth: TruthFacts = field(default_factory=TruthFacts)
     skipped_forwards: list[ForwardAdjustment] = field(default_factory=list)
     capped_forwards: list[ForwardAdjustment] = field(default_factory=list)
-    opened_accounts: list[tuple[int, str, str, str, int, int]] = field(default_factory=list)
+    opened_accounts: list[tuple[int, str, str, str, int, int, int]] = field(default_factory=list)
     paused_owner_payments: list[PausedOwnerPayment] = field(default_factory=list)
     cash_withdrawals: list[CashWithdrawalRecord] = field(default_factory=list)
     money_withdrawn_paise: int = 0

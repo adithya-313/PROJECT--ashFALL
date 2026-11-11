@@ -177,6 +177,31 @@ def _check_running_budget(
         )
 
 
+def _mule_role_span(
+    gang_id: str, account_id: str, depth: int, valid_from: int, origin: str | None
+) -> RoleSpan:
+    """
+    WHAT: Builds the open-ended 'mule' RoleSpan every mule account gets: valid from its acquisition minute,
+    never ending (valid_to None), at the given depth and origin.
+
+    WHY: One place builds mule spans, so every step that needs one writes it the same way.
+
+    Args:
+        gang_id: Gang the mule belongs to.
+        account_id: The mule's account identifier.
+        depth: Steps from the victims (1 = first mule).
+        valid_from: Acquisition minute.
+        origin: Mule origin ('rented', 'created', ...) or None when unknown.
+
+    Returns:
+        The initialized RoleSpan.
+
+    Example:
+        # _mule_role_span("g1", "acc_m1", 1, 100, "rented").valid_to is None
+    """
+    return RoleSpan(account_id, "mule", gang_id, depth, valid_from, None, origin)
+
+
 def _build_route_roles(
     config: GangConfig, routed_accounts: list[str], layers: int, accounts_per_layer: int,
     acquisition_minute: int, mule_origin_map: dict[str, str] | None = None
@@ -214,7 +239,7 @@ def _build_route_roles(
         layer_num = l + 1
         for acct in routed_accounts[l * accounts_per_layer : (l + 1) * accounts_per_layer]:
             origin = mule_origin_map.get(acct) if mule_origin_map is not None else None
-            roles.append(RoleSpan(acct, "mule", config.gang_id, layer_num, acquisition_minute, None, origin))
+            roles.append(_mule_role_span(config.gang_id, acct, layer_num, acquisition_minute, origin))
     return roles
 
 
@@ -1246,6 +1271,13 @@ def _plan_campaign_steps(
         costs.append(cost)
         money += cost.money_paise; time += cost.time_minutes; prob_safe *= (1.0 - cost.risk)
         _check_running_budget(config.gang_id, config.budget, money, time, 1.0 - prob_safe, step.block)
+
+    # Scam receiving mules that no step gave a mule span (a route step gives its layer mules one) get one here.
+    if mule_inflows is not None:
+        spanned = {role.account_id for role in roles if role.role == "mule"}
+        for receiver in mule_inflows:
+            if receiver not in spanned:
+                roles.append(_mule_role_span(config.gang_id, receiver, 1, acq_min, mule_origin_map.get(receiver)))
 
     if mule_inflows is not None and scam_active_from is not None:
         updated_roles: list[RoleSpan] = []

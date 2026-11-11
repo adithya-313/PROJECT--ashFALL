@@ -702,4 +702,4 @@ def test_scam_gang_runs_through_the_interactive_runner() -> None:
     ]
     assert fraud_events
     assert any(event.status == "success" for event in fraud_events)
-    assert {role.role for role in output.result.truth.roles} == {"victim"}
+    assert {role.role for role in output.result.truth.roles} == {"victim", "mule"}

@@ -287,6 +287,7 @@ def compute_decision_row(
     screener: RegistryScreener | None = None,
     dpip_key: str | None = None,
     arrival_cutoff: datetime | None = None,
+    run_scoped_watermarks: bool = False,
 ) -> FeatureLogRow:
     """
     WHAT: Computes all canonical M1 features as-of request.event_time for a DecisionRequest.
@@ -304,6 +305,8 @@ def compute_decision_row(
         dpip_key: Optional explicit DPIP HMAC key.
         arrival_cutoff: Optional bank watermark the caller already read (the registry questions were listed at
             this cutoff); when None the watermark is read here.
+        run_scoped_watermarks: Optional boolean flag; when True, queries bank watermark scoped by
+            run_id ('acctwm:{run_id}:...'). When False, queries legacy un-scoped watermark keys.
 
     Returns:
         FeatureLogRow ready for partitioned persistence in feature_log table.
@@ -323,7 +326,10 @@ def compute_decision_row(
     # 1. Watermark check: read bank watermark across all sources
     watermark: datetime | None = arrival_cutoff
     if watermark is None and redis_client is not None:
-        watermark = get_bank_watermark(redis_client, bank_id)
+        if run_scoped_watermarks:
+            watermark = get_bank_watermark(redis_client, bank_id, run_id=run_id)
+        else:
+            watermark = get_bank_watermark(redis_client, bank_id)
 
     # Condition for no_watermark is strictly watermark is None (F3)
     if watermark is None:

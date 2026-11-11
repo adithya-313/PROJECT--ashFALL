@@ -10,6 +10,7 @@ BankFeed projections to per-bank transports while tracking operational metrics a
 
 import asyncio
 import concurrent.futures
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -19,7 +20,7 @@ import orjson
 
 from core.config_validator import load_yaml
 from core.event_clock import world_minute_to_ist
-from world.bank_feed import BankFeed, project_run, resolve_bank_id
+from world.bank_feed import BankFeed, bank_visible_vpa, project_run, resolve_bank_id
 from world.bank_feed_config import (
     DEFAULT_BANK_API_CONFIG_PATH,
     BankFeedConfig,
@@ -39,6 +40,20 @@ from world.interactive_runner import (
 from world.label_records import LabelEvent
 
 VALID_BANK_MODES: frozenset[str] = frozenset({"shadow", "live"})
+
+
+@dataclass(frozen=True)
+class DecisionCall:
+    """
+    WHAT: Frozen value object containing evaluated decision request details for a payment.
+    WHY: Decouples decision request construction from network transmission, allowing replay
+    recording, offline logging, and independent verification without triggering bank calls.
+    """
+
+    sender_bank_id: str
+    receiver_bank_id: str
+    body_bytes: bytes
+    idempotency_key: str
 
 
 @runtime_checkable
@@ -267,6 +282,7 @@ class MockBankConnectors:
         decision_timeout_seconds: float,
         loop: asyncio.AbstractEventLoop,
         max_identifier_length: int | None = None,
+        opened_accounts: Sequence[tuple[int, str, str, str, int, int, int]] | None = None,
     ) -> None:
         """
         Initialises mock bank connectors with required transports and policy configuration.
@@ -280,6 +296,8 @@ class MockBankConnectors:
             decision_timeout_seconds: Timeout for decision calls before falling back to allow.
             loop: Active asyncio event loop used for cross-thread coroutine scheduling.
             max_identifier_length: Optional key length limit; read from config if None.
+            opened_accounts: Optional sequence of accounts opened mid-run to join
+                account_bank_map at their opening minute.
         """
         self.transports = transports
         self.modes = modes
@@ -291,6 +309,7 @@ class MockBankConnectors:
         self.max_identifier_length = (
             max_identifier_length if max_identifier_length is not None else load_max_identifier_length()
         )
+        self.opened_accounts = list(opened_accounts) if opened_accounts is not None else []
 
         self.decisions_sent: int = 0
         self.decisions_replayed: int = 0
@@ -310,59 +329,127 @@ class MockBankConnectors:
         }
         self.seen_accounts: set[str] = set()
 
-    def make_hook(self) -> Callable[[PaymentView], HookDecision]:
+    @property
+    def opened_accounts(self) -> list[tuple[int, str, str, str, int, int, int]]:
+        """
+        WHAT: Returns the list of mid-run opened account audit tuples registered with connectors.
+        WHY: Exposes current registered account tuples for inspection, serialization, or test assertions.
+        """
+        return self._opened_accounts
+
+    @opened_accounts.setter
+    def opened_accounts(self, records: Sequence[tuple[int, str, str, str, int, int, int]]) -> None:
+        """
+        WHAT: Sets the registered mid-run opened accounts and indexes them by account identifier.
+        WHY: Enables decision requests to dynamically map new accounts starting at their opening minute.
+        """
+        self._opened_accounts = list(records)
+        self._opened_accounts_by_id = {rec[1]: (rec[0], rec[4]) for rec in records}
+
+    def build_decision_request(
+        self,
+        payment: PaymentView,
+        include_receiver_vpa: bool = False,
+    ) -> DecisionCall:
+        """
+        WHAT: Resolves sender/receiver banks and payee type, then constructs the DecisionRequest payload.
+        WHY: Factored out of make_hook so decision requests can be built for recording, simulation, or verification
+        without initiating bank transport calls. Supports optional receiver_vpa inclusion for replay (Decision D2).
+
+        Args:
+            payment: PaymentView instance representing the planned payment.
+            include_receiver_vpa: If True, adds receiver_vpa to the payload; defaults to False for today's exact bytes.
+
+        Returns:
+            DecisionCall containing sender_bank_id, receiver_bank_id, body_bytes, and idempotency_key.
+
+        Raises:
+            ValueError: If sender/receiver account is unknown or receiver prefix has no mapped payee type.
+        """
+        # 0. Add new accounts opened at or before this payment's minute from the world's own records.
+        for op_acc, (op_min, op_b_idx) in self._opened_accounts_by_id.items():
+            if op_min <= payment.minute and op_acc not in self.account_bank_map:
+                self.account_bank_map[op_acc] = resolve_bank_id(op_b_idx, self.feed_config)
+            elif op_min > payment.minute and op_acc in self.account_bank_map:
+                del self.account_bank_map[op_acc]
+
+        # 1. Resolve sending and receiving bank identifiers from account mappings.
+        if payment.from_account not in self.account_bank_map:
+            raise ValueError(f"Sender account {payment.from_account!r} is not in account_bank_map")
+        sender_bank_id = self.account_bank_map[payment.from_account]
+
+        if payment.to_account not in self.account_bank_map:
+            raise ValueError(f"Receiver account {payment.to_account!r} is not in account_bank_map")
+        receiver_bank_id = self.account_bank_map[payment.to_account]
+
+        self.seen_accounts.add(payment.from_account)
+        self.seen_accounts.add(payment.to_account)
+
+        # 2. Derive bank-visible payee classification from account prefix.
+        resolved_payee_type: str | None = None
+        for prefix, ptype in self.feed_config.payee_type_by_account_prefix.items():
+            if payment.to_account.startswith(prefix):
+                resolved_payee_type = ptype
+                break
+        if resolved_payee_type is None:
+            raise ValueError(
+                f"Receiver account {payment.to_account!r} has unrecognized prefix; "
+                f"expected one of {sorted(self.feed_config.payee_type_by_account_prefix.keys())}"
+            )
+
+        # 3. Build DecisionRequest payload and deterministic idempotency key.
+        event_time_dt = world_minute_to_ist(payment.minute, self.clock_start)
+        body_dict: dict[str, Any] = {
+            "payment_id": payment.planned_payment_id,
+            "sender_account_id": payment.from_account,
+            "receiver_bank_id": receiver_bank_id,
+            "amount_paise": payment.amount_paise,
+            "event_time": event_time_dt.isoformat(),
+            "channel": self.feed_config.channel_value,
+            "payee_type": resolved_payee_type,
+        }
+        if include_receiver_vpa:
+            body_dict["receiver_vpa"] = bank_visible_vpa(payment.to_account)
+        body_bytes = orjson.dumps(body_dict)
+        idempotency_key = make_decision_idempotency_key(
+            payment.planned_payment_id, self.max_identifier_length
+        )
+
+        return DecisionCall(
+            sender_bank_id=sender_bank_id,
+            receiver_bank_id=receiver_bank_id,
+            body_bytes=body_bytes,
+            idempotency_key=idempotency_key,
+        )
+
+    def make_hook(self, decisions_per_event_payment: bool = False) -> Callable[[PaymentView], HookDecision]:
         """
         WHAT: Constructs a synchronous hook callable by run_interactive_world for each planned payment.
         WHY: Intercepts planned payments, maps sender/receiver banks, builds decision requests, and
         dispatches them across the bank transport while respecting shadow vs live mode policies.
 
+        Args:
+            decisions_per_event_payment: If True, raises ValueError because per-event decisions
+                are replay-only (Decision D4).
+
         Returns:
             Synchronous function accepting PaymentView and returning 'allow', 'hold', or 'decline'.
+
+        Raises:
+            ValueError: If decisions_per_event_payment is True.
         """
+        if decisions_per_event_payment:
+            raise ValueError(
+                "decisions per event payment are replay-only: the event payment id does not "
+                "exist at hook time in the live world loop (deferred to Level 19)"
+            )
 
         def hook(payment: PaymentView) -> HookDecision:
             """
             Synchronously evaluates a planned payment by dispatching a decision request to the bank transport.
             """
-            # 1. Resolve sending and receiving bank identifiers from account mappings.
-            if payment.from_account not in self.account_bank_map:
-                raise ValueError(f"Sender account {payment.from_account!r} is not in account_bank_map")
-            sender_bank_id = self.account_bank_map[payment.from_account]
-
-            if payment.to_account not in self.account_bank_map:
-                raise ValueError(f"Receiver account {payment.to_account!r} is not in account_bank_map")
-            receiver_bank_id = self.account_bank_map[payment.to_account]
-
-            self.seen_accounts.add(payment.from_account)
-            self.seen_accounts.add(payment.to_account)
-
-            # 2. Derive bank-visible payee classification from account prefix.
-            resolved_payee_type: str | None = None
-            for prefix, ptype in self.feed_config.payee_type_by_account_prefix.items():
-                if payment.to_account.startswith(prefix):
-                    resolved_payee_type = ptype
-                    break
-            if resolved_payee_type is None:
-                raise ValueError(
-                    f"Receiver account {payment.to_account!r} has unrecognized prefix; "
-                    f"expected one of {sorted(self.feed_config.payee_type_by_account_prefix.keys())}"
-                )
-
-            # 3. Build DecisionRequest payload and deterministic idempotency key.
-            event_time_dt = world_minute_to_ist(payment.minute, self.clock_start)
-            body_dict: dict[str, Any] = {
-                "payment_id": payment.planned_payment_id,
-                "sender_account_id": payment.from_account,
-                "receiver_bank_id": receiver_bank_id,
-                "amount_paise": payment.amount_paise,
-                "event_time": event_time_dt.isoformat(),
-                "channel": self.feed_config.channel_value,
-                "payee_type": resolved_payee_type,
-            }
-            body_bytes = orjson.dumps(body_dict)
-            idempotency_key = make_decision_idempotency_key(
-                payment.planned_payment_id, self.max_identifier_length
-            )
+            call = self.build_decision_request(payment)
+            sender_bank_id = call.sender_bank_id
 
             if sender_bank_id not in self.transports:
                 raise ValueError(f"No transport configured for sender bank {sender_bank_id!r}")
@@ -371,7 +458,7 @@ class MockBankConnectors:
             # 4. Dispatch decision request to event loop with timeout.
             try:
                 fut = asyncio.run_coroutine_threadsafe(
-                    transport.post("/v1/decisions", body_bytes, idempotency_key),
+                    transport.post("/v1/decisions", call.body_bytes, call.idempotency_key),
                     self.loop,
                 )
                 outcome = fut.result(timeout=self.decision_timeout_seconds)
@@ -463,100 +550,124 @@ class MockBankConnectors:
         for item in sorted_items:
             kind = item[4]
             rec = item[5]
-            target_bank_id = item[1]
+            await self.send_feed_record(kind, rec)
 
-            if target_bank_id not in self.transports:
-                raise ValueError(f"No transport configured for target bank {target_bank_id!r}")
-            transport = self.transports[target_bank_id]
+    async def send_feed_record(self, kind: str, record: Any) -> TransportOutcome:
+        """
+        WHAT: Posts a single projected feed record (transaction side, withdrawal, account event, or complaint).
+        WHY: Factored out of send_feed so individual feed records can be dispatched during replay or testing.
 
-            if kind == "transaction":
-                body_dict: dict[str, Any] = {
-                    "payment_id": rec.payment_id,
-                    "side": rec.side,
-                    "account_id": rec.account_id,
-                    "counterparty_vpa": rec.counterparty_vpa,
-                    "counterparty_bank_id": rec.counterparty_bank_id,
-                    "sender_bank_id": rec.sender_bank_id,
-                    "receiver_bank_id": rec.receiver_bank_id,
-                    "amount_paise": rec.amount_paise,
-                    "event_time": rec.event_time.isoformat(),
-                    "status": rec.status,
-                    "failure_domain": rec.failure_domain,
-                    "payee_type": rec.payee_type,
-                    "channel": rec.channel,
-                    "sender_device_fingerprint": rec.sender_device_fingerprint,
-                    "sender_os_generation": rec.sender_os_generation,
-                    "balance_after_paise": rec.balance_after_paise,
-                }
-                body_bytes = orjson.dumps(body_dict)
-                idempotency_key = make_transaction_idempotency_key(
-                    rec.payment_id, rec.side, self.max_identifier_length
-                )
-                outcome = await transport.post("/v1/transactions", body_bytes, idempotency_key)
-                if outcome.replayed:
-                    self.replayed_by_kind["transaction"] += 1
-                else:
-                    self.sent_by_kind["transaction"] += 1
+        Args:
+            kind: Record classification ('transaction', 'withdrawal', 'account_event', 'complaint').
+            record: Projected feed record instance.
 
-            elif kind == "withdrawal":
-                body_dict = {
-                    "bank_id": rec.bank_id,
-                    "withdrawal_id": rec.withdrawal_id,
-                    "account_id": rec.account_id,
-                    "channel": rec.channel,
-                    "amount_paise": rec.amount_paise,
-                    "balance_after_paise": rec.balance_after_paise,
-                    "status": rec.status,
-                    "failure_domain": rec.failure_domain,
-                    "event_time": rec.event_time.isoformat(),
-                }
-                body_bytes = orjson.dumps(body_dict)
-                idempotency_key = make_withdrawal_idempotency_key(
-                    rec.withdrawal_id, self.max_identifier_length
-                )
-                outcome = await transport.post("/v1/withdrawals", body_bytes, idempotency_key)
-                if outcome.replayed:
-                    self.replayed_by_kind["withdrawal"] += 1
-                else:
-                    self.sent_by_kind["withdrawal"] += 1
+        Returns:
+            TransportOutcome received from the destination bank transport.
 
-            elif kind == "account_event":
-                body_dict = {
-                    "event_id": rec.event_id,
-                    "account_id": rec.account_id,
-                    "kind": rec.kind,
-                    "event_time": rec.event_time.isoformat(),
-                    "details": rec.details,
-                }
-                body_bytes = orjson.dumps(body_dict)
-                idempotency_key = make_account_event_idempotency_key(
-                    rec.event_id, self.max_identifier_length
-                )
-                outcome = await transport.post("/v1/account-events", body_bytes, idempotency_key)
-                if outcome.replayed:
-                    self.replayed_by_kind["account_event"] += 1
-                else:
-                    self.sent_by_kind["account_event"] += 1
+        Raises:
+            ValueError: If target bank has no configured transport or kind is unknown.
+        """
+        target_bank_id = record.bank_id
 
-            elif kind == "complaint":
-                body_dict = {
-                    "complaint_id": rec.complaint_id,
-                    "complainant_account": rec.complainant_account,
-                    "reported_account": rec.reported_account,
-                    "reported_bank_id": rec.reported_bank_id,
-                    "payment_ids": list(rec.payment_ids),
-                    "claimed_type": rec.claimed_type,
-                    "received_at": rec.received_at.isoformat(),
-                }
-                body_bytes = orjson.dumps(body_dict)
-                idempotency_key = make_complaint_idempotency_key(
-                    rec.complaint_id, self.max_identifier_length
-                )
-                outcome = await transport.post("/v1/complaints", body_bytes, idempotency_key)
-                if outcome.replayed:
-                    self.replayed_by_kind["complaint"] += 1
-                else:
-                    self.sent_by_kind["complaint"] += 1
+        if target_bank_id not in self.transports:
+            raise ValueError(f"No transport configured for target bank {target_bank_id!r}")
+        transport = self.transports[target_bank_id]
+
+        if kind == "transaction":
+            body_dict: dict[str, Any] = {
+                "payment_id": record.payment_id,
+                "side": record.side,
+                "account_id": record.account_id,
+                "counterparty_vpa": record.counterparty_vpa,
+                "counterparty_bank_id": record.counterparty_bank_id,
+                "sender_bank_id": record.sender_bank_id,
+                "receiver_bank_id": record.receiver_bank_id,
+                "amount_paise": record.amount_paise,
+                "event_time": record.event_time.isoformat(),
+                "status": record.status,
+                "failure_domain": record.failure_domain,
+                "payee_type": record.payee_type,
+                "channel": record.channel,
+                "sender_device_fingerprint": record.sender_device_fingerprint,
+                "sender_os_generation": record.sender_os_generation,
+                "balance_after_paise": record.balance_after_paise,
+            }
+            body_bytes = orjson.dumps(body_dict)
+            idempotency_key = make_transaction_idempotency_key(
+                record.payment_id, record.side, self.max_identifier_length
+            )
+            outcome = await transport.post("/v1/transactions", body_bytes, idempotency_key)
+            if outcome.replayed:
+                self.replayed_by_kind["transaction"] += 1
+            else:
+                self.sent_by_kind["transaction"] += 1
+            return outcome
+
+        elif kind == "withdrawal":
+            body_dict = {
+                "bank_id": record.bank_id,
+                "withdrawal_id": record.withdrawal_id,
+                "account_id": record.account_id,
+                "channel": record.channel,
+                "amount_paise": record.amount_paise,
+                "balance_after_paise": record.balance_after_paise,
+                "status": record.status,
+                "failure_domain": record.failure_domain,
+                "event_time": record.event_time.isoformat(),
+            }
+            body_bytes = orjson.dumps(body_dict)
+            idempotency_key = make_withdrawal_idempotency_key(
+                record.withdrawal_id, self.max_identifier_length
+            )
+            outcome = await transport.post("/v1/withdrawals", body_bytes, idempotency_key)
+            if outcome.replayed:
+                self.replayed_by_kind["withdrawal"] += 1
+            else:
+                self.sent_by_kind["withdrawal"] += 1
+            return outcome
+
+        elif kind == "account_event":
+            body_dict = {
+                "event_id": record.event_id,
+                "account_id": record.account_id,
+                "kind": record.kind,
+                "event_time": record.event_time.isoformat(),
+                "details": record.details,
+            }
+            body_bytes = orjson.dumps(body_dict)
+            idempotency_key = make_account_event_idempotency_key(
+                record.event_id, self.max_identifier_length
+            )
+            outcome = await transport.post("/v1/account-events", body_bytes, idempotency_key)
+            if outcome.replayed:
+                self.replayed_by_kind["account_event"] += 1
+            else:
+                self.sent_by_kind["account_event"] += 1
+            return outcome
+
+        elif kind == "complaint":
+            body_dict = {
+                "complaint_id": record.complaint_id,
+                "complainant_account": record.complainant_account,
+                "reported_account": record.reported_account,
+                "reported_bank_id": record.reported_bank_id,
+                "payment_ids": list(record.payment_ids),
+                "claimed_type": record.claimed_type,
+                "received_at": record.received_at.isoformat(),
+            }
+            body_bytes = orjson.dumps(body_dict)
+            idempotency_key = make_complaint_idempotency_key(
+                record.complaint_id, self.max_identifier_length
+            )
+            outcome = await transport.post("/v1/complaints", body_bytes, idempotency_key)
+            if outcome.replayed:
+                self.replayed_by_kind["complaint"] += 1
+            else:
+                self.sent_by_kind["complaint"] += 1
+            return outcome
+
+        else:
+            raise ValueError(f"Unknown feed record kind: {kind!r}")
 
 
 @dataclass(frozen=True)

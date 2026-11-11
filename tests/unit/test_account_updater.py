@@ -31,11 +31,16 @@ from features.account_reader import (
 from features.account_records import (
     AccountEventRecord,
     PaymentSideRecord,
+    WithdrawalRecord,
     record_member,
 )
 from features.account_updater import (
     apply_account_event,
     apply_payment_side,
+    apply_withdrawal,
+    get_retention_pruned_count,
+    log_retention_summary,
+    reset_retention_pruned_count,
 )
 
 RUN_A = "aaaaaaaaaaaaaaaa"
@@ -582,3 +587,69 @@ def test_trim_runs_through_lua_script(
     new_member = record_member(new_rec)
     assert redis_client.zscore(st_key, new_member) is not None
     assert redis_client.hexists(sr_key, new_member) is True
+
+
+def test_retention_summary_count_and_same_return_values(redis_client: fakeredis.FakeRedis) -> None:
+    """
+    Verifies that records older than retention horizon return 'older_than_retention',
+    records within horizon return 'stored', and summary count is correctly tracked and reported.
+    """
+    settings = load_account_features_settings()
+    retention_days = settings.retention_seconds // 86400
+
+    # 1. Reset counter before test
+    reset_retention_pruned_count()
+    assert get_retention_pruned_count() == 0
+
+    # 2. Anchor account state with recent event at BASE_TIME
+    rec_recent = _make_payment_side(
+        RUN_A, BANK_0, ACC_1, f"{RUN_A}-rec-001", "debit", BASE_TIME, BASE_TIME
+    )
+    status_recent = apply_payment_side(redis_client, rec_recent, settings)
+    assert status_recent == "stored"
+    assert get_retention_pruned_count() == 0
+
+    # 3. Apply an old payment side (older than 7d retention) -> returns older_than_retention, count becomes 1
+    t_old = BASE_TIME - timedelta(days=retention_days + 3)
+    rec_old_side = _make_payment_side(
+        RUN_A, BANK_0, ACC_1, f"{RUN_A}-rec-old-side", "debit", t_old, t_old
+    )
+    status_old_side = apply_payment_side(redis_client, rec_old_side, settings)
+    assert status_old_side == "older_than_retention"
+    assert get_retention_pruned_count() == 1
+
+    # 4. Apply an old account event -> returns older_than_retention, count becomes 2
+    rec_old_event = _make_account_event(
+        RUN_A, BANK_0, ACC_1, f"{RUN_A}-rec-old-ev", "phone_change", t_old, t_old
+    )
+    status_old_event = apply_account_event(redis_client, rec_old_event, settings)
+    assert status_old_event == "older_than_retention"
+    assert get_retention_pruned_count() == 2
+
+    # 5. Apply an old withdrawal -> returns older_than_retention, count becomes 3
+    rec_old_with = WithdrawalRecord(
+        run_id=RUN_A,
+        bank_id=BANK_0,
+        account_id=ACC_1,
+        withdrawal_id=f"{RUN_A}-rec-old-with",
+        channel="atm",
+        amount_paise=50000,
+        status="success",
+        failure_domain=None,
+        balance_after_paise=100000,
+        event_time=t_old,
+        arrival_time=t_old,
+    )
+    status_old_with = apply_withdrawal(redis_client, rec_old_with, settings)
+    assert status_old_with == "older_than_retention"
+    assert get_retention_pruned_count() == 3
+
+    # 6. Verify log_retention_summary reports and returns 3
+    reported = log_retention_summary()
+    assert reported == 3
+
+    # 7. Reset clears count
+    prev = reset_retention_pruned_count()
+    assert prev == 3
+    assert get_retention_pruned_count() == 0
+

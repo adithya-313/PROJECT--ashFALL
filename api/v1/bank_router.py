@@ -73,6 +73,19 @@ def get_transport_clock(request: Request) -> Clock:
     return WallClock()
 
 
+def get_ingestion_clock(request: Request) -> Clock | None:
+    """
+    Returns the optional clock used for domain ingestion timestamps (arrival_time).
+
+    Tests put a Clock on app.state.ingestion_clock so domain ingestion time is under their control.
+    When unset, returns None, leaving arrival_time NULL per Ground Rule 13.
+    """
+    if hasattr(request.app.state, "ingestion_clock"):
+        clock: Clock | None = request.app.state.ingestion_clock
+        return clock
+    return None
+
+
 async def get_bank_context(request: Request) -> BankRequestContext:
     """
     Authenticates the request and returns who the bank is, the raw body and the idempotency key.
@@ -233,9 +246,12 @@ async def post_transaction(request: Request) -> ORJSONResponse:
     """
     ctx = await get_bank_context(request)
     side_request = parse_body(ctx, TransactionSideRequest)
+    ingestion_clock = get_ingestion_clock(request)
 
     async def handler(connection: asyncpg.Connection) -> tuple[int, dict[str, Any]]:
-        return await record_transaction(connection, ctx.bank_id, side_request)
+        return await record_transaction(
+            connection, ctx.bank_id, side_request, ingestion_clock=ingestion_clock
+        )
 
     return await run_idempotent_post(request, ctx, handler)
 
@@ -250,9 +266,12 @@ async def post_account_event(request: Request) -> ORJSONResponse:
     """Records a life-cycle event of an account. A repeated event id is stored once and answered with 200."""
     ctx = await get_bank_context(request)
     event_request = parse_body(ctx, AccountEventRequest)
+    ingestion_clock = get_ingestion_clock(request)
 
     async def handler(connection: asyncpg.Connection) -> tuple[int, dict[str, Any]]:
-        return await record_account_event(connection, ctx.bank_id, event_request)
+        return await record_account_event(
+            connection, ctx.bank_id, event_request, ingestion_clock=ingestion_clock
+        )
 
     return await run_idempotent_post(request, ctx, handler)
 
@@ -290,13 +309,17 @@ async def post_feedback(request: Request) -> ORJSONResponse:
     """
     ctx = await get_bank_context(request)
     feedback = parse_body(ctx, FeedbackRequest)
+    ingestion_clock = get_ingestion_clock(request)
+    arrival_time = ingestion_clock.now_ist() if ingestion_clock is not None else None
 
     async def handler(connection: asyncpg.Connection) -> tuple[int, dict[str, Any]]:
         try:
             await connection.execute(
                 """
-                INSERT INTO bank_feedback (bank_id, feedback_id, payment_id, outcome, note, event_time)
-                VALUES ($1, $2, $3, $4, $5, $6)
+                INSERT INTO bank_feedback (
+                    bank_id, feedback_id, payment_id, outcome, note, event_time, arrival_time
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
                 """,
                 ctx.bank_id,
                 feedback.feedback_id,
@@ -304,6 +327,7 @@ async def post_feedback(request: Request) -> ORJSONResponse:
                 feedback.outcome,
                 feedback.note,
                 feedback.event_time,
+                arrival_time,
             )
         except asyncpg.UniqueViolationError as error:
             raise as_duplicate_record_error(error, FEEDBACK_UNIQUE_CONSTRAINT) from error
@@ -324,9 +348,12 @@ async def post_withdrawal(request: Request) -> ORJSONResponse:
     withdrawal = parse_body(ctx, WithdrawalRequest)
     if withdrawal.bank_id != ctx.bank_id:
         raise ApiError(422, "invalid_body", "bank_id must match authenticated bank")
+    ingestion_clock = get_ingestion_clock(request)
 
     async def handler(connection: asyncpg.Connection) -> tuple[int, dict[str, Any]]:
-        inserted, _ = await record_withdrawal(connection, ctx.bank_id, withdrawal)
+        inserted, _ = await record_withdrawal(
+            connection, ctx.bank_id, withdrawal, ingestion_clock=ingestion_clock
+        )
         status_code = 201 if inserted else 200
         resp_status: Literal["recorded", "duplicate"] = "recorded" if inserted else "duplicate"
         resp = WithdrawalResponse(

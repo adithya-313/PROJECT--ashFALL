@@ -79,7 +79,7 @@ def check_opening_times(output: InteractiveWorldOutput) -> list[str]:
         Problem sentences starting with [opening_time], naming the account, entry minute and opening minute.
     """
     opening_minute: dict[str, int] = {}
-    for minute, account_id, _owner, _stream, _bank, _balance in output.result.opened_accounts:
+    for minute, account_id, *_ in output.result.opened_accounts:
         opening_minute[account_id] = minute
     problems: list[str] = []
     for ledger in output.world.ledgers:

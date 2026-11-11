@@ -83,3 +83,6 @@ aiokafka==0.13.0
 
 # PyYAML — nationalsim reads config/nationalsim.yaml at startup inside the image.
 PyYAML==6.0.3
+
+# pyarrow — columnar dataset serialization for Level 16c dataset builder
+pyarrow==23.0.1

@@ -192,7 +192,7 @@ async def select_daily_snapshot_accounts(
         """
         SELECT account_id, payment_id
         FROM transactions
-        WHERE bank_id = $1 AND created_at >= $2 AND created_at < $3
+        WHERE bank_id = $1 AND COALESCE(arrival_time, created_at) >= $2 AND COALESCE(arrival_time, created_at) < $3
         """,
         bank_id,
         t_start,
@@ -212,7 +212,7 @@ async def select_daily_snapshot_accounts(
         """
         SELECT account_id, event_id
         FROM bank_account_events
-        WHERE bank_id = $1 AND created_at >= $2 AND created_at < $3
+        WHERE bank_id = $1 AND COALESCE(arrival_time, created_at) >= $2 AND COALESCE(arrival_time, created_at) < $3
         """,
         bank_id,
         t_start,
@@ -232,7 +232,7 @@ async def select_daily_snapshot_accounts(
         """
         SELECT account_id, withdrawal_id
         FROM bank_withdrawals
-        WHERE bank_id = $1 AND recorded_at >= $2 AND recorded_at < $3
+        WHERE bank_id = $1 AND COALESCE(arrival_time, recorded_at) >= $2 AND COALESCE(arrival_time, recorded_at) < $3
         """,
         bank_id,
         t_start,
@@ -252,7 +252,9 @@ async def select_daily_snapshot_accounts(
         """
         SELECT payment_id, feedback_id
         FROM bank_feedback
-        WHERE bank_id = $1 AND outcome = 'confirmed_fraud' AND created_at >= $2 AND created_at < $3
+        WHERE bank_id = $1 AND outcome = 'confirmed_fraud'
+          AND COALESCE(arrival_time, created_at) >= $2
+          AND COALESCE(arrival_time, created_at) < $3
         """,
         bank_id,
         t_start,
@@ -282,7 +284,9 @@ async def select_daily_snapshot_accounts(
         """
         SELECT reported_account, complaint_id
         FROM bank_complaints
-        WHERE reported_bank_id = $1 AND created_at >= $2 AND created_at < $3
+        WHERE reported_bank_id = $1
+          AND COALESCE(arrival_time, created_at) >= $2
+          AND COALESCE(arrival_time, created_at) < $3
         """,
         bank_id,
         t_start,
@@ -319,7 +323,7 @@ async def select_all_accounts(
         """
         SELECT account_id, event_id
         FROM bank_account_events
-        WHERE bank_id = $1 AND kind = 'account_opened' AND created_at <= $2
+        WHERE bank_id = $1 AND kind = 'account_opened' AND COALESCE(arrival_time, created_at) <= $2
         """,
         bank_id,
         cutoff,
@@ -345,6 +349,7 @@ async def write_account_snapshots(
     snapshot_kind: str,
     account_ids: Sequence[str],
     settings: AccountFeaturesSettings | None = None,
+    run_scoped_watermarks: bool = False,
 ) -> int:
     """
     WHAT: Computes point-in-time account features using live Redis state and writes snapshot rows
@@ -362,6 +367,8 @@ async def write_account_snapshots(
         snapshot_kind: Cadence label ('daily' or 'full').
         account_ids: Sequence of customer account identifiers to snapshot.
         settings: Optional AccountFeaturesSettings instance. If None, repository defaults are used.
+        run_scoped_watermarks: Optional boolean flag; when True, queries bank watermark scoped by
+            run_id ('acctwm:{run_id}:...'). When False, queries legacy un-scoped watermark keys.
 
     Returns:
         Count of new snapshot rows inserted (0 on idempotent conflict).
@@ -373,7 +380,10 @@ async def write_account_snapshots(
     if snapshot_kind not in ("daily", "full"):
         raise ValueError(f"Invalid snapshot_kind {snapshot_kind!r}; must be 'daily' or 'full'")
 
-    arrival_cutoff = get_bank_watermark(redis, bank_id)
+    if run_scoped_watermarks:
+        arrival_cutoff = get_bank_watermark(redis, bank_id, run_id=run_id)
+    else:
+        arrival_cutoff = get_bank_watermark(redis, bank_id)
     if arrival_cutoff is None:
         raise NoWatermarkError(f"No watermark available for bank {bank_id!r}")
 

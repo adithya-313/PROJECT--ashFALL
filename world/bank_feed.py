@@ -22,6 +22,7 @@ from world.device_runtime import DeviceStamp
 from world.failures import FAILURE_DOMAINS, PaymentEvent
 from world.interactive_records import InteractiveWorldOutput
 from world.label_records import LabelEvent
+from world.phone_book import PhoneBook
 
 
 class ProjectionLeakError(ValueError):
@@ -199,6 +200,22 @@ def resolve_account_type(account_id: str, config: BankFeedConfig) -> str:
         f"account_id '{account_id}' has unknown prefix; "
         f"expected one of {sorted(config.account_type_by_account_prefix.keys())}"
     )
+
+
+def bank_visible_vpa(account_id: str) -> str:
+    """
+    WHAT: Returns the bank-visible opaque stand-in VPA for an account.
+    WHY: Architect decision 6B: opaque stand-in VPA. Features may only look it up among
+    this bank's own accounts and must never parse run, bank or account out of it.
+    Both bank feed counterparty_vpa and decision request receiver_vpa share this representation.
+
+    Args:
+        account_id: Account identifier.
+
+    Returns:
+        Opaque stand-in VPA string matching the feed representation.
+    """
+    return account_id
 
 
 @dataclass(frozen=True)
@@ -441,7 +458,7 @@ def project_payment(
         channel=config.channel_value,
         # Architect decision 6B: opaque stand-in VPA. Features may only look it up among
         # this bank's own accounts and must never parse run, bank or account out of it.
-        counterparty_vpa=event.to_account,
+        counterparty_vpa=bank_visible_vpa(event.to_account),
         sender_device_fingerprint=stamp.fingerprint if stamp is not None else None,
         sender_os_generation=stamp.os_generation if stamp is not None else None,
         balance_after_paise=debit_balance,
@@ -479,7 +496,7 @@ def project_payment(
             channel=config.channel_value,
             # Architect decision 6B: opaque stand-in VPA. Features may only look it up among
             # this bank's own accounts and must never parse run, bank or account out of it.
-            counterparty_vpa=event.from_account,
+            counterparty_vpa=bank_visible_vpa(event.from_account),
             sender_device_fingerprint=None,
             sender_os_generation=None,
             balance_after_paise=credit_balance,
@@ -493,6 +510,8 @@ def project_payment(
 def project_run(
     output: InteractiveWorldOutput,
     label_events: Sequence[LabelEvent] = (),
+    phone_book: PhoneBook | None = None,
+    kyc_phone: bool | None = None,
 ) -> BankFeed:
     """
     WHAT: Projects an entire interactive simulation run into tenant-isolated BankFeed event streams.
@@ -510,6 +529,8 @@ def project_run(
     Args:
         output: Complete InteractiveWorldOutput containing world ledgers, plan, and run results.
         label_events: Optional sequence of LabelEvent complaints filed during or after the simulation run.
+        phone_book: Phone book used to fill the KYC phone on account_opened events when that is switched on.
+        kyc_phone: Overrides config kyc_phone_on_account_opened (None = use the config value, false when live).
 
     Returns:
         Immutable BankFeed instance containing per-bank event tuples and unmapped device event counts.
@@ -520,6 +541,16 @@ def project_run(
     config = load_bank_feed_config()
     clock_start = output.plan.clock.start_date
     run_id = output.result.run_id
+    kyc_phone_on = config.kyc_phone_on_account_opened if kyc_phone is None else kyc_phone
+    if kyc_phone_on and phone_book is None:
+        raise ValueError("kyc_phone_on_account_opened is on but no phone book was given")
+    opened_fields = ACCOUNT_OPENED_DETAIL_FIELDS | {"phone"} if kyc_phone_on else ACCOUNT_OPENED_DETAIL_FIELDS
+
+    def phone_of(account_id: str) -> str | None:
+        """The account's KYC phone from the phone book, or None when it has none."""
+        assert phone_book is not None
+        record = phone_book.get_record(account_id)
+        return record.phone_number if record is not None else None
 
     # 1. Initialize per-bank accumulator lists and unmapped kind counters.
     all_bank_ids = set(config.bank_ids_by_index.values())
@@ -546,6 +577,9 @@ def project_run(
         account_to_region[p.account_id] = p.region
     for s in output.world.shops:
         account_to_region[s.account_id] = s.region
+    for opened in output.result.opened_accounts:
+        if len(opened) >= 7 and opened[6] is not None:
+            account_to_region[opened[1]] = opened[6]
 
     balance_replay = replay_balances(output.world)
     people_by_id = {p.person_id: p for p in output.world.people}
@@ -635,12 +669,17 @@ def project_run(
         event_time = world_minute_to_ist(op_minute, clock_start)
         event_id = f"{run_id}-open-{op_account_id}"
 
-        if op_account_id not in account_to_region:
+        if len(opened) >= 7 and opened[6] is not None:
+            region = opened[6]
+        elif op_account_id in account_to_region:
+            region = account_to_region[op_account_id]
+        else:
             raise ValueError(f"Account {op_account_id!r} has no home region")
-        region = account_to_region[op_account_id]
         acct_type = resolve_account_type(op_account_id, config)
         details = {"home_region": region, "account_type": acct_type}
-        check_bank_visible(details, ACCOUNT_OPENED_DETAIL_FIELDS)
+        if kyc_phone_on:
+            details["phone"] = phone_of(op_account_id)
+        check_bank_visible(details, opened_fields)
 
         acct_ev = BankFeedAccountEvent(
             bank_id=bank_id,
@@ -672,8 +711,10 @@ def project_run(
                 event_time = start_time - timedelta(days=days_open)
                 r = account_to_region[acc_id]
                 open_type = resolve_account_type(acc_id, config)
-                open_details = {"home_region": r, "account_type": open_type}
-                check_bank_visible(open_details, ACCOUNT_OPENED_DETAIL_FIELDS)
+                open_details: dict[str, Any] = {"home_region": r, "account_type": open_type}
+                if kyc_phone_on:
+                    open_details["phone"] = phone_of(acc_id)
+                check_bank_visible(open_details, opened_fields)
                 open_ev = BankFeedAccountEvent(
                     bank_id=b_id,
                     event_id=f"{run_id}-open-{acc_id}",

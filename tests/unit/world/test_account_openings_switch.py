@@ -91,12 +91,13 @@ def test_switch_on_schedules_genuine_openings_with_standard_id_formats() -> None
     shop_regex = re.compile(r"^acc_shop_\d{4}$")
 
     opened_ids = {entry[1] for entry in opened}
-    for minute, account_id, owner_kind, opening_stream, bank_index, opening_balance in opened:
+    for minute, account_id, owner_kind, opening_stream, bank_index, opening_balance, region in opened:
         if owner_kind == "person":
             assert person_regex.match(account_id)
         elif owner_kind == "shop":
             assert shop_regex.match(account_id)
         assert opening_stream == "genuine_account_openings"
+        assert isinstance(region, int) and 0 <= region < int(output.world.parameters_drawn["n_regions"])
 
     # Verify that truth facts do not assign any criminal roles to genuine mid-run accounts.
     truth_mules = {span.account_id for span in output.result.truth.roles}

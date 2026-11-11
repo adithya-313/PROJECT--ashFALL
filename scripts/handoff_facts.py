@@ -203,6 +203,51 @@ PART_CONFIGS: dict[str, dict[str, Any]] = {
             "R5",
         ),
     },
+    "16d": {
+        "INTERFACE_MODULES": (
+            "replay.runner",
+            "replay.ordering",
+            "replay.dataset_builder",
+            "replay.registry_driver",
+            "replay.registry_replay",
+            "replay.hold_requests",
+            "evaluation.dataset_truth_join",
+        ),
+        "RECORDS_MODULE": (
+            "replay.runner",
+            "replay.ordering",
+            "replay.dataset_builder",
+            "replay.registry_driver",
+            "replay.registry_replay",
+            "replay.hold_requests",
+        ),
+        "RECORD_NAMES": (
+            "ReplayDropContext",
+            "ReplayResult",
+            "FeedStep",
+            "DecisionStep",
+            "WorldExtract",
+            "RegistryDriver",
+            "RegistryReplaySettings",
+            "HoldEvent",
+        ),
+        "CONFIG_FILES": (
+            "config/replay.yaml",
+            "config/datasets.yaml",
+            "config/showcase_level_16.yaml",
+        ),
+        "REGISTER_IDS": (
+            "16-1",
+            "16-2",
+            "16-3",
+            "16-4",
+            "16-5",
+            "16-6",
+            "16-7",
+            "16-8",
+            "16-9",
+        ),
+    },
 }
 
 

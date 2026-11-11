@@ -26,6 +26,7 @@ from features.account_keys import (
 from features.account_labels import apply_complaint_row, apply_feedback_row
 from features.account_records import (
     account_event_from_row,
+    arrival_from_row,
     payment_side_from_transaction_row,
     withdrawal_from_row,
 )
@@ -174,65 +175,65 @@ async def replay_history_into_redis(
     """
     cfg = settings if settings is not None else get_default_settings()
 
-    # 1. Fetch transactions (arrival = created_at)
+    # 1. Fetch transactions (arrival = arrival_time or created_at)
     txn_rows = await pg_connection.fetch(
         """
         SELECT id, bank_id, payment_id, account_id, side, counterparty_bank_id,
                counterparty_vpa, amount_paise, status, failure_domain, payee_type,
                channel, sender_device_fingerprint, sender_os_generation,
-               balance_after_paise, event_time, created_at
+               balance_after_paise, event_time, created_at, arrival_time
         FROM transactions
-        WHERE bank_id = $1 AND created_at <= $2
+        WHERE bank_id = $1 AND COALESCE(arrival_time, created_at) <= $2 /* created_at <= $2 */
         ORDER BY id
         """,
         bank_id,
         arrival_cutoff,
     )
 
-    # 2. Fetch bank_account_events (arrival = created_at)
+    # 2. Fetch bank_account_events (arrival = arrival_time or created_at)
     event_rows = await pg_connection.fetch(
         """
-        SELECT id, bank_id, event_id, account_id, kind, event_time, details, created_at
+        SELECT id, bank_id, event_id, account_id, kind, event_time, details, created_at, arrival_time
         FROM bank_account_events
-        WHERE bank_id = $1 AND created_at <= $2
+        WHERE bank_id = $1 AND COALESCE(arrival_time, created_at) <= $2 /* created_at <= $2 */
         ORDER BY id
         """,
         bank_id,
         arrival_cutoff,
     )
 
-    # 3. Fetch bank_withdrawals (arrival = recorded_at)
+    # 3. Fetch bank_withdrawals (arrival = arrival_time or recorded_at)
     withdrawal_rows = await pg_connection.fetch(
         """
         SELECT id, bank_id, withdrawal_id, account_id, channel, amount_paise,
-               status, failure_domain, event_time, balance_after_paise, recorded_at
+               status, failure_domain, event_time, balance_after_paise, recorded_at, arrival_time
         FROM bank_withdrawals
-        WHERE bank_id = $1 AND recorded_at <= $2
+        WHERE bank_id = $1 AND COALESCE(arrival_time, recorded_at) <= $2 /* recorded_at <= $2 */
         ORDER BY id
         """,
         bank_id,
         arrival_cutoff,
     )
 
-    # 4. Fetch bank_feedback (arrival = created_at)
+    # 4. Fetch bank_feedback (arrival = arrival_time or created_at)
     feedback_rows = await pg_connection.fetch(
         """
-        SELECT id, bank_id, feedback_id, payment_id, outcome, note, event_time, created_at
+        SELECT id, bank_id, feedback_id, payment_id, outcome, note, event_time, created_at, arrival_time
         FROM bank_feedback
-        WHERE bank_id = $1 AND created_at <= $2
+        WHERE bank_id = $1 AND COALESCE(arrival_time, created_at) <= $2 /* created_at <= $2 */
         ORDER BY id
         """,
         bank_id,
         arrival_cutoff,
     )
 
-    # 5. Fetch bank_complaints (arrival = created_at)
+    # 5. Fetch bank_complaints (arrival = arrival_time or created_at)
     complaint_rows = await pg_connection.fetch(
         """
         SELECT id, bank_id, complaint_id, complainant_account, reported_account,
-               reported_bank_id, payment_ids, claimed_type, received_at, created_at
+               reported_bank_id, payment_ids, claimed_type, received_at, created_at, arrival_time
         FROM bank_complaints
-        WHERE bank_id = $1 AND created_at <= $2
+        WHERE bank_id = $1 AND COALESCE(arrival_time, created_at) <= $2 /* created_at <= $2 */
         ORDER BY id
         """,
         bank_id,
@@ -252,7 +253,7 @@ async def replay_history_into_redis(
             raise ValueError(f"transactions row {pid!r} has unparseable id: {exc}") from exc
         if row_run != run_id:
             continue
-        arr = _ensure_utc(r["created_at"])
+        arr = _ensure_utc(arrival_from_row(r, "created_at"))
         items.append((arr, 0, pid, "transaction", r))
         count_txns += 1
 
@@ -265,7 +266,7 @@ async def replay_history_into_redis(
             raise ValueError(f"bank_account_events row {eid!r} has unparseable id: {exc}") from exc
         if row_run != run_id:
             continue
-        arr = _ensure_utc(r["created_at"])
+        arr = _ensure_utc(arrival_from_row(r, "created_at"))
         items.append((arr, 1, eid, "account_event", r))
         count_events += 1
 
@@ -278,7 +279,7 @@ async def replay_history_into_redis(
             raise ValueError(f"bank_withdrawals row {wid!r} has unparseable id: {exc}") from exc
         if row_run != run_id:
             continue
-        arr = _ensure_utc(r["recorded_at"])
+        arr = _ensure_utc(arrival_from_row(r, "recorded_at"))
         items.append((arr, 2, wid, "withdrawal", r))
         count_withdrawals += 1
 
@@ -291,7 +292,7 @@ async def replay_history_into_redis(
             raise ValueError(f"bank_feedback row {pid!r} has unparseable id: {exc}") from exc
         if row_run != run_id:
             continue
-        arr = _ensure_utc(r["created_at"])
+        arr = _ensure_utc(arrival_from_row(r, "created_at"))
         items.append((arr, 3, str(r["feedback_id"]), "feedback", r))
         count_feedback += 1
 
@@ -304,7 +305,7 @@ async def replay_history_into_redis(
             raise ValueError(f"bank_complaints row {cid!r} has unparseable id: {exc}") from exc
         if row_run != run_id:
             continue
-        arr = _ensure_utc(r["created_at"])
+        arr = _ensure_utc(arrival_from_row(r, "created_at"))
         items.append((arr, 4, cid, "complaint", r))
         count_complaints += 1
 

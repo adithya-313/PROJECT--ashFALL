@@ -17,6 +17,7 @@ TERM: stale manifest: a plan whose recorded config hashes differ from the config
 import copy
 import dataclasses
 import math
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +25,13 @@ from core.config_validator import contains
 from world.fast_mode import FastRunSettings
 from world.gang_config import GangConfig
 from world.gang_mix import generate_gang_mix, load_gang_mix_config
-from world.interactive_records import InteractiveWorldOutput, RunnerSettings
+from world.interactive_records import (
+    HookDecision,
+    InteractiveWorldOutput,
+    PaymentView,
+    RunnerSettings,
+    allow_all,
+)
 from world.interactive_runner import prepare_world, run_interactive_world
 from world.world_configs import WorldConfigs, read_world_configs
 from world.world_sampler import (
@@ -213,12 +220,54 @@ def fast_settings_for(
     return dataclasses.replace(settings, n_days=days)
 
 
+def resolve_sampled_world_gangs(
+    spec: WorldSpec,
+    preset_name: str,
+    gang_configs: tuple[GangConfig, ...] | None,
+    sampler_cfg: dict[str, Any],
+    configs: WorldConfigs,
+) -> tuple[GangConfig, ...]:
+    """
+    WHAT: Resolves the gang configuration tuple for a sampled world, returning explicit gangs
+    or generating the mix from the world spec and eligible account capacity.
+
+    WHY: Implements Decision D3(a). Factors gang resolution out of run_sampled_world so recording
+    and dataset metadata can observe gang families without inspecting hidden simulation truth.
+
+    Args:
+        spec: The planned world spec.
+        preset_name: A preset name from config/world_sizing.yaml.
+        gang_configs: Explicit gangs tuple (at least one), or None to generate the mix.
+        sampler_cfg: The world_sampler dictionary.
+        configs: The pinned WorldConfigs for this spec.
+
+    Returns:
+        tuple[GangConfig, ...] of resolved gangs.
+
+    Raises:
+        ValueError: If gang_configs is an empty tuple, or if pinning, preset, or mix is refused.
+    """
+    if gang_configs is not None and not gang_configs:
+        raise ValueError("a sampled world is a fraud-on world and needs at least one gang")
+    gangs = gang_configs
+    if gangs is None:
+        settings = fast_settings_for(spec, preset_name, sampler_cfg, configs)
+        # Eligible people are counted in the same world the run will build, so the capacity check is exact.
+        world = prepare_world(settings, configs).world
+        shop_accounts = {shop.account_id for shop in world.shops}
+        eligible = len([person for person in world.people if person.account_id not in shop_accounts])
+        gangs = generate_gang_mix(spec, sampler_cfg, load_gang_mix_config(), eligible, configs.world_ranges)
+    return gangs
+
+
 def run_sampled_world(
     spec: WorldSpec,
     preset_name: str,
     gang_configs: tuple[GangConfig, ...] | None,
     sampler_cfg: dict[str, Any],
     code_version: str,
+    *,
+    hook: Callable[[PaymentView], HookDecision] = allow_all,
 ) -> InteractiveWorldOutput:
     """
     WHAT: Runs one planned world with fraud on, using pinned configs and the spec's seed and range name. When
@@ -233,6 +282,7 @@ def run_sampled_world(
         gang_configs: The gangs to run (at least one), or None to generate the mix from the spec.
         sampler_cfg: The world_sampler dictionary.
         code_version: The code version to record in the run id.
+        hook: Optional intercepting hook for pre-decision recording or inspection; defaults to allow_all.
 
     Returns:
         The InteractiveWorldOutput of the run.
@@ -240,17 +290,9 @@ def run_sampled_world(
     Raises:
         ValueError: If gang_configs is an empty tuple, or if pinning, the preset or the mix is refused.
     """
-    if gang_configs is not None and not gang_configs:
-        raise ValueError("a sampled world is a fraud-on world and needs at least one gang")
     configs = pinned_configs(spec, sampler_cfg)
     settings = fast_settings_for(spec, preset_name, sampler_cfg, configs)
-    gangs = gang_configs
-    if gangs is None:
-        # Eligible people are counted in the same world the run will build, so the capacity check is exact.
-        world = prepare_world(settings, configs).world
-        shop_accounts = {shop.account_id for shop in world.shops}
-        eligible = len([person for person in world.people if person.account_id not in shop_accounts])
-        gangs = generate_gang_mix(spec, sampler_cfg, load_gang_mix_config(), eligible, configs.world_ranges)
+    gangs = resolve_sampled_world_gangs(spec, preset_name, gang_configs, sampler_cfg, configs)
     return run_interactive_world(
         settings,
         RunnerSettings(fraud_enabled=True),
@@ -258,4 +300,5 @@ def run_sampled_world(
         gang_configs=gangs,
         code_version=code_version,
         world_split=spec.split,
+        hook=hook,
     )

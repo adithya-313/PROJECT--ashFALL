@@ -21,6 +21,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any
 
+from core.event_clock import Clock
 from features.account_keys import (
     AccountFeaturesSettings,
     complained_accounts_key,
@@ -29,6 +30,7 @@ from features.account_keys import (
     labelled_accounts_key,
 )
 from features.account_reader import read_side_records_many
+from features.account_records import arrival_from_row
 from features.account_summaries import read_counterparty_days_many
 from features.ingest_watermark import record_poller_watermark
 
@@ -40,6 +42,27 @@ def to_unix_seconds(dt: datetime) -> int:
     if dt.tzinfo is None:
         return int(dt.replace(tzinfo=timezone.utc).timestamp())
     return int(dt.timestamp())
+
+
+def arrival_of(row: Mapping[str, Any]) -> datetime:
+    """
+    WHAT: Resolves the effective arrival timestamp for a complaint or feedback row.
+
+    WHY: Delegates to the shared arrival_from_row helper with fallback column 'created_at'.
+    Domain visibility, cutoffs, and watermarks are evaluated against arrival_time (from the
+    injected ingestion clock). When arrival_time is None (real-clock legacy mode or historical
+    rows), falls back to created_at per Ground Rule 13 and Ground Rule 30.
+
+    Args:
+        row: Mapping containing row data (must contain 'created_at' and optionally 'arrival_time').
+
+    Returns:
+        A timezone-aware datetime representing the arrival time.
+
+    Raises:
+        ValueError: If the resolved timestamp is naive or invalid.
+    """
+    return arrival_from_row(row, "created_at")
 
 
 async def apply_feedback_row(
@@ -90,8 +113,8 @@ async def apply_feedback_row(
     debit_accounts = [r["account_id"] for r in txn_rows if r["side"] == "debit"]
 
     if credit_accounts:
-        # Score is available_from: max(feedback event_time, created_at)
-        available_from = max(row["event_time"], row["created_at"])
+        # Score is available_from: max(feedback event_time, arrival_of(row))
+        available_from = max(row["event_time"], arrival_of(row))
         score = to_unix_seconds(available_from)
         key = labelled_accounts_key(run_id, bank_id)
         for acc_id in credit_accounts:
@@ -119,6 +142,8 @@ async def apply_feedback_since(
     settings: AccountFeaturesSettings | None = None,
     bank_id: str = "bank_0",
     after_id: int = 0,
+    clock: Clock | None = None,
+    run_id: str | None = None,
 ) -> int:
     """
     WHAT: Queries bank_feedback for rows with id > after_id (with overlap re-read) and updates Redis labelled_accounts.
@@ -136,12 +161,28 @@ async def apply_feedback_since(
         settings: Optional AccountFeaturesSettings; defaults to repository configuration.
         bank_id: Commercial bank identifier.
         after_id: Cursor identifier; rows with id > (after_id - overlap) are selected.
+        clock: Optional domain ingestion clock. When provided, poll_start uses clock.now_ist()
+            without querying DB now(); when None, falls back to fetchval("SELECT now()").
+        run_id: Optional simulation run identifier. When clock is provided, run_id must also be
+            provided to write run-scoped watermarks ('acctwm:{run_id}:{bank_id}:feedback').
+            Run-scoped keys belong only to world-clock runs; if clock is None and run_id is given,
+            raises ValueError.
 
     Returns:
         The highest row ID processed, or after_id if no rows were found.
     """
+    if clock is not None and run_id is None:
+        raise ValueError("When clock is provided, run_id must also be provided to write run-scoped watermarks")
+    if clock is None and run_id is not None:
+        raise ValueError(
+            "run_id cannot be provided when clock is None; run-scoped keys belong only to world-clock runs"
+        )
+
     cfg = settings if settings is not None else get_default_settings()
-    poll_start_db_time = await connection.fetchval("SELECT now()")
+    if clock is not None:
+        poll_start_time = clock.now_ist()
+    else:
+        poll_start_time = await connection.fetchval("SELECT now()")
 
     batch_size = cfg.account_event_batch_size
     overlap = cfg.account_event_overlap_rows
@@ -149,7 +190,7 @@ async def apply_feedback_since(
 
     rows = await connection.fetch(
         """
-        SELECT id, bank_id, feedback_id, payment_id, outcome, event_time, created_at
+        SELECT id, bank_id, feedback_id, payment_id, outcome, event_time, created_at, arrival_time
         FROM bank_feedback
         WHERE bank_id = $1 AND id > $2
         ORDER BY id
@@ -168,8 +209,8 @@ async def apply_feedback_since(
                 last_id = row_id
             await apply_feedback_row(connection, redis_client, row, cfg)
 
-    watermark_ts = int(to_unix_seconds(poll_start_db_time)) - cfg.commit_grace
-    record_poller_watermark(redis_client, bank_id, "feedback", watermark_ts)
+    watermark_ts = int(to_unix_seconds(poll_start_time)) - cfg.commit_grace
+    record_poller_watermark(redis_client, bank_id, "feedback", watermark_ts, run_id=run_id)
 
     return last_id
 
@@ -205,7 +246,7 @@ def apply_complaint_row(
     run_id = extract_run_id(complaint_id)
     reported_account = row["reported_account"]
 
-    available_from = max(row["received_at"], row["created_at"])
+    available_from = max(row["received_at"], arrival_of(row))
     score = to_unix_seconds(available_from)
     key = complained_accounts_key(run_id, bank_id)
     redis_client.zadd(key, {reported_account: score}, lt=True)
@@ -217,6 +258,8 @@ async def apply_complaints_since(
     settings: AccountFeaturesSettings | None = None,
     bank_id: str = "bank_0",
     after_id: int = 0,
+    clock: Clock | None = None,
+    run_id: str | None = None,
 ) -> int:
     """
     WHAT: Queries bank_complaints for rows with id > after_id and records complained accounts for this bank.
@@ -230,12 +273,28 @@ async def apply_complaints_since(
         settings: Optional AccountFeaturesSettings; defaults to repository configuration.
         bank_id: Commercial bank identifier.
         after_id: Cursor identifier; rows with id > (after_id - overlap) are selected.
+        clock: Optional domain ingestion clock. When provided, poll_start uses clock.now_ist()
+            without querying DB now(); when None, falls back to fetchval("SELECT now()").
+        run_id: Optional simulation run identifier. When clock is provided, run_id must also be
+            provided to write run-scoped watermarks ('acctwm:{run_id}:{bank_id}:complaints').
+            Run-scoped keys belong only to world-clock runs; if clock is None and run_id is given,
+            raises ValueError.
 
     Returns:
         The highest row ID processed, or after_id if no rows were found.
     """
+    if clock is not None and run_id is None:
+        raise ValueError("When clock is provided, run_id must also be provided to write run-scoped watermarks")
+    if clock is None and run_id is not None:
+        raise ValueError(
+            "run_id cannot be provided when clock is None; run-scoped keys belong only to world-clock runs"
+        )
+
     cfg = settings if settings is not None else get_default_settings()
-    poll_start_db_time = await connection.fetchval("SELECT now()")
+    if clock is not None:
+        poll_start_time = clock.now_ist()
+    else:
+        poll_start_time = await connection.fetchval("SELECT now()")
 
     batch_size = cfg.account_event_batch_size
     overlap = cfg.account_event_overlap_rows
@@ -244,7 +303,7 @@ async def apply_complaints_since(
     rows = await connection.fetch(
         """
         SELECT id, bank_id, complaint_id, complainant_account, reported_account, reported_bank_id,
-               payment_ids, claimed_type, received_at, created_at
+               payment_ids, claimed_type, received_at, created_at, arrival_time
         FROM bank_complaints
         WHERE bank_id = $1 AND id > $2
         ORDER BY id
@@ -263,8 +322,8 @@ async def apply_complaints_since(
                 last_id = row_id
             apply_complaint_row(redis_client, row, cfg)
 
-    watermark_ts = int(to_unix_seconds(poll_start_db_time)) - cfg.commit_grace
-    record_poller_watermark(redis_client, bank_id, "complaints", watermark_ts)
+    watermark_ts = int(to_unix_seconds(poll_start_time)) - cfg.commit_grace
+    record_poller_watermark(redis_client, bank_id, "complaints", watermark_ts, run_id=run_id)
 
     return last_id
 
