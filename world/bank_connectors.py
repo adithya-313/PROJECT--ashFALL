@@ -331,10 +331,18 @@ class MockBankConnectors:
 
     @property
     def opened_accounts(self) -> list[tuple[int, str, str, str, int, int, int]]:
+        """
+        WHAT: Returns the list of mid-run opened account audit tuples registered with connectors.
+        WHY: Exposes current registered account tuples for inspection, serialization, or test assertions.
+        """
         return self._opened_accounts
 
     @opened_accounts.setter
     def opened_accounts(self, records: Sequence[tuple[int, str, str, str, int, int, int]]) -> None:
+        """
+        WHAT: Sets the registered mid-run opened accounts and indexes them by account identifier.
+        WHY: Enables decision requests to dynamically map new accounts starting at their opening minute.
+        """
         self._opened_accounts = list(records)
         self._opened_accounts_by_id = {rec[1]: (rec[0], rec[4]) for rec in records}
 
