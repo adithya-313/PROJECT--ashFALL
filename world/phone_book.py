@@ -281,9 +281,9 @@ def build_phone_book(
 
     # Include mid-run opened person accounts if present.
     # opened_accounts definition from InteractiveRunResult:
-    # tuple: (minute, account_id, owner_kind, opening_stream, bank_index, opening_balance_paise)
+    # tuple: (minute, account_id, owner_kind, opening_stream, bank_index, opening_balance_paise, region)
     for opened_item in output.result.opened_accounts:
-        minute, account_id, owner_kind, opening_stream, bank_index, opening_balance_paise = opened_item
+        minute, account_id, owner_kind, opening_stream, bank_index, opening_balance_paise, *rest = opened_item
         if owner_kind == "person" and account_id not in person_account_ids:
             person_account_ids.append(account_id)
 

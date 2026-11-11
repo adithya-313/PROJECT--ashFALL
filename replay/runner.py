@@ -36,6 +36,7 @@ from features.account_keys import AccountFeaturesSettings, get_default_settings
 from features.account_labels import apply_complaints_since, apply_feedback_since
 from features.account_snapshots import select_daily_snapshot_accounts, write_account_snapshots
 from features.account_stream import apply_account_events_since, apply_withdrawals_since, consume_available
+from features.account_updater import log_retention_summary, reset_retention_pruned_count
 from features.feature_log import canonical_feature_names
 from features.ingest_watermark import get_payment_watermark, record_payment_watermark
 from features.label_consumer import consume_complaint_labels_since
@@ -834,6 +835,7 @@ async def run_replay(
         live_redis_client = live_redis
 
     # 2. Allocate isolated workspace; ALWAYS drop in finally
+    reset_retention_pruned_count()
     workspace = await allocate_workspace(
         admin_pg,
         live_redis_client,
@@ -1265,3 +1267,5 @@ async def run_replay(
             )
         except Exception as exc:
             logger.error("Error dropping workspace %s: %s", workspace.name, exc)
+        finally:
+            log_retention_summary()

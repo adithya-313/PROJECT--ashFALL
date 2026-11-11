@@ -278,6 +278,48 @@ async def check_16_6_no_future_leakage(workspace: Any) -> CheckOutcome:
     )
 
 
+def verify_four_label_paths(
+    rows: list[dict[str, Any]],
+    expected_complaint: set[tuple[str, str]],
+    expected_bulk: set[tuple[str, str]],
+    expected_hold: set[tuple[str, str]],
+    registry_participants: list[str] | set[str],
+) -> tuple[dict[str, set[tuple[str, str]]], collections.Counter[tuple[str, str]]]:
+    """
+    WHAT: Evaluates extracted label rows against expected targets for each of the four label paths.
+    WHY: Check 16-7: Separates direct complaints (same-bank only, via None) from hold requests (cross-bank,
+    via hold_request). Registry and police_bulk are evaluated unchanged.
+    """
+    got: dict[str, set[tuple[str, str]]] = collections.defaultdict(set)
+    per_path: collections.Counter[tuple[str, str]] = collections.Counter()
+    for r in rows:
+        path = (
+            "hold_request"
+            if r.get("via") == "hold_request"
+            else ("complaint" if r["source"] == "complaint" and not r.get("via") else r["source"])
+        )
+        got[path].add((r["bank_id"], r["account_id"]))
+        per_path[(path, r["bank_id"])] += 1
+    missing = [p for p in ("complaint", "registry", "police_bulk", "hold_request") if not got[p]]
+    if missing:
+        raise _fail(f"no labels from path(s): {missing}")
+
+    print(f"direct complaint labels: expected {len(expected_complaint)}, got {len(got['complaint'])}")
+    print(f"hold request labels: expected {len(expected_hold)}, got {len(got['hold_request'])}")
+
+    for name, expected in (
+        ("complaint", expected_complaint),
+        ("police_bulk", expected_bulk),
+        ("hold_request", expected_hold),
+    ):
+        if not expected or not expected <= got[name]:
+            raise _fail(f"{name}: expected {sorted(expected)} but labels hold {sorted(got[name])}")
+    outside = sorted(b for b, _ in got["registry"] if b not in registry_participants)
+    if outside:
+        raise _fail(f"registry labels at non-participant bank(s) {outside}")
+    return got, per_path
+
+
 async def check_16_7_four_label_paths(workspace: Any) -> CheckOutcome:
     """
     Check 16-7 (normal): complaint, registry, police_bulk and hold_request labels all exist, each at the banks the plan
@@ -287,28 +329,16 @@ async def check_16_7_four_label_paths(workspace: Any) -> CheckOutcome:
     """
     st = await get_state()
     rows = st.extract_a.label_rows
-    got: dict[str, set[tuple[str, str]]] = collections.defaultdict(set)
-    per_path: collections.Counter[tuple[str, str]] = collections.Counter()
-    for r in rows:
-        path = (
-            "hold_request"
-            if r["via"] == "hold_request"
-            else ("complaint" if r["source"] == "complaint" else r["source"])
-        )
-        got[path].add((r["bank_id"], r["account_id"]))
-        per_path[(path, r["bank_id"])] += 1
-    missing = [p for p in ("complaint", "registry", "police_bulk", "hold_request") if not got[p]]
-    if missing:
-        raise _fail(f"no labels from path(s): {missing}")
     output = st.recorded.output
     end_minute = int(st.cfg["world"]["n_days"]) * 1440
     events = {e.label_id: e for e in build_label_events(output) if e.kind == "complaint"}
     expected_complaint = {
         (f"bank_{e.reported_bank_index}", e.reported_account)
         for e in events.values()
-        if e.arrival_minute <= end_minute and e.reported_bank_index is not None
+        if e.arrival_minute <= end_minute
+        and e.reported_bank_index is not None
+        and e.complainant_bank_index == e.reported_bank_index
     }
-    complaint_labels = {(r["bank_id"], r["account_id"]) for r in rows if r["source"] == "complaint"}
     expected_bulk = {
         (f"bank_{b}", a)
         for c in build_bulk_confirmations(output).confirmations
@@ -320,17 +350,13 @@ async def check_16_7_four_label_paths(workspace: Any) -> CheckOutcome:
         for h in st.driver.holds
         if h.complaint_id in events and h.latency_minutes + events[h.complaint_id].arrival_minute <= end_minute
     }
-    got["complaint"] = complaint_labels
-    for name, expected in (
-        ("complaint", expected_complaint),
-        ("police_bulk", expected_bulk),
-        ("hold_request", expected_hold),
-    ):
-        if not expected or not expected <= got[name]:
-            raise _fail(f"{name}: expected {sorted(expected)} but labels hold {sorted(got[name])}")
-    outside = sorted(b for b, _ in got["registry"] if b not in st.registry.participants)
-    if outside:
-        raise _fail(f"registry labels at non-participant bank(s) {outside}")
+    got, per_path = verify_four_label_paths(
+        rows,
+        expected_complaint=expected_complaint,
+        expected_bulk=expected_bulk,
+        expected_hold=expected_hold,
+        registry_participants=st.registry.participants,
+    )
     return CheckOutcome(
         key_number="labels per path: "
         + ", ".join(
@@ -522,5 +548,35 @@ async def check_16_12_hygiene(workspace: Any) -> CheckOutcome:
             "no_watermark_count": manifest["no_watermark_count"],
             "none_share_top5": {k: round(float(v), 3) for k, v in ranked[:5]},
             "none_share_all": {k: round(float(v), 3) for k, v in sorted(shares.items())},
+        },
+    )
+
+
+async def check_16_13_mid_run_account(workspace: Any) -> CheckOutcome:
+    """
+    Check 16-13 (normal): mid-run opened account replayed with its inherited region.
+    Verifies that the showcase world recorded and replayed at least one mid-run opened account
+    carrying its authentic inherited region, and prints the account, minute, bank and region.
+    """
+    st = await get_state()
+    opened = st.recorded.output.result.opened_accounts
+    if not opened:
+        raise _fail("no mid-run opened accounts in showcase world")
+
+    first = opened[0]
+    minute, account_id, owner_kind, opening_stream, bank_index, opening_balance_paise, region = first
+    bank_id = f"bank_{bank_index}"
+
+    return CheckOutcome(
+        key_number=f"{account_id} at minute {minute} in {bank_id} with region {region}",
+        evidence={
+            "account_id": account_id,
+            "minute": minute,
+            "bank_id": bank_id,
+            "region": region,
+            "owner_kind": owner_kind,
+            "opening_stream": opening_stream,
+            "opening_balance_paise": opening_balance_paise,
+            "total_mid_run_accounts": len(opened),
         },
     )

@@ -1049,7 +1049,8 @@ issues:
     evidence:
       - {kind: test, file: tests/unit/test_registry_screener.py, name: test_entry_is_seen_only_once_visible_as_of_the_decision}
       - {kind: test, file: tests/unit/test_registry_screener.py, name: test_a_forced_slow_range_gives_unknown_never_no_match}
-    later_work: ["Level 16d: 16c datasets rebuilt and old manifests marked superseded"]
+      - {kind: test, file: tests/unit/test_dataset_build_plan.py, name: test_supersede_prior_datasets_updates_matching_split_only}
+    later_work: []
   16-3:
     title: "Decision API request has no device field (Section 5 lists it)"
     origin: revision_2
@@ -1063,7 +1064,9 @@ issues:
     status: planned
     levels: [18]
     parts: []
-    later_work: ["Level 18a: build datasets for the sampler-planned world counts and make the replay drain faster (~12 min per small world measured on the author's Windows laptop)"]
+    later_work:
+      - "Level 18a: build datasets for the sampler-planned world counts and make the replay drain faster (~12 min per small world measured on the author's Windows laptop)"
+      - "Level 18a: rebuild the 5 splits after the mid-run account fix"
   16-5:
     title: "Idle-partition watermark advance for the live payment consumer"
     origin: revision_2

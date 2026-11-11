@@ -52,6 +52,33 @@ from features.velocity import to_unix_seconds
 
 logger = logging.getLogger(__name__)
 
+_RETENTION_PRUNED_COUNT: int = 0
+
+
+def get_retention_pruned_count() -> int:
+    """Returns the total number of records that arrived older than the retention horizon."""
+    return _RETENTION_PRUNED_COUNT
+
+
+def reset_retention_pruned_count() -> int:
+    """Resets the count of records older than retention horizon and returns the count before reset."""
+    global _RETENTION_PRUNED_COUNT
+    prev = _RETENTION_PRUNED_COUNT
+    _RETENTION_PRUNED_COUNT = 0
+    return prev
+
+
+def log_retention_summary() -> int:
+    """
+    WHAT: Logs a single summary count of records older than retention horizon pruned during execution.
+    WHY: Quiets the per-event retention horizon log flood during replays.
+    """
+    global _RETENTION_PRUNED_COUNT
+    count = _RETENTION_PRUNED_COUNT
+    if count > 0:
+        logger.info("Account updater: %d records were older than retention horizon", count)
+    return count
+
 # Atomic trim script: fetches expired members from ZSET, deletes from HASH, prunes from ZSET.
 TRIM_LUA_SCRIPT: str = """local expired = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
 if #expired > 0 then
@@ -160,7 +187,9 @@ def apply_payment_side(
 
         # Check if this incoming record is older than retention horizon
         if event_unix < cutoff:
-            logger.info(
+            global _RETENTION_PRUNED_COUNT
+            _RETENTION_PRUNED_COUNT += 1
+            logger.debug(
                 "Payment side %s for account %s is older than retention horizon (event=%s, cutoff=%s)",
                 record.payment_id,
                 record.account_id,
@@ -231,7 +260,9 @@ def apply_account_event(
         _trim_expired(client, et_key, er_key, f"({cutoff}")
 
         if event_unix < cutoff:
-            logger.info(
+            global _RETENTION_PRUNED_COUNT
+            _RETENTION_PRUNED_COUNT += 1
+            logger.debug(
                 "Account event %s for account %s is older than retention horizon (event=%s, cutoff=%s)",
                 record.event_id,
                 record.account_id,
@@ -302,7 +333,9 @@ def apply_withdrawal(
         _trim_expired(client, wt_key, wr_key, f"({cutoff}")
 
         if event_unix < cutoff:
-            logger.info(
+            global _RETENTION_PRUNED_COUNT
+            _RETENTION_PRUNED_COUNT += 1
+            logger.debug(
                 "Withdrawal %s for account %s is older than retention horizon (event=%s, cutoff=%s)",
                 record.withdrawal_id,
                 record.account_id,

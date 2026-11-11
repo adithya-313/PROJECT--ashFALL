@@ -10,6 +10,7 @@ BankFeed projections to per-bank transports while tracking operational metrics a
 
 import asyncio
 import concurrent.futures
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -281,6 +282,7 @@ class MockBankConnectors:
         decision_timeout_seconds: float,
         loop: asyncio.AbstractEventLoop,
         max_identifier_length: int | None = None,
+        opened_accounts: Sequence[tuple[int, str, str, str, int, int, int]] | None = None,
     ) -> None:
         """
         Initialises mock bank connectors with required transports and policy configuration.
@@ -294,6 +296,8 @@ class MockBankConnectors:
             decision_timeout_seconds: Timeout for decision calls before falling back to allow.
             loop: Active asyncio event loop used for cross-thread coroutine scheduling.
             max_identifier_length: Optional key length limit; read from config if None.
+            opened_accounts: Optional sequence of accounts opened mid-run to join
+                account_bank_map at their opening minute.
         """
         self.transports = transports
         self.modes = modes
@@ -305,6 +309,7 @@ class MockBankConnectors:
         self.max_identifier_length = (
             max_identifier_length if max_identifier_length is not None else load_max_identifier_length()
         )
+        self.opened_accounts = list(opened_accounts) if opened_accounts is not None else []
 
         self.decisions_sent: int = 0
         self.decisions_replayed: int = 0
@@ -323,6 +328,23 @@ class MockBankConnectors:
             "complaint": 0,
         }
         self.seen_accounts: set[str] = set()
+
+    @property
+    def opened_accounts(self) -> list[tuple[int, str, str, str, int, int, int]]:
+        """
+        WHAT: Returns the list of mid-run opened account audit tuples registered with connectors.
+        WHY: Exposes current registered account tuples for inspection, serialization, or test assertions.
+        """
+        return self._opened_accounts
+
+    @opened_accounts.setter
+    def opened_accounts(self, records: Sequence[tuple[int, str, str, str, int, int, int]]) -> None:
+        """
+        WHAT: Sets the registered mid-run opened accounts and indexes them by account identifier.
+        WHY: Enables decision requests to dynamically map new accounts starting at their opening minute.
+        """
+        self._opened_accounts = list(records)
+        self._opened_accounts_by_id = {rec[1]: (rec[0], rec[4]) for rec in records}
 
     def build_decision_request(
         self,
@@ -344,6 +366,13 @@ class MockBankConnectors:
         Raises:
             ValueError: If sender/receiver account is unknown or receiver prefix has no mapped payee type.
         """
+        # 0. Add new accounts opened at or before this payment's minute from the world's own records.
+        for op_acc, (op_min, op_b_idx) in self._opened_accounts_by_id.items():
+            if op_min <= payment.minute and op_acc not in self.account_bank_map:
+                self.account_bank_map[op_acc] = resolve_bank_id(op_b_idx, self.feed_config)
+            elif op_min > payment.minute and op_acc in self.account_bank_map:
+                del self.account_bank_map[op_acc]
+
         # 1. Resolve sending and receiving bank identifiers from account mappings.
         if payment.from_account not in self.account_bank_map:
             raise ValueError(f"Sender account {payment.from_account!r} is not in account_bank_map")

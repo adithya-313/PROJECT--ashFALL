@@ -13,6 +13,7 @@ TERM: pin: a world_ranges parameter set to one value for this showcase world onl
 
 from __future__ import annotations
 
+import copy
 from collections import defaultdict
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -23,6 +24,7 @@ from core.event_clock import ManualClock
 from nationalsim.keyed_hash import compute_identifier_hash
 from replay.registry_driver import build_registry_driver
 from replay.registry_replay import RegistryReplaySettings, load_registry_replay_settings
+from world.account_openings_config import load_account_openings_config
 from world.edge_cases import apply_edge_case_layer
 from world.fast_mode import FastRunSettings
 from world.gang_config import GangConfig, gang_config_from_plain
@@ -39,6 +41,7 @@ __all__ = [
     "level_16_world_configs",
     "level_16_gang",
     "level_16_registry_settings",
+    "level_16_account_openings_config",
     "level_16_fast_settings",
     "plan_level_16_world",
     "guarantee_counts",
@@ -80,6 +83,7 @@ class GuaranteeCounts:
     false_reported_accounts: int
     hold_requests: int
     innocent_holder_listings: int
+    mid_run_opened_accounts: int = 0
 
 
 def load_level_16_config(path: Path | None = None) -> dict[str, Any]:
@@ -145,6 +149,23 @@ def level_16_registry_settings(cfg: dict[str, Any]) -> RegistryReplaySettings:
     return replace(base, bank_settings=banks)
 
 
+def level_16_account_openings_config(cfg: dict[str, Any]) -> dict[str, Any]:
+    """
+    WHAT: Builds the account openings configuration for the showcase, applying the rate knob from config.
+    WHY: Pinned through showcase config so check 13 observes >=1 mid-run account opening authentically.
+    Args:
+        cfg: The parsed showcase config.
+    Returns:
+        The account openings configuration dictionary.
+    """
+    base = copy.deepcopy(load_account_openings_config())
+    split_name = str(cfg["world"]["range_name"])
+    if "account_openings" in cfg and "genuine_account_openings_per_1000_people_per_30_days" in cfg["account_openings"]:
+        rate = cfg["account_openings"]["genuine_account_openings_per_1000_people_per_30_days"]
+        base["parameters"]["genuine_account_openings_per_1000_people_per_30_days"][split_name] = list(rate)
+    return base
+
+
 def level_16_fast_settings(cfg: dict[str, Any], seed: int | None = None) -> FastRunSettings:
     """
     WHAT: Builds the FastRunSettings of the showcase world (optionally for another seed, for the scan).
@@ -183,10 +204,11 @@ def plan_level_16_world(cfg: dict[str, Any], seed: int | None = None) -> Recorde
     gang = level_16_gang()
     output = run_interactive_world(
         settings,
-        RunnerSettings(fraud_enabled=True),
+        RunnerSettings(fraud_enabled=True, account_openings_enabled=True),
         configs=level_16_world_configs(cfg),
         gang_configs=(gang,),
         world_split=settings.range_name,
+        account_openings_config=level_16_account_openings_config(cfg),
     )
     return RecordedWorld(
         output=output,
@@ -235,6 +257,7 @@ def guarantee_counts(world: RecordedWorld, registry: RegistryReplaySettings | No
         false_reported_accounts=len({a for a in by_account if a not in mule_accounts}),
         hold_requests=len(driver.holds),
         innocent_holder_listings=innocent,
+        mid_run_opened_accounts=len(output.result.opened_accounts),
     )
 
 
@@ -293,5 +316,6 @@ def unmet_guarantees(counts: GuaranteeCounts, cfg: dict[str, Any]) -> list[str]:
         "false_reported_accounts": counts.false_reported_accounts >= m["false_reported_accounts"],
         "hold_requests": counts.hold_requests >= m["hold_requests"],
         "innocent_holder_listings": counts.innocent_holder_listings >= m["innocent_holder_listings"],
+        "mid_run_opened_accounts": counts.mid_run_opened_accounts >= m.get("mid_run_opened_accounts", 1),
     }
     return [name for name, ok in checks.items() if not ok]
