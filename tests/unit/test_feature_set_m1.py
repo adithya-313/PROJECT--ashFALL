@@ -96,6 +96,7 @@ def test_removed_list_contains_expected_entries_with_reasons() -> None:
 def test_all_canonical_features_present_in_expected_groups() -> None:
     """Verifies that every canonical M1 feature from the plan is present in its approved group without duplicates."""
     feature_set = load_feature_set_m1()
+    assert len(feature_set.features) == 53
 
     expected_groups: dict[str, set[str]] = {
         "inflow": {
@@ -105,6 +106,7 @@ def test_all_canonical_features_present_in_expected_groups() -> None:
             "first_time_payer_share_24h",
             "small_credit_count_24h",
             "small_credit_count_7d",
+            "largest_credit_paise_24h",
             "below_threshold_credit_count_7d",
         },
         "outflow": {

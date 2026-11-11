@@ -180,6 +180,36 @@ def compute_small_credit_count(
     )
 
 
+def compute_largest_credit_paise(
+    side_records: Sequence[PaymentSideRecord],
+    decision_time: datetime,
+    window_seconds: int,
+) -> int:
+    """
+    PURPOSE:
+        Computes the largest amount in paise of any single successful credit in the window. Issue: G1.
+
+    INPUTS:
+        side_records: Raw payment side records from the account snapshot.
+        decision_time: Scoring evaluation timestamp.
+        window_seconds: Window duration in seconds (e.g. 86400 for 24h).
+
+    KEY LOGIC:
+        Reuses filter_window to scope records to (decision_time - window_seconds, decision_time].
+        Filters for side == 'credit' and status == 'success'.
+        Returns 0 when no successful credit records exist.
+        Failed credits and debits never count toward the largest credit.
+
+    RETURN:
+        int: Largest credit amount in paise, or 0 if no successful credits.
+    """
+    in_win = filter_window(side_records, decision_time, window_seconds)
+    credits = [r.amount_paise for r in in_win if r.side == "credit" and r.status == "success"]
+    if not credits:
+        return 0
+    return max(credits)
+
+
 def compute_below_threshold_credit_count_7d(
     side_records: Sequence[PaymentSideRecord],
     decision_time: datetime,

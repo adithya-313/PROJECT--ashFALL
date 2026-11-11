@@ -31,6 +31,7 @@ from features.m1_inflow_outflow import (
     compute_cash_out_channels_7d,
     compute_distinct_payers,
     compute_first_time_payer_share_24h,
+    compute_largest_credit_paise,
     compute_median_credit_to_debit_seconds_7d,
     compute_other_bank_outflow_share_7d,
     compute_pass_through_ratio,
@@ -181,6 +182,9 @@ def compute_account_features(
         )
         result["small_credit_count_7d"] = compute_small_credit_count(
             snapshot.side_records, decision_time, 604800, m1_cfg.small_credit_max_paise
+        )
+        result["largest_credit_paise_24h"] = compute_largest_credit_paise(
+            snapshot.side_records, decision_time, 86400
         )
         result["below_threshold_credit_count_7d"] = compute_below_threshold_credit_count_7d(
             snapshot.side_records,
