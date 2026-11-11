@@ -26,11 +26,12 @@ EXPECTED_ORDER = [
     "16-10 a superseded dataset is refused unless asked",
     "16-11 G3: one account collects complaints from several victims over weeks",
     "16-12 hygiene: no label column is a feature",
+    "16-13 mid-run opened account replayed with its inherited region",
 ]
 
 
-def test_twelve_checks_in_the_architects_order() -> None:
-    """Checks the showcase lists exactly the 12 checks in the fixed order."""
+def test_thirteen_checks_in_the_architects_order() -> None:
+    """Checks the showcase lists exactly the 13 checks in the fixed order."""
     assert [c.name for c in level_16.get_checks()] == EXPECTED_ORDER
 
 
