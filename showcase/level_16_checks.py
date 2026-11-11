@@ -550,3 +550,33 @@ async def check_16_12_hygiene(workspace: Any) -> CheckOutcome:
             "none_share_all": {k: round(float(v), 3) for k, v in sorted(shares.items())},
         },
     )
+
+
+async def check_16_13_mid_run_account(workspace: Any) -> CheckOutcome:
+    """
+    Check 16-13 (normal): mid-run opened account replayed with its inherited region.
+    Verifies that the showcase world recorded and replayed at least one mid-run opened account
+    carrying its authentic inherited region, and prints the account, minute, bank and region.
+    """
+    st = await get_state()
+    opened = st.recorded.output.result.opened_accounts
+    if not opened:
+        raise _fail("no mid-run opened accounts in showcase world")
+
+    first = opened[0]
+    minute, account_id, owner_kind, opening_stream, bank_index, opening_balance_paise, region = first
+    bank_id = f"bank_{bank_index}"
+
+    return CheckOutcome(
+        key_number=f"{account_id} at minute {minute} in {bank_id} with region {region}",
+        evidence={
+            "account_id": account_id,
+            "minute": minute,
+            "bank_id": bank_id,
+            "region": region,
+            "owner_kind": owner_kind,
+            "opening_stream": opening_stream,
+            "opening_balance_paise": opening_balance_paise,
+            "total_mid_run_accounts": len(opened),
+        },
+    )

@@ -83,6 +83,7 @@ def record_world_for_replay(
     gang_configs: tuple[GangConfig, ...] = (),
     world_split: str | None = None,
     configs: WorldConfigs | None = None,
+    account_openings_config: dict[str, Any] | None = None,
 ) -> RecordedWorld:
     """
     WHAT: Runs an interactive world simulation while recording decision requests constructed by connectors.
@@ -117,6 +118,7 @@ def record_world_for_replay(
         hook=hook,
         configs=configs,
         gang_configs=gang_configs,
+        account_openings_config=account_openings_config,
         world_split=world_split,
     )
 

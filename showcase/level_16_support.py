@@ -36,6 +36,7 @@ from showcase.isolation import get_showcase_database_url
 from showcase.level_16_world import (
     GuaranteeCounts,
     guarantee_counts,
+    level_16_account_openings_config,
     level_16_fast_settings,
     level_16_gang,
     level_16_registry_settings,
@@ -166,13 +167,15 @@ async def _build_state() -> Level16State:
         decision_timeout_seconds=5.0,
         loop=asyncio.get_running_loop(),
     )
+    aoc = level_16_account_openings_config(cfg)
     recorded = record_world_for_replay(
         settings,
-        RunnerSettings(fraud_enabled=True),
+        RunnerSettings(fraud_enabled=True, account_openings_enabled=True),
         connectors,
         gang_configs=(level_16_gang(),),
         world_split=settings.range_name,
         configs=configs,
+        account_openings_config=aoc,
     )
     extract_a, result_a = await _replay_once(recorded, registry)
     extract_b, result_b = await _replay_once(recorded, registry)

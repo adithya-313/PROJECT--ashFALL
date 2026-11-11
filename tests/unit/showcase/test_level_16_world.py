@@ -47,6 +47,7 @@ def test_the_recorded_scan_counts_match_the_world() -> None:
     assert counts.false_reported_accounts == rec["false_reported_accounts"]
     assert counts.hold_requests == rec["hold_requests"]
     assert counts.innocent_holder_listings == rec["innocent_holder_listings"]
+    assert counts.mid_run_opened_accounts == rec["mid_run_opened_accounts"]
 
 
 def test_g3_arrivals_spread_over_at_least_14_days_from_several_victims() -> None:

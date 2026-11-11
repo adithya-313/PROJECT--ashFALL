@@ -55,6 +55,13 @@ registry:
   non_participants: [bank_2]
   reason: "showcase-only: bank_2 does not take part in DPIP so check 9 can show payee_registry_match is None at a non-participant; the config file enrols every bank."
 
+# Account openings settings for showcase (genuine mid-run account openings rate knob).
+account_openings:
+  label: policy
+  showcase_only: true
+  genuine_account_openings_per_1000_people_per_30_days: [20, 20]
+  reason: "showcase-only: rate knob ensuring at least one genuine mid-run account opening in 40 people / 90 days."
+
 # Smallest counts the committed seed must reach (the unit test plans the world and checks each).
 minimums:
   label: policy
@@ -66,6 +73,7 @@ minimums:
   false_reported_accounts: 1
   hold_requests: 1
   innocent_holder_listings: 1
+  mid_run_opened_accounts: 1
   reason: "Every check passes only on real counts above zero; these are the floors the scan had to clear."
 
 # What the scan found (seeds 1-93 planned with the pins and registry settings above; no replay).
@@ -81,7 +89,8 @@ scan:
     g3_complaints_on_one_account: 6
     g3_victims: 6
     g3_spread_days: 16.2
-    false_reported_accounts: 3
+    false_reported_accounts: 2
     hold_requests: 5
     innocent_holder_listings: 1
+    mid_run_opened_accounts: 2
   reason: "The scan stopped after eight seeds passed every floor; seed 65 has the widest margins of the first four."

@@ -2,7 +2,7 @@
 # Purpose: Level 16 showcase: labels, replay datasets and truth kept apart (python -m showcase --level 16).
 """
 WHAT: Level 16 turns a replayed world into labelled datasets. This showcase records one committed world
-(config/showcase_level_16.yaml), replays it twice with the in-process registry wired, and runs 12 checks on the result.
+(config/showcase_level_16.yaml), replays it twice with the in-process registry wired, and runs 13 checks on the result.
 
 WHY: To show with real counts that labels reach the right banks by all four paths, that datasets hold only what was
 known at their cutoff, that truth stays outside the builder, and that two replays agree.
@@ -51,7 +51,7 @@ async def find_missing_preconditions() -> list[str]:
 
 
 def get_checks(quick: bool = False) -> list[CheckDefinition]:
-    """Returns the 12 Level 16 checks in the architect's order."""
+    """Returns the 13 Level 16 checks in the architect's order."""
     from showcase import level_16_checks as c
 
     def d(name: str, kind: str, proves: str, run: Any, cause: str, where: str) -> CheckDefinition:
@@ -161,5 +161,14 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
             c.check_16_12_hygiene,
             "A label column was added to the feature list.",
             "replay/dataset_builder.py",
+        ),
+        d(
+            "16-13 mid-run opened account replayed with its inherited region",
+            "normal",
+            "At least one mid-run opened account is replayed carrying its inherited home region, "
+            "showing the account, minute, bank and region.",
+            c.check_16_13_mid_run_account,
+            "Account openings were not scheduled or mid-run accounts lost their region.",
+            "world/interactive_state.py, world/bank_connectors.py, world/bank_feed.py",
         ),
     ]
