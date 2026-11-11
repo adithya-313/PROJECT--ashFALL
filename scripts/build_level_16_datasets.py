@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import orjson
 import redis
@@ -32,6 +33,7 @@ from replay.pipeline import feed_with_labels
 from replay.runner import IST, ReplayDropContext, run_replay
 from showcase.framework import get_code_version
 from showcase.isolation import get_showcase_database_url
+from world import interactive_state as ist
 from world.bank_connectors import MockBankConnectors, load_bank_modes
 from world.bank_feed import resolve_bank_id
 from world.bank_feed_config import load_bank_feed_config
@@ -179,6 +181,35 @@ def summarize_labels_by_source_and_via(dataset: Dataset) -> dict[str, int]:
     return summary
 
 
+class DynamicAccountBankMap(dict[str, str]):
+    """
+    Mapping of account id to bank id that initializes with starting ledger accounts
+    and dynamically resolves mid-run opened accounts from the simulation runner state.
+    """
+
+    def __init__(self, initial: dict[str, str], feed_cfg: Any) -> None:
+        super().__init__(initial)
+        self.feed_cfg = feed_cfg
+        self.active_state: Any = None
+
+    def __contains__(self, key: object) -> bool:
+        if super().__contains__(key):
+            return True
+        if self.active_state is not None and key in self.active_state.bank_map:
+            b_id = resolve_bank_id(self.active_state.bank_map[str(key)], self.feed_cfg)
+            self[str(key)] = b_id
+            return True
+        return False
+
+    def __getitem__(self, key: str) -> str:
+        if not super().__contains__(key):
+            if self.active_state is not None and key in self.active_state.bank_map:
+                b_id = resolve_bank_id(self.active_state.bank_map[key], self.feed_cfg)
+                self[key] = b_id
+                return b_id
+        return super().__getitem__(key)
+
+
 def record_world_for_spec(
     spec: WorldSpec,
     preset_name: str,
@@ -202,24 +233,34 @@ def record_world_for_spec(
         for acc in ledger.accounts:
             account_bank_map[acc] = b_id
 
+    dyn_map = DynamicAccountBankMap(account_bank_map, feed_cfg)
+
     connectors = MockBankConnectors(
         transports={b: RejectingTransport() for b in bank_modes},
         modes=bank_modes,
-        account_bank_map=account_bank_map,
+        account_bank_map=dyn_map,
         clock_start=prepared.plan.clock.start_date,
         feed_config=feed_cfg,
         decision_timeout_seconds=5.0,
         loop=loop,
     )
 
-    recorded = record_sampled_world_for_replay(
-        spec=spec,
-        preset_name=preset_name,
-        gang_configs=None,
-        sampler_cfg=sampler_cfg,
-        code_version=code_version,
-        connectors=connectors,
-    )
+    orig_start = ist.start_runner_state
+
+    def custom_start(w: Any) -> Any:
+        st = orig_start(w)
+        dyn_map.active_state = st
+        return st
+
+    with patch("world.interactive_runner.start_runner_state", side_effect=custom_start):
+        recorded = record_sampled_world_for_replay(
+            spec=spec,
+            preset_name=preset_name,
+            gang_configs=None,
+            sampler_cfg=sampler_cfg,
+            code_version=code_version,
+            connectors=connectors,
+        )
     return recorded
 
 
