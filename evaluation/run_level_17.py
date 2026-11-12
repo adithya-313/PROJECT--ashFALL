@@ -20,12 +20,14 @@ import argparse
 import hashlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 import orjson
 
 from core.config_validator import load_yaml
+from core.event_clock import IST
 from decisions.anomaly_config import load_anomaly_detector_config
 from decisions.anomaly_detector import TrainedAnomalyDetector, train_anomaly_detector
 from decisions.rules_config import RulesConfig, load_rules_config, with_thresholds
@@ -62,6 +64,7 @@ __all__ = [
     "reported_accounts",
     "run_evaluation",
     "run_key",
+    "snapshot_time_by_account_day",
     "summarise_worlds",
     "tune_on_validation",
     "write_result",
@@ -369,6 +372,38 @@ def _world_inflation_factor(base_rate: Mapping[str, Any], run_id: str) -> float:
     return float(factor)
 
 
+def snapshot_time_by_account_day(
+    day_rows: Sequence[Mapping[str, Any]],
+) -> dict[tuple[str, date], datetime]:
+    """
+    WHAT: Maps each account-day row to the timezone-aware snapshot_time it was scored from.
+
+    WHY: The detection flag time must be the moment the account was actually seen, so the metric
+    layer needs the snapshot time of the very row that produced each scored account-day.
+
+    Args:
+        day_rows: Rows already reduced by one_row_per_account_day.
+
+    Returns:
+        (account id, IST date) -> snapshot_time of that row.
+
+    Raises:
+        ValueError: If a row lacks an account id, a datetime snapshot_time, or a timezone.
+    """
+    snapshot_times: dict[tuple[str, date], datetime] = {}
+    for row in day_rows:
+        account_id = row.get("account_id")
+        if not isinstance(account_id, str) or not account_id:
+            raise ValueError("Snapshot rows require a non-empty string 'account_id'")
+        moment = row.get("snapshot_time")
+        if not isinstance(moment, datetime):
+            raise ValueError("Snapshot rows require a datetime 'snapshot_time'")
+        if moment.tzinfo is None:
+            raise ValueError("snapshot_time must be timezone-aware so its IST date is unambiguous")
+        snapshot_times[(account_id, moment.astimezone(IST).date())] = moment
+    return snapshot_times
+
+
 def evaluate_worlds(
     window: str,
     datasets: Sequence[tuple[Path, Dataset]],
@@ -417,6 +452,7 @@ def evaluate_worlds(
             world_snapshots = [row for row in snapshot_rows if row["world_id"] == world_id]
             day_rows = one_row_per_account_day(world_snapshots)
             scored = score_account_days(day_rows, tuned.rules_config, detector)
+            snapshot_times = snapshot_time_by_account_day(day_rows)
 
             truth_store = load_truth(truth_root, run_id)
             first_credit = first_illicit_credit(world_payments, truth_store.story_of)
@@ -434,6 +470,7 @@ def evaluate_worlds(
                     truth_store.persona_of,
                     settings.persona_weights,
                     settings.default_persona_weight,
+                    snapshot_times,
                     first_credit,
                     reported,
                 )

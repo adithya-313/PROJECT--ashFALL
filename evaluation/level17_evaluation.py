@@ -9,11 +9,10 @@ callables, and nothing here reads files or a database.
 """
 
 from collections.abc import Callable, Mapping, Sequence
-from datetime import date, datetime, time
+from datetime import date, datetime
 from math import ceil
 from typing import Any
 
-from core.event_clock import IST
 from decisions.rules_config import RulesConfig
 from evaluation.level17_scoring import (
     MULE_ROLES,
@@ -144,31 +143,42 @@ def first_illicit_credit(
 def first_flag_times(
     daily_escalations: Mapping[date, Sequence[str]],
     scored: Sequence[ScoredDay],
+    snapshot_time_by_account_day: Mapping[tuple[str, date], datetime],
 ) -> dict[str, datetime]:
     """
-    WHAT: Returns each escalated account's first escalation day, anchored at midnight IST.
+    WHAT: Returns each escalated account's first escalation time, taken from that day's snapshot.
 
-    WHY: Detection speed needs a flag timestamp. ScoredDay keeps only the IST calendar day, so the
-    day is anchored at 00:00 IST and documented here rather than inventing a finer time.
+    WHY: Detection speed is measured from the first illicit credit to the moment the account was
+    actually seen, so the flag time is the snapshot_time of the escalated account-day, not the
+    start of its calendar day.
 
     Args:
         daily_escalations: IST date -> account ids escalated that day.
         scored: Scored account-days; every escalated account-day must appear in it.
+        snapshot_time_by_account_day: (account id, IST date) -> timezone-aware snapshot_time of
+            the snapshot row that produced that scored account-day.
 
     Returns:
-        account id -> midnight IST of its first escalated day.
+        account id -> snapshot_time of its first escalated account-day.
 
     Raises:
-        ValueError: If an escalated account-day has no scored row.
+        ValueError: If an escalated account-day has no scored row, no snapshot time, or a
+            timezone-naive snapshot time.
     """
     scored_keys = {(scored_day.account_id, scored_day.day) for scored_day in scored}
     first_flag: dict[str, datetime] = {}
     for day in sorted(daily_escalations):
         for account_id in daily_escalations[day]:
-            if (account_id, day) not in scored_keys:
+            key = (account_id, day)
+            if key not in scored_keys:
                 raise ValueError(f"Escalated day {day} for account {account_id} has no scored row")
+            moment = snapshot_time_by_account_day.get(key)
+            if moment is None:
+                raise ValueError(f"Escalated day {day} for account {account_id} has no snapshot time")
+            if moment.tzinfo is None:
+                raise ValueError(f"Snapshot time for {account_id} on {day} must be timezone-aware")
             if account_id not in first_flag:
-                first_flag[account_id] = datetime.combine(day, time.min, tzinfo=IST)
+                first_flag[account_id] = moment
     return first_flag
 
 
@@ -201,6 +211,7 @@ def evaluate_world(
     persona_of: Callable[[str], str],
     weights: dict[str, int],
     default_weight: int,
+    snapshot_time_by_account_day: Mapping[tuple[str, date], datetime],
     first_credit: Mapping[str, datetime],
     reported: set[str],
 ) -> dict[str, Any]:
@@ -220,6 +231,8 @@ def evaluate_world(
         persona_of: Callable returning an account's persona label.
         weights: Persona label to harm weight.
         default_weight: Harm weight for personas not in weights.
+        snapshot_time_by_account_day: (account id, IST date) -> snapshot_time of that account-day,
+            used as the detection flag time.
         first_credit: Mule account -> first illicit credit time.
         reported: Accounts already reported to the national registry.
 
@@ -256,7 +269,7 @@ def evaluate_world(
     flagged = set(restricted)
 
     daily_capacity = max(1, ceil(len({scored_day.account_id for scored_day in scored}) * capacity_pct / 100.0))
-    first_flag = first_flag_times(escalations, scored)
+    first_flag = first_flag_times(escalations, scored, snapshot_time_by_account_day)
 
     return {
         "recall_at_capacity": recall_at_capacity(escalations, mules),

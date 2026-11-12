@@ -14,6 +14,7 @@ from core.event_clock import IST
 from decisions.rules_config import load_rules_config, with_thresholds
 from evaluation.level17_evaluation import (
     evaluate_world,
+    first_flag_times,
     first_illicit_credit,
     require_tuned,
 )
@@ -132,6 +133,12 @@ def test_evaluate_world_reports_hand_computed_metrics_for_every_scorer(scorer: s
         "mule_a": datetime(2025, 1, 1, 0, 0, tzinfo=IST),
         "mule_b": datetime(2025, 1, 2, 0, 0, tzinfo=IST),
     }
+    snapshot_times = {
+        (scored_day.account_id, scored_day.day): datetime(
+            scored_day.day.year, scored_day.day.month, scored_day.day.day, 21, 0, tzinfo=IST
+        )
+        for scored_day in scored
+    }
 
     result = evaluate_world(
         scored=scored,
@@ -142,6 +149,7 @@ def test_evaluate_world_reports_hand_computed_metrics_for_every_scorer(scorer: s
         persona_of=lambda account_id: "person",
         weights={"person": 1},
         default_weight=1,
+        snapshot_time_by_account_day=snapshot_times,
         first_credit=first_credit,
         reported=set(),
     )
@@ -151,3 +159,22 @@ def test_evaluate_world_reports_hand_computed_metrics_for_every_scorer(scorer: s
     assert result["yield_rate"]["reweighted"] == pytest.approx(1.0 / 3.0)
     assert result["genuine_harm"]["restricted_accounts"] == 1
     assert result["hidden_mule_recall_by_depth"] == {1: 1.0, 2: 0.0}
+
+
+def test_first_flag_times_uses_the_snapshot_time_of_the_escalated_day() -> None:
+    """
+    A credit at 10:00 and an escalation whose snapshot is 21:00 give 11.0 hours; a flag anchored
+    at midnight would give 0 hours and fail the final assertion.
+    """
+    credit = datetime(2025, 1, 1, 10, 0, tzinfo=IST)
+    snapshot = datetime(2025, 1, 1, 21, 0, tzinfo=IST)
+
+    first_flag = first_flag_times(
+        {DAY_ONE: ["mule_a"]},
+        _two_day_world(),
+        {("mule_a", DAY_ONE): snapshot},
+    )
+
+    assert first_flag == {"mule_a": snapshot}
+    hours = (first_flag["mule_a"] - credit).total_seconds() / 3600.0
+    assert hours == 11.0
