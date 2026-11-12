@@ -16,10 +16,43 @@ returns an explicit zero or None result instead of crashing the evaluator, and e
 documents that result.
 """
 
+import statistics
 from collections.abc import Callable
 from datetime import date, datetime
+from math import floor
 
-import numpy as np
+
+def percentile_linear(sorted_values: list[float], fraction: float) -> float:
+    """
+    WHAT: Percentile of an already sorted list, interpolated linearly between closest ranks.
+
+    WHY: This module must run with the standard library only, because the app environment does
+    not pin numpy and importing it would change the numpy version seen by the rest of the app.
+    The interpolation matches numpy's default "linear" method, so metric values stay the same
+    as when this module used numpy.percentile.
+
+    Args:
+        sorted_values: Values in ascending order. The caller is responsible for sorting them.
+        fraction: Percentile expressed as a fraction in [0.0, 1.0], for example 0.9 for p90.
+
+    Returns:
+        The value at position fraction * (n - 1). When the position falls between two ranks,
+        the lower value is raised by the fractional part times the gap to the next value; the
+        final value is used once the position reaches the last rank.
+
+    Errors:
+        Raises ValueError when sorted_values is empty or fraction lies outside [0.0, 1.0].
+    """
+    if not 0.0 <= fraction <= 1.0:
+        raise ValueError("percentile_linear requires fraction within [0.0, 1.0]")
+    if not sorted_values:
+        raise ValueError("percentile_linear requires at least one value")
+    position = fraction * (len(sorted_values) - 1)
+    lower_index = floor(position)
+    upper_index = min(lower_index + 1, len(sorted_values) - 1)
+    lower_value = sorted_values[lower_index]
+    upper_value = sorted_values[upper_index]
+    return lower_value + (position - lower_index) * (upper_value - lower_value)
 
 
 def recall_at_capacity(daily_escalations: dict[date, list[str]], mule_accounts: set[str]) -> float:
@@ -226,8 +259,8 @@ def time_to_detection(
         A dict with:
         - ``median``: median hours from credit to flag over detected mules, or None when no
           mule was detected.
-        - ``p90``: 90th percentile hours (numpy linear interpolation) over detected mules, or
-          None when no mule was detected.
+        - ``p90``: 90th percentile hours (linear interpolation via percentile_linear) over
+          detected mules, or None when no mule was detected.
         - ``detected_count``: mules present in first_flag.
         - ``undetected_count``: mules absent from first_flag.
         A flag that precedes the first illicit credit counts as 0 hours: the account was flagged
@@ -251,8 +284,8 @@ def time_to_detection(
             "undetected_count": undetected_count,
         }
     return {
-        "median": float(np.percentile(detection_hours, 50, method="linear")),
-        "p90": float(np.percentile(detection_hours, 90, method="linear")),
+        "median": statistics.median(detection_hours),
+        "p90": percentile_linear(sorted(detection_hours), 0.90),
         "detected_count": len(detection_hours),
         "undetected_count": undetected_count,
     }
@@ -305,9 +338,10 @@ def summarise_across_worlds(values: list[float], min_worlds: int) -> dict[str, f
         min_worlds: Minimum number of worlds required before p10 and p90 are reported.
 
     Returns:
-        A dict with ``world_count`` and ``median`` (numpy linear interpolation) always.
-        When world_count >= min_worlds it also carries ``p10`` and ``p90`` (numpy linear
-        interpolation); otherwise it carries ``"spread": "not enough worlds"``.
+        A dict with ``world_count`` and ``median`` (standard-library statistics.median) always.
+        When world_count >= min_worlds it also carries ``p10`` and ``p90`` (linear
+        interpolation via percentile_linear); otherwise it carries
+        ``"spread": "not enough worlds"``.
 
     Errors:
         Raises ValueError when values is empty, because a median over no worlds is undefined.
@@ -316,11 +350,12 @@ def summarise_across_worlds(values: list[float], min_worlds: int) -> dict[str, f
         raise ValueError("summarise_across_worlds requires at least one world value")
     summary: dict[str, float | int | str] = {
         "world_count": len(values),
-        "median": float(np.percentile(values, 50, method="linear")),
+        "median": statistics.median(values),
     }
     if len(values) >= min_worlds:
-        summary["p10"] = float(np.percentile(values, 10, method="linear"))
-        summary["p90"] = float(np.percentile(values, 90, method="linear"))
+        sorted_values = sorted(values)
+        summary["p10"] = percentile_linear(sorted_values, 0.10)
+        summary["p90"] = percentile_linear(sorted_values, 0.90)
     else:
         summary["spread"] = "not enough worlds"
     return summary

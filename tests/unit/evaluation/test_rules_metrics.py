@@ -15,6 +15,7 @@ from evaluation.rules_metrics import (
     analyst_load,
     genuine_harm,
     hidden_mule_recall_by_depth,
+    percentile_linear,
     recall_at_capacity,
     summarise_across_worlds,
     time_to_detection,
@@ -24,6 +25,33 @@ from evaluation.rules_metrics import (
 FIRST_DAY = date(2025, 1, 1)
 SECOND_DAY = date(2025, 1, 2)
 NOT_RUN = {"status": "not run", "reason": "needs liens/warnings from later levels"}
+
+
+def test_percentile_linear_single_value_is_that_value() -> None:
+    """A one-value list returns that value for any fraction inside the range."""
+    assert percentile_linear([5.0], 0.9) == 5.0
+
+
+def test_percentile_linear_interpolates_between_two_values() -> None:
+    """Two values at fraction 0.5 interpolate to the midpoint: 1.0 + 0.5 * 1.0 = 1.5."""
+    assert percentile_linear([1.0, 2.0], 0.5) == 1.5
+
+
+def test_percentile_linear_at_fraction_one_returns_last_value() -> None:
+    """Fraction 1.0 selects the final rank, so the last value is returned."""
+    assert percentile_linear([1.0, 4.0, 9.0], 1.0) == 9.0
+
+
+def test_percentile_linear_rejects_empty_list() -> None:
+    """A percentile over no values is undefined and raises ValueError."""
+    with pytest.raises(ValueError):
+        percentile_linear([], 0.5)
+
+
+def test_percentile_linear_rejects_fraction_above_one() -> None:
+    """A fraction outside [0.0, 1.0] raises ValueError."""
+    with pytest.raises(ValueError):
+        percentile_linear([1.0, 2.0], 1.5)
 
 
 def test_recall_at_capacity_counts_a_mule_once_across_days() -> None:
