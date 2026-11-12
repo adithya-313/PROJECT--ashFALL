@@ -52,6 +52,7 @@ class TrainedAnomalyDetector:
         feature_names: Tuple of canonical input feature names.
         column_names: Tuple of matrix column names including missing indicators.
         missing_features: Tuple of feature names that required a missingness indicator during training.
+        all_missing_features: Tuple of feature names that were None across all early training rows.
         medians: Mapping of feature names to their training imputation medians.
         training_row_count: Number of early unlabelled snapshot rows used to fit the model.
         training_rows_sha256: Cryptographic SHA-256 digest of training rows.
@@ -63,6 +64,7 @@ class TrainedAnomalyDetector:
     feature_names: tuple[str, ...]
     column_names: tuple[str, ...]
     missing_features: tuple[str, ...]
+    all_missing_features: tuple[str, ...]
     medians: dict[str, float]
     training_row_count: int
     training_rows_sha256: str
@@ -228,6 +230,7 @@ def train_anomaly_detector(
 
     # Compute imputation medians strictly from kept rows
     medians: dict[str, float] = {}
+    all_missing_features_list: list[str] = []
     for feat in feature_names:
         present_values: list[float] = []
         for r in kept_rows:
@@ -243,8 +246,12 @@ def train_anomaly_detector(
         if present_values:
             medians[feat] = float(np.median(present_values))
         else:
-            # Fallback for features that are entirely None across early rows
+            # When a feature has no value in ANY kept row, its median is 0.0.
+            # WHY: The __missing column is always 1 for it across all rows, so the 0.0 carries no signal.
             medians[feat] = 0.0
+            all_missing_features_list.append(feat)
+
+    all_missing_features = tuple(all_missing_features_list)
 
     missing_features = tuple(
         f for f in feature_names if any(r.get(f) is None for r in kept_rows)
@@ -272,6 +279,7 @@ def train_anomaly_detector(
         feature_names=tuple(feature_names),
         column_names=tuple(column_names),
         missing_features=missing_features,
+        all_missing_features=all_missing_features,
         medians=medians,
         training_row_count=len(kept_rows),
         training_rows_sha256=training_digest,
@@ -346,6 +354,7 @@ def save_detector(detector: TrainedAnomalyDetector, directory: Path | str) -> No
         "feature_column_list": list(detector.column_names),
         "feature_names": list(detector.feature_names),
         "missing_features": list(detector.missing_features),
+        "all_missing_features": list(detector.all_missing_features),
         "medians": detector.medians,
         "training_row_count": detector.training_row_count,
         "training_rows_sha256": detector.training_rows_sha256,
@@ -406,6 +415,9 @@ def load_detector(directory: Path | str) -> TrainedAnomalyDetector:
             f"expected {expected_model_sha256}, got {actual_model_sha256}"
         )
 
+    if "all_missing_features" not in manifest_data:
+        raise ValueError(f"Manifest file in {target_dir} missing 'all_missing_features' key.")
+
     model = joblib.load(model_path)
 
     return TrainedAnomalyDetector(
@@ -413,6 +425,7 @@ def load_detector(directory: Path | str) -> TrainedAnomalyDetector:
         feature_names=tuple(manifest_data["feature_names"]),
         column_names=tuple(manifest_data["feature_column_list"]),
         missing_features=tuple(manifest_data["missing_features"]),
+        all_missing_features=tuple(manifest_data["all_missing_features"]),
         medians={k: float(v) for k, v in manifest_data["medians"].items()},
         training_row_count=int(manifest_data["training_row_count"]),
         training_rows_sha256=str(manifest_data["training_rows_sha256"]),

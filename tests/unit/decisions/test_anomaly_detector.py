@@ -4,6 +4,7 @@ scoring, determinism, early-window filtering, missingness indicators, and crypto
 """
 
 import inspect
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -203,4 +204,47 @@ def test_train_anomaly_detector_has_no_label_parameters() -> None:
     sig = inspect.signature(train_anomaly_detector)
     for param_name in sig.parameters:
         assert "label" not in param_name.lower(), f"Forbidden parameter '{param_name}' contains 'label'"
+
+
+def test_load_detector_raises_on_sklearn_version_mismatch(tmp_path: Path) -> None:
+    """Verifies that load_detector raises ValueError mentioning version on mismatch."""
+    config = load_anomaly_detector_config()
+    features = list(input_feature_names(config))
+    rows = [_make_synth_row(i, features, T0 + timedelta(days=1)) for i in range(10)]
+
+    detector = train_anomaly_detector(rows, split="training", world_start_by_world=WORLD_STARTS, config=config)
+    save_dir = tmp_path / "detector_version_test"
+    save_detector(detector, save_dir)
+
+    manifest_file = save_dir / "manifest.json"
+    manifest_data = json.loads(manifest_file.read_text(encoding="utf-8"))
+    manifest_data["sklearn_version"] = "0.0.0"
+    manifest_file.write_text(json.dumps(manifest_data, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="0.0.0"):
+        load_detector(save_dir)
+
+
+def test_all_missing_features_recorded_when_feature_is_none_in_every_row(tmp_path: Path) -> None:
+    """Verifies that features with None in every kept row are recorded in all_missing_features."""
+    config = load_anomaly_detector_config()
+    features = list(input_feature_names(config))
+    target_feature = features[0]
+
+    rows = [
+        _make_synth_row(i, features, T0 + timedelta(days=1), none_features={target_feature})
+        for i in range(10)
+    ]
+
+    detector = train_anomaly_detector(rows, split="training", world_start_by_world=WORLD_STARTS, config=config)
+    assert target_feature in detector.all_missing_features
+    assert detector.medians[target_feature] == 0.0
+
+    print(f"\n[EVIDENCE] all_missing_features count in commit 1 test: {len(detector.all_missing_features)}")
+
+    # Verify roundtrip through save and load
+    save_dir = tmp_path / "all_missing_export"
+    save_detector(detector, save_dir)
+    loaded = load_detector(save_dir)
+    assert loaded.all_missing_features == detector.all_missing_features
 
