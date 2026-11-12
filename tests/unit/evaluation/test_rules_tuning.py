@@ -156,6 +156,21 @@ def test_tune_anomaly_threshold_picks_0199() -> None:
     assert result.meets_budget is True
 
 
+# (g) The committed grid carries exactly the planned candidate values.
+def test_committed_grid_has_the_planned_candidates() -> None:
+    """Each threshold's candidate list equals the planned grid, with no extra or missing value."""
+    tuning = load_tuning_config()
+
+    assert tuning.candidates == {
+        "large_credit_amount_paise": (500000, 1000000, 2000000, 5000000),
+        "outflow_share": (0.7, 0.8, 0.9),
+        "time_window_seconds": (1800, 3600, 7200),
+        "new_account_age_days": (14, 30, 60),
+        "payer_count": (10, 20, 40),
+        "near_zero_balance_paise": (5000, 10000, 50000),
+    }
+
+
 # (f) A candidate grid that dropped the untuned_start value is rejected at load time.
 def test_load_tuning_config_rejects_grid_without_untuned_start(tmp_path: Path) -> None:
     """payer_count candidates [20, 40] omit the baseline value 10 and must raise."""

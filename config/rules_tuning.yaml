@@ -14,19 +14,19 @@ allowed_tuning_splits:
 
 thresholds:
   large_credit_amount_paise:
-    candidates: [500000, 1000000, 2000000]
+    candidates: [500000, 1000000, 2000000, 5000000]
 
   outflow_share:
-    candidates: [0.6, 0.8, 0.9]
+    candidates: [0.7, 0.8, 0.9]
 
   time_window_seconds:
     candidates: [1800, 3600, 7200]
 
   new_account_age_days:
-    candidates: [15, 30, 60]
+    candidates: [14, 30, 60]
 
   payer_count:
-    candidates: [5, 10, 20, 40]
+    candidates: [10, 20, 40]
 
   near_zero_balance_paise:
-    candidates: [5000, 10000, 20000]
+    candidates: [5000, 10000, 50000]
