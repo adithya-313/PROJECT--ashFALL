@@ -89,3 +89,6 @@ pyarrow==23.0.1
 
 # Level 17b: isolation forest for the cold-start anomaly detector; same pin as requirements-ml.txt
 scikit-learn==1.8.0
+
+# Level 17c: evaluation/ and decisions/ import numpy directly; same pin as requirements-ml.txt
+numpy==1.26.4
