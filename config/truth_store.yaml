@@ -144,5 +144,5 @@ truth_store:
   # ---------------------------------------------------------------------
   allowed_reader_folders: [evaluation, showcase, tests]
   allowed_reader_folders_reason: "Only evaluation routines, showcase demonstrations, and unit tests are permitted to inspect hidden truth"
-  ashfall_packages: [api, serving, features, models, online_learning, agent, core, replay]
+  ashfall_packages: [api, serving, features, models, online_learning, agent, core, replay, decisions]
   ashfall_packages_reason: "Production operational packages must never access or depend on ground-truth fraud simulation labels"
