@@ -220,11 +220,15 @@ def _write_single_truth_file(run_dir: Path, filename: str, rows: list[dict[str, 
     return {"row_count": len(rows), "sha256": sha256}
 
 
-def write_truth_files(output: InteractiveWorldOutput, truth_root: Path) -> Path:
+def write_truth_files(
+    output: InteractiveWorldOutput,
+    truth_root: Path,
+    write_personas: bool | None = None,
+) -> Path:
     """
-    WHAT: Writes roles.jsonl, device_control.jsonl, payment_stories.jsonl, gangs.jsonl, and manifest.json into
-    a run-specific directory under truth_root using output.result.truth. Refuses to overwrite non-empty
-    existing run directories.
+    WHAT: Writes roles.jsonl, device_control.jsonl, payment_stories.jsonl, gangs.jsonl, optionally personas.jsonl,
+    and manifest.json into a run-specific directory under truth_root using output.result.truth. Refuses to overwrite
+    non-empty existing run directories.
 
     WHY: Ground rule 15 requires truth to be stored as discrete, append-only file artifacts with cryptographic
     digests. Refusing non-empty folders prevents accidental corruption of previous evaluation records.
@@ -232,13 +236,15 @@ def write_truth_files(output: InteractiveWorldOutput, truth_root: Path) -> Path:
     Args:
         output: InteractiveWorldOutput holding world state, run results, and run identity.
         truth_root: Filesystem Path representing the root folder under which run truth folders are placed.
+        write_personas: Optional boolean switch. If None, loaded from truth_store config (personas_file_enabled).
+            When True, writes personas.jsonl for genuine harm persona evaluation.
 
     Returns:
         Filesystem Path to the created run truth directory containing the truth artifacts.
 
     Raises:
         FileExistsError: If truth_root / run_id already exists and contains any files or directories.
-        ValueError: If roles and gang truth records disagree.
+        ValueError: If roles and gang truth records disagree or personas config is invalid.
 
     Example:
         # run_dir = write_truth_files(output, Path("runs/truth"))
@@ -257,6 +263,18 @@ def write_truth_files(output: InteractiveWorldOutput, truth_root: Path) -> Path:
     truth_config = load_yaml(REPO_ROOT / "config" / "truth_store.yaml")["truth_store"]
     file_names = truth_config["file_names"]
 
+    # Resolve whether personas truth file should be generated
+    if write_personas is None:
+        raw_personas_enabled = truth_config["personas_file_enabled"]
+        if isinstance(raw_personas_enabled, dict):
+            should_write_personas = bool(raw_personas_enabled["value"])
+        elif isinstance(raw_personas_enabled, bool):
+            should_write_personas = raw_personas_enabled
+        else:
+            raise ValueError(f"Invalid personas_file_enabled setting: {raw_personas_enabled!r}")
+    else:
+        should_write_personas = write_personas
+
     # Validate that every gang_id in roles has a gangs row, and every gangs row has at least one role.
     roles_gang_ids = {role["gang_id"] for role in rows_by_file["roles"]}
     gangs_gang_ids = {gang["gang_id"] for gang in rows_by_file["gangs"]}
@@ -272,6 +290,30 @@ def write_truth_files(output: InteractiveWorldOutput, truth_root: Path) -> Path:
         file_names[key]: _write_single_truth_file(run_dir, file_names[key], rows_by_file[key])
         for key in ("roles", "device_control", "payment_stories", "gangs")
     }
+
+    # If personas writing is enabled, generate personas.jsonl containing person and shop account personas
+    if should_write_personas:
+        persona_rows = [
+            {
+                "account_id": person.account_id,
+                "holder_type": "person",
+                "persona": person.persona_name,
+            }
+            for person in output.world.people
+        ] + [
+            {
+                "account_id": shop.account_id,
+                "holder_type": "shop",
+                "persona": f"shop:{shop.kind}",
+            }
+            for shop in output.world.shops
+        ]
+        # Guarantee deterministic ordering by account_id
+        persona_rows.sort(key=lambda r: r["account_id"])
+        personas_filename = file_names["personas"]
+        file_manifests[personas_filename] = _write_single_truth_file(
+            run_dir, personas_filename, persona_rows
+        )
 
     # 4. Write manifest.json recording simulation metadata, code version, and file checksums.
     manifest = {
