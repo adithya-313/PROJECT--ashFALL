@@ -76,6 +76,8 @@ REGISTRY_LABEL_SOURCE = "registry"
 
 _SCORERS: tuple[str, ...] = ("rules", "anomaly", "rules_and_anomaly")
 
+_WINDOWS: tuple[str, ...] = ("test", "stress")
+
 _HEADLINE_METRICS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("recall_at_capacity", ("recall_at_capacity",)),
     ("yield_measured", ("yield_rate", "measured")),
@@ -455,41 +457,56 @@ def _metric_value(world_result: Mapping[str, Any], path: tuple[str, ...]) -> Any
     return current
 
 
-def summarise_worlds(per_world: Mapping[str, Mapping[str, Any]], min_worlds: int) -> dict[str, dict[str, Any]]:
+def summarise_worlds(
+    per_world: Mapping[str, Mapping[str, Any]], min_worlds: int
+) -> dict[str, dict[str, dict[str, Any]]]:
     """
-    WHAT: Summarises each headline metric across worlds for each scorer.
+    WHAT: Summarises each headline metric per scorer, separately for test and stress worlds.
 
-    WHY: One world can flatter or condemn a scorer, so the median and the p10-to-p90 band are
-    reported once enough worlds exist.
+    WHY: One world can flatter or condemn a scorer, but stress worlds deliberately push extreme
+    situations; mixing them into the test median would move the number that is actually judged.
 
     Args:
-        per_world: world_id -> result block from evaluate_worlds.
+        per_world: world_id -> result block from evaluate_worlds, each carrying its split.
         min_worlds: Smallest world count for which p10 and p90 are reported.
 
     Returns:
-        scorer -> metric name -> summarise_across_worlds result. A metric with no numeric value
-        in any world (for example yield on a run that escalated nothing) is recorded as
+        window -> scorer -> metric name -> summarise_across_worlds result, for the keys "test"
+        and "stress". A window with no numeric value for a metric (for example no stress worlds,
+        or yield on a run that escalated nothing) is recorded as
         {"world_count": 0, "status": "no numeric values"} instead of a made-up number.
+
+    Raises:
+        ValueError: If a world block carries a split other than "test" or "stress".
     """
-    summaries: dict[str, dict[str, Any]] = {}
-    for scorer in _SCORERS:
-        scorer_summary: dict[str, Any] = {}
-        for metric_name, path in _HEADLINE_METRICS:
-            values: list[float] = []
-            for world in per_world.values():
-                scorers = world.get("scorers", {})
-                result = scorers.get(scorer)
-                if result is None:
-                    continue
-                value = _metric_value(result, path)
-                if value is None:
-                    continue
-                values.append(float(value))
-            if values:
-                scorer_summary[metric_name] = summarise_across_worlds(values, min_worlds)
-            else:
-                scorer_summary[metric_name] = {"world_count": 0, "status": "no numeric values"}
-        summaries[scorer] = scorer_summary
+    for world in per_world.values():
+        split = world.get("split")
+        if split not in _WINDOWS:
+            raise ValueError(f"World summaries require split 'test' or 'stress'; got {split!r}")
+
+    summaries: dict[str, dict[str, dict[str, Any]]] = {}
+    for window in _WINDOWS:
+        window_worlds = [world for world in per_world.values() if world["split"] == window]
+        window_summary: dict[str, dict[str, Any]] = {}
+        for scorer in _SCORERS:
+            scorer_summary: dict[str, Any] = {}
+            for metric_name, path in _HEADLINE_METRICS:
+                values: list[float] = []
+                for world in window_worlds:
+                    scorers = world.get("scorers", {})
+                    result = scorers.get(scorer)
+                    if result is None:
+                        continue
+                    value = _metric_value(result, path)
+                    if value is None:
+                        continue
+                    values.append(float(value))
+                if values:
+                    scorer_summary[metric_name] = summarise_across_worlds(values, min_worlds)
+                else:
+                    scorer_summary[metric_name] = {"world_count": 0, "status": "no numeric values"}
+            window_summary[scorer] = scorer_summary
+        summaries[window] = window_summary
     return summaries
 
 

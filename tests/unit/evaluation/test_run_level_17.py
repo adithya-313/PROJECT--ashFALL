@@ -18,6 +18,7 @@ from evaluation.run_level_17 import (
     load_split_datasets,
     read_world_base_rate,
     run_key,
+    summarise_worlds,
     write_result,
 )
 
@@ -74,6 +75,39 @@ def test_run_key_is_stable_for_the_same_dataset_ids_in_any_order() -> None:
     assert first == second
     assert len(first) == 12
     assert first != run_key(["test-1", "stress-1", "test-3"])
+
+
+def _world(split: str, recall: float) -> dict[str, Any]:
+    """Builds a world block with every headline metric, all three scorers, and the given recall."""
+    scorers = {
+        scorer: {
+            "recall_at_capacity": recall,
+            "yield_rate": {"measured": recall, "reweighted": recall},
+            "genuine_harm": {"genuine_restriction_rate": 0.0},
+            "time_to_detection": {"median": 1.0},
+        }
+        for scorer in ("rules", "anomaly", "rules_and_anomaly")
+    }
+    return {"run_id": f"run_{split}", "split": split, "scorers": scorers}
+
+
+def test_summarise_worlds_keeps_stress_out_of_the_test_median() -> None:
+    """
+    Two test worlds give a median recall of 0.5; adding a perfect stress world leaves that median
+    at 0.5 (mixing them would give 0.75) and reports the stress window on its own.
+    """
+    test_worlds = {"test_a": _world("test", 0.25), "test_b": _world("test", 0.75)}
+    stress_world = _world("stress", 1.0)
+
+    test_only = summarise_worlds(test_worlds, min_worlds=2)
+    with_stress = summarise_worlds({**test_worlds, "stress_a": stress_world}, min_worlds=2)
+
+    assert with_stress["test"] == test_only["test"]
+    assert with_stress["test"]["rules"]["recall_at_capacity"]["median"] == 0.5
+    assert with_stress["test"]["rules"]["recall_at_capacity"]["world_count"] == 2
+    assert with_stress["stress"]["rules"]["recall_at_capacity"]["median"] == 1.0
+    assert with_stress["stress"]["rules"]["recall_at_capacity"]["world_count"] == 1
+    assert test_only["stress"]["rules"]["recall_at_capacity"] == {"world_count": 0, "status": "no numeric values"}
 
 
 def test_write_result_marks_simulated_and_records_no_timestamp(tmp_path: Path) -> None:
