@@ -10,6 +10,14 @@ from decisions.anomaly_config import (
     load_anomaly_detector_config,
     load_cold_start_config,
 )
+from decisions.anomaly_detector import (
+    TrainedAnomalyDetector,
+    build_feature_matrix,
+    load_detector,
+    save_detector,
+    score_rows,
+    train_anomaly_detector,
+)
 from decisions.rules_config import (
     Rule,
     RuleCondition,
@@ -31,11 +39,17 @@ __all__ = [
     "RuleThreshold",
     "RulesConfig",
     "RulesDecision",
+    "TrainedAnomalyDetector",
     "all_thresholds_tuned",
+    "build_feature_matrix",
     "evaluate_rules",
     "input_feature_names",
     "load_anomaly_detector_config",
     "load_cold_start_config",
+    "load_detector",
     "load_rules_config",
+    "save_detector",
+    "score_rows",
+    "train_anomaly_detector",
 ]
 
