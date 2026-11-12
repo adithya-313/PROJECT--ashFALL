@@ -11,13 +11,19 @@ from decisions.rules_config import (
     all_thresholds_tuned,
     load_rules_config,
 )
+from decisions.rules_engine import (
+    RulesDecision,
+    evaluate_rules,
+)
 
 __all__ = [
     "Rule",
     "RuleCondition",
     "RuleThreshold",
     "RulesConfig",
+    "RulesDecision",
     "all_thresholds_tuned",
+    "evaluate_rules",
     "load_rules_config",
 ]
 
