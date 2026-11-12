@@ -157,6 +157,59 @@ def test_ground_sets_and_genuine_harm_use_per_day_truth_roles() -> None:
     assert is_mule("acct_1", FIRST_DAY) is False
 
 
+def test_ground_sets_count_collectors_and_cash_outs_without_a_depth() -> None:
+    """Collectors and cash-outs are mules for recall but carry no depth; truth requires depth None."""
+    scored = [
+        ScoredDay(
+            bank_id="bank_a",
+            account_id="collector_1",
+            day=FIRST_DAY,
+            rules_score=0,
+            rules_fired=(),
+            anomaly_score=None,
+            role="collector",
+            depth=None,
+        ),
+        ScoredDay(
+            bank_id="bank_a",
+            account_id="cash_out_1",
+            day=FIRST_DAY,
+            rules_score=0,
+            rules_fired=(),
+            anomaly_score=None,
+            role="cash_out",
+            depth=None,
+        ),
+    ]
+
+    mules, genuine_active, depth_of, is_mule = ground_sets(scored)
+
+    assert mules == {"collector_1", "cash_out_1"}
+    assert genuine_active == set()
+    assert depth_of == {}
+    assert is_mule("collector_1", FIRST_DAY) is True
+    assert is_mule("cash_out_1", FIRST_DAY) is True
+
+
+def test_ground_sets_refuse_a_mule_day_without_a_depth() -> None:
+    """A role-"mule" day with depth None still raises, because its depth would be unknown."""
+    scored = [
+        ScoredDay(
+            bank_id="bank_a",
+            account_id="mule_1",
+            day=FIRST_DAY,
+            rules_score=0,
+            rules_fired=(),
+            anomaly_score=None,
+            role="mule",
+            depth=None,
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="Mule account mule_1 has no truth_depth"):
+        ground_sets(scored)
+
+
 # (d) Capacity is ceil(active * pct / 100), floored at one escalation per bank-day.
 def test_daily_escalations_apply_bank_day_capacity() -> None:
     """1000 active accounts at 0.25% allow 3 escalations; 10 allow the floor of 1."""
