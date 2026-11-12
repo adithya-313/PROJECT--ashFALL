@@ -1,6 +1,9 @@
 """
-Unit tests for decisions.rules_engine: boundary checks, un-evaluable handling, and score calculations.
+Unit tests for decisions.rules_engine: boundary checks, un-evaluable handling,
+score calculations, constructed mule patterns, and look-alike behaviors.
 """
+
+import pytest
 
 from decisions.rules_config import load_rules_config
 from decisions.rules_engine import evaluate_rules
@@ -17,6 +20,13 @@ def _all_quiet_features() -> dict[str, float | int | None]:
         "current_balance_paise": 5000000,
         "new_device_r5": 0,
     }
+
+
+def _build_features(overrides: dict[str, float | int | None]) -> dict[str, float | int | None]:
+    """Helper constructing a full feature dictionary from all-quiet defaults plus overrides."""
+    feats = _all_quiet_features()
+    feats.update(overrides)
+    return feats
 
 
 def test_rule_3_boundary_payer_count() -> None:
@@ -112,3 +122,109 @@ def test_score_equals_len_fired() -> None:
     assert d1.score == 1
     assert d1.score == len(d1.fired)
 
+
+CONSTRUCTED_CASES: list[tuple[str, dict[str, float | int | None], set[str]]] = [
+    (
+        "mule_fast_pass_through",
+        {
+            "largest_credit_paise_24h": 1500000,
+            "pass_through_ratio_24h": 0.9,
+            "median_credit_to_debit_seconds_7d": 600,
+            "current_balance_paise": 5000,  # Balance near zero (<= 10000) after outflow
+        },
+        {"rule_1", "rule_4"},
+    ),
+    (
+        "mule_new_account_large_credit",
+        {
+            "largest_credit_paise_24h": 1500000,
+            "account_age_days": 15,
+        },
+        {"rule_2"},
+    ),
+    (
+        "mule_fan_in",
+        {
+            "distinct_payers_24h": 25,
+            "largest_credit_paise_24h": 200000,
+        },
+        {"rule_3"},
+    ),
+    (
+        "mule_new_device_money_moved",
+        {
+            "new_device_r5": 1,
+            "pass_through_ratio_24h": 0.85,
+            "largest_credit_paise_24h": 500000,
+        },
+        {"rule_5"},
+    ),
+    (
+        "tea_stall",
+        {
+            "distinct_payers_24h": 40,
+            "largest_credit_paise_24h": 30000,  # Largest ₹300
+            "pass_through_ratio_24h": 0.3,
+            "current_balance_paise": 2000000,  # Healthy balance
+        },
+        {"rule_3"},  # KNOWN FALSE TRIGGER — asserted so it is counted, never hidden
+    ),
+    (
+        "gig_worker",
+        {
+            "largest_credit_paise_24h": 200000,  # Largest ₹2,000 (< ₹10,000 threshold)
+            "pass_through_ratio_24h": 0.95,
+            "current_balance_paise": 5000,  # Balance ₹50
+            "distinct_payers_24h": 3,
+        },
+        set(),
+    ),
+    (
+        "os_update_only",
+        {
+            "new_device_r5": 0,
+            "pass_through_ratio_24h": 0.9,
+            "largest_credit_paise_24h": 0,
+        },
+        set(),
+    ),
+    (
+        "genuine_phone_change_no_money",
+        {
+            "new_device_r5": 1,
+            "pass_through_ratio_24h": 0.1,
+            "largest_credit_paise_24h": 0,
+        },
+        set(),
+    ),
+    (
+        "family_pooling",
+        {
+            "distinct_payers_24h": 4,
+            "largest_credit_paise_24h": 800000,  # Largest ₹8,000 (< ₹10,000 threshold)
+            "pass_through_ratio_24h": 0.2,
+        },
+        set(),
+    ),
+]
+
+
+@pytest.mark.parametrize("case_name,overrides,expected_fired", CONSTRUCTED_CASES)
+def test_constructed_cases_and_lookalikes(
+    case_name: str,
+    overrides: dict[str, float | int | None],
+    expected_fired: set[str],
+) -> None:
+    """
+    Verifies that constructed mule patterns and benign look-alike scenarios
+    trigger exactly their expected set of baseline heuristic rules.
+    """
+    config = load_rules_config()
+    features = _build_features(overrides)
+    decision = evaluate_rules(features, config)
+    fired_ids = {r[0] for r in decision.fired}
+
+    # Print for report reproduction as requested by Level 17a instructions
+    print(f"\n{case_name} -> {fired_ids}")
+
+    assert fired_ids == expected_fired
