@@ -249,8 +249,9 @@ def test_compute_account_features_returns_exact_inflow_outflow_balance_names() -
         expected_names.update(f.name for f in feature_set.features_by_group(g))
 
     assert set(features.keys()) == expected_names
-    # Total count = 7 (inflow) + 9 (outflow) + 3 (balance_pattern) = 19
-    assert len(features) == 19
+    # Total count = 8 (inflow) + 9 (outflow) + 3 (balance_pattern) = 20
+    # (inflow is 8 since largest_credit_paise_24h was added in Level 17a, ruling Q1)
+    assert len(features) == 20
 
 
 def test_schema_drift_check_raises_value_error(monkeypatch: Any) -> None:

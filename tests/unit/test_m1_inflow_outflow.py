@@ -25,6 +25,7 @@ from features.m1_inflow_outflow import (
     compute_cash_out_channels_7d,
     compute_distinct_payers,
     compute_first_time_payer_share_24h,
+    compute_largest_credit_paise,
     compute_median_credit_to_debit_seconds_7d,
     compute_other_bank_outflow_share_7d,
     compute_pass_through_ratio,
@@ -506,3 +507,36 @@ def test_compute_account_features_unknown_group_raises() -> None:
             arrival_cutoff=T0,
             groups=("unsupported_group",),
         )
+
+
+def test_largest_credit_paise_normal_and_exclusions() -> None:
+    """
+    Verifies compute_largest_credit_paise computes largest of several credits,
+    ignores failed credits and debits, excludes credits at exactly 24h+1s outside window,
+    and returns 0 when no credits exist.
+    """
+    decision_time = T0
+
+    # 1. No credits -> 0
+    assert compute_largest_credit_paise([], decision_time, 86400) == 0
+
+    # 2. Credits inside 24h window
+    c1 = _make_payment_side("c1", "credit", 100000, decision_time - timedelta(hours=2))
+    c2 = _make_payment_side("c2", "credit", 500000, decision_time - timedelta(hours=5))
+    c3 = _make_payment_side("c3", "credit", 250000, decision_time - timedelta(hours=10))
+
+    # 3. Failed credit with larger amount: must NOT be counted
+    c_fail = _make_payment_side("c_fail", "credit", 9000000, decision_time - timedelta(hours=1), status="failed")
+
+    # 4. Debit with larger amount: must NOT be counted
+    d_debit = _make_payment_side("d_debit", "debit", 8000000, decision_time - timedelta(hours=3))
+
+    # 5. Credit at exactly 24h + 1s outside the window (cutoff = decision_time - 24h)
+    c_outside = _make_payment_side("c_out", "credit", 7000000, decision_time - timedelta(seconds=86401))
+
+    # Check largest of several credits
+    records = [c1, c2, c3, c_fail, d_debit, c_outside]
+    assert compute_largest_credit_paise(records, decision_time, 86400) == 500000
+
+    # Only failed credits and debits -> 0
+    assert compute_largest_credit_paise([c_fail, d_debit], decision_time, 86400) == 0

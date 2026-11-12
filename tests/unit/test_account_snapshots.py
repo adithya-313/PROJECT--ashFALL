@@ -32,7 +32,9 @@ def test_account_feature_names_equals_canonical_minus_payment_level_in_order() -
     names = account_feature_names()
     assert names == expected_names
     assert len(names) == len(canonical_feature_names()) - len(payment_names)
-    assert len(names) == 44
+    # 45 = 53 M1 features minus 8 payment_level features;
+    # largest_credit_paise_24h added in Level 17a (amendment ruling Q1).
+    assert len(names) == 45
 
     expected_sha = hashlib.sha256("\n".join(names).encode("utf-8")).hexdigest()
     assert account_feature_names_sha256() == expected_sha
