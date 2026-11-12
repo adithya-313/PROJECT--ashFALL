@@ -18,6 +18,12 @@ from decisions.anomaly_detector import (
     score_rows,
     train_anomaly_detector,
 )
+from decisions.cold_start import (
+    ReviewCandidate,
+    choose_scorer,
+    count_positive_labels,
+    rank_for_review,
+)
 from decisions.rules_config import (
     Rule,
     RuleCondition,
@@ -34,6 +40,7 @@ from decisions.rules_engine import (
 __all__ = [
     "AnomalyDetectorConfig",
     "ColdStartConfig",
+    "ReviewCandidate",
     "Rule",
     "RuleCondition",
     "RuleThreshold",
@@ -42,12 +49,15 @@ __all__ = [
     "TrainedAnomalyDetector",
     "all_thresholds_tuned",
     "build_feature_matrix",
+    "choose_scorer",
+    "count_positive_labels",
     "evaluate_rules",
     "input_feature_names",
     "load_anomaly_detector_config",
     "load_cold_start_config",
     "load_detector",
     "load_rules_config",
+    "rank_for_review",
     "save_detector",
     "score_rows",
     "train_anomaly_detector",
