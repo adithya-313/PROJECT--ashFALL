@@ -28,6 +28,7 @@ __all__ = [
     "RulesConfig",
     "all_thresholds_tuned",
     "load_rules_config",
+    "with_thresholds",
 ]
 
 ALLOWED_OPERATORS: frozenset[str] = frozenset({">=", "<=", "=="})
@@ -147,6 +148,98 @@ def all_thresholds_tuned(config: RulesConfig | None = None) -> bool:
             return False
 
     return True
+
+
+def with_thresholds(config: RulesConfig, new_values: dict[str, float | int], source: str) -> RulesConfig:
+    """
+    PURPOSE:
+        Returns a new rules configuration with selected thresholds replaced by tuned values.
+
+    INPUTS:
+        config: Existing validated RulesConfig to copy.
+        new_values: Mapping of threshold key to its tuned numeric value.
+        source: Description recorded as derived_from on every replaced threshold.
+
+    KEY LOGIC:
+        1. Rejects any threshold key that does not exist in config.
+        2. Copies every threshold; replaced ones take the new value and status 'tuned'.
+        3. Thresholds absent from new_values keep their old value, source and status.
+        4. Rebuilds rule conditions that reference a replaced threshold, because evaluate_rules
+           reads the resolved threshold_value stored on each condition rather than the threshold map.
+
+    RETURNS:
+        RulesConfig: A new configuration; the original config and its thresholds are untouched.
+
+    SIDE EFFECTS / ERRORS:
+        Raises ValueError if new_values names an unknown threshold.
+
+    CONSTRAINTS:
+        Pure function: no I/O and no mutation of the input configuration.
+    """
+    for key in new_values:
+        if key not in config.thresholds:
+            raise ValueError(f"Unknown threshold key '{key}' in with_thresholds")
+
+    new_thresholds: dict[str, RuleThreshold] = {}
+    for key, threshold in config.thresholds.items():
+        if key in new_values:
+            new_thresholds[key] = RuleThreshold(
+                key=threshold.key,
+                value=new_values[key],
+                label=threshold.label,
+                reason=threshold.reason,
+                derived_from=source,
+                status="tuned",
+            )
+        else:
+            new_thresholds[key] = threshold
+
+    new_rules: tuple[Rule, ...] = tuple(_rule_with_new_threshold_values(rule, new_values) for rule in config.rules)
+
+    return RulesConfig(thresholds=new_thresholds, rules=new_rules)
+
+
+def _rule_with_new_threshold_values(rule: Rule, new_values: dict[str, float | int]) -> Rule:
+    """
+    PURPOSE:
+        Copies a rule, updating the resolved threshold_value of conditions that reference a replaced threshold.
+
+    INPUTS:
+        rule: Rule whose conditions may reference threshold keys.
+        new_values: Mapping of threshold key to its new numeric value.
+
+    RETURNS:
+        Rule: The original rule when no condition references a replaced threshold, otherwise a new Rule
+        whose referencing conditions carry the new threshold_value.
+
+    CONSTRAINTS:
+        A condition with a literal threshold (threshold_key None) and a rule with no affected
+        conditions are returned unchanged.
+    """
+    rebuilt_conditions: list[RuleCondition] = []
+    changed = False
+    for condition in rule.conditions:
+        if condition.threshold_key is not None and condition.threshold_key in new_values:
+            rebuilt_conditions.append(
+                RuleCondition(
+                    feature=condition.feature,
+                    op=condition.op,
+                    threshold=condition.threshold,
+                    threshold_key=condition.threshold_key,
+                    threshold_value=new_values[condition.threshold_key],
+                )
+            )
+            changed = True
+        else:
+            rebuilt_conditions.append(condition)
+    if not changed:
+        return rule
+    return Rule(
+        id=rule.id,
+        reason_code=rule.reason_code,
+        plain_english=rule.plain_english,
+        conditions=tuple(rebuilt_conditions),
+    )
 
 
 def load_rules_config(path: Path | str | None = None) -> RulesConfig:
