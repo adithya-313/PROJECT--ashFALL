@@ -10,7 +10,9 @@ import yaml
 from decisions.rules_config import (
     all_thresholds_tuned,
     load_rules_config,
+    with_thresholds,
 )
+from decisions.rules_engine import evaluate_rules
 
 
 def _write_yaml(path: Path, data: dict) -> Path:
@@ -197,3 +199,65 @@ def test_validation_threshold_missing_metadata_raises(tmp_path: Path, missing_fi
     with pytest.raises(ValueError, match=f"missing or empty required field '{missing_field}'"):
         load_rules_config(cfg_file)
 
+
+
+def test_with_thresholds_returns_new_config_and_leaves_original_untouched() -> None:
+    """Verifies every threshold is replaced in a new config while the original keeps its values."""
+    original = load_rules_config()
+    original_state = {key: (t.value, t.status, t.derived_from) for key, t in original.thresholds.items()}
+    tuned_values = {
+        "large_credit_amount_paise": 500000,
+        "outflow_share": 0.7,
+        "time_window_seconds": 1800,
+        "new_account_age_days": 14,
+        "payer_count": 20,
+        "near_zero_balance_paise": 5000,
+    }
+
+    tuned = with_thresholds(original, tuned_values, "test source")
+
+    assert tuned is not original
+    assert all_thresholds_tuned(tuned) is True
+    for key, value in tuned_values.items():
+        assert tuned.thresholds[key].value == value
+        assert tuned.thresholds[key].status == "tuned"
+        assert tuned.thresholds[key].derived_from == "test source"
+    original_after = {key: (t.value, t.status, t.derived_from) for key, t in original.thresholds.items()}
+    assert original_after == original_state
+
+
+def test_with_thresholds_five_replaced_is_not_fully_tuned() -> None:
+    """Verifies that leaving one threshold untuned keeps all_thresholds_tuned False."""
+    config = load_rules_config()
+    five_keys = [
+        "large_credit_amount_paise",
+        "outflow_share",
+        "time_window_seconds",
+        "new_account_age_days",
+        "payer_count",
+    ]
+    tuned = with_thresholds(config, {key: config.thresholds[key].value for key in five_keys}, "test source")
+
+    assert tuned.thresholds["near_zero_balance_paise"].status == "untuned_start"
+    assert all_thresholds_tuned(tuned) is False
+
+
+def test_with_thresholds_rejects_unknown_threshold_name() -> None:
+    """Verifies ValueError when a replacement names a threshold the config does not have."""
+    with pytest.raises(ValueError, match="Unknown threshold key 'not_a_threshold'"):
+        with_thresholds(load_rules_config(), {"not_a_threshold": 1}, "test source")
+
+
+def test_evaluate_rules_uses_tuned_payer_count() -> None:
+    """Verifies a case that fires rule_3 at the default payer_count and not at the tuned one."""
+    features = {"distinct_payers_24h": 15}
+    default_config = load_rules_config()
+    tuned_config = with_thresholds(default_config, {"payer_count": 20}, "test source")
+
+    default_decision = evaluate_rules(features, default_config)
+    tuned_decision = evaluate_rules(features, tuned_config)
+
+    assert ("rule_3", "RB3_MANY_PAYERS_ONE_DAY") in default_decision.fired
+    assert default_decision.score == 1
+    assert tuned_decision.fired == ()
+    assert tuned_decision.score == 0

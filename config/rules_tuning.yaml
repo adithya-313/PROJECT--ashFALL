@@ -1,0 +1,32 @@
+# =====================================================================
+# RULES TUNING: candidate grids searched on validation worlds only
+# =====================================================================
+# Every candidate list contains the baseline untuned_start value, so the
+# search always includes the configuration the rules shipped with. The grid
+# is never searched on test or stress worlds: those stay unseen.
+
+label: policy
+reason: "Each candidate is a policy grid point around the untuned_start value; the grid is searched on validation worlds only."
+derived_from: "policy grid around untuned_start"
+
+allowed_tuning_splits:
+  - validation
+
+thresholds:
+  large_credit_amount_paise:
+    candidates: [500000, 1000000, 2000000, 5000000]
+
+  outflow_share:
+    candidates: [0.7, 0.8, 0.9]
+
+  time_window_seconds:
+    candidates: [1800, 3600, 7200]
+
+  new_account_age_days:
+    candidates: [14, 30, 60]
+
+  payer_count:
+    candidates: [10, 20, 40]
+
+  near_zero_balance_paise:
+    candidates: [5000, 10000, 50000]
