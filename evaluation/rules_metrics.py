@@ -10,8 +10,10 @@ TERM: IST calendar date: the calendar day (in India Standard Time) that an event
 represented as a datetime.date. Callers convert timestamps to IST before calling these functions.
 
 Every function here is pure: it performs no file or truth access and does not mutate its inputs.
-Invalid, missing, or undefined inputs raise a plain ValueError instead of returning a silent
-fallback, so a broken caller is never reported as a number.
+Invalid inputs, such as a zero capacity or an empty mule set, raise a plain ValueError rather than
+guessing a value. An honest empty observation set, such as nothing escalated or nothing detected,
+returns an explicit zero or None result instead of crashing the evaluator, and each function
+documents that result.
 """
 
 from collections.abc import Callable
@@ -33,7 +35,9 @@ def recall_at_capacity(daily_escalations: dict[date, list[str]], mule_accounts: 
         mule_accounts: Account ids that truth marks as mules.
 
     Returns:
-        Fraction of mule accounts escalated on at least one day, in [0.0, 1.0].
+        Fraction of mule accounts escalated on at least one day, in [0.0, 1.0]. With no days
+        of escalations the result is 0.0, because an honest "nothing was escalated" run must
+        still be scored rather than crash the evaluator.
 
     Errors:
         Raises ValueError when mule_accounts is empty, because recall against no mules is
@@ -205,7 +209,7 @@ def hidden_mule_recall_by_depth(
 def time_to_detection(
     first_illicit_credit: dict[str, datetime],
     first_flag: dict[str, datetime],
-) -> dict[str, float | int]:
+) -> dict[str, float | int | None]:
     """
     WHAT: Median, p90, and detected/undetected counts for the hours between a mule's first
     illicit credit and its first detection flag.
@@ -220,19 +224,17 @@ def time_to_detection(
 
     Returns:
         A dict with:
-        - ``median``: median hours from credit to flag over detected mules.
-        - ``p90``: 90th percentile hours (numpy linear interpolation) over detected mules.
+        - ``median``: median hours from credit to flag over detected mules, or None when no
+          mule was detected.
+        - ``p90``: 90th percentile hours (numpy linear interpolation) over detected mules, or
+          None when no mule was detected.
         - ``detected_count``: mules present in first_flag.
         - ``undetected_count``: mules absent from first_flag.
         A flag that precedes the first illicit credit counts as 0 hours: the account was flagged
         before it started acting as a mule, so no waiting time is attributed to detection.
-
-    Errors:
-        Raises ValueError when first_illicit_credit is empty or when no mule has a flag, because
-        percentiles over no detected mules are undefined.
+        With no mules at all the result is two None percentiles and zero counts, because an
+        honest "nothing happened" run must still be scored rather than crash the evaluator.
     """
-    if not first_illicit_credit:
-        raise ValueError("time_to_detection requires at least one illicit credit")
     detection_hours: list[float] = []
     undetected_count = 0
     for account_id, credit_time in first_illicit_credit.items():
@@ -242,7 +244,12 @@ def time_to_detection(
         hours = (first_flag[account_id] - credit_time).total_seconds() / 3600.0
         detection_hours.append(max(hours, 0.0))
     if not detection_hours:
-        raise ValueError("time_to_detection requires at least one detected mule")
+        return {
+            "median": None,
+            "p90": None,
+            "detected_count": 0,
+            "undetected_count": undetected_count,
+        }
     return {
         "median": float(np.percentile(detection_hours, 50, method="linear")),
         "p90": float(np.percentile(detection_hours, 90, method="linear")),
@@ -264,16 +271,18 @@ def analyst_load(daily_escalations: dict[date, list[str]], capacity: int) -> dic
 
     Returns:
         ``{"mean": total escalations / number of days, "max": largest daily count,
-        "mean_share_of_capacity": mean / capacity}``.
+        "mean_share_of_capacity": mean / capacity}``. With no days the result is
+        ``{"mean": 0.0, "max": 0, "mean_share_of_capacity": 0.0}``, because an honest
+        "nothing was escalated" run must still be scored rather than crash the evaluator.
 
     Errors:
-        Raises ValueError when capacity is not strictly positive or when daily_escalations is
-        empty, because neither share of capacity nor a mean over no days is defined.
+        Raises ValueError when capacity is not strictly positive, because the share of capacity
+        is undefined without a capacity.
     """
     if capacity <= 0:
         raise ValueError("analyst_load requires capacity > 0")
     if not daily_escalations:
-        raise ValueError("analyst_load requires at least one day of escalations")
+        return {"mean": 0.0, "max": 0, "mean_share_of_capacity": 0.0}
     daily_counts = [len(accounts) for accounts in daily_escalations.values()]
     mean = sum(daily_counts) / len(daily_counts)
     return {

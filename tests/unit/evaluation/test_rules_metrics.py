@@ -40,6 +40,11 @@ def test_recall_at_capacity_with_no_escalations_is_zero() -> None:
     assert recall_at_capacity({FIRST_DAY: []}, {"m1"}) == 0.0
 
 
+def test_recall_at_capacity_with_no_days_is_zero() -> None:
+    """No days of escalations at all still scores recall 0.0 for a non-empty mule set."""
+    assert recall_at_capacity({}, {"m1"}) == 0.0
+
+
 def test_recall_at_capacity_rejects_empty_mule_set() -> None:
     """Recall against no mules is undefined and raises ValueError."""
     with pytest.raises(ValueError):
@@ -178,6 +183,16 @@ def test_time_to_detection_flag_before_credit_counts_as_zero_hours() -> None:
     assert result["undetected_count"] == 0
 
 
+def test_time_to_detection_without_any_detection_has_no_percentiles() -> None:
+    """Two mules and no flags leave the percentiles None and count both as undetected."""
+    first_illicit_credit = {
+        "m1": datetime(2025, 1, 1, 8, 0),
+        "m2": datetime(2025, 1, 1, 9, 0),
+    }
+    result = time_to_detection(first_illicit_credit, {})
+    assert result == {"median": None, "p90": None, "detected_count": 0, "undetected_count": 2}
+
+
 def test_analyst_load_mean_max_and_capacity_share() -> None:
     """Two days with 2 and 1 cases at capacity 2 give mean 1.5, max 2, share 0.75."""
     daily_escalations = {
@@ -194,10 +209,10 @@ def test_analyst_load_rejects_zero_capacity() -> None:
         analyst_load({FIRST_DAY: ["a1"]}, 0)
 
 
-def test_analyst_load_rejects_no_days() -> None:
-    """A mean over no days is undefined and raises ValueError."""
-    with pytest.raises(ValueError):
-        analyst_load({}, 2)
+def test_analyst_load_without_days_reports_zero_load() -> None:
+    """No days of escalations report zero mean, zero peak, and zero capacity share."""
+    result = analyst_load({}, 2)
+    assert result == {"mean": 0.0, "max": 0, "mean_share_of_capacity": 0.0}
 
 
 def test_summarise_across_worlds_reports_percentiles_with_enough_worlds() -> None:
