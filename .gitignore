@@ -50,6 +50,7 @@ models/**/*.ubj
 # Generated showcase reports: they change on every run and contain timestamps.
 reports/showcase/
 reports/latency/
+reports/level_17_evaluation/
 
 # Local world simulation run output folders
 runs/

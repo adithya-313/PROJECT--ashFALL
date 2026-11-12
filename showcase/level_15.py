@@ -699,7 +699,7 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
         CheckDefinition(
             name="15c-2 a logged vector recomputed from history matches exactly",
             kind="consistency",
-            proves="Replaying Postgres history into a scratch Redis reproduces all 52 logged values exactly.",
+            proves="Replaying Postgres history into a scratch Redis reproduces all 53 logged values exactly.",
             run=check_15c_2_recompute_exact_match,
             likely_cause="Replay applied a different set of events than live ingestion or ignored the arrival cutoff.",
             where_to_look="features/feature_replay.py",
