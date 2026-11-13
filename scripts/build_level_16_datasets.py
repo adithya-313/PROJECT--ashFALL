@@ -35,17 +35,20 @@ from showcase.isolation import get_showcase_database_url
 from world.bank_connectors import MockBankConnectors, load_bank_modes
 from world.bank_feed import resolve_bank_id
 from world.bank_feed_config import load_bank_feed_config
+from world.base_rate import base_rate_for
 from world.config_reader import read_world_ranges
 from world.interactive_runner import prepare_world
 from world.replay_recording import RecordedWorld, record_sampled_world_for_replay
 from world.replay_workspace import ReplayWorkspace, workspace_redis_client
-from world.sampled_world import fast_settings_for, pinned_configs
+from world.sampled_world import fast_settings_for, pinned_configs, resolve_sampled_world_gangs
+from world.truth_writer import truth_root_from_env, write_truth_files
 from world.world_sampler import WorldSpec, load_sampler_config, sample_worlds
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 DEFAULT_CONFIG_PATH = REPO_ROOT / "config" / "datasets.yaml"
 DEFAULT_DATASETS_ROOT = REPO_ROOT / "data" / "datasets"
+DEFAULT_WORLD_CARDS_ROOT = REPO_ROOT / "runs" / "world_cards"
 
 
 def host_side_redis_url() -> str:
@@ -108,6 +111,64 @@ def plan_datasets(
         )
         plan[split] = specs
     return plan
+
+
+def _gang_mix_fits(spec: WorldSpec, preset_name: str, sampler_cfg: dict[str, Any]) -> bool:
+    """
+    WHAT: Reports whether one planned world can generate its gang mix from the preset's people.
+    WHY: This follows record_sampled_world_for_replay up to resolve_sampled_world_gangs, so the
+    scan refuses exactly the worlds the real recording would refuse.
+    Raises:
+        ValueError: Propagated unless the mix is refused for too few eligible people.
+    """
+    configs = pinned_configs(spec, sampler_cfg)
+    try:
+        resolve_sampled_world_gangs(spec, preset_name, None, sampler_cfg, configs)
+    except ValueError as error:
+        if "eligible people" in str(error):
+            return False
+        raise
+    return True
+
+
+def find_fitting_sampler_seed(
+    splits: Sequence[str],
+    preset_name: str,
+    start_seed: int,
+    max_tries: int,
+) -> int:
+    """
+    WHAT: Returns the first sampler seed whose planned worlds in the given splits all have enough
+    eligible people for the gang mix they need.
+    WHY: generate_gang_mix refuses a world whose mix needs more mules and victims than the sizing
+    preset provides, and the build would otherwise discover that after hours of recording. Trying
+    seeds up front turns the refusal into a check that takes seconds.
+    Args:
+        splits: Split names to check, for example ("training", "validation", "test").
+        preset_name: World sizing preset the build will use.
+        start_seed: First sampler seed to try.
+        max_tries: Number of consecutive seeds to try, starting at start_seed.
+    Returns:
+        The first seed in [start_seed, start_seed + max_tries) where every planned world fits.
+    Raises:
+        ValueError: If a split is unknown, or if no seed fits within max_tries.
+    """
+    counts = load_datasets_config()
+    sampler_cfg = load_sampler_config()
+    world_ranges = read_world_ranges()
+
+    unknown_splits = [split for split in splits if split not in counts]
+    if unknown_splits:
+        raise ValueError(f"Unknown split(s) {', '.join(unknown_splits)}; expected some of {sorted(counts)}")
+
+    splits_text = ", ".join(splits)
+    for seed in range(start_seed, start_seed + max_tries):
+        plan = plan_datasets(counts, sampler_cfg, world_ranges, sampler_seed=seed)
+        if all(_gang_mix_fits(spec, preset_name, sampler_cfg) for split in splits for spec in plan[split]):
+            return seed
+    raise ValueError(
+        f"no sampler seed from {start_seed} fits {splits_text} within {max_tries} tries"
+    )
 
 
 def derive_dataset_cutoff(recorded_worlds: Sequence[RecordedWorld]) -> datetime:
@@ -262,6 +323,38 @@ async def replay_and_extract(
     return holder[0]
 
 
+def save_evaluation_inputs(
+    recorded: RecordedWorld,
+    truth_root: Path,
+    world_cards_root: Path,
+) -> dict[str, Any]:
+    """
+    WHAT: Saves the hidden truth files and the world-card base rate for one recorded world so the
+    Level 17 evaluation can join them later.
+    WHY: The evaluation needs truth and the fraud inflation factor per run, written next to the
+    datasets but outside them, so operational tables never carry hidden answers. The truth writer
+    already refuses to overwrite a non-empty run folder, which makes a second save for the same
+    run fail instead of silently replacing evidence.
+    """
+    run_id = recorded.output.result.run_id
+    truth_dir = write_truth_files(recorded.output, truth_root, write_personas=True)
+
+    base_rate = base_rate_for(recorded.output)
+    base_rate_dir = world_cards_root / run_id
+    base_rate_dir.mkdir(parents=True, exist_ok=True)
+    base_rate_path = base_rate_dir / "base_rate.json"
+    base_rate_path.write_bytes(
+        orjson.dumps(base_rate, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2) + b"\n"
+    )
+
+    return {
+        "run_id": run_id,
+        "truth_dir": str(truth_dir),
+        "base_rate_path": str(base_rate_path),
+        "fraud_inflation_factor": base_rate["fraud_inflation_factor"],
+    }
+
+
 async def build_split_dataset(
     split: str,
     specs: list[WorldSpec],
@@ -271,14 +364,24 @@ async def build_split_dataset(
     datasets_root: Path = DEFAULT_DATASETS_ROOT,
     admin_pg: str | None = None,
     base_redis_url: str | None = None,
+    write_evaluation_inputs: bool = False,
+    truth_root: Path | None = None,
+    world_cards_root: Path = DEFAULT_WORLD_CARDS_ROOT,
 ) -> tuple[Dataset, Path, list[Path]]:
     """
     WHAT: Records, replays, extracts, builds and writes one dataset for a given split across its specs.
     WHY: Implements single-dataset-per-split building and automatic prior version supersession.
+    When write_evaluation_inputs is on, each recorded world also saves its truth and base rate.
     """
     loop = asyncio.get_running_loop()
     db_url = admin_pg if admin_pg is not None else get_showcase_database_url()
     redis_url = base_redis_url if base_redis_url is not None else host_side_redis_url()
+
+    evaluation_truth_root: Path | None = None
+    if write_evaluation_inputs:
+        if truth_root is None:
+            raise ValueError("write_evaluation_inputs requires a truth_root path")
+        evaluation_truth_root = truth_root
 
     recorded_worlds: list[RecordedWorld] = []
     extracts: list[WorldExtract] = []
@@ -286,6 +389,8 @@ async def build_split_dataset(
     for spec in specs:
         rec = record_world_for_spec(spec, preset_name, sampler_cfg, code_version, loop)
         recorded_worlds.append(rec)
+        if evaluation_truth_root is not None:
+            save_evaluation_inputs(rec, evaluation_truth_root, world_cards_root)
         extract = await replay_and_extract(rec, db_url, redis_url)
         extracts.append(extract)
 
@@ -302,6 +407,8 @@ async def build_all_level_16_datasets(
     preset_name: str = "tiny",
     datasets_root: Path = DEFAULT_DATASETS_ROOT,
     sampler_seed: int = 1,
+    write_evaluation_inputs: bool = False,
+    world_cards_root: Path = DEFAULT_WORLD_CARDS_ROOT,
 ) -> dict[str, dict[str, Any]]:
     """
     WHAT: Builds datasets for all configured splits sequentially, returning execution metrics per split.
@@ -311,6 +418,10 @@ async def build_all_level_16_datasets(
     sampler_cfg = load_sampler_config()
     world_ranges = read_world_ranges()
     code_ver = get_code_version()
+
+    truth_root: Path | None = None
+    if write_evaluation_inputs:
+        truth_root = truth_root_from_env(os.environ)
 
     target_splits = list(splits) if splits is not None else list(counts.keys())
     plan = plan_datasets(counts, sampler_cfg, world_ranges, sampler_seed=sampler_seed)
@@ -326,6 +437,9 @@ async def build_all_level_16_datasets(
             sampler_cfg=sampler_cfg,
             code_version=code_ver,
             datasets_root=datasets_root,
+            write_evaluation_inputs=write_evaluation_inputs,
+            truth_root=truth_root,
+            world_cards_root=world_cards_root,
         )
         elapsed = time.monotonic() - t0
         label_summary = summarize_labels_by_source_and_via(dataset)
@@ -381,14 +495,52 @@ def main() -> None:
         default=str(DEFAULT_DATASETS_ROOT),
         help="Datasets output root directory (default: data/datasets)",
     )
+    parser.add_argument(
+        "--write-evaluation-inputs",
+        action="store_true",
+        help="Also save hidden truth and world-card base rates for the Level 17 evaluation (default: off)",
+    )
+    parser.add_argument(
+        "--world-cards-root",
+        type=str,
+        default=str(DEFAULT_WORLD_CARDS_ROOT),
+        help="World cards root for base_rate.json files (default: runs/world_cards)",
+    )
+    parser.add_argument(
+        "--sampler-seed",
+        type=int,
+        default=1,
+        help="Master sampler seed passed to the plan and the build (default: 1)",
+    )
+    parser.add_argument(
+        "--max-seed-tries",
+        type=int,
+        # policy: a fit is expected within a few seeds; 200 bounds the scan to seconds and stops
+        # it rather than looping forever.
+        default=200,
+        help="Seeds scanned by --find-sampler-seed before giving up (default: 200)",
+    )
+    parser.add_argument(
+        "--find-sampler-seed",
+        action="store_true",
+        help="Print the first sampler seed whose planned worlds fit and exit",
+    )
     args = parser.parse_args()
 
     selected_splits = [s.strip() for s in args.splits.split(",")] if args.splits else None
+    if args.find_sampler_seed:
+        scan_splits = selected_splits if selected_splits is not None else list(load_datasets_config().keys())
+        seed = find_fitting_sampler_seed(scan_splits, args.preset, args.sampler_seed, args.max_seed_tries)
+        print(f"fitting sampler seed: {seed}")
+        return
     asyncio.run(
         build_all_level_16_datasets(
             splits=selected_splits,
             preset_name=args.preset,
             datasets_root=Path(args.root),
+            sampler_seed=args.sampler_seed,
+            write_evaluation_inputs=args.write_evaluation_inputs,
+            world_cards_root=Path(args.world_cards_root),
         )
     )
 

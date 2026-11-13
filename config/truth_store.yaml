@@ -72,8 +72,14 @@ truth_store:
     device_control: "device_control.jsonl"
     payment_stories: "payment_stories.jsonl"
     gangs: "gangs.jsonl"
+    personas: "personas.jsonl"
     manifest: "manifest.json"
   file_names_reason: "Five separate truth-v2 artifacts capturing account roles, device control spans, transaction stories, gang syndicate classifications, and a cryptographic integrity manifest."
+  personas_file_enabled:
+    value: false
+    label: policy
+    reason: "Level 17 genuine harm needs each account's persona; off by default so earlier truth output stays byte-identical"
+    derived_from: "architect ruling Q7a (Level 17)"
   # ---------------------------------------------------------------------
   # roles: the labels an account can carry inside a span
   #
@@ -144,5 +150,5 @@ truth_store:
   # ---------------------------------------------------------------------
   allowed_reader_folders: [evaluation, showcase, tests]
   allowed_reader_folders_reason: "Only evaluation routines, showcase demonstrations, and unit tests are permitted to inspect hidden truth"
-  ashfall_packages: [api, serving, features, models, online_learning, agent, core, replay]
+  ashfall_packages: [api, serving, features, models, online_learning, agent, core, replay, decisions]
   ashfall_packages_reason: "Production operational packages must never access or depend on ground-truth fraud simulation labels"

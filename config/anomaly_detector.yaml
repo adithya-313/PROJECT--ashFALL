@@ -1,0 +1,52 @@
+# =====================================================================
+# ANOMALY DETECTOR CONFIG: Isolation Forest on early unlabelled traffic
+# =====================================================================
+
+excluded_features:
+  label: policy
+  reason: "Features excluded from the anomaly detector matrix"
+  derived_from: "Level 17b specification"
+  value:
+    hops_to_confirmed_label: "built from labels; Level 17 uses no labels"
+    shared_counterparties_with_flagged_7d: "built from labels; Level 17 uses no labels"
+    hops_to_complained_account: "built from labels; Level 17 uses no labels"
+    registry_match_count: "registry listings come from complaints (labels)"
+    registry_match_age_days: "registry listings come from complaints (labels)"
+    account_type: "text category; encoding deferred (documented gap)"
+
+early_window_days:
+  value: 14
+  label: policy
+  reason: "first two weeks of a world = early unlabelled traffic"
+  derived_from: "Level 17b specification"
+
+n_estimators:
+  value: 200
+  label: policy
+  reason: "Number of base isolation trees in the ensemble"
+  derived_from: "Level 17b specification"
+
+max_samples:
+  value: "auto"
+  label: policy
+  reason: "Subsampling size per tree; auto defaults to min(256, n_samples)"
+  derived_from: "scikit-learn option"
+
+contamination:
+  value: "auto"
+  label: policy
+  reason: "we only rank by score; no fixed cut-off"
+  derived_from: "Level 17b specification"
+
+random_state:
+  value: 1717
+  label: policy
+  reason: "fixed seed so runs repeat exactly"
+  derived_from: "Level 17b specification"
+
+allowed_training_splits:
+  value: ["training"]
+  label: policy
+  reason: "Allowed dataset splits for training the anomaly detector"
+  derived_from: "Level 17b specification"
+

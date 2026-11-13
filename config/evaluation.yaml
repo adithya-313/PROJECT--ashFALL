@@ -376,6 +376,12 @@ genuine_harm:
     - Genuine shops downstream of mules that were restricted or had money pulled back.
     - Days a genuine account waits before a wrong lien is released.
     - Warnings shown to genuine payers.
+  persona_weights:
+    label: policy
+    reason: "Restricting people with little financial slack hurts more."
+    derived_from: "architect ruling Q7b, amendment A-039"
+    weights: {retiree: 2, student: 2, gig_worker: 2}
+    default_weight: 1
   reason: Harm is not only "accounts frozen". Genuine shops that sold goods to mules, and people waiting for a wrong lien to be lifted, are real harm. The fair_comparison block above stays unchanged.
 
 # ---------------------------------------------------------------------
@@ -568,5 +574,4 @@ not_decided_here:
   - success criteria for tracing
   - success criteria for least-harm actions
   - success criteria for shared intelligence
-  - weights for vulnerable personas in genuine harm
   - how long a wait for a wrong lien to be released counts as too long

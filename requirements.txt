@@ -86,3 +86,6 @@ PyYAML==6.0.3
 
 # pyarrow — columnar dataset serialization for Level 16c dataset builder
 pyarrow==23.0.1
+
+# Level 17b: isolation forest for the cold-start anomaly detector; same pin as requirements-ml.txt
+scikit-learn==1.8.0

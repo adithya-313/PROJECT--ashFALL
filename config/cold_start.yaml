@@ -1,0 +1,16 @@
+# =====================================================================
+# COLD START CONFIG: Policy routing and label counting thresholds
+# =====================================================================
+
+min_positive_labels_per_bank:
+  value: 200
+  label: policy_placeholder
+  reason: "Minimum positive fraud labels required at a bank before routing to trained ML model"
+  derived_from: "policy: no trained model exists before Level 18; Level 18 revisits with a learning curve"
+
+counted_verdict:
+  value: "fraud"
+  label: policy
+  reason: "Verdict string counted as positive fraud label in cold-start threshold check"
+  derived_from: "Level 17b specification"
+

@@ -52,29 +52,66 @@ class TruthStore:
         device_control: list[dict[str, Any]],
         payment_stories: dict[str, dict[str, Any]],
         gangs: list[dict[str, Any]] | None = None,
+        personas: dict[str, str] | None = None,
     ) -> None:
         """
-        WHAT: Stores parsed truth records, payment story lookup maps, and gang classification records.
+        WHAT: Stores parsed truth records, payment story lookup maps, gang classification records, and personas.
 
-        WHY: Enables constant-time transaction story retrieval, linear temporal span scans, and gang taxonomic queries.
+        WHY: Enables constant-time transaction story retrieval, linear temporal span scans,
+        gang taxonomic queries, and persona lookup.
 
         Args:
             roles: List of parsed role span dictionaries.
             device_control: List of parsed device control dictionaries.
             payment_stories: Mapping from payment_id to forensic story record dictionary.
             gangs: Optional list of parsed gang classification dictionaries.
+            personas: Optional mapping from account_id to persona string.
 
         Returns:
             None.
 
         Example:
-            # store = TruthStore(roles=[], device_control=[], payment_stories={}, gangs=[])
+            # store = TruthStore(roles=[], device_control=[], payment_stories={}, gangs=[], personas={})
         """
         # Store verified truth collections.
         self._roles = roles
         self._device_control = device_control
         self._payment_stories = payment_stories
         self._gangs = gangs if gangs is not None else []
+        self._has_personas = personas is not None
+        self._personas = dict(personas) if personas is not None else {}
+
+    @property
+    def has_personas(self) -> bool:
+        """
+        WHAT: Returns True if personas truth was recorded in the manifest and loaded into this store.
+
+        WHY: Allows consumers to verify whether vulnerable persona information is available before querying.
+        """
+        return self._has_personas
+
+    def persona_of(self, account_id: str) -> str:
+        """
+        WHAT: Returns the assigned persona string of the account (e.g. 'retiree', 'shop:grocery').
+        Returns 'unknown' if the account has no row in the personas truth file.
+
+        WHY: Genuine harm evaluation requires persona weights to quantify disproportionate
+        impact on vulnerable individuals.
+
+        Args:
+            account_id: Account identifier string to query.
+
+        Returns:
+            String persona name, or 'unknown' if no record exists for this account.
+
+        Raises:
+            ValueError: If personas truth was not loaded (has_personas is False).
+        """
+        if not self._has_personas:
+            raise ValueError(
+                "Personas truth was not loaded in this TruthStore (has_personas is False); cannot query persona_of."
+            )
+        return self._personas.get(account_id, "unknown")
 
     def role_at(self, account_id: str, minute: int) -> str:
         """
@@ -445,6 +482,13 @@ def load_truth(truth_root: Path, run_id: str) -> TruthStore:
     gangs_name = file_names["gangs"]
     gangs_rows = _verify_file_integrity(run_dir / gangs_name, gangs_name, files_meta[gangs_name])
 
+    # If personas.jsonl is listed in the manifest, verify and parse its records
+    personas_name = file_names["personas"]
+    personas_map: dict[str, str] | None = None
+    if personas_name in files_meta:
+        persona_rows = _verify_file_integrity(run_dir / personas_name, personas_name, files_meta[personas_name])
+        personas_map = {str(row["account_id"]): str(row["persona"]) for row in persona_rows}
+
     # 4. Index stories by payment_id and construct TruthStore.
     stories_map = {story["payment_id"]: story for story in story_rows}
     return TruthStore(
@@ -452,4 +496,5 @@ def load_truth(truth_root: Path, run_id: str) -> TruthStore:
         device_control=device_rows,
         payment_stories=stories_map,
         gangs=gangs_rows,
+        personas=personas_map,
     )

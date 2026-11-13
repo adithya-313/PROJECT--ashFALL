@@ -467,3 +467,15 @@ No model code exists yet (models start in Level 18; `world/` is simulator code).
 | What changed | Written 2026-11-01, after the work; covers Level 15b merged through 2026-10-31 (PRs #85-#91). Level 15b M1 features (pull requests #85 to #91, written into this log afterwards from git and code). (a) World and bank feed: opening dates drawn for accounts that exist at the start (`account_opening_age_days` in `config/world_ranges.yaml`), balances on payment sides, a withdrawals endpoint and `bank_withdrawals` table (migration 0009), and home regions in the bank feed. (b) The canonical M1 feature list (`data/schemas/feature_set_m1.yaml`, 52 features) with a loader that rejects drift. (c) Long-lived account summaries with closed-day reads and a 62-day horizon (`summary_horizon_days`), with lifetime keys that do not expire. (d) Feature groups: inflow and outflow, balance pattern, routine life, lifecycle, control (device, with three R5 parts, hardware change, SIM swap and app reinstall on the same phone, plus the composite `new_device_r5`) and region (same-bank payers only). (e) Labels and network: confirmed labels come from `confirmed_fraud` feedback on the receiving (credit-side) account, complaints are kept per bank, and network features are computed over this bank's own payment graph (the code cites architect decision 9b). (f) Payment-level features, and registry intelligence features in which an unknown answer stays distinct from no match (the code cites architect rules 1 to 3 and decision 9c); the mock registry can answer as of a past time for replay. (g) Showcase part b. |
 | Why | Level 15b turns the account state of 15a into the M1 feature catalog while keeping what each bank may see: only its own payers, its own devices and its own labels, with labels read by arrival time. |
 | Results exist? | No model results. Unit tests, integration tests and showcase verification only. |
+
+## A-039
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-12 |
+| Issue IDs | None |
+| Issue IDs v2 | None |
+| Files | `config/evaluation.yaml`, `docs/research/amendments.md` |
+| What changed | The weights above, written before any Level 17 results: added `persona_weights` block to `genuine_harm` in `config/evaluation.yaml` (`weights: {retiree: 2, student: 2, gig_worker: 2}`, `default_weight: 1`) and removed weights for vulnerable personas from `not_decided_here`. |
+| Why | Genuine harm needs a fixed weighting decided before results; restricting people with little financial slack hurts more. |
+| Results exist? | No |

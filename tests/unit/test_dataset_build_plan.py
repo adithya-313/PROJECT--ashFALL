@@ -4,23 +4,74 @@ Purpose: Fast unit tests for Level 16 dataset build planning, split sampling,
          prior version superseding, and cutoff calculation without running slow replays.
 """
 
+import dataclasses
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import orjson
 import pyarrow as pa
 import pytest
 
+import scripts.build_level_16_datasets as build_module
 from replay.dataset_builder import Dataset
 from replay.runner import IST
 from scripts.build_level_16_datasets import (
     derive_dataset_cutoff,
+    find_fitting_sampler_seed,
     load_datasets_config,
     plan_datasets,
     summarize_labels_by_source_and_via,
     supersede_prior_datasets,
 )
+from world.world_sampler import WorldSpec
+
+
+def _patch_seed_scan(
+    monkeypatch: pytest.MonkeyPatch,
+    fits_from: int,
+    attempted_seeds: list[int] | None = None,
+) -> None:
+    """
+    Marks each planned spec with the sampler seed that produced it and replaces the gang resolver
+    with one that refuses every seed below fits_from for too few eligible people. When
+    attempted_seeds is given, every scanned seed is appended to it once, in scan order.
+    """
+    real_plan_datasets = build_module.plan_datasets
+
+    def marked_plan_datasets(
+        datasets_cfg: dict[str, int] | None = None,
+        sampler_cfg: dict[str, Any] | None = None,
+        world_ranges: dict[str, Any] | None = None,
+        sampler_seed: int = 1,
+    ) -> dict[str, list[WorldSpec]]:
+        plan = real_plan_datasets(datasets_cfg, sampler_cfg, world_ranges, sampler_seed=sampler_seed)
+        return {
+            split: [dataclasses.replace(spec, world_id=f"{spec.world_id}-sampler-{sampler_seed}") for spec in specs]
+            for split, specs in plan.items()
+        }
+
+    def resolver(
+        spec: WorldSpec,
+        preset_name: str,
+        gang_configs: tuple[Any, ...] | None,
+        sampler_cfg: dict[str, Any],
+        configs: Any,
+    ) -> tuple[Any, ...]:
+        scan_seed = int(spec.world_id.rsplit("-", 1)[1])
+        if attempted_seeds is not None and scan_seed not in attempted_seeds:
+            attempted_seeds.append(scan_seed)
+        if scan_seed < fits_from:
+            raise ValueError(
+                f"the gang mix of {spec.world_id} needs 63 people as mules and victims, "
+                "but the world has only 60 eligible people"
+            )
+        return ()
+
+    monkeypatch.setattr(build_module, "plan_datasets", marked_plan_datasets)
+    monkeypatch.setattr(build_module, "resolve_sampled_world_gangs", resolver)
 
 
 def test_load_datasets_config_reads_expected_splits() -> None:
@@ -152,3 +203,80 @@ def test_summarize_labels_by_source_and_via() -> None:
         "registry": 1,
         "police_bulk": 1,
     }
+
+
+def test_main_defaults_the_sampler_seed_to_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A build without --sampler-seed passes seed 1, so today's datasets stay reproducible."""
+    calls: dict[str, Any] = {}
+
+    async def fake_build(**kwargs: Any) -> dict[str, Any]:
+        calls.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(build_module, "build_all_level_16_datasets", fake_build)
+    monkeypatch.setattr(sys, "argv", ["build_level_16_datasets.py"])
+
+    build_module.main()
+
+    assert calls["sampler_seed"] == 1
+
+
+def test_find_fitting_sampler_seed_skips_the_seed_that_does_not_fit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Seed 1 needs more people than the world has, so the scan returns the next seed, 2."""
+    _patch_seed_scan(monkeypatch, fits_from=2)
+
+    seed = find_fitting_sampler_seed(["training"], "tiny", start_seed=1, max_tries=5)
+
+    assert seed == 2
+
+
+def test_find_fitting_sampler_seed_propagates_other_value_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refusal that is not about eligible people is a real failure, not a seed that does not fit."""
+    _patch_seed_scan(monkeypatch, fits_from=1)
+
+    def failing_resolver(
+        spec: WorldSpec,
+        preset_name: str,
+        gang_configs: tuple[Any, ...] | None,
+        sampler_cfg: dict[str, Any],
+        configs: Any,
+    ) -> tuple[Any, ...]:
+        raise ValueError("world ranges are misconfigured")
+
+    monkeypatch.setattr(build_module, "resolve_sampled_world_gangs", failing_resolver)
+
+    with pytest.raises(ValueError, match="world ranges are misconfigured"):
+        find_fitting_sampler_seed(["training"], "tiny", start_seed=1, max_tries=3)
+
+
+def test_find_fitting_sampler_seed_refuses_when_every_try_is_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two unfitting seeds exhaust the scan and the error names the start seed, tries and split."""
+    _patch_seed_scan(monkeypatch, fits_from=100)
+
+    with pytest.raises(ValueError, match="no sampler seed from 3 fits training within 2 tries"):
+        find_fitting_sampler_seed(["training"], "tiny", start_seed=3, max_tries=2)
+
+
+def test_find_sampler_seed_cli_starts_at_the_sampler_seed_flag(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """With --sampler-seed 3 and a fit from seed 5, the CLI scans from 3 and prints exactly seed 5."""
+    attempted_seeds: list[int] = []
+    _patch_seed_scan(monkeypatch, fits_from=5, attempted_seeds=attempted_seeds)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["build_level_16_datasets.py", "--find-sampler-seed", "--sampler-seed", "3", "--splits", "training"],
+    )
+
+    build_module.main()
+
+    assert capsys.readouterr().out == "fitting sampler seed: 5\n"
+    assert attempted_seeds == [3, 4, 5]

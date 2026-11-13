@@ -53,6 +53,14 @@ features:
     empty_means: "zero"
     issue_ids: ["G1"]
 
+  - name: "largest_credit_paise_24h"
+    group: "inflow"
+    definition: "Largest amount in paise of any single successful credit in the last 24 hours."
+    bank_visible_source_records: "PaymentSideRecord (side='credit', status='success')"
+    window_or_horizon: "24h (86400s)"
+    empty_means: "zero"
+    issue_ids: ["G1"]
+
   - name: "below_threshold_credit_count_7d"
     group: "inflow"
     definition: "Count of successful credit transactions within below_threshold_band_fraction below any amount in reporting_thresholds_paise in the last 7 days."

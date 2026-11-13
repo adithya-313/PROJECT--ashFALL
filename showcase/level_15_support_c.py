@@ -6,7 +6,7 @@ WHAT: Implementation of Level 15 part c showcase checks and shared relational/Re
   15c-1 [edge]: Late-arriving event leaves previously logged decision features byte-identical,
         while a fresh computation at the advanced watermark reflects the change.
   15c-2 [consistency]: Historical replay into isolated scratch Redis reproduces the logged feature
-        row bit-for-bit (52 of 52 equal, >= 10 non-None).
+        row bit-for-bit (53 of 53 equal, >= 10 non-None).
   15c-3 [normal]: In-process decision latency and feature extraction latency benchmark against the
         pre-registered evaluation budget.
   15c-4 [negative]: Engine feature computation failure gracefully falls back to status='error' with
@@ -70,7 +70,8 @@ from showcase.level_15 import host_side_redis_url
 # The seeded history reaches decision time with the same data in every run (fixed seed -> fixed run ids).
 BANK_ID = "bank_0"
 COUNTERPARTY_BANK_ID = "bank_1"
-CANONICAL_FEATURE_COUNT = 52
+CANONICAL_FEATURE_COUNT = 53
+# 53 = 52 Level 15 features + largest_credit_paise_24h (Level 17a, ruling Q1)
 # Shape of the seeded payment graph around the decided account (see _seed_network_history).
 SAME_BANK_COUNTERPARTIES = 10
 EXTRA_LABELLED_ACCOUNTS = 4
@@ -711,7 +712,7 @@ async def check_15c_2_recompute_exact_match(workspace: Workspace) -> CheckOutcom
     """
     Check 15c-2 (consistency): a logged vector recomputed from history matches exactly.
 
-    Replays the logged decision from Postgres history into a separate fakeredis. Key number: "52 of 52 equal, N
+    Replays the logged decision from Postgres history into a separate fakeredis. Key number: "53 of 53 equal, N
     non-None".
     """
     fix = await get_part_c_fixture(workspace)
