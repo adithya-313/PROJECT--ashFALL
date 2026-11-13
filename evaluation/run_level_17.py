@@ -82,12 +82,12 @@ _SCORERS: tuple[str, ...] = ("rules", "anomaly", "rules_and_anomaly")
 
 _WINDOWS: tuple[str, ...] = ("test", "stress")
 
-_HEADLINE_METRICS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("recall_at_capacity", ("recall_at_capacity",)),
-    ("yield_measured", ("yield_rate", "measured")),
-    ("yield_reweighted", ("yield_rate", "reweighted")),
-    ("genuine_restriction_rate", ("genuine_harm", "genuine_restriction_rate")),
-    ("median_time_to_detection_hours", ("time_to_detection", "median")),
+_HEADLINE_METRICS: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    ("recall_at_capacity", ("recall_at_capacity",), "fraction"),
+    ("yield_measured", ("yield_rate", "measured"), "fraction"),
+    ("yield_reweighted", ("yield_rate", "reweighted"), "fraction"),
+    ("genuine_restriction_rate", ("genuine_harm", "genuine_restriction_rate"), "fraction"),
+    ("median_time_to_detection_hours", ("time_to_detection", "median"), "hours"),
 )
 
 
@@ -510,9 +510,13 @@ def summarise_worlds(
 
     Returns:
         window -> scorer -> metric name -> summarise_across_worlds result, for the keys "test"
-        and "stress". A window with no numeric value for a metric (for example no stress worlds,
-        or yield on a run that escalated nothing) is recorded as
-        {"world_count": 0, "status": "no numeric values"} instead of a made-up number.
+        and "stress". Every metric entry carries "unit": "fraction" for the three rates and
+        "hours" for the detection time, so a reader cannot mistake a share for a count. A window
+        that was supplied no worlds is recorded as
+        {"world_count": 0, "status": "not run: no <window> worlds supplied", "unit": <unit>}.
+        A window with worlds but no numeric value for a metric (for example yield on a run that
+        escalated nothing) is recorded as {"world_count": 0, "status": "no numeric values",
+        "unit": <unit>} instead of a made-up number.
 
     Raises:
         ValueError: If a world block carries a split other than "test" or "stress".
@@ -528,7 +532,7 @@ def summarise_worlds(
         window_summary: dict[str, dict[str, Any]] = {}
         for scorer in _SCORERS:
             scorer_summary: dict[str, Any] = {}
-            for metric_name, path in _HEADLINE_METRICS:
+            for metric_name, path, unit in _HEADLINE_METRICS:
                 values: list[float] = []
                 for world in window_worlds:
                     scorers = world.get("scorers", {})
@@ -540,9 +544,21 @@ def summarise_worlds(
                         continue
                     values.append(float(value))
                 if values:
-                    scorer_summary[metric_name] = summarise_across_worlds(values, min_worlds)
+                    metric_summary = summarise_across_worlds(values, min_worlds)
+                    metric_summary["unit"] = unit
+                    scorer_summary[metric_name] = metric_summary
+                elif not window_worlds:
+                    scorer_summary[metric_name] = {
+                        "world_count": 0,
+                        "status": f"not run: no {window} worlds supplied",
+                        "unit": unit,
+                    }
                 else:
-                    scorer_summary[metric_name] = {"world_count": 0, "status": "no numeric values"}
+                    scorer_summary[metric_name] = {
+                        "world_count": 0,
+                        "status": "no numeric values",
+                        "unit": unit,
+                    }
             window_summary[scorer] = scorer_summary
         summaries[window] = window_summary
     return summaries
@@ -684,7 +700,9 @@ def write_result(
     across_worlds: Mapping[str, Any],
 ) -> Path:
     """
-    WHAT: Writes <out_root>/<key>/result.json with sorted keys and two-space indentation.
+    WHAT: Writes <out_root>/<key>/result.json with sorted keys and two-space indentation. Manifest
+    tuning rates keep their "_pct" names and are percent; across-worlds summaries are fractions
+    and carry their unit.
 
     WHY: The file is the deliverable of an evaluation run, and marking it "simulated": true stops
     a simulated measurement from ever being read as a real-world result.
