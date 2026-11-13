@@ -123,6 +123,6 @@ async def test_negative_overlap_raises(
     assert recorded == []
 
 
-def test_skip_overlap_switch_is_off_in_committed_config() -> None:
-    """Verifies that the committed config leaves watermark_advance_skip_overlap off."""
-    assert load_default_watermark_advance_skip_overlap() is False
+def test_skip_overlap_switch_is_on_in_committed_config() -> None:
+    """Verifies that the committed config turns watermark_advance_skip_overlap on (verified output-identical)."""
+    assert load_default_watermark_advance_skip_overlap() is True

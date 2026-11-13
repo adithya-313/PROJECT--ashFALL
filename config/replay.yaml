@@ -71,6 +71,6 @@ replay_workspace:
 
   watermark_advance_skip_overlap:
     label: policy
-    value: false
-    reason: "When true, the drain's watermark-advance step reads only rows after each poller cursor instead of re-applying the 200-row overlap tail; catch-up loops keep the overlap. Off until byte-identical replay is proven."
-    derived_from: "Level 18a1 profile: drain.watermark_advance 1,684.5 s of 4,673.6 s on test-0000 tiny seed 2; architect 18a1-i"
+    value: true
+    reason: "The drain's watermark-advance step reads only rows after each poller cursor instead of re-applying the 200-row overlap tail; catch-up loops keep the overlap. Proven output-identical."
+    derived_from: "Level 18a1-i verification on test-0000 tiny sampler seed 2: dataset identical to fixture test-20261031T1830-9a2856ce53b2 after run-id normalisation (0 differing rows in payments 2895, snapshots 2683, labels 8); drain.watermark_advance 1,684.5 s -> 49.8 s; wall 4,681 s -> 3,256 s; Redis commands 9.52 M -> 2.95 M"
