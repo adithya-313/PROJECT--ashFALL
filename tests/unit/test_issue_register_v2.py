@@ -85,8 +85,8 @@ def errors_of(register: dict[str, Any]) -> str:
 
 def test_real_register_passes() -> None:
     """
-    WHAT: Checks that the real config/issues_v2.yaml has no errors, covers exactly the 91 revision_2 IDs
-    from Section 27, and holds the 18 level_11 IDs that later levels carry on (109 entries in total).
+    WHAT: Checks that the real config/issues_v2.yaml has no errors, covers exactly the 92 revision_2 IDs
+    from Section 27 and later levels, and holds the 18 level_11 IDs that later levels carry on (110 entries in total).
 
     WHY: This is the main promise of the register. It also fixes the totals, so an ID cannot be added
     or dropped without this test noticing.
@@ -123,14 +123,15 @@ def test_real_register_passes() -> None:
         15-6 (planned) to partial, and added E3 and R5 (built; two level_11 IDs the register did not carry yet)
         (built 58 to 71, partial 12 to 13, planned 22 to 10, 93 entries to 95).
         Level 17 added 17-1..17-5 (planned) and R5 evidence (planned 17 to 22, 104 entries to 109).
+        Level 18a1: +1 planned (18-1) -> 110 (planned 22 to 23, revision_2 IDs 91 to 92).
     """
     register = real_register()
     assert check_register(register, REPO_ROOT) == []
     issues = register["issues"]
-    assert len(EXPECTED_V2_IDS) == 91
-    assert len(issues) == 109
-    # Level 17
-    assert count_statuses(issues) == {"built": 72, "partial": 13, "planned": 22, "deferred": 2}
+    assert len(EXPECTED_V2_IDS) == 92
+    assert len(issues) == 110
+    # Level 18a1
+    assert count_statuses(issues) == {"built": 72, "partial": 13, "planned": 23, "deferred": 2}
 
 
 def test_missing_id_is_rejected() -> None:
