@@ -1,0 +1,27 @@
+{
+  "code_version": "cd712d3",
+  "files": {
+    "device_control.jsonl": {
+      "row_count": 45,
+      "sha256": "2f23590989166aba8ae89d8bc1807f26d61463d78bf6b3d6959e613e5676b422"
+    },
+    "gangs.jsonl": {
+      "row_count": 4,
+      "sha256": "6b5381d33f10a3ddb5163a551b443a9bebc963ab68389d28790e9999908e0915"
+    },
+    "payment_stories.jsonl": {
+      "row_count": 2871,
+      "sha256": "cd9e983bcc7d19dbbc3cc5e69090db56fbf92d54cb58f967ea66675639437063"
+    },
+    "personas.jsonl": {
+      "row_count": 72,
+      "sha256": "d24cf687e27fed360503e2bd45af03648a0c10184163b315f1a8d987a21270b3"
+    },
+    "roles.jsonl": {
+      "row_count": 58,
+      "sha256": "e7ef13853a7d3c85852182f086223607abd5bb381cce6e0bd3db2bf9d4055dac"
+    }
+  },
+  "format": "truth-v2",
+  "run_id": "bf322fe73d39312d"
+}

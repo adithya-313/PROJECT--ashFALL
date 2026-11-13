@@ -1,0 +1,41 @@
+{
+  "code_version": "cd712d3",
+  "file_count": 41,
+  "preset": "tiny",
+  "purpose": "Level 17 showcase only; tiny worlds; numbers are not a real result",
+  "sampler_seed": 2,
+  "splits": {
+    "test": {
+      "dataset_id": "test-20261031T1830-9a2856ce53b2",
+      "worlds": [
+        {
+          "run_id": "ac7f6d276369a7b5",
+          "world_id": "test-0000"
+        }
+      ]
+    },
+    "training": {
+      "dataset_id": "training-20261031T1830-7a356ef53e9e",
+      "worlds": [
+        {
+          "run_id": "728fede34e0b5c4a",
+          "world_id": "training-0000"
+        },
+        {
+          "run_id": "bf322fe73d39312d",
+          "world_id": "training-0001"
+        }
+      ]
+    },
+    "validation": {
+      "dataset_id": "validation-20261031T1830-9d983967b617",
+      "worlds": [
+        {
+          "run_id": "b83a9dd1e2ba205a",
+          "world_id": "validation-0000"
+        }
+      ]
+    }
+  },
+  "total_bytes": 4931857
+}
