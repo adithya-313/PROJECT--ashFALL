@@ -29,7 +29,14 @@ from replay.dataset_builder import (
     write_dataset,
 )
 from replay.pipeline import feed_with_labels
-from replay.runner import IST, ReplayDropContext, run_replay
+from replay.runner import (
+    IST,
+    ReplayDropContext,
+    load_default_local_offset_tracking,
+    load_default_registry_poll_on_change,
+    load_default_watermark_advance_skip_overlap,
+    run_replay,
+)
 from showcase.framework import get_code_version
 from showcase.isolation import get_showcase_database_url
 from world.bank_connectors import MockBankConnectors, load_bank_modes
@@ -422,6 +429,13 @@ async def build_split_dataset(
     loop = asyncio.get_running_loop()
     db_url = admin_pg if admin_pg is not None else get_showcase_database_url()
     redis_url = base_redis_url if base_redis_url is not None else host_side_redis_url()
+
+    print(
+        "Replay switches: "
+        f"watermark_advance_skip_overlap={load_default_watermark_advance_skip_overlap()} "
+        f"local_offset_tracking={load_default_local_offset_tracking()} "
+        f"registry_poll_on_change={load_default_registry_poll_on_change()}"
+    )
 
     evaluation_truth_root: Path | None = None
     if write_evaluation_inputs:
