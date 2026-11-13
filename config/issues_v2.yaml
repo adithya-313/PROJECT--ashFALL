@@ -1019,11 +1019,12 @@ issues:
     title: "OS updates do not trigger new-device rules"
     origin: level_11
     status: built
-    levels: [15]
-    parts: [15b]
+    levels: [15, 17]
+    parts: [15b, 17a]
     v1_status: built
     evidence:
       - {kind: test, file: tests/unit/test_m1_control_region.py, name: test_r5_device_constraints_and_os_update_safety}
+      - {kind: test, file: tests/unit/decisions/test_rules_engine.py, name: test_constructed_cases_and_lookalikes}
   R9:
     title: "Arms-race design changes"
     origin: level_11
@@ -1102,3 +1103,38 @@ issues:
     levels: [28]
     parts: []
     later_work: ["Level 28: calibrate pre_world_listing_share and pre_world_reporter_choice (config/nationalsim.yaml) in the evaluation suite, which already measures registry coverage (issue N2 names Level 28)"]
+  17-1:
+    title: "Device rule catches almost no mules: gang phone acquisition is not in the bank feed and SIM swaps during a run are not modelled"
+    origin: revision_2
+    status: planned
+    levels: [18]
+    parts: []
+    later_work: ["Level 18a: after 16-6 models phone changes, re-measure rule_5 mule recall"]
+  17-2:
+    title: "The I4C feed is not wired into bank features; the non-DPIP bank has no registry signal"
+    origin: revision_2
+    status: planned
+    levels: [28]
+    parts: []
+    later_work: ["Level 28: decide and wire an I4C-fed bank feature"]
+  17-3:
+    title: "Level 17 real multi-world evaluation not run: replay is too slow (16-4)"
+    origin: revision_2
+    status: planned
+    levels: [18]
+    parts: []
+    later_work: ["Level 18a: build full-scale datasets with --write-evaluation-inputs and run python -m evaluation.run_level_17 on >= 20 test worlds"]
+  17-4:
+    title: "CI level-showcase times out: the Level 16 showcase replays twice (~2.5 h)"
+    origin: revision_2
+    status: planned
+    levels: [18]
+    parts: []
+    later_work: ["Level 18a: fast replay (16-4) brings make show-all QUICK=1 under the CI limit"]
+  17-5:
+    title: "Rule thresholds are tuned only per evaluation run; the decision path needs thresholds tuned on full-scale validation worlds"
+    origin: revision_2
+    status: planned
+    levels: [19]
+    parts: []
+    later_work: ["Level 19: commit tuned thresholds (with_thresholds) from the 18a validation run before rules serve live"]
