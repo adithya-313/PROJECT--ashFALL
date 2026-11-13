@@ -77,6 +77,7 @@ __all__ = [
     "drain",
     "load_default_local_offset_tracking",
     "load_default_registry_poll_on_change",
+    "finish_run",
     "read_registry_batch",
     "resolve_drain_switches",
     "idle_advance_target",
@@ -123,19 +124,21 @@ class DrainCounters:
 
 
 def resolve_drain_switches(
-    local_offset_tracking: bool, registry_poll_on_change: bool, hooks_present: bool
+    local_offset_tracking: bool, registry_poll_on_change: bool, decision_hook_present: bool
 ) -> tuple[bool, bool]:
     """
     WHAT: Decides which of the two local-counter switches really apply to this run.
-    WHY: before_decision_hook / before_drop_hook can publish to Kafka outside the counters, so with a hook the
-    counters could be wrong. Both switches are then forced OFF (the broker path) and one log line says so.
-    Args: the two configured switch values, and whether any hook was supplied.
+    WHY: before_decision_hook runs in the middle of the replay, between drains, and may publish to Kafka outside
+    the counters, so with it both switches are forced OFF (the broker path) and one log line says so.
+    before_drop_hook does NOT force them off: it runs at teardown, after the last drain and after the run-end
+    cross-check, so it cannot publish into a drain that the counters judge.
+    Args: the two configured switch values, and whether a before_decision_hook was supplied.
     Returns: (local_offset_tracking, registry_poll_on_change) to use for the run.
     """
-    if hooks_present and (local_offset_tracking or registry_poll_on_change):
+    if decision_hook_present and (local_offset_tracking or registry_poll_on_change):
         logger.info(
-            "Replay hooks supplied: local_offset_tracking and registry_poll_on_change forced OFF "
-            "(hooks may publish outside the drain counters; using broker offsets)"
+            "before_decision_hook supplied: local_offset_tracking and registry_poll_on_change forced OFF "
+            "(the hook may publish outside the drain counters; using broker offsets)"
         )
         return False, False
     return local_offset_tracking, registry_poll_on_change
@@ -805,6 +808,27 @@ def load_default_watermark_advance_skip_overlap() -> bool:
     return bool(entry["value"])
 
 
+async def finish_run(
+    switches_active: bool,
+    consumer: Any,
+    workspace: ReplayWorkspace,
+    registry: "RegistryDrain | None",
+    counters: DrainCounters,
+    drop_hook: Callable[[], Awaitable[None]] | None,
+) -> None:
+    """
+    WHAT: The end of a replay: the counters-vs-broker cross-check first, then the drop hook (if any).
+    WHY: The cross-check must see the topics before a hook touches the workspace, and it must run even when the
+    final snapshot boundary was skipped. It only runs when a local switch is active; with both off nothing used
+    the counters.
+    Raises: ReplayPipelineError from the cross-check on a mismatch; the drop hook is then not called.
+    """
+    if switches_active:
+        await cross_check_counters(consumer, workspace, registry, counters)
+    if drop_hook is not None:
+        await drop_hook()
+
+
 def _load_replay_policy_flag(name: str) -> bool:
     """
     WHAT: Reads one boolean policy setting from the replay_workspace block of config/replay.yaml.
@@ -1050,13 +1074,20 @@ async def run_replay(
     )
     # Read once per run so every drain in this replay uses the same policy.
     skip_overlap_on_advance = load_default_watermark_advance_skip_overlap()
-    # Hooks can publish outside the counters, so with a hook both local-counter switches fall back to the broker.
+    # A decision hook can publish outside the counters, so with it both local-counter switches use the broker.
     local_offset_tracking, registry_poll_on_change = resolve_drain_switches(
         load_default_local_offset_tracking(),
         load_default_registry_poll_on_change(),
-        hooks_present=before_decision_hook is not None or before_drop_hook is not None,
+        decision_hook_present=before_decision_hook is not None,
     )
     counters = DrainCounters()
+    # One line per run so the log proves which drain path ran.
+    logger.info(
+        "Replay drain switches: watermark_advance_skip_overlap=%s local_offset_tracking=%s registry_poll_on_change=%s",
+        skip_overlap_on_advance,
+        local_offset_tracking,
+        registry_poll_on_change,
+    )
 
     per_event_mode = (
         load_default_decisions_per_event_payment()
@@ -1490,21 +1521,33 @@ async def run_replay(
                 if gap > max_gap:
                     max_gap = gap
 
+        async def call_drop_hook() -> None:
+            """Builds the drop context and runs the caller's before_drop_hook."""
+            assert before_drop_hook is not None
+            sep = "&" if "?" in admin_pg else "?"
+            workspace_dsn = f"{admin_pg}{sep}options=-csearch_path%3D{workspace.postgres_schema}"
+            drop_ctx = ReplayDropContext(
+                workspace=workspace,
+                workspace_dsn=workspace_dsn,
+                logged_payment_ids_by_bank=dict(logged_payment_ids_by_bank),
+                dpip_key=replay_dpip_key(run_id),
+                registry_wired=registry_driver is not None,
+                registry_wired_reason=(
+                    REGISTRY_WIRED_REASON if registry_driver is not None else REGISTRY_NOT_WIRED_REASON
+                ),
+            )
+            await before_drop_hook(drop_ctx)
+
+        # Run-end cross-check first (even if the last snapshot boundary was skipped), then the drop hook.
         with profile.timed("run.drop_hook"):
-            if before_drop_hook is not None:
-                sep = "&" if "?" in admin_pg else "?"
-                workspace_dsn = f"{admin_pg}{sep}options=-csearch_path%3D{workspace.postgres_schema}"
-                drop_ctx = ReplayDropContext(
-                    workspace=workspace,
-                    workspace_dsn=workspace_dsn,
-                    logged_payment_ids_by_bank=dict(logged_payment_ids_by_bank),
-                    dpip_key=replay_dpip_key(run_id),
-                    registry_wired=registry_driver is not None,
-                    registry_wired_reason=(
-                        REGISTRY_WIRED_REASON if registry_driver is not None else REGISTRY_NOT_WIRED_REASON
-                    ),
-                )
-                await before_drop_hook(drop_ctx)
+            await finish_run(
+                local_offset_tracking or registry_poll_on_change,
+                consumer,
+                workspace,
+                registry,
+                counters,
+                call_drop_hook if before_drop_hook is not None else None,
+            )
 
         profile.add_seconds("run.total", time.perf_counter() - started)
         return ReplayResult(

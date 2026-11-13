@@ -24,6 +24,7 @@ from replay.runner import (
     ReplayDrainTimeout,
     ReplayPipelineError,
     cross_check_counters,
+    finish_run,
     resolve_drain_switches,
 )
 
@@ -237,17 +238,78 @@ async def test_cross_check_covers_the_registry_topic() -> None:
         await cross_check_counters(FakeConsumer(end=2, committed=2), workspace, registry, counters)
 
 
-def test_hook_forces_both_switches_off() -> None:
-    """Verifies that a supplied hook turns both switches off, and no hook leaves them as configured."""
-    assert resolve_drain_switches(True, True, hooks_present=True) == (False, False)
-    assert resolve_drain_switches(True, True, hooks_present=False) == (True, True)
-    assert resolve_drain_switches(False, True, hooks_present=False) == (False, True)
+def test_decision_hook_forces_both_switches_off() -> None:
+    """Verifies that a decision hook turns both switches off, and no decision hook leaves them as configured."""
+    assert resolve_drain_switches(True, True, decision_hook_present=True) == (False, False)
+    assert resolve_drain_switches(True, True, decision_hook_present=False) == (True, True)
+    assert resolve_drain_switches(False, True, decision_hook_present=False) == (False, True)
+
+
+def test_drop_hook_alone_keeps_switches_on() -> None:
+    """Verifies that a run with only a drop hook keeps both switches on.
+
+    run_replay passes decision_hook_present=before_decision_hook is not None, so a drop hook never reaches
+    resolve_drain_switches; this test pins that the source does not read before_drop_hook for this decision.
+    """
+    import inspect
+
+    source = inspect.getsource(runner.run_replay)
+    line = next(ln for ln in source.splitlines() if "decision_hook_present=" in ln)
+    assert "before_decision_hook" in line
+    assert "before_drop_hook" not in line
+    assert resolve_drain_switches(True, True, decision_hook_present=False) == (True, True)
+
+
+async def test_run_end_cross_check_runs_once_before_the_drop_hook() -> None:
+    """Verifies the order: cross-check first (one end_offsets read), then the drop hook, once each."""
+    events: list[str] = []
+
+    class OrderConsumer(FakeConsumer):
+        async def end_offsets(self, tps: Any) -> dict[Any, int]:
+            events.append("cross_check")
+            return await super().end_offsets(tps)
+
+    async def drop_hook() -> None:
+        events.append("drop_hook")
+
+    workspace: Any = SimpleNamespace(kafka_topic=PAYMENTS_TOPIC)
+    counters = DrainCounters(payments_produced=2, payments_consumed=2)
+    await finish_run(True, OrderConsumer(end=2, committed=2), workspace, None, counters, drop_hook)
+    assert events == ["cross_check", "drop_hook"]
+
+
+async def test_run_end_cross_check_raises_on_mismatch_and_skips_the_hook() -> None:
+    """Verifies that a mismatch raises before the drop hook runs."""
+    called: list[str] = []
+
+    async def drop_hook() -> None:
+        called.append("drop_hook")
+
+    workspace: Any = SimpleNamespace(kafka_topic=PAYMENTS_TOPIC)
+    counters = DrainCounters(payments_produced=3, payments_consumed=3)
+    with pytest.raises(ReplayPipelineError, match=PAYMENTS_TOPIC):
+        await finish_run(True, FakeConsumer(end=2, committed=2), workspace, None, counters, drop_hook)
+    assert called == []
+
+
+async def test_run_end_check_skipped_when_no_switch_active() -> None:
+    """Verifies that with both switches off the broker is not read, but the drop hook still runs."""
+    called: list[str] = []
+
+    async def drop_hook() -> None:
+        called.append("drop_hook")
+
+    consumer = FakeConsumer()
+    workspace: Any = SimpleNamespace(kafka_topic=PAYMENTS_TOPIC)
+    await finish_run(False, consumer, workspace, None, DrainCounters(), drop_hook)
+    assert consumer.calls == []
+    assert called == ["drop_hook"]
 
 
 async def test_hook_forced_off_means_broker_calls_are_made(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verifies that the switch values resolved for a hooked run make the drain call the broker."""
     Harness(monkeypatch)
-    local, on_change = resolve_drain_switches(True, True, hooks_present=True)
+    local, on_change = resolve_drain_switches(True, True, decision_hook_present=True)
     consumer = FakeConsumer()
     await run_drain(consumer, counters=DrainCounters(), local_offset_tracking=local, registry_poll_on_change=on_change)
     assert "end_offsets" in consumer.calls
