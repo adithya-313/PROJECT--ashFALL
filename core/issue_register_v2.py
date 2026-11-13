@@ -51,6 +51,7 @@ EXPECTED_V2_IDS: frozenset[str] = frozenset(
     + [f"14-{number}" for number in (2, 4, 6, 8, 9, 10, 11, 12, 13, 14, 15, 16)]
     + [f"15-{number}" for number in (1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12)]
     + [f"16-{number}" for number in (1, 2, 3, 4, 5, 6, 7, 8, 9)]
+    + [f"17-{number}" for number in range(1, 6)]
 )
 
 
