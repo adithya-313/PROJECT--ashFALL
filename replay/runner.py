@@ -19,6 +19,7 @@ import time
 import uuid
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Sequence
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
@@ -43,6 +44,7 @@ from features.label_consumer import consume_complaint_labels_since
 from features.registry_label_consumer import consume_registry_events
 from nationalsim.national_outbox import relay_national_outbox
 from replay.ordering import DecisionStep, FeedStep, build_replay_steps
+from replay.profiling import ReplayProfile
 from replay.registry_driver import RegistryDriver, build_registry_driver
 from replay.registry_replay import REGISTRY_INGEST, REGISTRY_VISIBLE, RegistryReplaySettings, replay_dpip_key
 from world.bank_connectors import BankTransport, MockBankConnectors, load_bank_modes
@@ -75,6 +77,17 @@ __all__ = [
     "load_default_idle_partition_advance",
     "run_replay",
 ]
+
+
+def _profile_timer(profile: ReplayProfile | None, name: str) -> AbstractContextManager[None]:
+    """
+    WHAT: Returns the profile's timer for a named phase, or a no-op context manager when profile is None.
+
+    WHY: Every timed block reads the same, while the unprofiled path keeps its exact behaviour and cost.
+    """
+    if profile is None:
+        return nullcontext()
+    return profile.timed(name)
 
 
 class ReplayDrainTimeout(Exception):
@@ -138,6 +151,7 @@ class ReplayResult:
     registry_screens: int = 0
     registry_screens_unknown: int = 0
     feature_log_sha256: str = ""
+    profile: dict[str, Any] = field(default_factory=dict)
 
 
 def compute_feature_log_sha256(rows: Sequence[asyncpg.Record]) -> str:
@@ -310,17 +324,37 @@ async def drain(
     deadline: float,
     batch_size: int = 100,
     registry: RegistryDrain | None = None,
+    profile: ReplayProfile | None = None,
 ) -> float:
     """
     WHAT: Drains the outbox, consumer, and table pollers until pipeline convergence or deadline.
     WHY: Architect decision S2: guarantees that all prior events are fully committed and watermarked
     before scoring a decision. S2.3: consumer is polled on every iteration to prevent deadlocks.
+    The optional profile records the time and counts of each phase; with profile=None the behaviour
+    and return value are exactly as before.
     """
     t0 = time.monotonic()
     topic_parts = consumer.partitions_for_topic(workspace.kafka_topic) or {0}
     tps = [TopicPartition(workspace.kafka_topic, p) for p in sorted(topic_parts)]
 
+    async def consume_with_counts() -> int:
+        """
+        WHAT: Polls available payment sides and counts empty polls and consumed records on the profile.
+
+        WHY: The outbox loop and the main consume step both poll the consumer; counting every poll here
+        keeps the consume counters honest without timing the outbox loop twice.
+        """
+        consumed = await consume_available(consumer, redis_client, acct_settings, timeout_ms=20)
+        if profile is not None:
+            if consumed == 0:
+                profile.add_count("drain.consume_empty_polls")
+            else:
+                profile.add_count("drain.records_consumed", consumed)
+        return consumed
+
+    iterations = 0
     while True:
+        iterations += 1
         now = time.monotonic()
         if now > deadline:
             end_dict = await consumer.end_offsets(tps)
@@ -332,32 +366,37 @@ async def drain(
             )
 
         # a. Outbox: relay batches until count_waiting == 0
-        while await count_waiting(workspace_conn) > 0:
-            if time.monotonic() > deadline:
-                break
-            await relay_one_batch(
-                workspace_conn,
-                producer,
-                batch_size=batch_size,
-                topic=workspace.kafka_topic,
-            )
-            # S2.3: poll consumer on every loop
-            await consume_available(consumer, redis_client, acct_settings, timeout_ms=20)
+        with _profile_timer(profile, "drain.outbox_relay"):
+            while await count_waiting(workspace_conn) > 0:
+                if time.monotonic() > deadline:
+                    break
+                await relay_one_batch(
+                    workspace_conn,
+                    producer,
+                    batch_size=batch_size,
+                    topic=workspace.kafka_topic,
+                )
+                # S2.3: poll consumer on every loop
+                await consume_with_counts()
 
         # a2. National outbox: registry events go to the workspace registry topic (payments outbox is separate)
         registry_caught_up = True
         if registry is not None:
-            await relay_national_outbox(
-                workspace_conn, producer, batch_size=batch_size,
-                topic_map={"registry.events": registry.topic},
-            )
-            registry_caught_up = await drain_registry(registry, workspace_conn)
+            with _profile_timer(profile, "drain.national_relay"):
+                await relay_national_outbox(
+                    workspace_conn, producer, batch_size=batch_size,
+                    topic_map={"registry.events": registry.topic},
+                )
+            with _profile_timer(profile, "drain.registry_poll"):
+                registry_caught_up = await drain_registry(registry, workspace_conn)
 
         # b. Consumer: consume available messages until committed offset >= end offset for all partitions
-        await consume_available(consumer, redis_client, acct_settings, timeout_ms=20)
+        with _profile_timer(profile, "drain.consume"):
+            await consume_with_counts()
 
-        end_dict = await consumer.end_offsets(tps)
-        committed_dict = {tp: await consumer.committed(tp) for tp in tps}
+        with _profile_timer(profile, "drain.offset_check"):
+            end_dict = await consumer.end_offsets(tps)
+            committed_dict = {tp: await consumer.committed(tp) for tp in tps}
         consumer_caught_up = all(
             (committed_dict.get(tp) or 0) >= end_dict.get(tp, 0)
             for tp in tps
@@ -367,118 +406,128 @@ async def drain(
         pollers_caught_up = True
         for bank_id in banks:
             # Events
-            max_events = await workspace_conn.fetchval(
-                "SELECT COALESCE(MAX(id), 0) FROM bank_account_events WHERE bank_id = $1",
-                bank_id,
-            )
-            while poller_cursors[bank_id]["events"] < max_events:
-                c = await apply_account_events_since(
-                    workspace_conn,
-                    redis_client,
-                    settings=acct_settings,
-                    bank_id=bank_id,
-                    after_id=poller_cursors[bank_id]["events"],
-                    clock=world_clock,
-                    run_id=run_id,
+            with _profile_timer(profile, "drain.poller_max_queries"):
+                max_events = await workspace_conn.fetchval(
+                    "SELECT COALESCE(MAX(id), 0) FROM bank_account_events WHERE bank_id = $1",
+                    bank_id,
                 )
-                if c <= poller_cursors[bank_id]["events"]:
-                    break
-                poller_cursors[bank_id]["events"] = c
+            with _profile_timer(profile, "drain.poller_catchup"):
+                while poller_cursors[bank_id]["events"] < max_events:
+                    c = await apply_account_events_since(
+                        workspace_conn,
+                        redis_client,
+                        settings=acct_settings,
+                        bank_id=bank_id,
+                        after_id=poller_cursors[bank_id]["events"],
+                        clock=world_clock,
+                        run_id=run_id,
+                    )
+                    if c <= poller_cursors[bank_id]["events"]:
+                        break
+                    poller_cursors[bank_id]["events"] = c
 
             # Withdrawals
-            max_wth = await workspace_conn.fetchval(
-                "SELECT COALESCE(MAX(id), 0) FROM bank_withdrawals WHERE bank_id = $1",
-                bank_id,
-            )
-            while poller_cursors[bank_id]["withdrawals"] < max_wth:
-                c = await apply_withdrawals_since(
-                    workspace_conn,
-                    redis_client,
-                    settings=acct_settings,
-                    bank_id=bank_id,
-                    after_id=poller_cursors[bank_id]["withdrawals"],
-                    clock=world_clock,
-                    run_id=run_id,
+            with _profile_timer(profile, "drain.poller_max_queries"):
+                max_wth = await workspace_conn.fetchval(
+                    "SELECT COALESCE(MAX(id), 0) FROM bank_withdrawals WHERE bank_id = $1",
+                    bank_id,
                 )
-                if c <= poller_cursors[bank_id]["withdrawals"]:
-                    break
-                poller_cursors[bank_id]["withdrawals"] = c
+            with _profile_timer(profile, "drain.poller_catchup"):
+                while poller_cursors[bank_id]["withdrawals"] < max_wth:
+                    c = await apply_withdrawals_since(
+                        workspace_conn,
+                        redis_client,
+                        settings=acct_settings,
+                        bank_id=bank_id,
+                        after_id=poller_cursors[bank_id]["withdrawals"],
+                        clock=world_clock,
+                        run_id=run_id,
+                    )
+                    if c <= poller_cursors[bank_id]["withdrawals"]:
+                        break
+                    poller_cursors[bank_id]["withdrawals"] = c
 
             # Feedback
-            max_fb = await workspace_conn.fetchval(
-                "SELECT COALESCE(MAX(id), 0) FROM bank_feedback WHERE bank_id = $1",
-                bank_id,
-            )
-            while poller_cursors[bank_id]["feedback"] < max_fb:
-                c = await apply_feedback_since(
-                    workspace_conn,
-                    redis_client,
-                    settings=acct_settings,
-                    bank_id=bank_id,
-                    after_id=poller_cursors[bank_id]["feedback"],
-                    clock=world_clock,
-                    run_id=run_id,
+            with _profile_timer(profile, "drain.poller_max_queries"):
+                max_fb = await workspace_conn.fetchval(
+                    "SELECT COALESCE(MAX(id), 0) FROM bank_feedback WHERE bank_id = $1",
+                    bank_id,
                 )
-                if c <= poller_cursors[bank_id]["feedback"]:
-                    break
-                poller_cursors[bank_id]["feedback"] = c
+            with _profile_timer(profile, "drain.poller_catchup"):
+                while poller_cursors[bank_id]["feedback"] < max_fb:
+                    c = await apply_feedback_since(
+                        workspace_conn,
+                        redis_client,
+                        settings=acct_settings,
+                        bank_id=bank_id,
+                        after_id=poller_cursors[bank_id]["feedback"],
+                        clock=world_clock,
+                        run_id=run_id,
+                    )
+                    if c <= poller_cursors[bank_id]["feedback"]:
+                        break
+                    poller_cursors[bank_id]["feedback"] = c
 
             # Complaints
-            max_cmp = await workspace_conn.fetchval(
-                "SELECT COALESCE(MAX(id), 0) FROM bank_complaints WHERE bank_id = $1",
-                bank_id,
-            )
-            while poller_cursors[bank_id]["complaints"] < max_cmp:
-                c = await apply_complaints_since(
-                    workspace_conn,
-                    redis_client,
-                    settings=acct_settings,
-                    bank_id=bank_id,
-                    after_id=poller_cursors[bank_id]["complaints"],
-                    clock=world_clock,
-                    run_id=run_id,
+            with _profile_timer(profile, "drain.poller_max_queries"):
+                max_cmp = await workspace_conn.fetchval(
+                    "SELECT COALESCE(MAX(id), 0) FROM bank_complaints WHERE bank_id = $1",
+                    bank_id,
                 )
-                if c <= poller_cursors[bank_id]["complaints"]:
-                    break
-                poller_cursors[bank_id]["complaints"] = c
+            with _profile_timer(profile, "drain.poller_catchup"):
+                while poller_cursors[bank_id]["complaints"] < max_cmp:
+                    c = await apply_complaints_since(
+                        workspace_conn,
+                        redis_client,
+                        settings=acct_settings,
+                        bank_id=bank_id,
+                        after_id=poller_cursors[bank_id]["complaints"],
+                        clock=world_clock,
+                        run_id=run_id,
+                    )
+                    if c <= poller_cursors[bank_id]["complaints"]:
+                        break
+                    poller_cursors[bank_id]["complaints"] = c
 
             # Labels (from complaints)
-            while poller_cursors[bank_id]["labels"] < max_cmp:
-                c_lbl = await consume_complaint_labels_since(
-                    workspace_conn,
-                    bank_id=bank_id,
-                    run_id=run_id,
-                    after_id=poller_cursors[bank_id]["labels"],
-                    batch_size=batch_size,
-                )
-                if c_lbl <= poller_cursors[bank_id]["labels"]:
-                    break
-                poller_cursors[bank_id]["labels"] = c_lbl
+            with _profile_timer(profile, "drain.label_catchup"):
+                while poller_cursors[bank_id]["labels"] < max_cmp:
+                    c_lbl = await consume_complaint_labels_since(
+                        workspace_conn,
+                        bank_id=bank_id,
+                        run_id=run_id,
+                        after_id=poller_cursors[bank_id]["labels"],
+                        batch_size=batch_size,
+                    )
+                    if c_lbl <= poller_cursors[bank_id]["labels"]:
+                        break
+                    poller_cursors[bank_id]["labels"] = c_lbl
 
             # Advance clock watermarks on empty or caught-up tables
-            c_ev = await apply_account_events_since(
-                workspace_conn, redis_client, settings=acct_settings, bank_id=bank_id,
-                after_id=poller_cursors[bank_id]["events"], clock=world_clock, run_id=run_id,
-            )
-            poller_cursors[bank_id]["events"] = max(poller_cursors[bank_id]["events"], c_ev)
+            with _profile_timer(profile, "drain.watermark_advance"):
+                c_ev = await apply_account_events_since(
+                    workspace_conn, redis_client, settings=acct_settings, bank_id=bank_id,
+                    after_id=poller_cursors[bank_id]["events"], clock=world_clock, run_id=run_id,
+                )
+                poller_cursors[bank_id]["events"] = max(poller_cursors[bank_id]["events"], c_ev)
 
-            c_wt = await apply_withdrawals_since(
-                workspace_conn, redis_client, settings=acct_settings, bank_id=bank_id,
-                after_id=poller_cursors[bank_id]["withdrawals"], clock=world_clock, run_id=run_id,
-            )
-            poller_cursors[bank_id]["withdrawals"] = max(poller_cursors[bank_id]["withdrawals"], c_wt)
+                c_wt = await apply_withdrawals_since(
+                    workspace_conn, redis_client, settings=acct_settings, bank_id=bank_id,
+                    after_id=poller_cursors[bank_id]["withdrawals"], clock=world_clock, run_id=run_id,
+                )
+                poller_cursors[bank_id]["withdrawals"] = max(poller_cursors[bank_id]["withdrawals"], c_wt)
 
-            c_fb = await apply_feedback_since(
-                workspace_conn, redis_client, settings=acct_settings, bank_id=bank_id,
-                after_id=poller_cursors[bank_id]["feedback"], clock=world_clock, run_id=run_id,
-            )
-            poller_cursors[bank_id]["feedback"] = max(poller_cursors[bank_id]["feedback"], c_fb)
+                c_fb = await apply_feedback_since(
+                    workspace_conn, redis_client, settings=acct_settings, bank_id=bank_id,
+                    after_id=poller_cursors[bank_id]["feedback"], clock=world_clock, run_id=run_id,
+                )
+                poller_cursors[bank_id]["feedback"] = max(poller_cursors[bank_id]["feedback"], c_fb)
 
-            c_cm = await apply_complaints_since(
-                workspace_conn, redis_client, settings=acct_settings, bank_id=bank_id,
-                after_id=poller_cursors[bank_id]["complaints"], clock=world_clock, run_id=run_id,
-            )
-            poller_cursors[bank_id]["complaints"] = max(poller_cursors[bank_id]["complaints"], c_cm)
+                c_cm = await apply_complaints_since(
+                    workspace_conn, redis_client, settings=acct_settings, bank_id=bank_id,
+                    after_id=poller_cursors[bank_id]["complaints"], clock=world_clock, run_id=run_id,
+                )
+                poller_cursors[bank_id]["complaints"] = max(poller_cursors[bank_id]["complaints"], c_cm)
 
             if (
                 poller_cursors[bank_id]["events"] < max_events
@@ -489,11 +538,18 @@ async def drain(
             ):
                 pollers_caught_up = False
 
-        waiting_count = await count_waiting(workspace_conn)
+        with _profile_timer(profile, "drain.final_count_waiting"):
+            waiting_count = await count_waiting(workspace_conn)
         if waiting_count == 0 and consumer_caught_up and pollers_caught_up and registry_caught_up:
             break
 
-        await asyncio.sleep(0.01)
+        with _profile_timer(profile, "drain.sleep"):
+            await asyncio.sleep(0.01)
+        if profile is not None:
+            profile.add_count("drain.sleeps")
+
+    if profile is not None:
+        profile.record_drain_iterations(iterations)
 
     return time.monotonic() - t0
 
@@ -691,60 +747,67 @@ async def _snapshot_completed_day(
     produced_partitions: set[int] | None = None,
     next_unsent_arrival: datetime | None = None,
     registry: RegistryDrain | None = None,
+    profile: ReplayProfile | None = None,
 ) -> float:
     """
     WHAT: Drains the operational pipeline up to boundary and writes daily account snapshots for completed day.
     WHY: Implements architect decision D2: snapshots active accounts for [boundary - 1d, boundary) at each IST midnight.
+    The optional profile times the boundary drain and the snapshot write; with profile=None nothing is recorded.
     """
     world_clock.set_time(boundary)
     deadline = time.monotonic() + drain_timeout_seconds
-    drain_duration = await drain(
-        step_index=step_idx,
-        workspace_conn=drain_conn,
-        producer=producer,
-        consumer=consumer,
-        workspace=workspace,
-        redis_client=ws_redis,
-        acct_settings=acct_cfg,
-        banks=banks,
-        world_clock=world_clock,
-        run_id=run_id,
-        poller_cursors=poller_cursors,
-        deadline=deadline,
-        registry=registry,
-    )
-    if idle_advance and produced_partitions:
-        target_ts, reason = idle_advance_target(
-            clock_now=boundary,
-            commit_grace_seconds=acct_cfg.commit_grace,
-            partition_drained=True,
-            next_unsent_arrival=next_unsent_arrival,
-        )
-        if target_ts is not None:
-            for part in produced_partitions:
-                record_payment_watermark(ws_redis, partition=part, timestamp=target_ts, run_id=run_id)
-    day_start = boundary - timedelta(days=1)
-    day_end = boundary
-    for bank_id in banks:
-        account_ids = await select_daily_snapshot_accounts(
-            drain_conn,
+    if profile is not None:
+        profile.add_count("steps.snapshot_boundaries")
+    with _profile_timer(profile, "run.snapshot_drain"):
+        drain_duration = await drain(
+            step_index=step_idx,
+            workspace_conn=drain_conn,
+            producer=producer,
+            consumer=consumer,
+            workspace=workspace,
+            redis_client=ws_redis,
+            acct_settings=acct_cfg,
+            banks=banks,
+            world_clock=world_clock,
             run_id=run_id,
-            bank_id=bank_id,
-            day_start=day_start,
-            day_end=day_end,
+            poller_cursors=poller_cursors,
+            deadline=deadline,
+            registry=registry,
+            profile=profile,
         )
-        if account_ids:
-            await write_account_snapshots(
+    with _profile_timer(profile, "run.snapshot_write"):
+        if idle_advance and produced_partitions:
+            target_ts, reason = idle_advance_target(
+                clock_now=boundary,
+                commit_grace_seconds=acct_cfg.commit_grace,
+                partition_drained=True,
+                next_unsent_arrival=next_unsent_arrival,
+            )
+            if target_ts is not None:
+                for part in produced_partitions:
+                    record_payment_watermark(ws_redis, partition=part, timestamp=target_ts, run_id=run_id)
+        day_start = boundary - timedelta(days=1)
+        day_end = boundary
+        for bank_id in banks:
+            account_ids = await select_daily_snapshot_accounts(
                 drain_conn,
-                ws_redis,
                 run_id=run_id,
                 bank_id=bank_id,
-                snapshot_time=boundary,
-                snapshot_kind="daily",
-                account_ids=account_ids,
-                settings=acct_cfg,
-                run_scoped_watermarks=True,
+                day_start=day_start,
+                day_end=day_end,
             )
+            if account_ids:
+                await write_account_snapshots(
+                    drain_conn,
+                    ws_redis,
+                    run_id=run_id,
+                    bank_id=bank_id,
+                    snapshot_time=boundary,
+                    snapshot_kind="daily",
+                    account_ids=account_ids,
+                    settings=acct_cfg,
+                    run_scoped_watermarks=True,
+                )
     return drain_duration
 
 
@@ -771,7 +834,11 @@ async def run_replay(
     """
     WHAT: Drives the complete operational pipeline in world-time order to replay a recorded simulation run.
     WHY: Implements architect decisions C2, 16b Q1-Q3, P1, S1, S2, and 16b-3b Ruling (R1-R3).
+    The profile times each phase of the run and is returned in ReplayResult for measurement.
     """
+    profile = ReplayProfile()
+    started = time.perf_counter()
+
     # 1. Refuse live bank modes and interleave steps
     bank_modes = load_bank_modes()
     for mode in bank_modes.values():
@@ -924,6 +991,7 @@ async def run_replay(
                 await consume_registry_events(conn, events, participation, driver.key, run_id, world_clock.now_ist())
 
         registry = RegistryDrain(registry_consumer, workspace.registry_topic, registry_handler)
+        profile.add_seconds("run.setup", time.perf_counter() - started)
 
         # 4. Set up clocks and bank connector transports
         if not steps:
@@ -996,7 +1064,8 @@ async def run_replay(
         prev_world_time: datetime | None = None
         async with workspace_pool.acquire() as drain_conn:
             for step_idx, step in enumerate(steps):
-                await pace_step(prev_world_time, step.world_time, current_speed, sleep=sleep)
+                with profile.timed("run.pace"):
+                    await pace_step(prev_world_time, step.world_time, current_speed, sleep=sleep)
 
                 if prev_world_time is not None:
                     boundaries = [
@@ -1023,6 +1092,7 @@ async def run_replay(
                             produced_partitions=produced_partitions,
                             next_unsent_arrival=step.world_time,
                             registry=registry,
+                            profile=profile,
                         )
                         if dur > longest_drain_seconds:
                             longest_drain_seconds = dur
@@ -1034,79 +1104,88 @@ async def run_replay(
                     world_clock.set_time(step.world_time)
                     if step.kind in (REGISTRY_INGEST, REGISTRY_VISIBLE):
                         assert registry_driver is not None
-                        await registry_driver.run_step(step, drain_conn)
+                        with profile.timed("run.registry_step"):
+                            await registry_driver.run_step(step, drain_conn)
                     else:
-                        await connectors.send_feed_record(step.kind, step.record)
+                        with profile.timed("run.feed_send"):
+                            await connectors.send_feed_record(step.kind, step.record)
                         if step.kind == "transaction":
                             produced_partitions.add(0)
+                    profile.add_count(f"steps.feed.{step.kind}")
 
                 elif isinstance(step, DecisionStep):
                     # 6. DecisionStep: set world clock, drain, check R2/R3, post decision
+                    profile.add_count("steps.decision")
                     world_clock.set_time(step.world_time)
                     deadline = time.monotonic() + r_cfg.drain_timeout_seconds
-                    drain_duration = await drain(
-                        step_index=step_idx,
-                        workspace_conn=drain_conn,
-                        producer=producer,
-                        consumer=consumer,
-                        workspace=workspace,
-                        redis_client=ws_redis,
-                        acct_settings=acct_cfg,
-                        banks=banks,
-                        world_clock=world_clock,
-                        run_id=run_id,
-                        poller_cursors=poller_cursors,
-                        deadline=deadline,
-                        registry=registry,
-                    )
-                    if drain_duration > longest_drain_seconds:
-                        longest_drain_seconds = drain_duration
-
-                    if idle_advance and produced_partitions:
-                        next_unsent = steps[step_idx + 1].world_time if step_idx + 1 < len(steps) else None
-                        target_ts, reason = idle_advance_target(
-                            clock_now=step.world_time,
-                            commit_grace_seconds=acct_cfg.commit_grace,
-                            partition_drained=True,
-                            next_unsent_arrival=next_unsent,
-                        )
-                        if target_ts is not None:
-                            for part in produced_partitions:
-                                record_payment_watermark(ws_redis, partition=part, timestamp=target_ts, run_id=run_id)
-
-                    # Optional test injection hook (e.g. to simulate deleting watermark key or pausing consumer)
-                    if before_decision_hook is not None:
-                        ctx = ReplayHookContext(
+                    with profile.timed("run.decision_drain"):
+                        drain_duration = await drain(
                             step_index=step_idx,
-                            decision_step=step,
+                            workspace_conn=drain_conn,
+                            producer=producer,
                             consumer=consumer,
                             workspace=workspace,
+                            redis_client=ws_redis,
+                            acct_settings=acct_cfg,
+                            banks=banks,
+                            world_clock=world_clock,
+                            run_id=run_id,
+                            poller_cursors=poller_cursors,
+                            deadline=deadline,
+                            registry=registry,
+                            profile=profile,
                         )
-                        await before_decision_hook(ctx)
+                    with profile.timed("run.decision_post"):
+                        if drain_duration > longest_drain_seconds:
+                            longest_drain_seconds = drain_duration
 
-                    # R2: Every partition the runner has produced at least one message to must have a watermark
-                    for part in produced_partitions:
-                        wm = get_payment_watermark(ws_redis, partition=part, run_id=run_id)
-                        if wm is None:
-                            raise ReplayPipelineError(
-                                f"Section 9.4 R2 violation at step {step_idx}: Produced partition {part} "
-                                f"has no run-scoped payment watermark for run {run_id}"
+                        if idle_advance and produced_partitions:
+                            next_unsent = steps[step_idx + 1].world_time if step_idx + 1 < len(steps) else None
+                            target_ts, reason = idle_advance_target(
+                                clock_now=step.world_time,
+                                commit_grace_seconds=acct_cfg.commit_grace,
+                                partition_drained=True,
+                                next_unsent_arrival=next_unsent,
                             )
+                            if target_ts is not None:
+                                for part in produced_partitions:
+                                    record_payment_watermark(
+                                        ws_redis, partition=part, timestamp=target_ts, run_id=run_id
+                                    )
 
-                    # R3: Decisions that come before ANY payment has been produced
-                    # legitimately get status 'no_watermark'
-                    if not produced_partitions:
-                        decisions_before_first_payment += 1
+                        # Optional test injection hook (e.g. to simulate deleting watermark key or pausing consumer)
+                        if before_decision_hook is not None:
+                            ctx = ReplayHookContext(
+                                step_index=step_idx,
+                                decision_step=step,
+                                consumer=consumer,
+                                workspace=workspace,
+                            )
+                            await before_decision_hook(ctx)
 
-                    # Post decision
-                    sender_bank = step.call.sender_bank_id
-                    transport = connectors.transports[sender_bank]
-                    await transport.post(
-                        "/v1/decisions",
-                        step.call.body_bytes,
-                        step.call.idempotency_key,
-                    )
-                    decisions_sent += 1
+                        # R2: Every partition the runner has produced at least one message to must have a watermark
+                        for part in produced_partitions:
+                            wm = get_payment_watermark(ws_redis, partition=part, run_id=run_id)
+                            if wm is None:
+                                raise ReplayPipelineError(
+                                    f"Section 9.4 R2 violation at step {step_idx}: Produced partition {part} "
+                                    f"has no run-scoped payment watermark for run {run_id}"
+                                )
+
+                        # R3: Decisions that come before ANY payment has been produced
+                        # legitimately get status 'no_watermark'
+                        if not produced_partitions:
+                            decisions_before_first_payment += 1
+
+                        # Post decision
+                        sender_bank = step.call.sender_bank_id
+                        transport = connectors.transports[sender_bank]
+                        await transport.post(
+                            "/v1/decisions",
+                            step.call.body_bytes,
+                            step.call.idempotency_key,
+                        )
+                        decisions_sent += 1
 
             if prev_world_time is not None:
                 prev_ist = (
@@ -1136,18 +1215,20 @@ async def run_replay(
                         produced_partitions=produced_partitions,
                         next_unsent_arrival=None,
                         registry=registry,
+                        profile=profile,
                     )
                     if dur > longest_drain_seconds:
                         longest_drain_seconds = dur
 
             # Read feature rows from feature_log table before workspace teardown
-            rows = await drain_conn.fetch(
-                "SELECT bank_id, payment_id, decision_time, decided_at, watermark_lag_ms, "
-                "status, feature_values, missing_request_fields, registry_answers, created_at, "
-                "run_id, account_id, arrival_cutoff, feature_set_version, feature_names_sha256, "
-                "error_type, error_message "
-                "FROM feature_log ORDER BY bank_id, payment_id, decision_time"
-            )
+            with profile.timed("run.feature_log_fetch"):
+                rows = await drain_conn.fetch(
+                    "SELECT bank_id, payment_id, decision_time, decided_at, watermark_lag_ms, "
+                    "status, feature_values, missing_request_fields, registry_answers, created_at, "
+                    "run_id, account_id, arrival_cutoff, feature_set_version, feature_names_sha256, "
+                    "error_type, error_message "
+                    "FROM feature_log ORDER BY bank_id, payment_id, decision_time"
+                )
 
         sha256_hash = compute_feature_log_sha256(rows)
         feature_rows_by_status: dict[str, int] = defaultdict(int)
@@ -1189,21 +1270,23 @@ async def run_replay(
                 if gap > max_gap:
                     max_gap = gap
 
-        if before_drop_hook is not None:
-            sep = "&" if "?" in admin_pg else "?"
-            workspace_dsn = f"{admin_pg}{sep}options=-csearch_path%3D{workspace.postgres_schema}"
-            drop_ctx = ReplayDropContext(
-                workspace=workspace,
-                workspace_dsn=workspace_dsn,
-                logged_payment_ids_by_bank=dict(logged_payment_ids_by_bank),
-                dpip_key=replay_dpip_key(run_id),
-                registry_wired=registry_driver is not None,
-                registry_wired_reason=(
-                    REGISTRY_WIRED_REASON if registry_driver is not None else REGISTRY_NOT_WIRED_REASON
-                ),
-            )
-            await before_drop_hook(drop_ctx)
+        with profile.timed("run.drop_hook"):
+            if before_drop_hook is not None:
+                sep = "&" if "?" in admin_pg else "?"
+                workspace_dsn = f"{admin_pg}{sep}options=-csearch_path%3D{workspace.postgres_schema}"
+                drop_ctx = ReplayDropContext(
+                    workspace=workspace,
+                    workspace_dsn=workspace_dsn,
+                    logged_payment_ids_by_bank=dict(logged_payment_ids_by_bank),
+                    dpip_key=replay_dpip_key(run_id),
+                    registry_wired=registry_driver is not None,
+                    registry_wired_reason=(
+                        REGISTRY_WIRED_REASON if registry_driver is not None else REGISTRY_NOT_WIRED_REASON
+                    ),
+                )
+                await before_drop_hook(drop_ctx)
 
+        profile.add_seconds("run.total", time.perf_counter() - started)
         return ReplayResult(
             decisions_sent=decisions_sent,
             feature_rows_by_status=dict(feature_rows_by_status),
@@ -1221,6 +1304,7 @@ async def run_replay(
             registry_screens=registry_driver.stats.screens if registry_driver is not None else 0,
             registry_screens_unknown=registry_driver.stats.unknown if registry_driver is not None else 0,
             feature_log_sha256=sha256_hash,
+            profile=profile.to_dict(),
         )
 
     finally:
