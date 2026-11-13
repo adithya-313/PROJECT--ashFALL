@@ -4,7 +4,8 @@
 WHAT: Level 17 turns the typologies into a rules baseline. This showcase runs the committed rules
 table on constructed mule cases and on two genuine look-alikes, runs the OS-update-wave stress
 scenario through the real interactive world and bank feed to show that an OS update alone never
-looks like a new device, and shows the two guards that keep a guess or a leaky model out of results.
+looks like a new device, runs the real evaluator on the committed fixture worlds, and shows the
+two guards that keep a guess or a leaky model out of results.
 
 WHY: The rules are the bar the models must beat, so their firing, their reason codes and their
 known false triggers have to be shown with real calls, not described.
@@ -28,7 +29,10 @@ WHAT_YOU_SAW = (
     "The OS-update-wave stress scenario is run through the interactive world and the bank feed: accounts "
     "whose only device event is an OS update never raise new_device_r5, while a real phone change does. "
     "The committed rules config is untuned on purpose: the evaluation guard refuses it, and the anomaly "
-    "detector refuses a test split, so neither a guess nor a model that saw test rows can reach a result."
+    "detector refuses a test split, so neither a guess nor a model that saw test rows can reach a result. "
+    "The real evaluator runs on the committed tiny fixture worlds and writes a complete result.json; a copy "
+    "of the test world with an empty labels table still produces review decisions under the cold-start "
+    "policy; and two runs on the same inputs give one SHA-256."
 )
 
 
@@ -76,6 +80,26 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
             "world/bank_feed.py, features/m1_control_region.py, scenarios/stress/os-update-wave.yaml",
         ),
         d(
+            "17-4 fixture worlds produce a complete result.json",
+            "normal",
+            "The evaluator runs on the committed fixtures and every test-split value for all three "
+            'scorers is a number, a null or a "not run" status, with both tuning blocks reporting '
+            "meets_budget. 1 tiny test world: proves the pipeline, not a real result; spreads need "
+            ">= 20 worlds.",
+            c.check_17_4_results_on_fixture_worlds,
+            "The evaluator, a metric summary or the result writer changed.",
+            "evaluation/run_level_17.py, evaluation/rules_metrics.py",
+        ),
+        d(
+            "17-5 a world with no labels still produces decisions",
+            "edge",
+            "A copy of the fixture test dataset with an empty labels table still scores its "
+            "account-days and produces review decisions, and cold start stays on rules_and_anomaly.",
+            c.check_17_5_world_without_labels,
+            "Scoring needs labels, or cold start switched to a model without positive labels.",
+            "evaluation/level17_scoring.py, decisions/cold_start.py",
+        ),
+        d(
             "17-6 untuned rules and a test-split detector are refused",
             "negative",
             "require_tuned refuses the committed all-untuned rules config and train_anomaly_detector "
@@ -83,5 +107,14 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
             c.check_17_6_untuned_and_split_guards,
             "The untuned guard or the detector's split check was removed or weakened.",
             "evaluation/level17_evaluation.py, decisions/anomaly_detector.py",
+        ),
+        d(
+            "17-7 two runs on the same inputs give one hash",
+            "consistency",
+            "Two evaluator runs on the committed fixtures into separate roots write byte-identical "
+            "result.json files, so the same inputs always give the same result.",
+            c.check_17_7_same_inputs_same_result,
+            "A timestamp, an unordered collection or another varying value reached result.json.",
+            "evaluation/run_level_17.py, decisions/anomaly_detector.py",
         ),
     ]

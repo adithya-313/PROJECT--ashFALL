@@ -12,23 +12,42 @@ the real evaluator on the committed fixtures. Nothing here re-implements a decis
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
+import shutil
+import tempfile
 from collections import defaultdict
+from collections.abc import Mapping
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 import fakeredis
+import pyarrow as pa
+import pyarrow.parquet as pq
 
+from decisions.anomaly_config import load_anomaly_detector_config, load_cold_start_config
 from decisions.anomaly_detector import train_anomaly_detector
+from decisions.cold_start import choose_scorer, count_positive_labels
 from decisions.rules_config import load_rules_config
 from decisions.rules_engine import RulesDecision, evaluate_rules
+from evaluation.dataset_truth_join import join_truth
 from evaluation.level17_evaluation import require_tuned
+from evaluation.level17_scoring import daily_escalations, one_row_per_account_day, score_account_days
+from evaluation.rules_tuning import load_tuning_config
+from evaluation.run_level_17 import (
+    load_evaluation_settings,
+    load_split_datasets,
+    run_evaluation,
+    tune_on_validation,
+    world_start_by_world,
+)
 from features.account_keys import load_account_features_settings
 from features.account_records import AccountEventRecord
 from features.account_updater import apply_account_event
 from features.m1_features import compute_account_features
+from replay.dataset_builder import load_dataset
 from showcase.framework import CheckOutcome
 from world.bank_feed import BankFeedAccountEvent, project_run
 from world.fast_mode import FastRunSettings
@@ -38,6 +57,12 @@ from world.world_configs import read_world_configs
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURES_ROOT = REPO_ROOT / "showcase" / "fixtures" / "level_17"
+DATASETS_ROOT = FIXTURES_ROOT / "datasets"
+TRAINING_DATASET = DATASETS_ROOT / "training-20261031T1830-7a356ef53e9e"
+VALIDATION_DATASET = DATASETS_ROOT / "validation-20261031T1830-9d983967b617"
+TEST_DATASET = DATASETS_ROOT / "test-20261031T1830-9a2856ce53b2"
+TRUTH_ROOT = FIXTURES_ROOT / "truth"
+WORLD_CARDS_ROOT = FIXTURES_ROOT / "world_cards"
 OS_WAVE_LAYER_PATH = REPO_ROOT / "scenarios" / "stress" / "os-update-wave.yaml"
 
 _DEVICE_KINDS = frozenset({"os_update", "device_binding_change", "app_reinstall", "sim_swap"})
@@ -381,6 +406,210 @@ async def check_17_3_os_update_wave(workspace: Any) -> CheckOutcome:
     )
 
 
+_FIXTURE_METRICS: tuple[str, ...] = (
+    "recall_at_capacity",
+    "yield_measured",
+    "yield_reweighted",
+    "genuine_restriction_rate",
+    "median_time_to_detection_hours",
+)
+
+
+def _fixture_summary(across_worlds: Mapping[str, Any], scorer: str, metric: str) -> dict[str, Any]:
+    """
+    WHAT: Returns one test-window metric summary after checking it is an honest value.
+
+    WHY: A result that crashed, came back blank, or invented a status would otherwise look like a
+    pass; only a number, a null or the two documented "no measurement" statuses are accepted.
+
+    Args:
+        across_worlds: The test window's scorer -> metric -> summary block from result.json.
+        scorer: One of "rules", "anomaly" or "rules_and_anomaly".
+        metric: Headline metric name.
+
+    Returns:
+        The summary's value (or status), world count, spread text and unit.
+
+    Raises:
+        AssertionError: If the summary is missing, its status is unknown, or its value is not numeric.
+    """
+    summary = across_worlds.get(scorer, {}).get(metric)
+    if not isinstance(summary, Mapping):
+        raise AssertionError(f"test summary for {scorer}/{metric} is missing")
+    world_count = summary.get("world_count")
+    if isinstance(world_count, bool) or not isinstance(world_count, int):
+        raise AssertionError(f"test summary for {scorer}/{metric} has no integer world_count: {summary}")
+
+    if "status" in summary:
+        status = summary["status"]
+        honest_status = isinstance(status, str) and (status.startswith("not run") or status == "no numeric values")
+        if not honest_status:
+            raise AssertionError(f"test summary for {scorer}/{metric} has an unknown status: {status!r}")
+        return {"status": status, "world_count": world_count, "unit": summary.get("unit")}
+
+    value = summary.get("median")
+    if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))):
+        raise AssertionError(f"test summary for {scorer}/{metric} has a non-numeric value: {value!r}")
+    spread = summary.get("spread")
+    if not isinstance(spread, str):
+        raise AssertionError(f"test summary for {scorer}/{metric} has no spread text: {summary}")
+    return {"value": value, "world_count": world_count, "spread": spread, "unit": summary.get("unit")}
+
+
+def _two_decimals(value: Any) -> str:
+    """Returns a metric rounded to two decimals, or "not run" when the window has no number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "not run"
+    return f"{float(value):.2f}"
+
+
+async def check_17_4_results_on_fixture_worlds(workspace: Any) -> CheckOutcome:
+    """
+    WHAT: Runs the real Level 17 evaluator on the committed tiny fixture worlds into a temporary
+    out-root and reads every test-split headline number back from result.json.
+
+    WHY: The evaluator has to produce an auditable result from real datasets, and the committed
+    fixtures can only prove the pipeline runs; their spreads say nothing about the real world.
+
+    Returns:
+        A CheckOutcome whose key number states the rules and anomaly recall on the fixture world.
+
+    Raises:
+        AssertionError: If any reported value is neither a number, a null nor a "not run" status.
+    """
+    with tempfile.TemporaryDirectory() as temp_dir:
+        result_path = run_evaluation(
+            TRAINING_DATASET,
+            VALIDATION_DATASET,
+            (TEST_DATASET,),
+            (),
+            TRUTH_ROOT,
+            WORLD_CARDS_ROOT,
+            out_root=Path(temp_dir),
+        )
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+
+    test_summaries = result["across_worlds"]["test"]
+    summaries_by_scorer: dict[str, Any] = {
+        scorer: {metric: _fixture_summary(test_summaries, scorer, metric) for metric in _FIXTURE_METRICS}
+        for scorer in ("rules", "anomaly", "rules_and_anomaly")
+    }
+    tuning = result["manifest"]["tuning"]
+    rules_meets_budget = tuning["rules"]["meets_budget"]
+    anomaly_meets_budget = tuning["anomaly"]["meets_budget"]
+    if not isinstance(rules_meets_budget, bool) or not isinstance(anomaly_meets_budget, bool):
+        raise AssertionError(f"tuning blocks carry no boolean meets_budget: {tuning}")
+
+    rules_recall = summaries_by_scorer["rules"]["recall_at_capacity"]
+    anomaly_recall = summaries_by_scorer["anomaly"]["recall_at_capacity"]
+    world_count = rules_recall["world_count"]
+    plural = "" if world_count == 1 else "s"
+    return CheckOutcome(
+        key_number=(
+            f"rules recall {_two_decimals(rules_recall.get('value'))}, "
+            f"anomaly recall {_two_decimals(anomaly_recall.get('value'))} ({world_count} world{plural})"
+        ),
+        evidence={
+            "note": "1 tiny test world: proves the pipeline, not a real result; spreads need >= 20 worlds",
+            "test": summaries_by_scorer,
+            "tuning": {
+                "rules_meets_budget": rules_meets_budget,
+                "rules_validation_rate_pct": tuning["rules"]["validation_rate_pct"],
+                "anomaly_meets_budget": anomaly_meets_budget,
+                "anomaly_validation_rate_pct": tuning["anomaly"]["validation_rate_pct"],
+            },
+        },
+    )
+
+
+async def check_17_5_world_without_labels(workspace: Any) -> CheckOutcome:
+    """
+    WHAT: Copies the fixture test dataset to a temporary folder, empties its labels table (same
+    schema), then trains the detector, tunes on validation and scores that world's account-days.
+
+    WHY: A world where no complaint ever arrived must still produce review decisions, and with no
+    positive labels the cold-start policy must stay on rules plus anomaly instead of a model.
+
+    Returns:
+        A CheckOutcome whose key number states the escalation count and the cold-start choice.
+
+    Raises:
+        AssertionError: If the copy still holds labels, the empty table yields a positive count, the
+            cold-start policy leaves rules_and_anomaly, or no decision is produced.
+    """
+    anomaly_config = load_anomaly_detector_config()
+    settings = load_evaluation_settings()
+    tuning = load_tuning_config()
+
+    training_datasets = load_split_datasets("training", [TRAINING_DATASET])
+    training_rows = [row for dataset in training_datasets for row in dataset.snapshots.to_pylist()]
+    detector = train_anomaly_detector(
+        training_rows,
+        "training",
+        world_start_by_world(training_rows),
+        anomaly_config,
+    )
+    tuned = tune_on_validation(
+        VALIDATION_DATASET,
+        TRUTH_ROOT,
+        load_rules_config(),
+        tuning,
+        detector,
+        settings.genuine_restriction_budget_pct,
+    )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        empty_dataset_dir = Path(temp_dir) / TEST_DATASET.name
+        shutil.copytree(TEST_DATASET, empty_dataset_dir)
+        labels_schema = pq.read_schema(empty_dataset_dir / "labels.parquet")
+        pq.write_table(pa.Table.from_pylist([], schema=labels_schema), empty_dataset_dir / "labels.parquet")
+
+        dataset = load_dataset(empty_dataset_dir)
+        if dataset.labels.num_rows != 0:
+            raise AssertionError(f"the copied labels table still holds {dataset.labels.num_rows} rows")
+        empty_labels = dataset.labels.to_pylist()
+
+        _, snapshots = join_truth(empty_dataset_dir, TRUTH_ROOT)
+        snapshot_rows = snapshots.to_pylist()
+        day_rows = one_row_per_account_day(snapshot_rows)
+        scored = score_account_days(day_rows, tuned.rules_config, detector)
+        escalations = daily_escalations(
+            scored,
+            "rules_and_anomaly",
+            tuned.anomaly_result.threshold,
+            settings.capacity_pct_active_accounts_per_day,
+        )
+        decisions = sum(len(account_ids) for account_ids in escalations.values())
+
+    cold_start_config = load_cold_start_config()
+    scorer_by_bank: dict[str, str] = {}
+    for world in dataset.manifest["worlds"]:
+        world_id = str(world["world_id"])
+        world_rows = [row for row in snapshot_rows if row["world_id"] == world_id]
+        as_of = max(row["snapshot_time"] for row in world_rows)
+        for bank_id in sorted({str(row["bank_id"]) for row in world_rows}):
+            positive = count_positive_labels(empty_labels, bank_id, as_of, cold_start_config)
+            if positive != 0:
+                raise AssertionError(f"an empty labels table gave {positive} positive labels for {bank_id}")
+            scorer = choose_scorer(positive, False, cold_start_config)
+            if scorer != "rules_and_anomaly":
+                raise AssertionError(f"cold start chose {scorer} for {bank_id} with no labels")
+            scorer_by_bank[bank_id] = scorer
+
+    if decisions <= 0:
+        raise AssertionError(f"a world without labels produced {decisions} escalations")
+
+    return CheckOutcome(
+        key_number=f"empty labels: 0 positives, {decisions} decisions, cold start rules_and_anomaly",
+        evidence={
+            "empty_label_rows": len(empty_labels),
+            "decisions": decisions,
+            "escalation_days": len(escalations),
+            "cold_start_scorer_by_bank": scorer_by_bank,
+        },
+    )
+
+
 async def check_17_6_untuned_and_split_guards(workspace: Any) -> CheckOutcome:
     """
     WHAT: Feeds the committed all-untuned rules config to the evaluation guard and a test split to
@@ -414,5 +643,56 @@ async def check_17_6_untuned_and_split_guards(workspace: Any) -> CheckOutcome:
         evidence={
             "require_tuned_raised": untuned_refused,
             "train_anomaly_detector_test_split_raised": test_split_refused,
+        },
+    )
+
+
+async def check_17_7_same_inputs_same_result(workspace: Any) -> CheckOutcome:
+    """
+    WHAT: Runs the evaluator twice on the committed fixtures into two separate temporary roots and
+    compares the SHA-256 of the two result.json files.
+
+    WHY: A result that changes between identical runs cannot be audited or compared, so the
+    evaluator must be deterministic from its committed inputs alone.
+
+    Returns:
+        A CheckOutcome whose key number states that both runs produced one hash.
+
+    Raises:
+        AssertionError: If the two files differ.
+    """
+    with tempfile.TemporaryDirectory() as first_root, tempfile.TemporaryDirectory() as second_root:
+        first_path = run_evaluation(
+            TRAINING_DATASET,
+            VALIDATION_DATASET,
+            (TEST_DATASET,),
+            (),
+            TRUTH_ROOT,
+            WORLD_CARDS_ROOT,
+            out_root=Path(first_root),
+        )
+        second_path = run_evaluation(
+            TRAINING_DATASET,
+            VALIDATION_DATASET,
+            (TEST_DATASET,),
+            (),
+            TRUTH_ROOT,
+            WORLD_CARDS_ROOT,
+            out_root=Path(second_root),
+        )
+        first_bytes = first_path.read_bytes()
+        second_bytes = second_path.read_bytes()
+
+    first_sha = hashlib.sha256(first_bytes).hexdigest()
+    second_sha = hashlib.sha256(second_bytes).hexdigest()
+    if first_sha != second_sha:
+        raise AssertionError(f"two runs of the same inputs gave different result.json: {first_sha} != {second_sha}")
+
+    return CheckOutcome(
+        key_number=f"two runs, one SHA-256 ({first_sha[:12]})",
+        evidence={
+            "first_sha256": first_sha,
+            "second_sha256": second_sha,
+            "result_json_bytes": len(first_bytes),
         },
     )
