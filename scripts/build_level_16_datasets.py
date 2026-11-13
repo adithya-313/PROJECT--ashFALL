@@ -288,10 +288,13 @@ async def replay_and_extract(
     recorded: RecordedWorld,
     admin_pg: str,
     base_redis_url: str,
+    *,
+    profile_dir: Path | None = None,
 ) -> WorldExtract:
     """
     WHAT: Replays a recorded world through the operational pipeline and extracts workspace tables before teardown.
     WHY: Provides the point-in-time tables needed for dataset construction.
+    When profile_dir is set, the replay phase profile is written to profile_dir/<world_id>.json.
     """
     feed = feed_with_labels(recorded)
     holder: list[WorldExtract] = []
@@ -309,7 +312,16 @@ async def replay_and_extract(
             )
         )
 
-    await run_replay(
+    # A separate client reads the server-wide commandstats; the value below is shared by every
+    # client of this Redis server, so it counts the whole server, not only this replay.
+    redis_client: redis.Redis | None = None
+    commands_before = 0
+    if profile_dir is not None:
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        redis_client = redis.Redis.from_url(base_redis_url)
+        commands_before = redis_command_calls(redis_client)
+
+    result = await run_replay(
         recorded,
         feed,
         admin_pg=admin_pg,
@@ -318,9 +330,41 @@ async def replay_and_extract(
         decisions_per_event_payment=True,
         before_drop_hook=hook,
     )
+
+    if redis_client is not None:
+        commands_after = redis_command_calls(redis_client)
+        redis_client.close()
+        profile_payload: dict[str, Any] = {
+            "profile": result.profile,
+            "decisions_sent": result.decisions_sent,
+            "longest_drain_seconds": result.longest_drain_seconds,
+            "feature_log_sha256": result.feature_log_sha256,
+            "redis_commands_during_replay": commands_after - commands_before,
+        }
+        profile_path = profile_dir / f"{recorded.world_id}.json"
+        profile_path.write_bytes(
+            orjson.dumps(profile_payload, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2) + b"\n"
+        )
+
     if not holder:
         raise ValueError(f"Workspace extract hook was not triggered during replay of {recorded.world_id}")
     return holder[0]
+
+
+def redis_command_calls(client: redis.Redis) -> int:
+    """
+    WHAT: Sums the `calls` counter over all INFO commandstats sections.
+
+    WHY: The difference between two reads bounds how many Redis commands a replay issued. Redis keeps
+    this counter server-wide, so other clients of the same server also contribute.
+    """
+    commandstats = client.info("commandstats")
+    total = 0
+    for section in commandstats.values():
+        if not isinstance(section, dict):
+            raise ValueError(f"Unexpected Redis commandstats section: {section!r}")
+        total += int(section["calls"])
+    return total
 
 
 def save_evaluation_inputs(
@@ -367,11 +411,13 @@ async def build_split_dataset(
     write_evaluation_inputs: bool = False,
     truth_root: Path | None = None,
     world_cards_root: Path = DEFAULT_WORLD_CARDS_ROOT,
+    replay_profile_dir: Path | None = None,
 ) -> tuple[Dataset, Path, list[Path]]:
     """
     WHAT: Records, replays, extracts, builds and writes one dataset for a given split across its specs.
     WHY: Implements single-dataset-per-split building and automatic prior version supersession.
     When write_evaluation_inputs is on, each recorded world also saves its truth and base rate.
+    When replay_profile_dir is on, each world's replay profile is written there with its record and replay seconds.
     """
     loop = asyncio.get_running_loop()
     db_url = admin_pg if admin_pg is not None else get_showcase_database_url()
@@ -387,12 +433,28 @@ async def build_split_dataset(
     extracts: list[WorldExtract] = []
 
     for spec in specs:
+        record_started = time.perf_counter()
         rec = record_world_for_spec(spec, preset_name, sampler_cfg, code_version, loop)
+        record_seconds = time.perf_counter() - record_started
         recorded_worlds.append(rec)
         if evaluation_truth_root is not None:
             save_evaluation_inputs(rec, evaluation_truth_root, world_cards_root)
-        extract = await replay_and_extract(rec, db_url, redis_url)
+        replay_started = time.perf_counter()
+        if replay_profile_dir is None:
+            extract = await replay_and_extract(rec, db_url, redis_url)
+        else:
+            extract = await replay_and_extract(rec, db_url, redis_url, profile_dir=replay_profile_dir)
+        replay_seconds = time.perf_counter() - replay_started
         extracts.append(extract)
+
+        if replay_profile_dir is not None:
+            profile_path = replay_profile_dir / f"{rec.world_id}.json"
+            profile_payload = orjson.loads(profile_path.read_bytes())
+            profile_payload["record_seconds"] = round(record_seconds, 3)
+            profile_payload["replay_seconds"] = round(replay_seconds, 3)
+            profile_path.write_bytes(
+                orjson.dumps(profile_payload, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2) + b"\n"
+            )
 
     cutoff = derive_dataset_cutoff(recorded_worlds)
     dataset = build_dataset(extracts, split=split, cutoff=cutoff, code_version=code_version)
@@ -409,6 +471,7 @@ async def build_all_level_16_datasets(
     sampler_seed: int = 1,
     write_evaluation_inputs: bool = False,
     world_cards_root: Path = DEFAULT_WORLD_CARDS_ROOT,
+    replay_profile_dir: Path | None = None,
 ) -> dict[str, dict[str, Any]]:
     """
     WHAT: Builds datasets for all configured splits sequentially, returning execution metrics per split.
@@ -440,6 +503,7 @@ async def build_all_level_16_datasets(
             write_evaluation_inputs=write_evaluation_inputs,
             truth_root=truth_root,
             world_cards_root=world_cards_root,
+            replay_profile_dir=replay_profile_dir,
         )
         elapsed = time.monotonic() - t0
         label_summary = summarize_labels_by_source_and_via(dataset)
@@ -507,6 +571,12 @@ def main() -> None:
         help="World cards root for base_rate.json files (default: runs/world_cards)",
     )
     parser.add_argument(
+        "--replay-profile-dir",
+        type=str,
+        default=None,
+        help="Directory for per-world replay profile JSON files (default: no profiles written)",
+    )
+    parser.add_argument(
         "--sampler-seed",
         type=int,
         default=1,
@@ -541,6 +611,7 @@ def main() -> None:
             sampler_seed=args.sampler_seed,
             write_evaluation_inputs=args.write_evaluation_inputs,
             world_cards_root=Path(args.world_cards_root),
+            replay_profile_dir=Path(args.replay_profile_dir) if args.replay_profile_dir else None,
         )
     )
 
