@@ -74,3 +74,15 @@ replay_workspace:
     value: true
     reason: "The drain's watermark-advance step reads only rows after each poller cursor instead of re-applying the 200-row overlap tail; catch-up loops keep the overlap. Proven output-identical."
     derived_from: "Level 18a1-i verification on test-0000 tiny sampler seed 2: dataset identical to fixture test-20261031T1830-9a2856ce53b2 after run-id normalisation (0 differing rows in payments 2895, snapshots 2683, labels 8); drain.watermark_advance 1,684.5 s -> 49.8 s; wall 4,681 s -> 3,256 s; Redis commands 9.52 M -> 2.95 M"
+
+  local_offset_tracking:
+    label: policy
+    value: false
+    reason: "When true, the drain's payments-topic caught-up check uses local produced/consumed counters instead of asking the broker for end and committed offsets every drain; a broker cross-check runs at each snapshot boundary and at run end. Forced off when a replay hook is supplied."
+    derived_from: "Level 18a1 profile on test-0000 tiny seed 2 (switch-on watermark run): drain.offset_check 1,491.8 s, drain.registry_poll 1,031.4 s of run.total 3,244.2 s; architect 18a1-ii"
+
+  registry_poll_on_change:
+    label: policy
+    value: false
+    reason: "When true, the registry drain skips getmany and offset calls while the local registry produced count equals the consumed count; the national outbox relay still runs every drain. Forced off when a replay hook is supplied."
+    derived_from: "Level 18a1 profile on test-0000 tiny seed 2 (switch-on watermark run): drain.offset_check 1,491.8 s, drain.registry_poll 1,031.4 s of run.total 3,244.2 s; architect 18a1-ii"

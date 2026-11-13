@@ -72,7 +72,13 @@ __all__ = [
     "check_workspace_topic_partitions",
     "compute_feature_log_sha256",
     "day_boundaries_between",
+    "DrainCounters",
+    "cross_check_counters",
     "drain",
+    "load_default_local_offset_tracking",
+    "load_default_registry_poll_on_change",
+    "read_registry_batch",
+    "resolve_drain_switches",
     "idle_advance_target",
     "load_default_idle_partition_advance",
     "load_default_watermark_advance_skip_overlap",
@@ -97,6 +103,82 @@ class ReplayDrainTimeout(Exception):
 
 class ReplayPipelineError(Exception):
     """Raised when an internal pipeline invariant is violated during replay."""
+
+
+@dataclass
+class DrainCounters:
+    """
+    WHAT: Local counts of messages the replay itself put on, and took off, the two workspace topics.
+    WHY: The drain asks the broker "is the consumer caught up?" on every pass. A replay is the only producer and
+    the only consumer of its own fresh topics, so it can know the answer locally. Counting is always on (it is
+    cheap) so the broker cross-check can run in either mode.
+    Fields: payments_produced / payments_consumed for the payments topic, registry_produced / registry_consumed
+    for the registry topic. Each is a plain message count since the topic was created (offset 0).
+    """
+
+    payments_produced: int = 0
+    payments_consumed: int = 0
+    registry_produced: int = 0
+    registry_consumed: int = 0
+
+
+def resolve_drain_switches(
+    local_offset_tracking: bool, registry_poll_on_change: bool, hooks_present: bool
+) -> tuple[bool, bool]:
+    """
+    WHAT: Decides which of the two local-counter switches really apply to this run.
+    WHY: before_decision_hook / before_drop_hook can publish to Kafka outside the counters, so with a hook the
+    counters could be wrong. Both switches are then forced OFF (the broker path) and one log line says so.
+    Args: the two configured switch values, and whether any hook was supplied.
+    Returns: (local_offset_tracking, registry_poll_on_change) to use for the run.
+    """
+    if hooks_present and (local_offset_tracking or registry_poll_on_change):
+        logger.info(
+            "Replay hooks supplied: local_offset_tracking and registry_poll_on_change forced OFF "
+            "(hooks may publish outside the drain counters; using broker offsets)"
+        )
+        return False, False
+    return local_offset_tracking, registry_poll_on_change
+
+
+async def _topic_offsets(consumer: Any, topic: str) -> tuple[int, int]:
+    """
+    WHAT: Reads the broker's end offset and this consumer's committed offset for a topic, summed over partitions.
+    WHY: Shared by the cross-check; a missing committed offset means nothing committed yet, so it counts as 0.
+    Returns: (end_total, committed_total).
+    """
+    parts = consumer.partitions_for_topic(topic) or {0}
+    tps = [TopicPartition(topic, p) for p in sorted(parts)]
+    end_dict = await consumer.end_offsets(tps)
+    end_total = sum(int(end_dict.get(tp, 0)) for tp in tps)
+    committed_total = 0
+    for tp in tps:
+        committed_total += int((await consumer.committed(tp)) or 0)
+    return end_total, committed_total
+
+
+async def cross_check_counters(
+    consumer: Any, workspace: ReplayWorkspace, registry: "RegistryDrain | None", counters: DrainCounters
+) -> None:
+    """
+    WHAT: Compares the local counters with the broker: end offset == produced and committed == consumed, for the
+    payments topic and (when present) the registry topic.
+    WHY: With the local switches on, the drain never asks the broker. This check proves the counters still match
+    reality at each snapshot boundary and at run end. A mismatch is never corrected silently.
+    Raises: ReplayPipelineError naming the topic, the local values and the broker values.
+    """
+    checks: list[tuple[str, Any, int, int]] = [
+        (workspace.kafka_topic, consumer, counters.payments_produced, counters.payments_consumed)
+    ]
+    if registry is not None:
+        checks.append((registry.topic, registry.consumer, counters.registry_produced, counters.registry_consumed))
+    for topic, topic_consumer, produced, consumed in checks:
+        end_total, committed_total = await _topic_offsets(topic_consumer, topic)
+        if end_total != produced or committed_total != consumed:
+            raise ReplayPipelineError(
+                f"Local offset counters disagree with the broker on topic {topic}: "
+                f"local produced={produced} consumed={consumed}; broker end={end_total} committed={committed_total}"
+            )
 
 
 @dataclass(frozen=True)
@@ -283,6 +365,22 @@ class RegistryDrain:
     handler: Callable[[list[Any], Any], Awaitable[None]] | None = None
 
 
+async def read_registry_batch(registry: RegistryDrain, conn: Any, timeout_ms: int = 20) -> int:
+    """
+    WHAT: Reads the available registry messages, hands them to the handler, and commits.
+    WHY: The read half of drain_registry, split out so the drain can count the records it handled without the
+    offset calls that drain_registry makes afterwards.
+    Returns: The number of registry records handled (0 when nothing was available).
+    """
+    batches = await registry.consumer.getmany(timeout_ms=timeout_ms)
+    records = [rec for tp in sorted(batches, key=lambda t: (t.topic, t.partition)) for rec in batches[tp]]
+    if records:
+        if registry.handler is not None:
+            await registry.handler(records, conn)
+        await registry.consumer.commit()
+    return len(records)
+
+
 async def drain_registry(registry: RegistryDrain, conn: Any, timeout_ms: int = 20) -> bool:
     """
     WHAT: Reads the available registry messages, hands them to the handler, commits, and says whether the consumer is
@@ -297,12 +395,7 @@ async def drain_registry(registry: RegistryDrain, conn: Any, timeout_ms: int = 2
     Example:
         caught_up = await drain_registry(registry)
     """
-    batches = await registry.consumer.getmany(timeout_ms=timeout_ms)
-    records = [rec for tp in sorted(batches, key=lambda t: (t.topic, t.partition)) for rec in batches[tp]]
-    if records:
-        if registry.handler is not None:
-            await registry.handler(records, conn)
-        await registry.consumer.commit()
+    await read_registry_batch(registry, conn, timeout_ms)
     parts = registry.consumer.partitions_for_topic(registry.topic) or {0}
     tps = [TopicPartition(registry.topic, p) for p in sorted(parts)]
     end_dict = await registry.consumer.end_offsets(tps)
@@ -327,6 +420,9 @@ async def drain(
     registry: RegistryDrain | None = None,
     profile: ReplayProfile | None = None,
     skip_overlap_on_advance: bool = False,
+    counters: DrainCounters | None = None,
+    local_offset_tracking: bool = False,
+    registry_poll_on_change: bool = False,
 ) -> float:
     """
     WHAT: Drains the outbox, consumer, and table pollers until pipeline convergence or deadline.
@@ -336,7 +432,15 @@ async def drain(
     and return value are exactly as before.
     With skip_overlap_on_advance=True the watermark-advance step skips the overlap re-read (see the block below);
     the default False keeps every existing caller identical.
+    counters always counts what is produced to and consumed from the two topics. local_offset_tracking replaces the
+    payments end_offsets/committed calls with those counters; registry_poll_on_change skips the registry
+    getmany/offset calls while registry produced == consumed. Either switch on needs counters (ValueError otherwise).
+    Both default off, which is exactly the previous behaviour.
     """
+    if (local_offset_tracking or registry_poll_on_change) and counters is None:
+        raise ValueError("local_offset_tracking / registry_poll_on_change need a DrainCounters instance")
+    # With no counters supplied (existing callers) a throwaway instance keeps the counting code branch-free.
+    counts = counters if counters is not None else DrainCounters()
     t0 = time.monotonic()
     topic_parts = consumer.partitions_for_topic(workspace.kafka_topic) or {0}
     tps = [TopicPartition(workspace.kafka_topic, p) for p in sorted(topic_parts)]
@@ -349,6 +453,7 @@ async def drain(
         keeps the consume counters honest without timing the outbox loop twice.
         """
         consumed = await consume_available(consumer, redis_client, acct_settings, timeout_ms=20)
+        counts.payments_consumed += consumed
         if profile is not None:
             if consumed == 0:
                 profile.add_count("drain.consume_empty_polls")
@@ -374,37 +479,60 @@ async def drain(
             while await count_waiting(workspace_conn) > 0:
                 if time.monotonic() > deadline:
                     break
-                await relay_one_batch(
+                batch_result = await relay_one_batch(
                     workspace_conn,
                     producer,
                     batch_size=batch_size,
                     topic=workspace.kafka_topic,
                 )
+                # .published counts only rows the broker acknowledged on this topic (dead letters are separate).
+                counts.payments_produced += batch_result.published
                 # S2.3: poll consumer on every loop
                 await consume_with_counts()
 
         # a2. National outbox: registry events go to the workspace registry topic (payments outbox is separate)
         registry_caught_up = True
         if registry is not None:
+            published_by_topic: dict[str, int] = {}
             with _profile_timer(profile, "drain.national_relay"):
                 await relay_national_outbox(
                     workspace_conn, producer, batch_size=batch_size,
                     topic_map={"registry.events": registry.topic},
+                    published_by_topic=published_by_topic,
                 )
+            # Count exactly what reached the registry topic, not the relay's aggregate total.
+            counts.registry_produced += published_by_topic.get(registry.topic, 0)
+            if registry_poll_on_change:
+                unexpected = {t: n for t, n in published_by_topic.items() if t != registry.topic}
+                if unexpected:
+                    raise ReplayPipelineError(
+                        f"Unexpected publisher in replay: national outbox published to {unexpected} "
+                        f"besides {registry.topic}; local registry counters cannot be trusted"
+                    )
             with _profile_timer(profile, "drain.registry_poll"):
-                registry_caught_up = await drain_registry(registry, workspace_conn)
+                if registry_poll_on_change:
+                    # Nothing left to read when everything produced was already consumed: skip the broker round trips.
+                    if counts.registry_consumed < counts.registry_produced:
+                        counts.registry_consumed += await read_registry_batch(registry, workspace_conn)
+                    registry_caught_up = counts.registry_consumed >= counts.registry_produced
+                else:
+                    registry_caught_up = await drain_registry(registry, workspace_conn)
 
         # b. Consumer: consume available messages until committed offset >= end offset for all partitions
         with _profile_timer(profile, "drain.consume"):
             await consume_with_counts()
 
         with _profile_timer(profile, "drain.offset_check"):
-            end_dict = await consumer.end_offsets(tps)
-            committed_dict = {tp: await consumer.committed(tp) for tp in tps}
-        consumer_caught_up = all(
-            (committed_dict.get(tp) or 0) >= end_dict.get(tp, 0)
-            for tp in tps
-        )
+            if local_offset_tracking:
+                # The replay is the only producer and consumer of this fresh topic, so counts answer it locally.
+                consumer_caught_up = counts.payments_consumed >= counts.payments_produced
+            else:
+                end_dict = await consumer.end_offsets(tps)
+                committed_dict = {tp: await consumer.committed(tp) for tp in tps}
+                consumer_caught_up = all(
+                    (committed_dict.get(tp) or 0) >= end_dict.get(tp, 0)
+                    for tp in tps
+                )
 
         # c. Pollers: advance each of the 4 pollers for each bank until cursor >= table max id
         pollers_caught_up = True
@@ -677,6 +805,37 @@ def load_default_watermark_advance_skip_overlap() -> bool:
     return bool(entry["value"])
 
 
+def _load_replay_policy_flag(name: str) -> bool:
+    """
+    WHAT: Reads one boolean policy setting from the replay_workspace block of config/replay.yaml.
+    WHY: One reader for the flags that share the same shape. Raises ValueError if the setting is missing.
+    """
+    from core.config_validator import load_yaml
+    from world.replay_workspace import CONFIG_PATH
+
+    data = load_yaml(CONFIG_PATH)
+    entry = data.get("replay_workspace", {}).get(name)
+    if entry is None or not isinstance(entry, dict) or "value" not in entry:
+        raise ValueError(f"Missing '{name}' policy setting in {CONFIG_PATH}")
+    return bool(entry["value"])
+
+
+def load_default_local_offset_tracking() -> bool:
+    """
+    WHAT: Reads the local_offset_tracking policy setting from config/replay.yaml.
+    WHY: Level 18a1-ii: when true the drain checks the payments topic with local counters, not broker offsets.
+    """
+    return _load_replay_policy_flag("local_offset_tracking")
+
+
+def load_default_registry_poll_on_change() -> bool:
+    """
+    WHAT: Reads the registry_poll_on_change policy setting from config/replay.yaml.
+    WHY: Level 18a1-ii: when true the registry drain skips its broker calls while produced == consumed locally.
+    """
+    return _load_replay_policy_flag("registry_poll_on_change")
+
+
 def idle_advance_target(
     clock_now: datetime,
     commit_grace_seconds: int | float,
@@ -777,6 +936,9 @@ async def _snapshot_completed_day(
     registry: RegistryDrain | None = None,
     profile: ReplayProfile | None = None,
     skip_overlap_on_advance: bool = False,
+    counters: DrainCounters | None = None,
+    local_offset_tracking: bool = False,
+    registry_poll_on_change: bool = False,
 ) -> float:
     """
     WHAT: Drains the operational pipeline up to boundary and writes daily account snapshots for completed day.
@@ -804,7 +966,13 @@ async def _snapshot_completed_day(
             registry=registry,
             profile=profile,
             skip_overlap_on_advance=skip_overlap_on_advance,
+            counters=counters,
+            local_offset_tracking=local_offset_tracking,
+            registry_poll_on_change=registry_poll_on_change,
         )
+    # With a local switch on the drain never asked the broker; prove the counters still match it at every boundary.
+    if (local_offset_tracking or registry_poll_on_change) and counters is not None:
+        await cross_check_counters(consumer, workspace, registry, counters)
     with _profile_timer(profile, "run.snapshot_write"):
         if idle_advance and produced_partitions:
             target_ts, reason = idle_advance_target(
@@ -882,6 +1050,13 @@ async def run_replay(
     )
     # Read once per run so every drain in this replay uses the same policy.
     skip_overlap_on_advance = load_default_watermark_advance_skip_overlap()
+    # Hooks can publish outside the counters, so with a hook both local-counter switches fall back to the broker.
+    local_offset_tracking, registry_poll_on_change = resolve_drain_switches(
+        load_default_local_offset_tracking(),
+        load_default_registry_poll_on_change(),
+        hooks_present=before_decision_hook is not None or before_drop_hook is not None,
+    )
+    counters = DrainCounters()
 
     per_event_mode = (
         load_default_decisions_per_event_payment()
@@ -1126,6 +1301,9 @@ async def run_replay(
                             registry=registry,
                             profile=profile,
                             skip_overlap_on_advance=skip_overlap_on_advance,
+                            counters=counters,
+                            local_offset_tracking=local_offset_tracking,
+                            registry_poll_on_change=registry_poll_on_change,
                         )
                         if dur > longest_drain_seconds:
                             longest_drain_seconds = dur
@@ -1168,6 +1346,9 @@ async def run_replay(
                             registry=registry,
                             profile=profile,
                             skip_overlap_on_advance=skip_overlap_on_advance,
+                            counters=counters,
+                            local_offset_tracking=local_offset_tracking,
+                            registry_poll_on_change=registry_poll_on_change,
                         )
                     with profile.timed("run.decision_post"):
                         if drain_duration > longest_drain_seconds:
@@ -1251,7 +1432,11 @@ async def run_replay(
                         registry=registry,
                         profile=profile,
                         skip_overlap_on_advance=skip_overlap_on_advance,
+                        counters=counters,
+                        local_offset_tracking=local_offset_tracking,
+                        registry_poll_on_change=registry_poll_on_change,
                     )
+                    # The final-boundary snapshot above ends with the cross-check, which is the run-end check.
                     if dur > longest_drain_seconds:
                         longest_drain_seconds = dur
 
