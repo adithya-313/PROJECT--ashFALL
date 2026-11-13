@@ -75,6 +75,7 @@ __all__ = [
     "drain",
     "idle_advance_target",
     "load_default_idle_partition_advance",
+    "load_default_watermark_advance_skip_overlap",
     "run_replay",
 ]
 
@@ -325,6 +326,7 @@ async def drain(
     batch_size: int = 100,
     registry: RegistryDrain | None = None,
     profile: ReplayProfile | None = None,
+    skip_overlap_on_advance: bool = False,
 ) -> float:
     """
     WHAT: Drains the outbox, consumer, and table pollers until pipeline convergence or deadline.
@@ -332,6 +334,8 @@ async def drain(
     before scoring a decision. S2.3: consumer is polled on every iteration to prevent deadlocks.
     The optional profile records the time and counts of each phase; with profile=None the behaviour
     and return value are exactly as before.
+    With skip_overlap_on_advance=True the watermark-advance step skips the overlap re-read (see the block below);
+    the default False keeps every existing caller identical.
     """
     t0 = time.monotonic()
     topic_parts = consumer.partitions_for_topic(workspace.kafka_topic) or {0}
@@ -503,29 +507,36 @@ async def drain(
                         break
                     poller_cursors[bank_id]["labels"] = c_lbl
 
-            # Advance clock watermarks on empty or caught-up tables
+            # Advance clock watermarks on empty or caught-up tables. With the skip switch on, overlap_rows=0
+            # makes this call read only rows after the cursor: the catch-up loops above already applied the
+            # overlap tail, so repeating it here only costs time. Off passes nothing (config overlap, as before).
+            advance_kwargs: dict[str, int] = {"overlap_rows": 0} if skip_overlap_on_advance else {}
             with _profile_timer(profile, "drain.watermark_advance"):
                 c_ev = await apply_account_events_since(
                     workspace_conn, redis_client, settings=acct_settings, bank_id=bank_id,
                     after_id=poller_cursors[bank_id]["events"], clock=world_clock, run_id=run_id,
+                    **advance_kwargs,
                 )
                 poller_cursors[bank_id]["events"] = max(poller_cursors[bank_id]["events"], c_ev)
 
                 c_wt = await apply_withdrawals_since(
                     workspace_conn, redis_client, settings=acct_settings, bank_id=bank_id,
                     after_id=poller_cursors[bank_id]["withdrawals"], clock=world_clock, run_id=run_id,
+                    **advance_kwargs,
                 )
                 poller_cursors[bank_id]["withdrawals"] = max(poller_cursors[bank_id]["withdrawals"], c_wt)
 
                 c_fb = await apply_feedback_since(
                     workspace_conn, redis_client, settings=acct_settings, bank_id=bank_id,
                     after_id=poller_cursors[bank_id]["feedback"], clock=world_clock, run_id=run_id,
+                    **advance_kwargs,
                 )
                 poller_cursors[bank_id]["feedback"] = max(poller_cursors[bank_id]["feedback"], c_fb)
 
                 c_cm = await apply_complaints_since(
                     workspace_conn, redis_client, settings=acct_settings, bank_id=bank_id,
                     after_id=poller_cursors[bank_id]["complaints"], clock=world_clock, run_id=run_id,
+                    **advance_kwargs,
                 )
                 poller_cursors[bank_id]["complaints"] = max(poller_cursors[bank_id]["complaints"], c_cm)
 
@@ -649,6 +660,23 @@ def load_default_idle_partition_advance() -> bool:
     return bool(entry["value"])
 
 
+def load_default_watermark_advance_skip_overlap() -> bool:
+    """
+    WHAT: Reads the watermark_advance_skip_overlap policy setting from config/replay.yaml.
+    WHY: Level 18a1: the drain's watermark-advance step re-applies the overlap tail on every drain; when this
+    switch is true that step reads only rows after each poller cursor. Raises ValueError if the setting is missing.
+    """
+    from core.config_validator import load_yaml
+    from world.replay_workspace import CONFIG_PATH
+
+    data = load_yaml(CONFIG_PATH)
+    block = data.get("replay_workspace", {})
+    entry = block.get("watermark_advance_skip_overlap")
+    if entry is None or not isinstance(entry, dict) or "value" not in entry:
+        raise ValueError(f"Missing 'watermark_advance_skip_overlap' policy setting in {CONFIG_PATH}")
+    return bool(entry["value"])
+
+
 def idle_advance_target(
     clock_now: datetime,
     commit_grace_seconds: int | float,
@@ -748,6 +776,7 @@ async def _snapshot_completed_day(
     next_unsent_arrival: datetime | None = None,
     registry: RegistryDrain | None = None,
     profile: ReplayProfile | None = None,
+    skip_overlap_on_advance: bool = False,
 ) -> float:
     """
     WHAT: Drains the operational pipeline up to boundary and writes daily account snapshots for completed day.
@@ -774,6 +803,7 @@ async def _snapshot_completed_day(
             deadline=deadline,
             registry=registry,
             profile=profile,
+            skip_overlap_on_advance=skip_overlap_on_advance,
         )
     with _profile_timer(profile, "run.snapshot_write"):
         if idle_advance and produced_partitions:
@@ -850,6 +880,8 @@ async def run_replay(
         if idle_partition_advance is None
         else bool(idle_partition_advance)
     )
+    # Read once per run so every drain in this replay uses the same policy.
+    skip_overlap_on_advance = load_default_watermark_advance_skip_overlap()
 
     per_event_mode = (
         load_default_decisions_per_event_payment()
@@ -1093,6 +1125,7 @@ async def run_replay(
                             next_unsent_arrival=step.world_time,
                             registry=registry,
                             profile=profile,
+                            skip_overlap_on_advance=skip_overlap_on_advance,
                         )
                         if dur > longest_drain_seconds:
                             longest_drain_seconds = dur
@@ -1134,6 +1167,7 @@ async def run_replay(
                             deadline=deadline,
                             registry=registry,
                             profile=profile,
+                            skip_overlap_on_advance=skip_overlap_on_advance,
                         )
                     with profile.timed("run.decision_post"):
                         if drain_duration > longest_drain_seconds:
@@ -1216,6 +1250,7 @@ async def run_replay(
                         next_unsent_arrival=None,
                         registry=registry,
                         profile=profile,
+                        skip_overlap_on_advance=skip_overlap_on_advance,
                     )
                     if dur > longest_drain_seconds:
                         longest_drain_seconds = dur

@@ -144,6 +144,8 @@ async def apply_feedback_since(
     after_id: int = 0,
     clock: Clock | None = None,
     run_id: str | None = None,
+    *,
+    overlap_rows: int | None = None,
 ) -> int:
     """
     WHAT: Queries bank_feedback for rows with id > after_id (with overlap re-read) and updates Redis labelled_accounts.
@@ -167,10 +169,17 @@ async def apply_feedback_since(
             provided to write run-scoped watermarks ('acctwm:{run_id}:{bank_id}:feedback').
             Run-scoped keys belong only to world-clock runs; if clock is None and run_id is given,
             raises ValueError.
+        overlap_rows: Optional override of how many trailing rows before after_id are re-read.
+            None uses cfg.account_event_overlap_rows (the live and catch-up behaviour). An int >= 0 uses
+            that value; 0 reads only rows after the cursor. The drain's watermark-only call passes 0
+            because it has no reason to re-apply rows it already applied. A negative value raises ValueError.
 
     Returns:
         The highest row ID processed, or after_id if no rows were found.
     """
+    if overlap_rows is not None and overlap_rows < 0:
+        raise ValueError(f"overlap_rows must be >= 0 or None, got {overlap_rows}")
+
     if clock is not None and run_id is None:
         raise ValueError("When clock is provided, run_id must also be provided to write run-scoped watermarks")
     if clock is None and run_id is not None:
@@ -185,7 +194,7 @@ async def apply_feedback_since(
         poll_start_time = await connection.fetchval("SELECT now()")
 
     batch_size = cfg.account_event_batch_size
-    overlap = cfg.account_event_overlap_rows
+    overlap = cfg.account_event_overlap_rows if overlap_rows is None else overlap_rows
     start_id = max(0, after_id - overlap)
 
     rows = await connection.fetch(
@@ -260,6 +269,8 @@ async def apply_complaints_since(
     after_id: int = 0,
     clock: Clock | None = None,
     run_id: str | None = None,
+    *,
+    overlap_rows: int | None = None,
 ) -> int:
     """
     WHAT: Queries bank_complaints for rows with id > after_id and records complained accounts for this bank.
@@ -279,10 +290,17 @@ async def apply_complaints_since(
             provided to write run-scoped watermarks ('acctwm:{run_id}:{bank_id}:complaints').
             Run-scoped keys belong only to world-clock runs; if clock is None and run_id is given,
             raises ValueError.
+        overlap_rows: Optional override of how many trailing rows before after_id are re-read.
+            None uses cfg.account_event_overlap_rows (the live and catch-up behaviour). An int >= 0 uses
+            that value; 0 reads only rows after the cursor. The drain's watermark-only call passes 0
+            because it has no reason to re-apply rows it already applied. A negative value raises ValueError.
 
     Returns:
         The highest row ID processed, or after_id if no rows were found.
     """
+    if overlap_rows is not None and overlap_rows < 0:
+        raise ValueError(f"overlap_rows must be >= 0 or None, got {overlap_rows}")
+
     if clock is not None and run_id is None:
         raise ValueError("When clock is provided, run_id must also be provided to write run-scoped watermarks")
     if clock is None and run_id is not None:
@@ -297,7 +315,7 @@ async def apply_complaints_since(
         poll_start_time = await connection.fetchval("SELECT now()")
 
     batch_size = cfg.account_event_batch_size
-    overlap = cfg.account_event_overlap_rows
+    overlap = cfg.account_event_overlap_rows if overlap_rows is None else overlap_rows
     start_id = max(0, after_id - overlap)
 
     rows = await connection.fetch(

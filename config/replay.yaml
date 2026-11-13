@@ -68,3 +68,9 @@ replay_workspace:
     value: true
     reason: "architect 16c-3 (b) — a quiet payment partition stalls the watermark; the replay proves the drain, so it may advance like the pollers"
     derived_from: "architect 16c-3 (b)"
+
+  watermark_advance_skip_overlap:
+    label: policy
+    value: false
+    reason: "When true, the drain's watermark-advance step reads only rows after each poller cursor instead of re-applying the 200-row overlap tail; catch-up loops keep the overlap. Off until byte-identical replay is proven."
+    derived_from: "Level 18a1 profile: drain.watermark_advance 1,684.5 s of 4,673.6 s on test-0000 tiny seed 2; architect 18a1-i"
