@@ -8,7 +8,7 @@ untuned_start value is rejected.
 """
 
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -64,12 +64,12 @@ def _validation_rows() -> list[dict[str, Any]]:
     return rows
 
 
-def _scored_day(account_id: str, anomaly_score: float, role: str) -> ScoredDay:
+def _scored_day(account_id: str, anomaly_score: float, role: str, day: date = TUNING_DAY) -> ScoredDay:
     """Builds one scored validation day; rules fields are unused by the anomaly tuner."""
     return ScoredDay(
         bank_id="bank_a",
         account_id=account_id,
-        day=TUNING_DAY,
+        day=day,
         rules_score=0,
         rules_fired=(),
         anomaly_score=anomaly_score,
@@ -152,6 +152,31 @@ def test_tune_anomaly_threshold_picks_0199() -> None:
 
     assert result.threshold == pytest.approx(0.199)
     assert result.validation_rate_pct == 0.5
+    assert result.validation_recall == 1.0
+    assert result.meets_budget is True
+
+
+# (h) The validation rate counts restricted genuine accounts, not restricted account-days.
+def test_validation_rate_counts_restricted_genuine_accounts_not_days() -> None:
+    """
+    Ten genuine accounts over twelve genuine account-days: genuine_000 has three days scored
+    0.9, 0.8 and 0.7, the other nine have one day at 0.1, and one mule scores 0.7. The cut 0.7
+    restricts one of ten genuine accounts (10.0%); counting restricted account-days instead
+    would report 3 of 12 (25.0%).
+    """
+    scored = [
+        _scored_day("genuine_000", 0.9, "genuine", TUNING_DAY),
+        _scored_day("genuine_000", 0.8, "genuine", TUNING_DAY + timedelta(days=1)),
+        _scored_day("genuine_000", 0.7, "genuine", TUNING_DAY + timedelta(days=2)),
+    ]
+    scored.extend(_scored_day(f"genuine_{index:03d}", 0.1, "genuine") for index in range(1, 10))
+    scored.append(_scored_day("mule_1", 0.7, "mule"))
+
+    result = tune_anomaly_threshold(scored, load_tuning_config(), "validation", 10.0)
+
+    assert result.threshold == pytest.approx(0.7)
+    assert result.validation_rate_pct == 10.0
+    assert result.validation_rate_pct != pytest.approx(25.0)
     assert result.validation_recall == 1.0
     assert result.meets_budget is True
 

@@ -5,10 +5,11 @@ validation worlds only.
 WHY: The rules baseline ships with untuned_start thresholds. Before it can be compared with the
 model at a matched genuine-restriction rate, every threshold must be chosen from a pre-declared
 grid on validation worlds, never on test or stress worlds. The search therefore enumerates the
-whole grid, rejects any point that restricts more genuine account-days than the budget allows,
+whole grid, rejects any point that restricts more genuine accounts than the budget allows,
 and reports the point with the highest mule recall at that budget.
 
-TERM: validation rate: percentage of genuine account-days (genuine or victim) that are restricted.
+TERM: validation rate: percentage of genuinely active accounts (genuine or victim) restricted on
+at least one genuine day.
 TERM: validation recall: share of mule accounts (mule, collector, cash_out) with at least one
 restricted mule day.
 
@@ -83,7 +84,7 @@ class RuleStandalone:
 
     ATTRIBUTES:
         reason_code: Reason code of the rule.
-        validation_rate_pct: Percentage of genuine account-days this rule alone restricts.
+        validation_rate_pct: Percentage of genuinely active accounts this rule alone restricts.
         validation_recall: Share of mule accounts this rule alone detects.
     """
 
@@ -99,7 +100,7 @@ class RulesTuningResult:
 
     ATTRIBUTES:
         thresholds: chosen value for every baseline threshold key.
-        validation_rate_pct: percentage of genuine account-days the chosen point restricts.
+        validation_rate_pct: percentage of genuinely active accounts the chosen point restricts.
         validation_recall: share of mule accounts the chosen point detects.
         meets_budget: True when validation_rate_pct is within the genuine-restriction budget.
         combinations_evaluated: number of grid points scored.
@@ -121,7 +122,7 @@ class AnomalyTuningResult:
 
     ATTRIBUTES:
         threshold: chosen inclusive anomaly score cut.
-        validation_rate_pct: percentage of genuine account-days the cut restricts.
+        validation_rate_pct: percentage of genuinely active accounts the cut restricts.
         validation_recall: share of mule accounts the cut detects.
         meets_budget: True when validation_rate_pct is within the genuine-restriction budget.
     """
@@ -284,7 +285,7 @@ def _check_budget(budget_pct: float) -> None:
     WHAT: Refuses a genuine-restriction budget outside 0..100 percent.
 
     Args:
-        budget_pct: Maximum allowed percentage of restricted genuine account-days.
+        budget_pct: Maximum allowed percentage of genuinely active accounts that may be restricted.
 
     Raises:
         ValueError: If budget_pct is outside 0..100 or is not a number.
@@ -305,19 +306,18 @@ def _validation_metrics(
         restricted: account -> restricted days produced by the point being measured.
 
     Returns:
-        (validation_rate_pct, validation_recall). Recall is 0.0 when there are no mules.
+        (validation_rate_pct, validation_recall). The rate counts genuinely active accounts
+        restricted on at least one genuine day over all genuinely active accounts, the same
+        definition the evaluation reports. Recall is 0.0 when there are no mules.
 
     Raises:
-        ValueError: If any restricted day has no scored row, or there are no genuine account-days.
+        ValueError: If any restricted day has no scored row, or there are no genuinely active accounts.
     """
-    genuine_days = [scored_day for scored_day in scored if scored_day.role in GENUINE_ROLES]
-    if not genuine_days:
-        raise ValueError("Cannot measure a genuine-restriction rate without genuine account-days")
+    mules, genuine_active, _, is_mule = ground_sets(scored)
+    if not genuine_active:
+        raise ValueError("Cannot measure a genuine-restriction rate without genuine accounts")
     genuine_restricted = genuine_restricted_days(restricted, scored)
-    restricted_count = sum(len(days) for days in genuine_restricted.values())
-    validation_rate_pct = 100.0 * restricted_count / len(genuine_days)
-
-    mules, _, _, is_mule = ground_sets(scored)
+    validation_rate_pct = 100.0 * len(genuine_restricted) / len(genuine_active)
     detected = {
         account_id
         for account_id, days in restricted.items()
@@ -368,14 +368,14 @@ def tune_rules(
     that respects the genuine-restriction budget.
 
     WHY: Thresholds must be chosen jointly, because rules share features, and the comparison with
-    the model is only fair when both restrict the same share of genuine account-days.
+    the model is only fair when both restrict the same share of genuinely active accounts.
 
     Args:
         rows: Snapshot rows from validation worlds; deduplicated to one row per account-day.
         config: Baseline rules config supplying the untuned_start values.
         tuning: Candidate grid and allowed splits.
         split: Dataset split; must be allowed for tuning.
-        budget_pct: Maximum percentage of genuine account-days that may be restricted.
+        budget_pct: Maximum percentage of genuinely active accounts that may be restricted.
 
     Returns:
         RulesTuningResult for the selected point. When no point meets the budget, the lowest-rate
@@ -452,7 +452,7 @@ def tune_anomaly_threshold(
         scored: Validation account-days already carrying anomaly scores.
         tuning: Loaded tuning config supplying the allowed splits.
         split: Dataset split; must be allowed for tuning.
-        budget_pct: Maximum percentage of genuine account-days that may be restricted.
+        budget_pct: Maximum percentage of genuinely active accounts that may be restricted.
 
     Returns:
         AnomalyTuningResult for the selected cut.

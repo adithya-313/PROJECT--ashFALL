@@ -54,3 +54,6 @@ reports/level_17_evaluation/
 
 # Local world simulation run output folders
 runs/
+
+# Level 17 showcase fixtures are committed on purpose
+!showcase/fixtures/level_17/**
