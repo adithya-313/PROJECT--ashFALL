@@ -57,6 +57,7 @@ __all__ = [
     "TunedThresholds",
     "build_result_manifest",
     "evaluate_worlds",
+    "json_safe_result",
     "load_evaluation_settings",
     "load_split_datasets",
     "main",
@@ -623,6 +624,58 @@ def build_result_manifest(
     }
 
 
+def json_safe_result(per_world_result: Mapping[str, Any]) -> dict[str, Any]:
+    """
+    WHAT: Returns a copy of the per-world results whose hidden_mule_recall_by_depth keys are text.
+
+    WHY: JSON object keys must be text, and that metric is keyed by integer mule depth. The
+    conversion happens here rather than in a serializer option so a reader can see it, and the
+    payload is written with sorted keys, so depth order is preserved by the sorted keys.
+
+    Args:
+        per_world_result: world_id -> result block from evaluate_worlds.
+
+    Returns:
+        A new mapping in which every depth key is a decimal string such as "1"; all other values
+        are shared with the input.
+    """
+    converted: dict[str, Any] = {}
+    for world_id, world in per_world_result.items():
+        world_copy = dict(world)
+        scorer_copy: dict[str, Any] = {}
+        for scorer, result in world.get("scorers", {}).items():
+            result_copy = dict(result)
+            depth_recall = result.get("hidden_mule_recall_by_depth")
+            if depth_recall is not None:
+                result_copy["hidden_mule_recall_by_depth"] = {
+                    str(depth): value for depth, value in depth_recall.items()
+                }
+            scorer_copy[scorer] = result_copy
+        world_copy["scorers"] = scorer_copy
+        converted[world_id] = world_copy
+    return converted
+
+
+def _require_text_keys(value: Any, path: str) -> None:
+    """
+    WHAT: Walks a JSON payload and refuses any mapping key that is not text.
+
+    WHY: A non-text key would either fail inside the serializer without a location or be coerced
+    silently; naming the path makes the offending part of the result obvious.
+
+    Raises:
+        ValueError: Naming the path of the first key that is not a string.
+    """
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            if not isinstance(key, str):
+                raise ValueError(f"JSON key at {path} is not a string: {key!r}")
+            _require_text_keys(nested, f"{path}.{key}")
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _require_text_keys(item, f"{path}[{index}]")
+
+
 def write_result(
     out_root: Path,
     key: str,
@@ -651,9 +704,10 @@ def write_result(
     payload = {
         "simulated": True,
         "manifest": dict(manifest),
-        "per_world": dict(per_world),
+        "per_world": json_safe_result(per_world),
         "across_worlds": dict(across_worlds),
     }
+    _require_text_keys(payload, "result")
     path = result_dir / "result.json"
     path.write_bytes(orjson.dumps(payload, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2) + b"\n")
     return path
