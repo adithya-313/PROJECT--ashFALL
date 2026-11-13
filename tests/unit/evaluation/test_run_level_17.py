@@ -6,6 +6,7 @@ under, refuse a missing world card, key a result by its datasets alone, and mark
 simulated without recording any generation timestamp.
 """
 
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,9 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from core.event_clock import IST
+from evaluation.level17_evaluation import evaluate_world
+from evaluation.level17_scoring import ScoredDay
 from evaluation.run_level_17 import (
     load_split_datasets,
     read_world_base_rate,
@@ -75,6 +79,90 @@ def test_run_key_is_stable_for_the_same_dataset_ids_in_any_order() -> None:
     assert first == second
     assert len(first) == 12
     assert first != run_key(["test-1", "stress-1", "test-3"])
+
+
+def _evaluated_two_depth_world() -> dict[str, Any]:
+    """Runs evaluate_world on one day with mules at depths 1 and 2, returning its real metrics."""
+    day = date(2025, 1, 1)
+    scored = [
+        ScoredDay(
+            bank_id="bank_a",
+            account_id="mule_1",
+            day=day,
+            rules_score=1,
+            rules_fired=("RB3_MANY_PAYERS_ONE_DAY",),
+            anomaly_score=None,
+            role="mule",
+            depth=1,
+        ),
+        ScoredDay(
+            bank_id="bank_a",
+            account_id="mule_2",
+            day=day,
+            rules_score=0,
+            rules_fired=(),
+            anomaly_score=None,
+            role="mule",
+            depth=2,
+        ),
+        ScoredDay(
+            bank_id="bank_a",
+            account_id="genuine_1",
+            day=day,
+            rules_score=0,
+            rules_fired=(),
+            anomaly_score=None,
+            role="genuine",
+            depth=None,
+        ),
+    ]
+    return evaluate_world(
+        scored=scored,
+        scorer="rules",
+        anomaly_threshold=None,
+        capacity_pct=100.0,
+        inflation_factor=1.0,
+        persona_of=lambda account_id: "person",
+        weights={"person": 1},
+        default_weight=1,
+        snapshot_time_by_account_day={
+            (scored_day.account_id, day): datetime(2025, 1, 1, 12, 0, tzinfo=IST) for scored_day in scored
+        },
+        first_credit={
+            "mule_1": datetime(2025, 1, 1, 10, 0, tzinfo=IST),
+            "mule_2": datetime(2025, 1, 1, 10, 0, tzinfo=IST),
+        },
+        reported=set(),
+    )
+
+
+def test_write_result_writes_depth_keys_as_text(tmp_path: Path) -> None:
+    """evaluate_world keys depth recall by integer depth; result.json must carry "1" and "2"."""
+    result = _evaluated_two_depth_world()
+    per_world = {"world_a": {"run_id": "run_a", "split": "test", "scorers": {"rules": result}}}
+
+    path = write_result(tmp_path, "0123456789ab", {}, per_world, {})
+
+    payload = orjson.loads(path.read_bytes())
+    depth_recall = payload["per_world"]["world_a"]["scorers"]["rules"]["hidden_mule_recall_by_depth"]
+    assert set(depth_recall) == {"1", "2"}
+    assert depth_recall == {
+        str(depth): value for depth, value in result["hidden_mule_recall_by_depth"].items()
+    }
+
+
+def test_write_result_refuses_a_non_text_key_and_names_its_path(tmp_path: Path) -> None:
+    """A key that is not text anywhere else in the payload fails loudly with its path."""
+    per_world = {
+        "world_a": {
+            "run_id": "run_a",
+            "split": "test",
+            "scorers": {"rules": {"analyst_load": {1: 0.5}}},
+        }
+    }
+
+    with pytest.raises(ValueError, match=r"result\.per_world\.world_a\.scorers\.rules\.analyst_load"):
+        write_result(tmp_path, "0123456789ab", {}, per_world, {})
 
 
 def _world(split: str, recall: float) -> dict[str, Any]:

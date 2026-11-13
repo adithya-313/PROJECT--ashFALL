@@ -61,7 +61,7 @@ class ScoredDay:
         rules_fired: Reason codes of the fired rules, in rule-table order.
         anomaly_score: Detector score, or None when no detector was supplied.
         role: Hidden truth role on this day.
-        depth: Mule depth on this day, or None for a genuine role.
+        depth: Mule depth on this day, or None for a role that carries no depth.
     """
 
     bank_id: str
@@ -383,13 +383,18 @@ def ground_sets(
 
     Returns:
         A 4-tuple (mules, genuine_active, depth_of, is_mule) where:
-        - mules: accounts whose role is in MULE_ROLES on at least one day.
+        - mules: accounts whose role is in MULE_ROLES on at least one day. Collectors and
+          cash-outs are mules here too, because recall, yield and time to detection must count
+          them.
         - genuine_active: accounts whose role is in GENUINE_ROLES on at least one day.
-        - depth_of: account -> deepest truth_depth seen on a mule day.
+        - depth_of: account -> deepest truth_depth seen on a role-"mule" day. Truth defines a
+          depth only for the role "mule": world/truth_records.py validate_mule_depth requires
+          depth None for every other role, so hidden recall by depth covers depth-carrying
+          mules only.
         - is_mule: predicate returning True only when that account has a mule role on that day.
 
     Raises:
-        ValueError: If a mule day has no truth_depth, because its depth would be unknown.
+        ValueError: If a role-"mule" day has no truth_depth, because its depth would be unknown.
     """
     mules: set[str] = set()
     genuine_active: set[str] = set()
@@ -399,11 +404,12 @@ def ground_sets(
         roles_by_account_day[(scored_day.account_id, scored_day.day)] = scored_day.role
         if scored_day.role in MULE_ROLES:
             mules.add(scored_day.account_id)
-            if scored_day.depth is None:
-                raise ValueError(f"Mule account {scored_day.account_id} has no truth_depth")
-            known_depth = depth_of.get(scored_day.account_id)
-            if known_depth is None or scored_day.depth > known_depth:
-                depth_of[scored_day.account_id] = scored_day.depth
+            if scored_day.role == "mule":
+                if scored_day.depth is None:
+                    raise ValueError(f"Mule account {scored_day.account_id} has no truth_depth")
+                known_depth = depth_of.get(scored_day.account_id)
+                if known_depth is None or scored_day.depth > known_depth:
+                    depth_of[scored_day.account_id] = scored_day.depth
         if scored_day.role in GENUINE_ROLES:
             genuine_active.add(scored_day.account_id)
 
