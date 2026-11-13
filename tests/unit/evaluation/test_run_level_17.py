@@ -195,7 +195,52 @@ def test_summarise_worlds_keeps_stress_out_of_the_test_median() -> None:
     assert with_stress["test"]["rules"]["recall_at_capacity"]["world_count"] == 2
     assert with_stress["stress"]["rules"]["recall_at_capacity"]["median"] == 1.0
     assert with_stress["stress"]["rules"]["recall_at_capacity"]["world_count"] == 1
-    assert test_only["stress"]["rules"]["recall_at_capacity"] == {"world_count": 0, "status": "no numeric values"}
+    assert test_only["stress"]["rules"]["recall_at_capacity"] == {
+        "world_count": 0,
+        "status": "not run: no stress worlds supplied",
+        "unit": "fraction",
+    }
+
+
+def test_summarise_worlds_records_the_unit_of_every_metric() -> None:
+    """Each headline metric says whether its number is a fraction or a time in hours."""
+    summaries = summarise_worlds({"test_a": _world("test", 0.5)}, min_worlds=2)
+
+    units = {metric: entry["unit"] for metric, entry in summaries["test"]["rules"].items()}
+
+    assert units == {
+        "recall_at_capacity": "fraction",
+        "yield_measured": "fraction",
+        "yield_reweighted": "fraction",
+        "genuine_restriction_rate": "fraction",
+        "median_time_to_detection_hours": "hours",
+    }
+
+
+def test_summarise_worlds_says_not_run_for_a_window_without_worlds() -> None:
+    """A stress window never supplied is reported as not run, not as a metric that found nothing."""
+    summaries = summarise_worlds({"test_a": _world("test", 0.5)}, min_worlds=2)
+
+    assert summaries["stress"]["anomaly"]["recall_at_capacity"] == {
+        "world_count": 0,
+        "status": "not run: no stress worlds supplied",
+        "unit": "fraction",
+    }
+
+
+def test_summarise_worlds_keeps_no_numeric_values_when_a_world_has_none() -> None:
+    """A test world with a null detection time reports no numeric values, while its recall stands."""
+    world = _world("test", 0.5)
+    world["scorers"]["rules"]["time_to_detection"] = {"median": None}
+
+    summaries = summarise_worlds({"test_a": world}, min_worlds=2)
+
+    assert summaries["test"]["rules"]["median_time_to_detection_hours"] == {
+        "world_count": 0,
+        "status": "no numeric values",
+        "unit": "hours",
+    }
+    assert summaries["test"]["rules"]["recall_at_capacity"]["median"] == 0.5
 
 
 def test_write_result_marks_simulated_and_records_no_timestamp(tmp_path: Path) -> None:
