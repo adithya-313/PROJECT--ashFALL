@@ -299,6 +299,25 @@ PART_CONFIGS: dict[str, dict[str, Any]] = {
         ),
         "REGISTER_IDS": ("17-1", "17-2", "17-3", "17-4", "17-5", "R5"),
     },
+    "18a1": {
+        "INTERFACE_MODULES": (
+            "replay.runner",
+            "nationalsim.national_outbox",
+            "scripts.compare_datasets_normalised",
+        ),
+        "RECORDS_MODULE": ("replay.runner",),
+        "RECORD_NAMES": (
+            "DrainCounters",
+            "ReplayDropContext",
+            "ReplayHookContext",
+            "ReplayResult",
+        ),
+        "CONFIG_FILES": (
+            "config/replay.yaml",
+            "config/datasets.yaml",
+        ),
+        "REGISTER_IDS": ("16-4", "17-4", "18-1"),
+    },
 }
 
 
