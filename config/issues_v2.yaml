@@ -1062,9 +1062,11 @@ issues:
   16-4:
     title: "Full-scale dataset building and a faster replay drain"
     origin: revision_2
-    status: planned
+    status: partial
     levels: [18]
-    parts: []
+    parts: [18a1]
+    evidence:
+      - {kind: test, file: tests/unit/test_drain_local_counters.py, name: test_local_offset_tracking_skips_the_broker_and_follows_counters}
     later_work:
       - "Level 18a: build datasets for the sampler-planned world counts and make the replay drain faster (~12 min per small world measured on the author's Windows laptop)"
       - "Level 18a: rebuild the 5 splits after the mid-run account fix"
@@ -1138,3 +1140,10 @@ issues:
     levels: [19]
     parts: []
     later_work: ["Level 19: commit tuned thresholds (with_thresholds) from the 18a validation run before rules serve live"]
+  18-1:
+    title: "Dataset builds cannot be pinned to a code version: build_level_16_datasets.py ignores ASHFALL_CODE_VERSION, so a fixture cannot be reproduced byte-for-byte at a later commit"
+    origin: revision_2
+    status: planned
+    levels: [18]
+    parts: []
+    later_work: ["Level 18: make scripts/build_level_16_datasets.py take its code version from world/run_identity.find_code_version (which honours ASHFALL_CODE_VERSION) instead of showcase/framework.py get_code_version(), so run_id and fixtures are reproducible at any commit"]

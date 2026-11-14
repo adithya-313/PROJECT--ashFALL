@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from aiokafka import TopicPartition
 
 from replay.runner import (
     idle_advance_target,
@@ -173,6 +174,9 @@ async def test_switch_off_path_never_calls_record_payment_watermark(monkeypatch:
     monkeypatch.setattr("replay.runner.workspace_redis_client", MagicMock(return_value=mock_redis))
     monkeypatch.setattr("replay.runner.start_producer", AsyncMock(return_value=AsyncMock()))
     mock_consumer = AsyncMock()
+    mock_consumer.partitions_for_topic = MagicMock(return_value={0})
+    mock_consumer.end_offsets.return_value = {TopicPartition("test_topic", 0): 0}
+    mock_consumer.committed.return_value = 0
     monkeypatch.setattr("replay.runner.AIOKafkaConsumer", MagicMock(return_value=mock_consumer))
     monkeypatch.setattr("replay.runner.check_workspace_topic_partitions", MagicMock())
     monkeypatch.setattr("replay.runner.drain", AsyncMock(return_value=0.01))
