@@ -24,6 +24,7 @@ from world.gang_devices import (
     assign_devices_round_robin,
     build_device_control_spans,
     build_gang_device_events,
+    build_rotation_events,
     make_gang_devices,
 )
 
@@ -306,3 +307,66 @@ def test_take_control_ordering_and_boolean_validation() -> None:
     )
     with pytest.raises(ValueError, match="devices must be an integer in \\[1, 5\\]"):
         validate_gang_config(GangConfig("gang_devices_out", 1, GENEROUS_BUDGET, DEFAULT_SOURCE, bad_device_steps))
+
+
+def test_control_binding_is_emitted_once_per_controlled_account_at_take_control() -> None:
+    """With bind_control_device on, one control_binding event per controlled account appears at take-control."""
+    devices = make_gang_devices(2, np.random.default_rng(606))
+    accounts = ["acc_mule_01", "acc_mule_02", "acc_mule_03"]
+    mapping = assign_devices_round_robin(accounts, devices)
+
+    events = build_gang_device_events(
+        devices, mapping, 420, sim_swap=False, linked_number_switch=False,
+        emulator=False, remote_access=False, bind_control_device=True,
+    )
+
+    bindings = [event for event in events if event.kind == "control_binding"]
+    assert len(bindings) == len(accounts)
+    assert {event.account_id for event in bindings} == set(accounts)
+    for event in bindings:
+        assert event.minute == 420
+        assert event.device_id == mapping[str(event.account_id)].device_id
+        assert event.fingerprint == mapping[str(event.account_id)].fingerprint
+
+
+def test_control_binding_is_absent_when_bind_control_device_is_false() -> None:
+    """With the switch off, the telemetry is exactly the acquisition and compromise flag events as before."""
+    devices = make_gang_devices(1, np.random.default_rng(707))
+    mapping = assign_devices_round_robin(["acc_mule_01"], devices)
+    events = build_gang_device_events(
+        devices, mapping, 50, sim_swap=True, linked_number_switch=False,
+        emulator=False, remote_access=False, bind_control_device=False,
+    )
+    assert [event.kind for event in events] == ["device_acquired", "sim_swap"]
+
+
+def test_rotation_control_binding_is_emitted_at_every_generation() -> None:
+    """A rotation gang binds each account at take-control and at each later generation start."""
+    accounts = ["acc_mule_01", "acc_mule_02"]
+    rotations = 2
+    devices = make_gang_devices(len(accounts) * (rotations + 1), np.random.default_rng(808))
+    events = build_rotation_events(
+        accounts, devices, 1440, 10080, rotations,
+        sim_swap=False, linked_number_switch=False, emulator=False, remote_access=False,
+        bind_control_device=True,
+    )
+
+    bindings = [event for event in events if event.kind == "control_binding"]
+    assert len(bindings) == len(accounts) * (rotations + 1)
+    assert {event.minute for event in bindings} == {1440, 11520, 21600}
+    for generation in range(rotations + 1):
+        minute = 1440 + generation * 10080
+        generation_events = [event for event in bindings if event.minute == minute]
+        expected_devices = devices[generation * len(accounts):(generation + 1) * len(accounts)]
+        assert sorted(event.account_id for event in generation_events) == sorted(accounts)
+        assert {event.device_id for event in generation_events} == {d.device_id for d in expected_devices}
+
+
+def test_bind_control_device_must_be_boolean() -> None:
+    """A non-boolean bind_control_device is refused with the same message as the other take-control flags."""
+    steps = (
+        BlockStep("acquire", (("count", 2),)),
+        BlockStep("take_control", (("devices", 1), ("bind_control_device", "yes"))),
+    )
+    with pytest.raises(ValueError, match="'bind_control_device' must be boolean"):
+        validate_gang_config(GangConfig("gang_bind", 1, GENEROUS_BUDGET, DEFAULT_SOURCE, steps))

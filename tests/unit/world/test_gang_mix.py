@@ -24,7 +24,13 @@ import pytest
 import yaml
 
 from world.gang_config import GangConfig, gang_config_to_plain
-from world.gang_mix import gang_mix_rng, generate_gang_mix, load_gang_mix_config
+from world.gang_mix import (
+    TAKE_CONTROL_FLAG_SHARES,
+    gang_mix_rng,
+    generate_gang_mix,
+    load_gang_mix_config,
+    take_control_flags_rng,
+)
 from world.sampled_world import run_sampled_world
 from world.world_sampler import WorldSpec, load_sampler_config, sample_worlds
 
@@ -260,3 +266,98 @@ def test_a_small_world_runs_with_a_generated_mix(timed_world: tuple[Any, float, 
     mule_gangs = {role.gang_id for role in output.result.truth.roles if role.role == "mule"}
     assert len(mule_gangs) >= dict(spec.key_values)["gang_count"]
     assert output.effective_config["world_split"] == "training"
+
+
+TAKE_CONTROL_FLAGS = ("sim_swap", "linked_number_switch", "emulator", "remote_access")
+
+
+def _takeover_mix() -> dict[str, Any]:
+    """Returns a fresh mix config with takeover_realism switched on."""
+    mix = _mix_cfg()
+    mix["takeover_realism"]["value"] = True
+    return mix
+
+
+def _flags(gang: GangConfig) -> dict[str, bool]:
+    """Returns the four take-control flags written on a generated gang."""
+    params = _params(gang, "take_control")
+    return {name: params[name] for name in TAKE_CONTROL_FLAGS}
+
+
+def _ranges_with_shares(training: list[float], stress: list[float]) -> dict[str, Any]:
+    """Returns a private copy of the world ranges with every take-control share set to the given ranges."""
+    ranges = copy.deepcopy(RANGES)
+    for _, share_name in TAKE_CONTROL_FLAG_SHARES:
+        ranges["parameters"][share_name]["training"] = list(training)
+        ranges["parameters"][share_name]["stress"] = list(stress)
+    return ranges
+
+
+def test_takeover_switch_off_matches_the_same_call_with_the_switch_off() -> None:
+    """With the switch off, generate_gang_mix returns exactly what a call with the switch explicitly off returns."""
+    mix_off = _mix_cfg()
+    assert mix_off["takeover_realism"]["value"] is False
+    for index in range(3):
+        spec = _spec(count=3, index=index)
+        assert generate_gang_mix(spec, SAMPLER, MIX, SMALL_PEOPLE, RANGES) == generate_gang_mix(
+            spec, SAMPLER, mix_off, SMALL_PEOPLE, RANGES
+        )
+
+
+def test_takeover_switch_on_keeps_every_child_22_draw() -> None:
+    """Switching takeover_realism on leaves layers, dwell, devices, victims, start days and acquire counts unchanged."""
+    spec = _spec("training")
+    off_gangs = generate_gang_mix(spec, SAMPLER, MIX, SMALL_PEOPLE, RANGES)
+    on_gangs = generate_gang_mix(spec, SAMPLER, _takeover_mix(), SMALL_PEOPLE, RANGES)
+    assert len(off_gangs) == len(on_gangs)
+    for off_gang, on_gang in zip(off_gangs, on_gangs):
+        assert on_gang.start_minute == off_gang.start_minute
+        assert on_gang.family == off_gang.family
+        assert _params(on_gang, "acquire") == _params(off_gang, "acquire")
+        assert _params(on_gang, "route") == _params(off_gang, "route")
+        assert _params(on_gang, "scam") == _params(off_gang, "scam")
+        assert _params(on_gang, "take_control")["devices"] == _params(off_gang, "take_control")["devices"]
+        assert _params(on_gang, "take_control")["bind_control_device"] is True
+        assert "bind_control_device" not in _params(off_gang, "take_control")
+
+
+def test_takeover_flag_draws_are_reproducible_and_use_child_27() -> None:
+    """The same seed gives the same flags twice, and the flag stream is child 27 of the seed."""
+    spec = _spec("training")
+    first = generate_gang_mix(spec, SAMPLER, _takeover_mix(), SMALL_PEOPLE, RANGES)
+    second = generate_gang_mix(spec, SAMPLER, _takeover_mix(), SMALL_PEOPLE, RANGES)
+    assert [_flags(gang) for gang in first] == [_flags(gang) for gang in second]
+
+    child = _yaml("interactive_runner.yaml")["interactive_runner"]["random_stream_children"]["gang_take_control_flags"]
+    assert child == 27
+    expected = np.random.default_rng(np.random.SeedSequence(spec.seed).spawn(child + 1)[child])
+    assert take_control_flags_rng(spec.seed).bit_generator.state == expected.bit_generator.state
+
+
+def test_a_share_of_zero_gives_no_flags_and_a_share_of_one_gives_all() -> None:
+    """A zero share can never be beaten by the uniform draw; a share of one always is."""
+    spec = _spec("training")
+    none_gangs = generate_gang_mix(
+        spec, SAMPLER, _takeover_mix(), SMALL_PEOPLE, _ranges_with_shares([0.0, 0.0], [0.0, 0.0])
+    )
+    assert all(not any(_flags(gang).values()) for gang in none_gangs)
+    assert all(_params(gang, "take_control")["bind_control_device"] is True for gang in none_gangs)
+
+    all_gangs = generate_gang_mix(
+        spec, SAMPLER, _takeover_mix(), SMALL_PEOPLE, _ranges_with_shares([1.0, 1.0], [1.0, 1.0])
+    )
+    assert all(all(_flags(gang).values()) for gang in all_gangs)
+
+
+def test_the_shares_follow_the_specs_range_column() -> None:
+    """A training spec reads the training shares and a stress spec reads the stress shares."""
+    base = _spec("training")
+    stress_spec = WorldSpec("stress-check", "stress", base.seed, "stress", base.key_values)
+    mix = _takeover_mix()
+    mix["held_out_generation"]["value"] = False
+    ranges = _ranges_with_shares([0.0, 0.0], [1.0, 1.0])
+
+    training_gangs = generate_gang_mix(base, SAMPLER, mix, SMALL_PEOPLE, ranges)
+    stress_gangs = generate_gang_mix(stress_spec, SAMPLER, mix, SMALL_PEOPLE, ranges)
+    assert all(not any(_flags(gang).values()) for gang in training_gangs)
+    assert all(all(_flags(gang).values()) for gang in stress_gangs)

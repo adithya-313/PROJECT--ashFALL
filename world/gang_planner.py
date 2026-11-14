@@ -1008,6 +1008,7 @@ def _plan_take_control_step(
     linked_number_switch = bool(params.get("linked_number_switch", False))
     emulator = bool(params.get("emulator", False))
     remote_access = bool(params.get("remote_access", False))
+    bind_control_device = bool(params.get("bind_control_device", False))
 
     rotate_every_days = params.get("rotate_every_days")
     if rotate_every_days is not None:
@@ -1038,6 +1039,7 @@ def _plan_take_control_step(
             linked_number_switch,
             emulator,
             remote_access,
+            bind_control_device=bind_control_device,
         )
     else:
         devices_param = params.get("devices")
@@ -1056,7 +1058,8 @@ def _plan_take_control_step(
             config.gang_id, account_to_device, clock_minute, sim_swap, linked_number_switch, emulator, remote_access
         )
         events = build_gang_device_events(
-            devices, account_to_device, clock_minute, sim_swap, linked_number_switch, emulator, remote_access
+            devices, account_to_device, clock_minute, sim_swap, linked_number_switch, emulator, remote_access,
+            bind_control_device=bind_control_device,
         )
 
     # 4. Sample execution duration and risk from calibrated take_control ranges.

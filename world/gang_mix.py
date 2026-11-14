@@ -31,7 +31,15 @@ from world.world_sampler import WorldSpec, key_parameter_range
 
 DEFAULT_MIX_PATH: Path = REPO_ROOT / "config" / "gang_mix.yaml"
 STREAM_NAME = "gang_mix"
+TAKEOVER_STREAM_NAME = "gang_take_control_flags"
 MINUTES_PER_DAY = 1440
+# Fixed draw order: (take_control flag, world_ranges share it is compared against).
+TAKE_CONTROL_FLAG_SHARES: tuple[tuple[str, str], ...] = (
+    ("sim_swap", "take_control_share_sim_swap"),
+    ("linked_number_switch", "take_control_share_linked_number_switch"),
+    ("emulator", "take_control_share_emulator"),
+    ("remote_access", "take_control_share_remote_access"),
+)
 
 
 def load_gang_mix_config(path: Path | None = None) -> dict[str, Any]:
@@ -110,6 +118,73 @@ def gang_mix_rng(seed: int) -> np.random.Generator:
     """
     child = int(load_runner_config()["random_stream_children"][STREAM_NAME])
     return np.random.default_rng(np.random.SeedSequence(seed).spawn(child + 1)[child])
+
+
+def take_control_flags_rng(seed: int) -> np.random.Generator:
+    """
+    WHAT: Builds the take-control flag generator for a world seed: child 27 of the seed, the child number being read
+    from random_stream_children in config/interactive_runner.yaml.
+
+    WHY: The flags are drawn on their own stream, so turning them on never shifts the gang-mix draws on child 22.
+
+    Args:
+        seed: The world's seed.
+
+    Returns:
+        A numpy Generator.
+    """
+    child = int(load_runner_config()["random_stream_children"][TAKEOVER_STREAM_NAME])
+    return np.random.default_rng(np.random.SeedSequence(seed).spawn(child + 1)[child])
+
+
+def _take_control_shares(
+    spec: WorldSpec, ranges: dict[str, Any], rng: np.random.Generator
+) -> dict[str, float]:
+    """
+    WHAT: Draws each take-control flag's share for the spec's world, uniformly inside the world_ranges entry read
+    from the spec's split column with scope world.
+
+    WHY: These flags are not route settings, so stress worlds read the stress column and training, validation and
+    test worlds read the training column. One share per flag per world keeps a world's gangs comparable.
+
+    Args:
+        spec: The planned world, whose range_name names the column.
+        ranges: The dictionary read from config/world_ranges.yaml.
+        rng: The take-control flag stream (child 27).
+
+    Returns:
+        A mapping from flag name to its share in [0, 1].
+    """
+    shares: dict[str, float] = {}
+    for flag, share_name in TAKE_CONTROL_FLAG_SHARES:
+        setting = {"scope": "world", "world_ranges_reference": share_name}
+        low, high = key_parameter_range(setting, spec.range_name, ranges)
+        shares[flag] = float(rng.uniform(low, high))
+    return shares
+
+
+def _set_take_control_flags(
+    plain: dict[str, Any], flags: dict[str, bool], bind_control_device: bool
+) -> None:
+    """
+    WHAT: Writes a gang's drawn take-control flags and bind_control_device into its take_control step.
+
+    WHY: The flags are ordinary take_control parameters, so the existing gang validation and planning paths apply.
+
+    Args:
+        plain: The gang dictionary built by _gang_plain.
+        flags: The gang's flag values.
+        bind_control_device: Whether the gang binds each controlled account to a device event.
+
+    Raises:
+        ValueError: With a message naming the gang when it has no take_control step.
+    """
+    for step in plain["steps"]:
+        if step["block"] == "take_control":
+            step["params"].update(flags)
+            step["params"]["bind_control_device"] = bind_control_device
+            return
+    raise ValueError(f"generated gang '{plain['gang_id']}' has no take_control step to set flags on")
 
 
 def _draw_around(
@@ -232,6 +307,10 @@ def generate_gang_mix(
 
     drawn_gangs: list[dict[str, int]] = []
     start_days: list[int] = []
+    takeover_on = bool(mix_cfg["takeover_realism"]["value"])
+    flag_rng = take_control_flags_rng(spec.seed) if takeover_on else None
+    shares = _take_control_shares(spec, ranges, flag_rng) if flag_rng is not None else {}
+    gang_flags: list[dict[str, bool]] = []
     for _ in range(int(centres["gang_count"])):
         drawn = {
             "layers": int(_draw_around(rng, centres["route_layers"], *bounds("route_layers"), spread, True)),
@@ -246,6 +325,8 @@ def generate_gang_mix(
         low_day, high_day = mix_cfg["start_day_range"]["range"]
         start_days.append(int(rng.integers(low_day, high_day, endpoint=True)))
         drawn_gangs.append(drawn)
+        if flag_rng is not None:
+            gang_flags.append({flag: float(flag_rng.random()) < shares[flag] for flag, _ in TAKE_CONTROL_FLAG_SHARES})
 
     gang_count = len(drawn_gangs)
     held_out_splits = mix_cfg.get("held_out_gang", {}).get("splits", [])
@@ -316,6 +397,9 @@ def generate_gang_mix(
         else:
             raise ValueError(f"Unknown active held-out family: '{chosen_family}'")
 
+        if takeover_on:
+            _set_take_control_flags(held_out_plain, gang_flags[last_index], True)
+
     needed = 0
     for drawn in drawn_gangs:
         needed += drawn["layers"] * drawn["receiving_mules"] + drawn["receiving_mules"] * drawn["victims"]
@@ -333,5 +417,7 @@ def generate_gang_mix(
             drawn = drawn_gangs[index]
             family = family_for_gang(mix_cfg["family_rules"]["rules"], drawn["layers"])
             plain = _gang_plain(index, drawn, start_days[index] * MINUTES_PER_DAY, family, mix_cfg["budget"])
+            if takeover_on:
+                _set_take_control_flags(plain, gang_flags[index], True)
             gangs.append(gang_config_from_plain(plain))
     return tuple(gangs)
