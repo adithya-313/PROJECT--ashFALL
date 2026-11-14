@@ -491,3 +491,15 @@ No model code exists yet (models start in Level 18; `world/` is simulator code).
 | What changed | Generated gangs can draw their take-control flags. (a) Four world ranges, `take_control_share_sim_swap`, `take_control_share_linked_number_switch`, `take_control_share_emulator` and `take_control_share_remote_access`, each training `[0.1, 0.4]` (the last two `[0.05, 0.3]`), test `[0.05, 0.6]` (the last two `[0.02, 0.5]`) and stress `[0.0, 0.9]` (the last two `[0.0, 0.8]`). (b) Stream child 27, `gang_take_control_flags`, draws the flags so the gang-mix stream (child 22) never shifts. (c) A take-control parameter `bind_control_device`: when true, each controlled account gets a gang device event of kind `control_binding` at take-control and at every rotation generation. (d) The gang device kind `control_binding` maps to the bank-visible kind `device_binding_change`. (e) The shares are read with WORLD scope: stress worlds read the stress column and training, validation and test worlds read the training column, because these flags are not route settings. (f) `linked_number_switch` stays bank-invisible in 18a2: a binding event already marks the move to a gang phone, and a phone field on gang events only would make them distinguishable from genuine ones (rule 29). Every new behaviour sits behind `takeover_realism`, false by default, so gangs are unchanged until round 2 turns it on. |
 | Why | Issue 16-6 needs generated gangs that occasionally use SIM swaps, linked-number replacement, emulators and remote access, not only the fixed fixture flags, and the bank feed must see those take-overs in the same shape as genuine device binding changes. |
 | Results exist? | No |
+
+## A-041
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-14 |
+| Issue IDs | None |
+| Issue IDs v2 | 16-6 |
+| Files | `config/takeover_realism.yaml`, `config/world_ranges.yaml`, `world/gang_mix.py`, `world/world_configs.py`, `tests/unit/test_research_configs.py`, `tests/unit/world/test_gang_mix.py`, `docs/research/amendments.md` |
+| What changed | The four take-control share ranges of A-040 now live in `config/takeover_realism.yaml` under `parameters`, not in `config/world_ranges.yaml`, with the same label, unit, training/test/stress ranges, reason, issue ids and derived_from; `config/world_ranges.yaml` is back to 79 settings. `world/gang_mix.py` reads the new file through `load_takeover_shares`, only when `takeover_realism` is true, and the file is deliberately not part of WorldConfigs. Everything else in A-040 stands. |
+| Why | `config/world_ranges.yaml` is part of the effective config hashed into the run id, so adding the four entries there changed every fraud-on run id even with the switch off. |
+| Results exist? | No |

@@ -30,6 +30,7 @@ from world.world_configs import read_world_configs
 from world.world_sampler import WorldSpec, key_parameter_range
 
 DEFAULT_MIX_PATH: Path = REPO_ROOT / "config" / "gang_mix.yaml"
+DEFAULT_TAKEOVER_PATH: Path = REPO_ROOT / "config" / "takeover_realism.yaml"
 STREAM_NAME = "gang_mix"
 TAKEOVER_STREAM_NAME = "gang_take_control_flags"
 MINUTES_PER_DAY = 1440
@@ -137,11 +138,27 @@ def take_control_flags_rng(seed: int) -> np.random.Generator:
     return np.random.default_rng(np.random.SeedSequence(seed).spawn(child + 1)[child])
 
 
+def load_takeover_shares(path: Path = DEFAULT_TAKEOVER_PATH) -> dict[str, Any]:
+    """
+    WHAT: Loads config/takeover_realism.yaml, the four take-control share ranges.
+
+    WHY: world_ranges.yaml is hashed into the run id, so the shares live in their own file and are read only when
+    takeover_realism is true; the switch staying off leaves every run id unchanged.
+
+    Args:
+        path: The file to read; defaults to config/takeover_realism.yaml.
+
+    Returns:
+        The dictionary read from the file, with its parameters under "parameters".
+    """
+    return load_yaml(path)
+
+
 def _take_control_shares(
-    spec: WorldSpec, ranges: dict[str, Any], rng: np.random.Generator
+    spec: WorldSpec, takeover_shares: dict[str, Any], rng: np.random.Generator
 ) -> dict[str, float]:
     """
-    WHAT: Draws each take-control flag's share for the spec's world, uniformly inside the world_ranges entry read
+    WHAT: Draws each take-control flag's share for the spec's world, uniformly inside its takeover_realism entry read
     from the spec's split column with scope world.
 
     WHY: These flags are not route settings, so stress worlds read the stress column and training, validation and
@@ -149,7 +166,7 @@ def _take_control_shares(
 
     Args:
         spec: The planned world, whose range_name names the column.
-        ranges: The dictionary read from config/world_ranges.yaml.
+        takeover_shares: The dictionary read from config/takeover_realism.yaml.
         rng: The take-control flag stream (child 27).
 
     Returns:
@@ -158,7 +175,7 @@ def _take_control_shares(
     shares: dict[str, float] = {}
     for flag, share_name in TAKE_CONTROL_FLAG_SHARES:
         setting = {"scope": "world", "world_ranges_reference": share_name}
-        low, high = key_parameter_range(setting, spec.range_name, ranges)
+        low, high = key_parameter_range(setting, spec.range_name, takeover_shares)
         shares[flag] = float(rng.uniform(low, high))
     return shares
 
@@ -309,7 +326,7 @@ def generate_gang_mix(
     start_days: list[int] = []
     takeover_on = bool(mix_cfg["takeover_realism"]["value"])
     flag_rng = take_control_flags_rng(spec.seed) if takeover_on else None
-    shares = _take_control_shares(spec, ranges, flag_rng) if flag_rng is not None else {}
+    shares = _take_control_shares(spec, load_takeover_shares(), flag_rng) if flag_rng is not None else {}
     gang_flags: list[dict[str, bool]] = []
     for _ in range(int(centres["gang_count"])):
         drawn = {

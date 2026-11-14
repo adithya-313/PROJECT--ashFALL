@@ -23,12 +23,14 @@ import numpy as np
 import pytest
 import yaml
 
+from core.config_validator import validate_file
 from world.gang_config import GangConfig, gang_config_to_plain
 from world.gang_mix import (
     TAKE_CONTROL_FLAG_SHARES,
     gang_mix_rng,
     generate_gang_mix,
     load_gang_mix_config,
+    load_takeover_shares,
     take_control_flags_rng,
 )
 from world.sampled_world import run_sampled_world
@@ -284,13 +286,18 @@ def _flags(gang: GangConfig) -> dict[str, bool]:
     return {name: params[name] for name in TAKE_CONTROL_FLAGS}
 
 
-def _ranges_with_shares(training: list[float], stress: list[float]) -> dict[str, Any]:
-    """Returns a private copy of the world ranges with every take-control share set to the given ranges."""
-    ranges = copy.deepcopy(RANGES)
+def _takeover_with_shares(training: list[float], stress: list[float]) -> dict[str, Any]:
+    """Returns a private copy of the takeover shares with every entry set to the given ranges."""
+    shares = copy.deepcopy(load_takeover_shares())
     for _, share_name in TAKE_CONTROL_FLAG_SHARES:
-        ranges["parameters"][share_name]["training"] = list(training)
-        ranges["parameters"][share_name]["stress"] = list(stress)
-    return ranges
+        shares["parameters"][share_name]["training"] = list(training)
+        shares["parameters"][share_name]["stress"] = list(stress)
+    return shares
+
+
+def test_takeover_realism_file_passes_the_world_ranges_validator() -> None:
+    """The share file passes the same validate_file checks as config/world_ranges.yaml."""
+    assert validate_file(REPO_ROOT / "config" / "takeover_realism.yaml") == []
 
 
 def test_takeover_switch_off_matches_the_same_call_with_the_switch_off() -> None:
@@ -334,30 +341,28 @@ def test_takeover_flag_draws_are_reproducible_and_use_child_27() -> None:
     assert take_control_flags_rng(spec.seed).bit_generator.state == expected.bit_generator.state
 
 
-def test_a_share_of_zero_gives_no_flags_and_a_share_of_one_gives_all() -> None:
+def test_a_share_of_zero_gives_no_flags_and_a_share_of_one_gives_all(monkeypatch: pytest.MonkeyPatch) -> None:
     """A zero share can never be beaten by the uniform draw; a share of one always is."""
     spec = _spec("training")
-    none_gangs = generate_gang_mix(
-        spec, SAMPLER, _takeover_mix(), SMALL_PEOPLE, _ranges_with_shares([0.0, 0.0], [0.0, 0.0])
-    )
+    monkeypatch.setattr("world.gang_mix.load_takeover_shares", lambda: _takeover_with_shares([0.0, 0.0], [0.0, 0.0]))
+    none_gangs = generate_gang_mix(spec, SAMPLER, _takeover_mix(), SMALL_PEOPLE, RANGES)
     assert all(not any(_flags(gang).values()) for gang in none_gangs)
     assert all(_params(gang, "take_control")["bind_control_device"] is True for gang in none_gangs)
 
-    all_gangs = generate_gang_mix(
-        spec, SAMPLER, _takeover_mix(), SMALL_PEOPLE, _ranges_with_shares([1.0, 1.0], [1.0, 1.0])
-    )
+    monkeypatch.setattr("world.gang_mix.load_takeover_shares", lambda: _takeover_with_shares([1.0, 1.0], [1.0, 1.0]))
+    all_gangs = generate_gang_mix(spec, SAMPLER, _takeover_mix(), SMALL_PEOPLE, RANGES)
     assert all(all(_flags(gang).values()) for gang in all_gangs)
 
 
-def test_the_shares_follow_the_specs_range_column() -> None:
+def test_the_shares_follow_the_specs_range_column(monkeypatch: pytest.MonkeyPatch) -> None:
     """A training spec reads the training shares and a stress spec reads the stress shares."""
     base = _spec("training")
     stress_spec = WorldSpec("stress-check", "stress", base.seed, "stress", base.key_values)
     mix = _takeover_mix()
     mix["held_out_generation"]["value"] = False
-    ranges = _ranges_with_shares([0.0, 0.0], [1.0, 1.0])
+    monkeypatch.setattr("world.gang_mix.load_takeover_shares", lambda: _takeover_with_shares([0.0, 0.0], [1.0, 1.0]))
 
-    training_gangs = generate_gang_mix(base, SAMPLER, mix, SMALL_PEOPLE, ranges)
-    stress_gangs = generate_gang_mix(stress_spec, SAMPLER, mix, SMALL_PEOPLE, ranges)
+    training_gangs = generate_gang_mix(base, SAMPLER, mix, SMALL_PEOPLE, RANGES)
+    stress_gangs = generate_gang_mix(stress_spec, SAMPLER, mix, SMALL_PEOPLE, RANGES)
     assert all(not any(_flags(gang).values()) for gang in training_gangs)
     assert all(all(_flags(gang).values()) for gang in stress_gangs)
