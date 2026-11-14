@@ -22,6 +22,7 @@ from scripts.build_level_16_datasets import (
     derive_dataset_cutoff,
     find_fitting_sampler_seed,
     load_datasets_config,
+    parse_worlds_per_split,
     plan_datasets,
     summarize_labels_by_source_and_via,
     supersede_prior_datasets,
@@ -280,3 +281,73 @@ def test_find_sampler_seed_cli_starts_at_the_sampler_seed_flag(
 
     assert capsys.readouterr().out == "fitting sampler seed: 5\n"
     assert attempted_seeds == [3, 4, 5]
+
+
+def test_parse_worlds_per_split_reads_pilot_counts() -> None:
+    """The pilot override text parses into the three split counts the pilot build uses."""
+    assert parse_worlds_per_split("training=6,validation=3,test=3") == {
+        "training": 6,
+        "validation": 3,
+        "test": 3,
+    }
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ("holiday=2", "unknown split"),
+        ("training=2,validation=0", "must be positive"),
+        ("training=-1", "must be positive"),
+        ("training=three", "not an integer"),
+        ("training=2,training=3", "more than once"),
+        ("training:2", "not split=count"),
+        ("", "empty"),
+        ("   ", "empty"),
+    ],
+)
+def test_parse_worlds_per_split_refuses_bad_text(text: str, message: str) -> None:
+    """Every malformed override is refused with a message naming the problem."""
+    with pytest.raises(ValueError, match=message):
+        parse_worlds_per_split(text)
+
+
+def test_main_passes_the_worlds_per_split_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A build with --worlds-per-split hands the parsed counts to the build function."""
+    calls: dict[str, Any] = {}
+
+    async def fake_build(**kwargs: Any) -> dict[str, Any]:
+        calls.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(build_module, "build_all_level_16_datasets", fake_build)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["build_level_16_datasets.py", "--worlds-per-split", "training=6,validation=3,test=3"],
+    )
+
+    build_module.main()
+
+    assert calls["worlds_per_split"] == {"training": 6, "validation": 3, "test": 3}
+
+
+def test_main_without_the_flag_passes_no_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A build without --worlds-per-split passes None, so the config counts still rule."""
+    calls: dict[str, Any] = {}
+
+    async def fake_build(**kwargs: Any) -> dict[str, Any]:
+        calls.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(build_module, "build_all_level_16_datasets", fake_build)
+    monkeypatch.setattr(sys, "argv", ["build_level_16_datasets.py"])
+
+    build_module.main()
+
+    assert calls["worlds_per_split"] is None
+    assert load_datasets_config() == {
+        "training": 2,
+        "validation": 1,
+        "test": 1,
+        "stress": 1,
+    }

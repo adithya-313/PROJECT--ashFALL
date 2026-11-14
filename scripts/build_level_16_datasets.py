@@ -93,6 +93,41 @@ def load_datasets_config(path: Path | str | None = None) -> dict[str, int]:
     return counts
 
 
+def parse_worlds_per_split(text: str) -> dict[str, int]:
+    """
+    WHAT: Parses a "training=6,validation=3,test=3" override into split counts.
+    WHY: Lets a pilot build change world counts for one run without touching config/datasets.yaml.
+    Args:
+        text: Comma-separated split=count items.
+    Returns:
+        The split counts in the order they were given.
+    Raises:
+        ValueError: On empty text, a malformed item, an unknown split, a repeated split, or a count
+        that is not a positive integer.
+    """
+    allowed_splits = set(load_datasets_config())
+    if not text.strip():
+        raise ValueError("worlds-per-split text is empty")
+    counts: dict[str, int] = {}
+    for item in text.split(","):
+        split_name, separator, count_text = item.strip().partition("=")
+        if not separator:
+            raise ValueError(f"worlds-per-split item {item!r} is not split=count")
+        split_name = split_name.strip()
+        if split_name not in allowed_splits:
+            raise ValueError(f"unknown split {split_name!r}; expected some of {sorted(allowed_splits)}")
+        if split_name in counts:
+            raise ValueError(f"split {split_name!r} appears more than once")
+        try:
+            count = int(count_text.strip())
+        except ValueError:
+            raise ValueError(f"count for split {split_name!r} is not an integer: {count_text.strip()!r}") from None
+        if count <= 0:
+            raise ValueError(f"count for split {split_name!r} must be positive: {count}")
+        counts[split_name] = count
+    return counts
+
+
 def plan_datasets(
     datasets_cfg: dict[str, int] | None = None,
     sampler_cfg: dict[str, Any] | None = None,
@@ -143,6 +178,7 @@ def find_fitting_sampler_seed(
     preset_name: str,
     start_seed: int,
     max_tries: int,
+    datasets_cfg: dict[str, int] | None = None,
 ) -> int:
     """
     WHAT: Returns the first sampler seed whose planned worlds in the given splits all have enough
@@ -155,12 +191,13 @@ def find_fitting_sampler_seed(
         preset_name: World sizing preset the build will use.
         start_seed: First sampler seed to try.
         max_tries: Number of consecutive seeds to try, starting at start_seed.
+        datasets_cfg: Split counts to plan, or None to read config/datasets.yaml.
     Returns:
         The first seed in [start_seed, start_seed + max_tries) where every planned world fits.
     Raises:
         ValueError: If a split is unknown, or if no seed fits within max_tries.
     """
-    counts = load_datasets_config()
+    counts = load_datasets_config() if datasets_cfg is None else datasets_cfg
     sampler_cfg = load_sampler_config()
     world_ranges = read_world_ranges()
 
@@ -486,12 +523,14 @@ async def build_all_level_16_datasets(
     write_evaluation_inputs: bool = False,
     world_cards_root: Path = DEFAULT_WORLD_CARDS_ROOT,
     replay_profile_dir: Path | None = None,
+    worlds_per_split: dict[str, int] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """
     WHAT: Builds datasets for all configured splits sequentially, returning execution metrics per split.
     WHY: Executes Level 16 dataset generation unattended while tracking wall time and label counts.
     """
-    counts = load_datasets_config()
+    counts = load_datasets_config() if worlds_per_split is None else worlds_per_split
+    print(f"Worlds per split: {counts} (source: {'flag' if worlds_per_split is not None else 'config'})")
     sampler_cfg = load_sampler_config()
     world_ranges = read_world_ranges()
     code_ver = get_code_version()
@@ -609,12 +648,22 @@ def main() -> None:
         action="store_true",
         help="Print the first sampler seed whose planned worlds fit and exit",
     )
+    parser.add_argument(
+        "--worlds-per-split",
+        type=str,
+        default=None,
+        help='Override worlds per split for this run, for example "training=6,validation=3,test=3"',
+    )
     args = parser.parse_args()
 
     selected_splits = [s.strip() for s in args.splits.split(",")] if args.splits else None
+    worlds_per_split = parse_worlds_per_split(args.worlds_per_split) if args.worlds_per_split is not None else None
     if args.find_sampler_seed:
-        scan_splits = selected_splits if selected_splits is not None else list(load_datasets_config().keys())
-        seed = find_fitting_sampler_seed(scan_splits, args.preset, args.sampler_seed, args.max_seed_tries)
+        default_splits = list(load_datasets_config().keys()) if worlds_per_split is None else list(worlds_per_split)
+        scan_splits = selected_splits if selected_splits is not None else default_splits
+        seed = find_fitting_sampler_seed(
+            scan_splits, args.preset, args.sampler_seed, args.max_seed_tries, datasets_cfg=worlds_per_split
+        )
         print(f"fitting sampler seed: {seed}")
         return
     asyncio.run(
@@ -626,6 +675,7 @@ def main() -> None:
             write_evaluation_inputs=args.write_evaluation_inputs,
             world_cards_root=Path(args.world_cards_root),
             replay_profile_dir=Path(args.replay_profile_dir) if args.replay_profile_dir else None,
+            worlds_per_split=worlds_per_split,
         )
     )
 
