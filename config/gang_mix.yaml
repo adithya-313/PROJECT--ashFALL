@@ -90,9 +90,9 @@ gang_mix:
 
   takeover_realism:
     label: policy
-    value: false
+    value: true
     reason: "When true, generated gangs draw their take-control flags from the take_control_share_* entries in config/takeover_realism.yaml (A-041) on stream child 27 and set bind_control_device, so each controlled account gets a control_binding device event. When false, generated gangs are built exactly as before Level 18a2."
-    derived_from: "Level 18a2 architect ruling; amendment A-040"
+    derived_from: "Step 2 smoke, 2026-11-14: test-split world test-0000, tiny preset, sampler seed 2, replay exit 0; account events by kind with the switch on: device_binding_change 15, sim_swap 0 (same world with the switch off: device_binding_change 6, sim_swap 0)."
 
   held_out_gang:
     label: policy
