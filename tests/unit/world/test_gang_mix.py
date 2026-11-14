@@ -58,6 +58,13 @@ def _mix_cfg() -> dict[str, Any]:
     return copy.deepcopy(MIX)
 
 
+def _mix_with_takeover(value: bool) -> dict[str, Any]:
+    """Returns a fresh copy of the gang mix config with the takeover switch set explicitly."""
+    mix = _mix_cfg()
+    mix["takeover_realism"]["value"] = value
+    return mix
+
+
 def _spec(split: str = "training", index: int = 0, count: int = 1) -> WorldSpec:
     """Plans count worlds of a split and returns the one at index."""
     return sample_worlds(split, count, SEED_FOR_SAMPLER, SAMPLER, RANGES)[index]
@@ -192,29 +199,55 @@ def test_families_follow_the_rules_training_never_held_out_test_and_stress_get_o
 
 
 def test_training_and_validation_mixes_are_byte_identical_to_commit_2d66bf3() -> None:
-    """Training and validation gang mixes (plain form) match the SHA-256 computed at 2d66bf3."""
+    """Training and validation gang mixes (plain form) match the SHA-256 computed at 2d66bf3.
+
+    The switch-off path is the 2d66bf3 anchor.
+    """
+    mix = _mix_with_takeover(False)
     training_spec = _spec("training")
-    training_gangs = generate_gang_mix(training_spec, SAMPLER, MIX, SMALL_PEOPLE, RANGES)
+    training_gangs = generate_gang_mix(training_spec, SAMPLER, mix, SMALL_PEOPLE, RANGES)
     training_dumped = json.dumps([gang_config_to_plain(g) for g in training_gangs], sort_keys=True)
     assert hashlib.sha256(training_dumped.encode()).hexdigest() == (
         "7fd819d38b7113f1f3ef2338f0799c4a26ed3b23b3ebc61bc42015aa1c58691a"
     )
 
     val_spec = _spec("validation")
-    val_gangs = generate_gang_mix(val_spec, SAMPLER, MIX, SMALL_PEOPLE, RANGES)
+    val_gangs = generate_gang_mix(val_spec, SAMPLER, mix, SMALL_PEOPLE, RANGES)
     val_dumped = json.dumps([gang_config_to_plain(g) for g in val_gangs], sort_keys=True)
     assert hashlib.sha256(val_dumped.encode()).hexdigest() == (
         "0f9ab9849af7aec85c47d2cc6e2907d2a2e376116e794c5ef7d64d6c4fdc0ed9"
     )
 
 
+def test_training_and_validation_mixes_with_takeover_on_match_their_pinned_hashes() -> None:
+    """Training and validation gang mixes with the switch explicitly on match the hashes pinned in commit 5a."""
+    mix = _mix_with_takeover(True)
+    training_spec = _spec("training")
+    training_gangs = generate_gang_mix(training_spec, SAMPLER, mix, SMALL_PEOPLE, RANGES)
+    training_dumped = json.dumps([gang_config_to_plain(g) for g in training_gangs], sort_keys=True)
+    assert hashlib.sha256(training_dumped.encode()).hexdigest() == (
+        "d22658b0970ff5ba34358fb2029d61d2b7ba0d5a24f4712b475141e952d06b4e"
+    )
+
+    val_spec = _spec("validation")
+    val_gangs = generate_gang_mix(val_spec, SAMPLER, mix, SMALL_PEOPLE, RANGES)
+    val_dumped = json.dumps([gang_config_to_plain(g) for g in val_gangs], sort_keys=True)
+    assert hashlib.sha256(val_dumped.encode()).hexdigest() == (
+        "cc7ce1735433c91292c85a9d8cd98a5cd3c31f3219ca93cd60867b672c62eb10"
+    )
+
+
 def test_test_and_stress_prefix_gangs_equal_commit_2d66bf3_and_last_is_held_out() -> None:
-    """Test and stress specs keep gangs 0..n-2 identical to 2d66bf3 and place a held-out gang at index n-1."""
+    """Test and stress specs keep gangs 0..n-2 identical to 2d66bf3 and place a held-out gang at index n-1.
+
+    The switch-off path is the 2d66bf3 anchor.
+    """
+    mix = _mix_with_takeover(False)
     eval_cfg = _yaml("evaluation.yaml")
     active_held_out = set(eval_cfg["held_out_tactics"]["tactics"])
 
     test_spec = _spec("test")
-    test_gangs = generate_gang_mix(test_spec, SAMPLER, MIX, SMALL_PEOPLE, RANGES)
+    test_gangs = generate_gang_mix(test_spec, SAMPLER, mix, SMALL_PEOPLE, RANGES)
     test_prefix_dumped = json.dumps([gang_config_to_plain(g) for g in test_gangs[:-1]], sort_keys=True)
     assert hashlib.sha256(test_prefix_dumped.encode()).hexdigest() == (
         "8c4fb9ea9a69f59891b7432e7a41c9d55723e8391f3451152736498572cfe4fe"
@@ -222,10 +255,33 @@ def test_test_and_stress_prefix_gangs_equal_commit_2d66bf3_and_last_is_held_out(
     assert test_gangs[-1].family in active_held_out
 
     stress_spec = _spec("stress")
-    stress_gangs = generate_gang_mix(stress_spec, SAMPLER, MIX, SMALL_PEOPLE, RANGES)
+    stress_gangs = generate_gang_mix(stress_spec, SAMPLER, mix, SMALL_PEOPLE, RANGES)
     stress_prefix_dumped = json.dumps([gang_config_to_plain(g) for g in stress_gangs[:-1]], sort_keys=True)
     assert hashlib.sha256(stress_prefix_dumped.encode()).hexdigest() == (
         "1426a0110afe75395155258244a8c2e290aa75f2283e28f417053170881f4206"
+    )
+    assert stress_gangs[-1].family in active_held_out
+
+
+def test_test_and_stress_prefix_gangs_with_takeover_on_match_their_hashes_and_last_is_held_out() -> None:
+    """Test and stress prefixes with the switch explicitly on match the pinned hashes and keep a held-out last gang."""
+    mix = _mix_with_takeover(True)
+    eval_cfg = _yaml("evaluation.yaml")
+    active_held_out = set(eval_cfg["held_out_tactics"]["tactics"])
+
+    test_spec = _spec("test")
+    test_gangs = generate_gang_mix(test_spec, SAMPLER, mix, SMALL_PEOPLE, RANGES)
+    test_prefix_dumped = json.dumps([gang_config_to_plain(g) for g in test_gangs[:-1]], sort_keys=True)
+    assert hashlib.sha256(test_prefix_dumped.encode()).hexdigest() == (
+        "2c40234946b6fe168d65946ddf50cbbdfd0326d888606409f7ef62c2cef93d40"
+    )
+    assert test_gangs[-1].family in active_held_out
+
+    stress_spec = _spec("stress")
+    stress_gangs = generate_gang_mix(stress_spec, SAMPLER, mix, SMALL_PEOPLE, RANGES)
+    stress_prefix_dumped = json.dumps([gang_config_to_plain(g) for g in stress_gangs[:-1]], sort_keys=True)
+    assert hashlib.sha256(stress_prefix_dumped.encode()).hexdigest() == (
+        "9a90a94d5ca43b4db6eb47f253d08e1e630eee39aef93418554ca94a7ff8210c"
     )
     assert stress_gangs[-1].family in active_held_out
 
@@ -302,20 +358,20 @@ def test_takeover_realism_file_passes_the_world_ranges_validator() -> None:
 
 def test_takeover_switch_off_matches_the_same_call_with_the_switch_off() -> None:
     """With the switch off, generate_gang_mix returns exactly what a call with the switch explicitly off returns."""
-    mix_off = _mix_cfg()
+    mix_off = _mix_with_takeover(False)
     assert mix_off["takeover_realism"]["value"] is False
     for index in range(3):
         spec = _spec(count=3, index=index)
-        assert generate_gang_mix(spec, SAMPLER, MIX, SMALL_PEOPLE, RANGES) == generate_gang_mix(
-            spec, SAMPLER, mix_off, SMALL_PEOPLE, RANGES
+        assert generate_gang_mix(spec, SAMPLER, mix_off, SMALL_PEOPLE, RANGES) == generate_gang_mix(
+            spec, SAMPLER, _mix_with_takeover(False), SMALL_PEOPLE, RANGES
         )
 
 
 def test_takeover_switch_on_keeps_every_child_22_draw() -> None:
     """Switching takeover_realism on leaves layers, dwell, devices, victims, start days and acquire counts unchanged."""
     spec = _spec("training")
-    off_gangs = generate_gang_mix(spec, SAMPLER, MIX, SMALL_PEOPLE, RANGES)
-    on_gangs = generate_gang_mix(spec, SAMPLER, _takeover_mix(), SMALL_PEOPLE, RANGES)
+    off_gangs = generate_gang_mix(spec, SAMPLER, _mix_with_takeover(False), SMALL_PEOPLE, RANGES)
+    on_gangs = generate_gang_mix(spec, SAMPLER, _mix_with_takeover(True), SMALL_PEOPLE, RANGES)
     assert len(off_gangs) == len(on_gangs)
     for off_gang, on_gang in zip(off_gangs, on_gangs):
         assert on_gang.start_minute == off_gang.start_minute
