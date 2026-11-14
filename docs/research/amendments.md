@@ -479,3 +479,15 @@ No model code exists yet (models start in Level 18; `world/` is simulator code).
 | What changed | The weights above, written before any Level 17 results: added `persona_weights` block to `genuine_harm` in `config/evaluation.yaml` (`weights: {retiree: 2, student: 2, gig_worker: 2}`, `default_weight: 1`) and removed weights for vulnerable personas from `not_decided_here`. |
 | Why | Genuine harm needs a fixed weighting decided before results; restricting people with little financial slack hurts more. |
 | Results exist? | No |
+
+## A-040
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-14 |
+| Issue IDs | None |
+| Issue IDs v2 | 16-6 |
+| Files | `config/world_ranges.yaml`, `config/interactive_runner.yaml`, `config/tactic_blocks.yaml`, `config/gang_mix.yaml`, `config/bank_feed.yaml`, `world/gang_mix.py`, `world/gang_devices.py`, `world/gang_config.py`, `world/gang_planner.py`, `world/bank_feed.py`, `world/world_configs.py`, `tests/unit/test_research_configs.py`, `docs/research/amendments.md` |
+| What changed | Generated gangs can draw their take-control flags. (a) Four world ranges, `take_control_share_sim_swap`, `take_control_share_linked_number_switch`, `take_control_share_emulator` and `take_control_share_remote_access`, each training `[0.1, 0.4]` (the last two `[0.05, 0.3]`), test `[0.05, 0.6]` (the last two `[0.02, 0.5]`) and stress `[0.0, 0.9]` (the last two `[0.0, 0.8]`). (b) Stream child 27, `gang_take_control_flags`, draws the flags so the gang-mix stream (child 22) never shifts. (c) A take-control parameter `bind_control_device`: when true, each controlled account gets a gang device event of kind `control_binding` at take-control and at every rotation generation. (d) The gang device kind `control_binding` maps to the bank-visible kind `device_binding_change`. (e) The shares are read with WORLD scope: stress worlds read the stress column and training, validation and test worlds read the training column, because these flags are not route settings. (f) `linked_number_switch` stays bank-invisible in 18a2: a binding event already marks the move to a gang phone, and a phone field on gang events only would make them distinguishable from genuine ones (rule 29). Every new behaviour sits behind `takeover_realism`, false by default, so gangs are unchanged until round 2 turns it on. |
+| Why | Issue 16-6 needs generated gangs that occasionally use SIM swaps, linked-number replacement, emulators and remote access, not only the fixed fixture flags, and the bank feed must see those take-overs in the same shape as genuine device binding changes. |
+| Results exist? | No |

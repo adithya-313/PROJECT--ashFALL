@@ -88,6 +88,12 @@ gang_mix:
     label: policy
     reason: "Test and stress worlds get one held-out gang, so held-out results exist per family; training and validation worlds never do (Level 12g, A-025)."
 
+  takeover_realism:
+    label: policy
+    value: false
+    reason: "When true, generated gangs draw their take-control flags from the world_ranges take_control_share_* entries on stream child 27 and set bind_control_device, so each controlled account gets a control_binding device event. When false, generated gangs are built exactly as before Level 18a2."
+    derived_from: "Level 18a2 architect ruling; amendment A-040"
+
   held_out_gang:
     label: policy
     reason: "Governs held-out gang generation for test and stress worlds per Level 12g brief and amendment A-025."

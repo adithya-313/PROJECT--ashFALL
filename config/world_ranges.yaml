@@ -6,7 +6,7 @@
 #   The simulated world has many settings: how big a payment is, how long a
 #   gang keeps a mule account, how late a bank hears about a complaint. For
 #   each one this file gives an allowed range, [lowest, highest], and says
-#   how well that range is backed by evidence. There are 79 settings.
+#   how well that range is backed by evidence. There are 83 settings.
 #   A world picks its own value for a setting at random inside the range
 #   for its kind of world. Some settings are picked once per world, some
 #   once per bank, per gang or per person.
@@ -223,6 +223,50 @@ parameters:
     test: [0.02, 0.5]
     stress: [0.0, 0.8]
     reason: One report says current and merchant accounts were preferred; no share is published.
+
+  # Chance that a generated gang uses each take-control flag. One share is
+  # drawn per flag per world and each gang draws against it. Example:
+  # training [0.1, 0.4] means a gang is flagged with SIM swap 10% to 40% of
+  # the time.
+  take_control_share_sim_swap:
+    label: assumption
+    issue_ids_v2: [16-6]
+    derived_from: "Level 18a2 architect brief; amendment A-040"
+    unit: fraction
+    training: [0.1, 0.4]
+    test: [0.05, 0.6]
+    stress: [0.0, 0.9]
+    reason: "Device-intelligence vendors (2026) and CloudSEK (Mar 2024) report SIM swaps, linked-number replacement, emulators and remote access in mule operations; no share is published. Ranges follow the mule_origin_share shape. Chance that a generated gang uses the flag."
+
+  take_control_share_linked_number_switch:
+    label: assumption
+    issue_ids_v2: [16-6]
+    derived_from: "Level 18a2 architect brief; amendment A-040"
+    unit: fraction
+    training: [0.1, 0.4]
+    test: [0.05, 0.6]
+    stress: [0.0, 0.9]
+    reason: "Device-intelligence vendors (2026) and CloudSEK (Mar 2024) report SIM swaps, linked-number replacement, emulators and remote access in mule operations; no share is published. Ranges follow the mule_origin_share shape. Chance that a generated gang uses the flag."
+
+  take_control_share_emulator:
+    label: assumption
+    issue_ids_v2: [16-6]
+    derived_from: "Level 18a2 architect brief; amendment A-040"
+    unit: fraction
+    training: [0.05, 0.3]
+    test: [0.02, 0.5]
+    stress: [0.0, 0.8]
+    reason: "Device-intelligence vendors (2026) and CloudSEK (Mar 2024) report SIM swaps, linked-number replacement, emulators and remote access in mule operations; no share is published. Ranges follow the mule_origin_share shape. Chance that a generated gang uses the flag."
+
+  take_control_share_remote_access:
+    label: assumption
+    issue_ids_v2: [16-6]
+    derived_from: "Level 18a2 architect brief; amendment A-040"
+    unit: fraction
+    training: [0.05, 0.3]
+    test: [0.02, 0.5]
+    stress: [0.0, 0.8]
+    reason: "Device-intelligence vendors (2026) and CloudSEK (Mar 2024) report SIM swaps, linked-number replacement, emulators and remote access in mule operations; no share is published. Ranges follow the mule_origin_share shape. Chance that a generated gang uses the flag."
 
   # Share of a rented account owner's own outgoing payments that carry on
   # while the account is rented; the rest are paused. Example: training

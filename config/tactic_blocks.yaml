@@ -139,6 +139,10 @@ tactic_blocks:
           label: policy
           type: boolean
           reason: "Whether remote access software was installed to operate the session remotely"
+        bind_control_device:
+          label: policy
+          type: boolean
+          reason: "When true, each controlled account gets a control_binding device event at take-control and at every rotation generation; omitted means false (fixtures unchanged)"
         rotate_every_days:
           label: assumption
           range: [3, 14]
@@ -475,6 +479,7 @@ gang_devices:
     - linked_number_switch
     - emulator_enabled
     - remote_access_enabled
+    - control_binding
 
 # ---------------------------------------------------------------------
 # slow_drip_limits: volume bounds on slow-drip payment streams

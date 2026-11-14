@@ -31,12 +31,12 @@ def test_world_ranges_file_is_valid():
 
 
 def test_world_ranges_parameter_count():
-    assert len(load_yaml(WORLD_RANGES_PATH)["parameters"]) == 79
+    assert len(load_yaml(WORLD_RANGES_PATH)["parameters"]) == 83
 
 
 def test_world_ranges_label_counts():
     parameters = load_yaml(WORLD_RANGES_PATH)["parameters"]
-    assert count_parameter_labels(parameters) == {"sourced": 5, "reported": 5, "assumption": 69}
+    assert count_parameter_labels(parameters) == {"sourced": 5, "reported": 5, "assumption": 73}
 
 
 def test_world_ranges_parameters_have_unit_and_all_three_ranges():

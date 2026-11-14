@@ -52,7 +52,7 @@ class WorldConfigs:
         >>> from world.world_configs import read_world_configs
         >>> configs = read_world_configs()
         >>> len(configs.world_ranges["parameters"])
-        79
+        83
         >>> len(configs.background_realism["parameters"])
         17
     """
