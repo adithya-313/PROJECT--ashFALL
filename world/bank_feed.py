@@ -18,10 +18,12 @@ from core.event_clock import world_minute_to_ist
 from world.bank_feed_config import BankFeedConfig, load_bank_feed_config
 from world.build_world import World
 from world.cash_withdrawals import ALLOWED_CHANNELS
+from world.device_events import DeviceEvent
 from world.device_runtime import DeviceStamp
 from world.failures import FAILURE_DOMAINS, PaymentEvent
 from world.interactive_records import InteractiveWorldOutput
 from world.label_records import LabelEvent
+from world.people import Person
 from world.phone_book import PhoneBook
 
 
@@ -507,6 +509,45 @@ def project_payment(
     return sides
 
 
+def _prior_binding_device(
+    account_id: str,
+    minute: int,
+    person_by_account: dict[str, Person],
+    genuine_events_by_person: dict[str, list[DeviceEvent]],
+    prior_bindings: dict[str, tuple[str, int]],
+) -> tuple[str, int] | None:
+    """
+    WHAT: Returns the (fingerprint, os_generation) an account used just before a gang control binding: the
+    previous binding's gang device when there is one, else a person-owned account's latest genuine device change
+    at or before the minute, else that person's own device.
+
+    WHY: A bank sees a device_binding_change with a before and an after device. A gang-opened account has no
+    earlier device the bank could know, so its first binding has no honest "before" and is not projected.
+
+    Args:
+        account_id: The account being bound.
+        minute: The binding's simulation minute.
+        person_by_account: Simulated people keyed by their account id.
+        genuine_events_by_person: Applied genuine device events keyed by person id, in applied order.
+        prior_bindings: Devices written by earlier projected bindings, keyed by account id.
+
+    Returns:
+        The before device, or None when the account belongs to no person and has no earlier binding.
+    """
+    if account_id in prior_bindings:
+        return prior_bindings[account_id]
+    if account_id not in person_by_account:
+        return None
+    person = person_by_account[account_id]
+    person_events: list[DeviceEvent] = []
+    if person.person_id in genuine_events_by_person:
+        person_events = genuine_events_by_person[person.person_id]
+    for event in reversed(person_events):
+        if event.minute <= minute:
+            return event.fingerprint_after, event.os_generation_after
+    return person.device.fingerprint, person.device.os_generation
+
+
 def project_run(
     output: InteractiveWorldOutput,
     label_events: Sequence[LabelEvent] = (),
@@ -583,6 +624,10 @@ def project_run(
 
     balance_replay = replay_balances(output.world)
     people_by_id = {p.person_id: p for p in output.world.people}
+    person_by_account = {p.account_id: p for p in output.world.people}
+    genuine_events_by_person: dict[str, list[DeviceEvent]] = {}
+    for genuine_event in output.result.applied_device_events:
+        genuine_events_by_person.setdefault(genuine_event.person_id, []).append(genuine_event)
 
     # 3. Project all payment events into debit and credit sides across banks.
     for idx, event in enumerate(output.result.run_result.events):
@@ -630,6 +675,7 @@ def project_run(
         account_events_by_bank[bank_id].append(acct_ev)
 
     # 5. Project applied gang device events (only mapped kinds with an associated account).
+    prior_bindings: dict[str, tuple[str, int]] = {}
     for gang_ev in output.result.applied_gang_device_events:
         if gang_ev.account_id is None or gang_ev.kind not in config.device_event_kind_map:
             dropped_device_events_by_kind[gang_ev.kind] = dropped_device_events_by_kind.get(gang_ev.kind, 0) + 1
@@ -640,15 +686,35 @@ def project_run(
         bank_id = account_to_bank[gang_ev.account_id]
         target_kind = config.device_event_kind_map[gang_ev.kind]
         event_time = world_minute_to_ist(gang_ev.minute, clock_start)
+
+        if gang_ev.kind == "control_binding":
+            before = _prior_binding_device(
+                gang_ev.account_id, gang_ev.minute, person_by_account, genuine_events_by_person, prior_bindings
+            )
+            if before is None:
+                dropped_device_events_by_kind["control_binding_no_prior_device"] = (
+                    dropped_device_events_by_kind.get("control_binding_no_prior_device", 0) + 1
+                )
+                continue
+            details = {
+                "platform": gang_ev.platform,
+                "fingerprint_before": before[0],
+                "fingerprint_after": gang_ev.fingerprint,
+                "os_generation_before": before[1],
+                "os_generation_after": gang_ev.os_generation,
+            }
+            check_bank_visible(details, GENUINE_DEVICE_DETAIL_FIELDS)
+            prior_bindings[gang_ev.account_id] = (gang_ev.fingerprint, gang_ev.os_generation)
+        else:
+            details = {
+                "platform": gang_ev.platform,
+                "fingerprint": gang_ev.fingerprint,
+                "os_generation": gang_ev.os_generation,
+            }
+            check_bank_visible(details, GANG_DEVICE_DETAIL_FIELDS)
+
         event_id = f"{run_id}-dev-{device_position:06d}"
         device_position += 1
-
-        details = {
-            "platform": gang_ev.platform,
-            "fingerprint": gang_ev.fingerprint,
-            "os_generation": gang_ev.os_generation,
-        }
-        check_bank_visible(details, GANG_DEVICE_DETAIL_FIELDS)
         acct_ev = BankFeedAccountEvent(
             bank_id=bank_id,
             event_id=event_id,
