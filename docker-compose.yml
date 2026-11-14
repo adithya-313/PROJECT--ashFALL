@@ -39,7 +39,11 @@ services:
 
   postgres:
     image: postgres:15
-    command: ["postgres", "-c", "wal_level=logical"]
+    # Replay workspaces are dropped with DROP SCHEMA CASCADE, which locks every object in one
+    # transaction; three parallel replays exhausted the default (64) on 2026-11-14 ("out of shared
+    # memory"). N = 4 x 41883 objects (the largest workspace schema in pg_class) = 167532, rounded
+    # up to the next multiple of 64 = 167552.
+    command: ["postgres", "-c", "wal_level=logical", "-c", "max_locks_per_transaction=167552"]
     # Credentials are read from .env so they are never hardcoded here.
     # The three POSTGRES_* variables must be present in .env.
     env_file:
