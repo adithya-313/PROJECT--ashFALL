@@ -1,6 +1,6 @@
 {
-  "code_version": "cd712d3",
-  "content_hash": "9a2856ce53b28edf39ffc725fecacd116a6eea99b8f0b931b7fcac0095c8096c",
+  "code_version": "38151de",
+  "content_hash": "3910e3bea0d49827685c65830039ee839991d7a0d0e0e1fc694c2dbd56306690",
   "cutoff": "2026-10-31T18:30:00+00:00",
   "feature_columns": [
     "distinct_payers_1h",
@@ -69,7 +69,7 @@
     "cash_branch_paise_7d": 0.0003454231433506045,
     "current_balance_paise": 0.018998272884283247,
     "customer_failed_attempts_24h": 0.0003454231433506045,
-    "days_since_device_change": 0.9523316062176166,
+    "days_since_device_change": 0.834887737478411,
     "device_hardware_changed": 0.0003454231433506045,
     "distinct_fingerprints_lifetime": 0.0003454231433506045,
     "distinct_payers_1h": 0.0003454231433506045,
@@ -113,9 +113,9 @@
     "volume_vs_own_history_ratio": 0.05319516407599309
   },
   "files": {
-    "labels.parquet": "8638c1b8281b5c0d660d50646b220a28260435bf242dce4d3c6336ffdc68c5f4",
-    "payments.parquet": "d49259f430a840d2eefc9d483fda4f4842d58cc42e180809773d87e980974e42",
-    "snapshots.parquet": "2dca398e1b12f3b96bbba853a1ee385224ce28a1aa93f4d08aec418ff7456e58"
+    "labels.parquet": "4cc62e75a98bf99df17077c2e2f1697371ac082e2d39474b36c6e1401fd80d1d",
+    "payments.parquet": "619a626fed01693310905fe0e11b3f2254c522637435cf46c75388e36b55988f",
+    "snapshots.parquet": "b50488120eb0e4767647723d8073f862cd01ae2af1739522a659841d7e64ab82"
   },
   "label_maturity_note": "Label maturity near cutoff contains unadjusted reporting lag.",
   "labels_contested": [],
@@ -127,7 +127,7 @@
   "row_counts": {
     "labels": 8,
     "payments": 2895,
-    "snapshots": 2683
+    "snapshots": 2688
   },
   "split": "test",
   "superseded_by": null,
@@ -139,7 +139,7 @@
         "layered_chain",
         "slow_drip"
       ],
-      "run_id": "ac7f6d276369a7b5",
+      "run_id": "7ee68d1b5a539657",
       "seed": 3000000,
       "split": "test",
       "world_id": "test-0000"

@@ -105,7 +105,7 @@ median time to detection 10.2 h; anomaly recall 0.0; rules+anomaly recall 0.444,
 - `py -3.12 -m showcase --level 17` and `--quick` -> 7 checks, Overall: PASSED.
 - `py -3.12 -m pytest -q -p no:cacheprovider tests/unit/decisions tests/unit/evaluation`
 - `py -3.12 -B scripts/verify_world.py` -> ALL GOLDEN CHECKS PASSED.
-- Fixture evaluation: `py -3.12 -m evaluation.run_level_17 --training showcase/fixtures/level_17/datasets/training-20261031T1830-7a356ef53e9e --validation showcase/fixtures/level_17/datasets/validation-20261031T1830-9d983967b617 --test showcase/fixtures/level_17/datasets/test-20261031T1830-9a2856ce53b2 --truth-root showcase/fixtures/level_17/truth --world-cards-root showcase/fixtures/level_17/world_cards`
+- Fixture evaluation: `py -3.12 -m evaluation.run_level_17 --training showcase/fixtures/level_17/datasets/training-20261031T1830-624c2ad40f4c --validation showcase/fixtures/level_17/datasets/validation-20261031T1830-e5593f4c3f8e --test showcase/fixtures/level_17/datasets/test-20261031T1830-3910e3bea0d4 --truth-root showcase/fixtures/level_17/truth --world-cards-root showcase/fixtures/level_17/world_cards`
 
 ## Generated facts
 
