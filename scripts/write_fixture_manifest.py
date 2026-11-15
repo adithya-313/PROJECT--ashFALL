@@ -111,7 +111,7 @@ def build_manifest(
 
 def write_manifest_file(manifest_path: Path, payload: dict[str, Any]) -> None:
     """Writes the payload as sorted two-space JSON with a trailing newline, the committed format."""
-    manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
 
 
 def write_fixture_manifest(
