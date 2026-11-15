@@ -318,6 +318,26 @@ PART_CONFIGS: dict[str, dict[str, Any]] = {
         ),
         "REGISTER_IDS": ("16-4", "17-4", "18-1"),
     },
+    "18a2": {
+        "INTERFACE_MODULES": (
+            "world.gang_mix",
+            "world.gang_config",
+            "world.gang_devices",
+            "world.bank_feed",
+        ),
+        "RECORDS_MODULE": (
+            "world.gang_devices",
+            "world.bank_feed",
+        ),
+        "RECORD_NAMES": (
+            "GangDeviceEvent",
+            "BankFeedAccountEvent",
+        ),
+        "CONFIG_FILES": (
+            "config/takeover_realism.yaml",
+        ),
+        "REGISTER_IDS": ("16-6",),
+    },
 }
 
 
