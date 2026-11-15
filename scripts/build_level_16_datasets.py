@@ -10,16 +10,18 @@ import argparse
 import asyncio
 import os
 import time
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import asyncpg
 import orjson
 import redis
 import yaml
 
 from core.config import config
+from core.config_validator import load_yaml
 from replay.dataset_builder import (
     Dataset,
     WorldExtract,
@@ -62,8 +64,22 @@ from world.world_sampler import WorldSpec, load_sampler_config, sample_worlds
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 DEFAULT_CONFIG_PATH = REPO_ROOT / "config" / "datasets.yaml"
+DEFAULT_DATASET_BUILD_CONFIG_PATH = REPO_ROOT / "config" / "dataset_build.yaml"
 DEFAULT_DATASETS_ROOT = REPO_ROOT / "data" / "datasets"
 DEFAULT_WORLD_CARDS_ROOT = REPO_ROOT / "runs" / "world_cards"
+
+# ConnectionResetError is a built-in subclass of ConnectionError. The redis and asyncpg classes
+# do not inherit from the built-in class, so each is named here. A lost connection surfaces as
+# one of these; anything else during a replay is a real failure and must not be retried.
+CONNECTION_ERROR_TYPES: tuple[type[BaseException], ...] = (
+    ConnectionResetError,
+    ConnectionError,
+    redis.exceptions.ConnectionError,
+    asyncpg.exceptions.ConnectionDoesNotExistError,
+    asyncpg.exceptions.ConnectionFailureError,
+    asyncpg.exceptions.CannotConnectNowError,
+    asyncpg.exceptions.ClientCannotConnectError,
+)
 
 
 def host_side_redis_url() -> str:
@@ -419,6 +435,63 @@ async def replay_and_extract(
     return holder[0]
 
 
+def load_dataset_build_config(path: Path = DEFAULT_DATASET_BUILD_CONFIG_PATH) -> dict[str, Any]:
+    """
+    WHAT: Reads config/dataset_build.yaml and returns its labelled parameters.
+    WHY: Retry policy is a choice, so it lives in config and not in code; the file is read only
+    here, never by the recording or run-id path (amendment A-041).
+    """
+    data = load_yaml(path)
+    parameters: dict[str, Any] = data["parameters"]
+    return parameters
+
+
+async def replay_world_with_retry(
+    recorded: RecordedWorld,
+    admin_pg: str,
+    base_redis_url: str,
+    *,
+    config: dict[str, Any],
+    profile_dir: Path | None = None,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> WorldExtract:
+    """
+    WHAT: Replays one world, retrying from scratch only when Redis or Postgres dropped the connection.
+    WHY: run_replay drops its workspace in a finally block, so a fresh call starts clean. Any other
+    exception is a real failure and is raised at once instead of burning the remaining attempts.
+    """
+    retry_enabled = config["retry_world_on_connection_error"]["value"]
+    if retry_enabled:
+        attempts = int(config["max_world_attempts"]["value"])
+        waits = list(config["retry_wait_seconds"]["value"])
+        if attempts < 1:
+            raise ValueError(f"max_world_attempts must be at least 1, got {attempts}")
+        if len(waits) != attempts - 1:
+            raise ValueError(
+                f"retry_wait_seconds has {len(waits)} entries but {attempts} attempts need {attempts - 1}"
+            )
+    else:
+        attempts = 1
+        waits = []
+
+    for attempt in range(1, attempts + 1):
+        try:
+            if profile_dir is None:
+                return await replay_and_extract(recorded, admin_pg, base_redis_url)
+            return await replay_and_extract(recorded, admin_pg, base_redis_url, profile_dir=profile_dir)
+        except CONNECTION_ERROR_TYPES as error:
+            if attempt == attempts:
+                raise
+            wait_seconds = waits[attempt - 1]
+            print(
+                f"Replay attempt {attempt}/{attempts} for world {recorded.world_id} failed with "
+                f"{type(error).__name__}: {error}; retrying in {wait_seconds}s"
+            )
+            await sleep(wait_seconds)
+
+    raise RuntimeError(f"replay of world {recorded.world_id} ended without a result or an error")
+
+
 def redis_command_calls(client: redis.Redis) -> int:
     """
     WHAT: Sums the `calls` counter over all INFO commandstats sections.
@@ -511,6 +584,7 @@ async def build_split_dataset(
     recorded_worlds: list[RecordedWorld] = []
     extracts: list[WorldExtract] = []
     world_ends: list[datetime] = []
+    retry_config = load_dataset_build_config()
 
     for spec in specs:
         if checkpoint_dir is not None:
@@ -541,10 +615,13 @@ async def build_split_dataset(
         if evaluation_truth_root is not None and checkpoint_dir is None:
             save_evaluation_inputs(rec, evaluation_truth_root, world_cards_root)
         replay_started = time.perf_counter()
-        if replay_profile_dir is None:
-            extract = await replay_and_extract(rec, db_url, redis_url)
-        else:
-            extract = await replay_and_extract(rec, db_url, redis_url, profile_dir=replay_profile_dir)
+        extract = await replay_world_with_retry(
+            rec,
+            db_url,
+            redis_url,
+            config=retry_config,
+            profile_dir=replay_profile_dir,
+        )
         replay_seconds = time.perf_counter() - replay_started
         extracts.append(extract)
 
