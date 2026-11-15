@@ -33,3 +33,6 @@ declared_in_other_files:
   reason: Training and benchmark scripts run in the machine-learning environment, whose pins (numpy, pandas and others) conflict with the app pins, so installing that whole file in CI would break.
   modules:
     mlflow: requirements-ml.txt
+    numpy: requirements-ml.txt
+    shap: requirements-ml.txt
+    xgboost: requirements-ml.txt
