@@ -338,6 +338,16 @@ PART_CONFIGS: dict[str, dict[str, Any]] = {
         ),
         "REGISTER_IDS": ("16-6",),
     },
+    "18a1b": {
+        "INTERFACE_MODULES": (
+            "scripts.build_level_16_datasets",
+            "scripts.dataset_checkpoints",
+        ),
+        "RECORDS_MODULE": ("scripts.dataset_checkpoints",),
+        "RECORD_NAMES": ("DatasetCheckpoint",),
+        "CONFIG_FILES": ("config/dataset_build.yaml",),
+        "REGISTER_IDS": ("16-4",),
+    },
 }
 
 
