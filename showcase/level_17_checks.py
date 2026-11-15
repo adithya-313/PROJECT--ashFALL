@@ -58,9 +58,9 @@ from world.world_configs import read_world_configs
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURES_ROOT = REPO_ROOT / "showcase" / "fixtures" / "level_17"
 DATASETS_ROOT = FIXTURES_ROOT / "datasets"
-TRAINING_DATASET = DATASETS_ROOT / "training-20261031T1830-7a356ef53e9e"
-VALIDATION_DATASET = DATASETS_ROOT / "validation-20261031T1830-9d983967b617"
-TEST_DATASET = DATASETS_ROOT / "test-20261031T1830-9a2856ce53b2"
+TRAINING_DATASET = DATASETS_ROOT / "training-20261031T1830-624c2ad40f4c"
+VALIDATION_DATASET = DATASETS_ROOT / "validation-20261031T1830-e5593f4c3f8e"
+TEST_DATASET = DATASETS_ROOT / "test-20261031T1830-3910e3bea0d4"
 TRUTH_ROOT = FIXTURES_ROOT / "truth"
 WORLD_CARDS_ROOT = FIXTURES_ROOT / "world_cards"
 OS_WAVE_LAYER_PATH = REPO_ROOT / "scenarios" / "stress" / "os-update-wave.yaml"

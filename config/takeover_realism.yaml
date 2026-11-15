@@ -1,0 +1,74 @@
+# =====================================================================
+# TAKEOVER REALISM: how often a generated gang uses each take-control flag
+# =====================================================================
+#
+# What this file is
+#   When takeover_realism is on, each world draws one share per flag from
+#   these ranges and each of its gangs draws against that share to decide
+#   whether it uses the flag. The four flags are SIM swap,
+#   linked-number replacement, emulator and remote access.
+#
+# Who reads it
+#   world/gang_mix.py (load_takeover_shares) reads it, only when
+#   takeover_realism is true. This file is deliberately not part of
+#   WorldConfigs and is never folded into world_ranges: world_ranges is
+#   hashed into the run id, so adding the shares there changed every
+#   fraud-on run id even with the switch off (amendment A-041).
+#
+# How to read an entry
+#   label       "assumption": nobody published the share, so the range is
+#               our registered guess.
+#   unit        fraction.
+#   training / test / stress
+#               the range for each kind of world, in the same shape as
+#               config/world_ranges.yaml: training sits inside test, and
+#               test inside stress. Each world draws one share inside the
+#               range for its kind.
+#   reason      one sentence on why the range looks the way it does.
+#
+# Where the full reasoning lives
+#   docs/research/amendments.md (A-040, A-041).
+#
+# Checked by: python -m core.config_validator config/takeover_realism.yaml
+# =====================================================================
+
+parameters:
+  take_control_share_sim_swap:
+    label: assumption
+    issue_ids_v2: [16-6]
+    derived_from: "Level 18a2 architect brief; amendment A-040"
+    unit: fraction
+    training: [0.1, 0.4]
+    test: [0.05, 0.6]
+    stress: [0.0, 0.9]
+    reason: "Device-intelligence vendors (2026) and CloudSEK (Mar 2024) report SIM swaps, linked-number replacement, emulators and remote access in mule operations; no share is published. Ranges follow the mule_origin_share shape. Chance that a generated gang uses the flag."
+
+  take_control_share_linked_number_switch:
+    label: assumption
+    issue_ids_v2: [16-6]
+    derived_from: "Level 18a2 architect brief; amendment A-040"
+    unit: fraction
+    training: [0.1, 0.4]
+    test: [0.05, 0.6]
+    stress: [0.0, 0.9]
+    reason: "Device-intelligence vendors (2026) and CloudSEK (Mar 2024) report SIM swaps, linked-number replacement, emulators and remote access in mule operations; no share is published. Ranges follow the mule_origin_share shape. Chance that a generated gang uses the flag."
+
+  take_control_share_emulator:
+    label: assumption
+    issue_ids_v2: [16-6]
+    derived_from: "Level 18a2 architect brief; amendment A-040"
+    unit: fraction
+    training: [0.05, 0.3]
+    test: [0.02, 0.5]
+    stress: [0.0, 0.8]
+    reason: "Device-intelligence vendors (2026) and CloudSEK (Mar 2024) report SIM swaps, linked-number replacement, emulators and remote access in mule operations; no share is published. Ranges follow the mule_origin_share shape. Chance that a generated gang uses the flag."
+
+  take_control_share_remote_access:
+    label: assumption
+    issue_ids_v2: [16-6]
+    derived_from: "Level 18a2 architect brief; amendment A-040"
+    unit: fraction
+    training: [0.05, 0.3]
+    test: [0.02, 0.5]
+    stress: [0.0, 0.8]
+    reason: "Device-intelligence vendors (2026) and CloudSEK (Mar 2024) report SIM swaps, linked-number replacement, emulators and remote access in mule operations; no share is published. Ranges follow the mule_origin_share shape. Chance that a generated gang uses the flag."
