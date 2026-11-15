@@ -278,7 +278,7 @@ def _tune_on_validation(
     tuning: TuningConfig,
     detector: TrainedAnomalyDetector,
     budget_pct: float,
-) -> tuple[TunedThresholds, list[ScoredDay]]:
+) -> tuple[TunedThresholds, list[ScoredDay], list[dict[str, Any]]]:
     """
     WHAT: Tunes the rules thresholds and both anomaly-style cuts on the validation account-days.
 
@@ -295,7 +295,8 @@ def _tune_on_validation(
         budget_pct: Maximum share of genuine account-days either system may restrict.
 
     Returns:
-        (tuned thresholds, validation scored days with detector scores).
+        (tuned thresholds, validation scored days with detector scores, the account-day rows
+        those scores were computed from, in score order).
 
     Raises:
         ValueError: If the datasets cannot be joined or a tuner refuses its inputs.
@@ -320,7 +321,7 @@ def _tune_on_validation(
         rules_result=rules_result,
         anomaly_result=anomaly_result,
     )
-    return tuned, scored
+    return tuned, scored, day_rows
 
 
 def _evaluate_test_worlds(
@@ -685,7 +686,7 @@ def run_pilot(
     detector = train_anomaly_detector(
         training_snapshot_rows, "training", world_starts, anomaly_config
     )
-    tuned, validation_scored = _tune_on_validation(
+    tuned, validation_scored, validation_scored_rows = _tune_on_validation(
         validation_dirs,
         truth_root,
         base_rules_config,
@@ -693,7 +694,7 @@ def run_pilot(
         detector,
         settings.genuine_restriction_budget_pct,
     )
-    validation_probabilities = predict_account_days(best_model, validation_day_rows)
+    validation_probabilities = predict_account_days(best_model, validation_scored_rows)
     validation_xgboost_scored = [
         replace(scored_day, anomaly_score=probability)
         for scored_day, probability in zip(validation_scored, validation_probabilities, strict=True)

@@ -159,14 +159,19 @@ def _truth_depth(row: dict[str, Any]) -> int | None:
 
 def one_row_per_account_day(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
-    WHAT: Keeps one snapshot row per (bank, account, IST day): the latest, with 'daily'
+    WHAT: Keeps one snapshot row per (world, bank, account, IST day): the latest, with 'daily'
     preferred when two rows share the same latest time.
 
     WHY: An account can be snapshotted more than once a day (for example a full snapshot at
     09:00 and the daily one at 21:00). Scoring both would count the same account-day twice.
+    The world is part of the key because account identifiers repeat across simulated worlds:
+    without it, different accounts that share a bank, account and day would merge into one
+    row as soon as several worlds are deduplicated in a single call.
 
     Args:
         rows: Snapshot rows, each carrying bank_id, account_id, snapshot_time and snapshot_kind.
+            Rows may carry world_id; a row without one keeps None in that key slot, so
+            hand-built single-world rows deduplicate exactly as before.
 
     Returns:
         One row per key, in first-seen key order. No input row is modified.
@@ -179,12 +184,13 @@ def one_row_per_account_day(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         ValueError: If a row lacks a required string field, a timezone-aware snapshot_time,
             or a valid snapshot_kind.
     """
-    selected: dict[tuple[str, str, date], dict[str, Any]] = {}
+    selected: dict[tuple[object, str, str, date], dict[str, Any]] = {}
     for row in rows:
+        world_id = row.get("world_id")
         bank_id = _require_string(row, "bank_id", "one_row_per_account_day")
         account_id = _require_string(row, "account_id", "one_row_per_account_day")
         day = _ist_day(row)
-        key = (bank_id, account_id, day)
+        key = (world_id, bank_id, account_id, day)
         current = selected.get(key)
         if current is None:
             selected[key] = row

@@ -87,6 +87,30 @@ def test_one_row_per_account_day_prefers_daily_on_exact_time_tie() -> None:
     assert kept_with_later_full == [later_full]
 
 
+def test_one_row_per_account_day_keeps_worlds_apart() -> None:
+    """The same bank, account and day in two worlds stays two rows; a single world collapses."""
+    world_a_early = _row(
+        world_id="world_a",
+        snapshot_time=datetime(2025, 1, 1, 9, 0, tzinfo=IST),
+        snapshot_kind="full",
+    )
+    world_a_late = _row(
+        world_id="world_a",
+        snapshot_time=datetime(2025, 1, 1, 21, 0, tzinfo=IST),
+        snapshot_kind="daily",
+    )
+    world_b = _row(
+        world_id="world_b",
+        snapshot_time=datetime(2025, 1, 1, 12, 0, tzinfo=IST),
+        snapshot_kind="daily",
+    )
+
+    kept = one_row_per_account_day([world_a_early, world_b, world_a_late])
+
+    assert kept == [world_a_late, world_b]
+    assert one_row_per_account_day([world_a_early, world_a_late]) == [world_a_late]
+
+
 # (b) Scoring receives feature values only: never identifiers and never hidden truth.
 def test_score_account_days_hides_truth_and_identifiers(monkeypatch: pytest.MonkeyPatch) -> None:
     """The rules call sees canonical features only; no truth_ or identifier key is passed."""

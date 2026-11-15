@@ -94,22 +94,24 @@ def _ist_day(moment: datetime) -> date:
 
 def _one_row_per_account_day(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
-    WHAT: Keeps the latest snapshot per (bank, account, IST day), preferring 'daily' on a tie.
+    WHAT: Keeps the latest snapshot per (world, bank, account, IST day), preferring 'daily' on a tie.
 
     WHY: The evaluation package owns the canonical one_row_per_account_day, but decisions/ is an
     operational package and the truth-isolation guard forbids it from importing evaluation at all.
-    This local copy keeps the same selection rule without weakening the boundary.
+    This local copy keeps the same selection rule without weakening the boundary, including the
+    world in the key so account identifiers repeated across simulated worlds stay apart.
 
     Raises:
         ValueError: If a row lacks a required string field, a timezone-aware snapshot_time, or a
             valid snapshot_kind.
     """
-    selected: dict[tuple[str, str, date], dict[str, Any]] = {}
+    selected: dict[tuple[object, str, str, date], dict[str, Any]] = {}
     for row in rows:
+        world_id = row.get("world_id")
         bank_id = _require_string(row, "bank_id", "one_row_per_account_day")
         account_id = _require_string(row, "account_id", "one_row_per_account_day")
         day = _ist_day(_require_datetime(row, "snapshot_time", "one_row_per_account_day"))
-        key = (bank_id, account_id, day)
+        key = (world_id, bank_id, account_id, day)
         current = selected.get(key)
         if current is None:
             selected[key] = row
