@@ -12,8 +12,6 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("xgboost", reason="xgboost is only installed with requirements-ml.txt")
-
 from decisions.mule_account_model import (
     account_model_feature_names,
     build_training_rows,
@@ -22,8 +20,6 @@ from decisions.mule_account_model import (
     save_model,
     train_account_model,
 )
-
-pytestmark = pytest.mark.ml  # needs the requirements-ml.txt libraries: CI's fast job leaves it out, the ml job runs it
 
 
 def _snapshot(world_id: str, account_id: str, day: int, value: float) -> dict[str, object]:

@@ -12,12 +12,6 @@ import shutil
 from pathlib import Path
 
 import pyarrow.parquet as pq
-import pytest
-
-pytest.importorskip("xgboost", reason="xgboost is only installed with requirements-ml.txt")
-pytest.importorskip("shap", reason="shap is only installed with requirements-ml.txt")
-pytest.importorskip("sklearn", reason="scikit-learn is only installed with requirements-ml.txt")
-pytest.importorskip("numpy", reason="numpy is only installed with requirements-ml.txt")
 
 from core.event_clock import IST
 from decisions.mule_account_model import _one_row_per_account_day
@@ -25,8 +19,6 @@ from decisions.rules_config import load_rules_config
 from evaluation.level17_scoring import one_row_per_account_day
 from evaluation.run_level_18_pilot import run_pilot
 from showcase.level_17_checks import TEST_DATASET, TRAINING_DATASET, VALIDATION_DATASET
-
-pytestmark = pytest.mark.ml  # needs the requirements-ml.txt libraries: CI's fast job leaves it out, the ml job runs it
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FIXTURES = REPO_ROOT / "showcase" / "fixtures" / "level_17"
