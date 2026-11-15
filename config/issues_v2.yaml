@@ -1078,12 +1078,18 @@ issues:
     parts: []
     later_work: ["Level 19: a quiet partition stalls the live payment watermark; replay solves it with a drain proof, live needs an idle timeout"]
   16-6:
-    title: "Phone changes during a run (SIM swap, linked-number switch) are not modelled; needed before Level 18a"
+    title: "Phone changes during a run: generated gangs draw take-control flags; linked-number switch, emulator and remote access stay bank-invisible in v1"
     origin: revision_2
-    status: planned
+    status: partial
     levels: [18]
-    parts: []
-    later_work: ["Level 18a (needed before 18a starts): model phone changes during a run (SIM swap, linked-number switch); control-change bank events and the Level 15 phone-change feature have no source until then"]
+    parts: [18a2]
+    evidence:
+      - {kind: test, file: tests/unit/world/test_gang_mix.py, name: test_takeover_flag_draws_are_reproducible_and_use_child_27}
+      - {kind: test, file: tests/unit/world/test_gang_devices.py, name: test_control_binding_is_emitted_once_per_controlled_account_at_take_control}
+      - {kind: test, file: tests/unit/world/test_bank_feed.py, name: test_control_binding_details_have_exactly_the_genuine_device_fields}
+    later_work:
+      - "Level 18: 18a2 draws the sim_swap, linked_number_switch, emulator and remote_access flags and projects control_binding as a device_binding_change; linked_number_switch, emulator and remote_access stay bank-invisible in v1 (architect ruling)"
+      - "Level 18 (17-1): rule_5 mule recall is still unmeasured at scale; the tiny fixtures only prove the plumbing"
   16-7:
     title: "World generates revoke/dispute for wrong listings"
     origin: revision_2

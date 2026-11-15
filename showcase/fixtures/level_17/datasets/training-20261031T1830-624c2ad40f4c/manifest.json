@@ -1,6 +1,6 @@
 {
-  "code_version": "cd712d3",
-  "content_hash": "7a356ef53e9ebf23fc28db5aac12a0baee907f08ce364ce7eafa2325d9261b44",
+  "code_version": "38151de",
+  "content_hash": "624c2ad40f4c16eb05741a1c522b18a742930649afe927a233755679f5768847",
   "cutoff": "2026-10-31T18:30:00+00:00",
   "feature_columns": [
     "distinct_payers_1h",
@@ -69,7 +69,7 @@
     "cash_branch_paise_7d": 0.000333889816360601,
     "current_balance_paise": 0.02971619365609349,
     "customer_failed_attempts_24h": 0.000333889816360601,
-    "days_since_device_change": 0.940567612687813,
+    "days_since_device_change": 0.752253756260434,
     "device_hardware_changed": 0.000333889816360601,
     "distinct_fingerprints_lifetime": 0.000333889816360601,
     "distinct_payers_1h": 0.000333889816360601,
@@ -113,9 +113,9 @@
     "volume_vs_own_history_ratio": 0.05459098497495826
   },
   "files": {
-    "labels.parquet": "bd56bfe98a0f1447e35028150ac07811503682bbdbc409918329646cb8127353",
-    "payments.parquet": "cea0c7fb2723d85333a1ce6a11029260f5c476d4cf0937bd1ddbb4eedc399561",
-    "snapshots.parquet": "a8eead1670ec38d93a00b6a7b258064ce4f5169b619538ae16c62e824a9e1936"
+    "labels.parquet": "4199bbf6a76a1f2414f455d9db7b399b95784827dcd4d9a744ff90c73b0bab43",
+    "payments.parquet": "f09bfef368250f0a99cbb889eef039ad3969a2fab6a93dd89030743dcaa45793",
+    "snapshots.parquet": "670309016a9c9ebd199ef045af517c9fdb55cd3132341d40d15786ac226bda73"
   },
   "label_maturity_note": "Label maturity near cutoff contains unadjusted reporting lag.",
   "labels_contested": [],
@@ -127,7 +127,7 @@
   "row_counts": {
     "labels": 22,
     "payments": 5990,
-    "snapshots": 5522
+    "snapshots": 5527
   },
   "split": "training",
   "superseded_by": null,
@@ -139,7 +139,7 @@
         "layered_chain",
         "layered_chain"
       ],
-      "run_id": "728fede34e0b5c4a",
+      "run_id": "79d161df9ecf4172",
       "seed": 1000000,
       "split": "training",
       "world_id": "training-0000"
@@ -152,7 +152,7 @@
         "layered_chain",
         "layered_chain"
       ],
-      "run_id": "bf322fe73d39312d",
+      "run_id": "6b20a184cb1a5efe",
       "seed": 1000001,
       "split": "training",
       "world_id": "training-0001"
