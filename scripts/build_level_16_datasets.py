@@ -9,12 +9,14 @@ Purpose: Rebuilds immutable point-in-time datasets across all configured simulat
 import argparse
 import asyncio
 import os
+import subprocess
 import sys
 import time
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import asyncpg
 import orjson
@@ -66,7 +68,7 @@ from world.base_rate import base_rate_for
 from world.config_reader import read_world_ranges
 from world.interactive_runner import prepare_world
 from world.replay_recording import RecordedWorld, record_sampled_world_for_replay
-from world.replay_workspace import ReplayWorkspace, workspace_redis_client
+from world.replay_workspace import ReplayWorkspace, load_replay_settings, workspace_redis_client
 from world.sampled_world import fast_settings_for, pinned_configs, resolve_sampled_world_gangs
 from world.truth_writer import truth_root_from_env, write_truth_files
 from world.world_sampler import WorldSpec, load_sampler_config, sample_worlds
@@ -554,6 +556,144 @@ class BuildStopped(Exception):
     """WHAT: A STOP file ended the build before every planned world was built. WHY: main exits with EXIT_STOPPED."""
 
 
+class WorkerFailure(Exception):
+    """WHAT: At least one child build exited non-zero.
+    WHY: The parent must not assemble, and main exits with exit_code."""
+
+    def __init__(self, exit_code: int) -> None:
+        self.exit_code = exit_code
+        super().__init__(f"a child build failed; exiting {exit_code}")
+
+
+@dataclass(frozen=True)
+class WorkerCommand:
+    """WHAT: One child build: its shard, the worlds it will build, its command and its log file."""
+
+    index: int
+    world_ids: tuple[str, ...]
+    argv: tuple[str, ...]
+    log_path: Path
+
+
+class ProcessHandle(Protocol):
+    """WHAT: The part of subprocess.Popen the launcher uses, so tests can supply a fake process."""
+
+    def wait(self) -> int: ...
+
+
+def validate_parallel_workers(count: int) -> int:
+    """
+    WHAT: Checks a worker count against the replay workspace pool read from config/replay.yaml.
+    WHY: Each replay holds one Redis workspace DB for its whole run; more workers than the pool would
+    wait on each other's locks instead of running, so the count is refused up front.
+    """
+    if count < 1:
+        raise ValueError(f"--parallel-workers must be at least 1, got {count}")
+    settings = load_replay_settings()
+    pool_size = settings.redis_workspace_db_max - settings.redis_workspace_db_min + 1
+    if count > pool_size:
+        raise ValueError(
+            f"--parallel-workers {count} exceeds the replay workspace pool of {pool_size} "
+            f"(redis_workspace_db_min={settings.redis_workspace_db_min}, "
+            f"redis_workspace_db_max={settings.redis_workspace_db_max})"
+        )
+    return count
+
+
+def worker_argv(base_argv: Sequence[str], shard: WorldShard, split: str) -> list[str]:
+    """
+    WHAT: Builds one child's command: this script under this interpreter with the parent's flags,
+    its own split and its world shard.
+    WHY: The parent runs one split at a time, so the child is told that single split. --parallel-workers
+    and an earlier --splits are dropped so the child cannot start a nested pool or a second split.
+    """
+    stripped: list[str] = []
+    skip_value = False
+    for arg in base_argv:
+        if skip_value:
+            skip_value = False
+            continue
+        if arg in ("--parallel-workers", "--splits"):
+            skip_value = True
+            continue
+        if arg.startswith("--parallel-workers=") or arg.startswith("--splits="):
+            continue
+        stripped.append(arg)
+    return [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        *stripped,
+        "--splits",
+        split,
+        "--world-shard",
+        f"{shard.index}/{shard.count}",
+    ]
+
+
+def split_worker_commands(
+    base_argv: Sequence[str],
+    split: str,
+    specs: Sequence[WorldSpec],
+    checkpoint_dir: Path,
+    workers: int,
+) -> list[WorkerCommand]:
+    """WHAT: One WorkerCommand per worker K of N. WHY: The parent prints and starts exactly these."""
+    commands: list[WorkerCommand] = []
+    for index in range(workers):
+        shard = WorldShard(index, workers)
+        selected = shard_specs(specs, shard)
+        commands.append(
+            WorkerCommand(
+                index=index,
+                world_ids=tuple(spec.world_id for spec in selected),
+                argv=tuple(worker_argv(base_argv, shard, split)),
+                log_path=checkpoint_dir / split / f"worker-{index}.log",
+            )
+        )
+    return commands
+
+
+def start_worker_process(argv: Sequence[str], log_path: Path) -> subprocess.Popen[bytes]:
+    """
+    WHAT: Starts one child with an explicit argument list and its own log file.
+    WHY: No shell, so flags such as K/N reach argparse exactly as built, and each worker's output
+    stays in its own file.
+    """
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("wb") as log_handle:
+        return subprocess.Popen(list(argv), stdout=log_handle, stderr=subprocess.STDOUT)
+
+
+def run_worker_commands(
+    commands: Sequence[WorkerCommand],
+    *,
+    spawn: Callable[[Sequence[str], Path], ProcessHandle] = start_worker_process,
+) -> list[int]:
+    """
+    WHAT: Starts every worker first, then waits for all of them, returning their exit codes in worker order.
+    WHY: A failing worker must not kill a healthy one; every healthy worker is left to finish and checkpoint.
+    """
+    processes = [spawn(command.argv, command.log_path) for command in commands]
+    return [process.wait() for process in processes]
+
+
+def worker_failure_exit_code(codes: Sequence[int]) -> int:
+    """WHAT: EXIT_STOPPED when every failed worker stopped or was incomplete, otherwise 1."""
+    failed = [code for code in codes if code != 0]
+    if failed and all(code == EXIT_STOPPED for code in failed):
+        return EXIT_STOPPED
+    return 1
+
+
+def log_tail(log_path: Path, lines: int = 5) -> list[str]:
+    """
+    WHAT: The last lines of a worker log.
+    WHY: Child output can contain bytes that are not UTF-8, and a failure report must still print the tail.
+    """
+    text = log_path.read_bytes().decode("utf-8", errors="replace")
+    return text.splitlines()[-lines:]
+
+
 async def checkpoint_split_worlds(
     split: str,
     specs: Sequence[WorldSpec],
@@ -777,6 +917,8 @@ async def build_all_level_16_datasets(
     checkpoint_dir: Path | None = None,
     world_shard: WorldShard | None = None,
     assemble_only: bool = False,
+    parallel_workers: int | None = None,
+    base_argv: Sequence[str] = (),
 ) -> dict[str, dict[str, Any]]:
     """
     WHAT: Builds datasets for all configured splits sequentially, returning execution metrics per split.
@@ -784,7 +926,10 @@ async def build_all_level_16_datasets(
     When world_shard is on, this process only writes checkpoints for its share of each split and
     writes no dataset.
     When assemble_only is on, every split's dataset is built from checkpoints and no world runs.
+    When parallel_workers is above 1, each split runs that many child builds and is then assembled here.
     """
+    if parallel_workers is not None:
+        validate_parallel_workers(parallel_workers)
     counts = load_datasets_config() if worlds_per_split is None else worlds_per_split
     print(f"Worlds per split: {counts} (source: {'flag' if worlds_per_split is not None else 'config'})")
     sampler_cfg = load_sampler_config()
@@ -822,6 +967,25 @@ async def build_all_level_16_datasets(
             if stopped:
                 raise BuildStopped(f"split {split} stopped before every planned world was built")
             continue
+        run_parallel = False
+        if parallel_workers is not None and parallel_workers > 1:
+            run_parallel = True
+            if checkpoint_dir is None:
+                raise ValueError("parallel_workers requires checkpoint_dir")
+            commands = split_worker_commands(base_argv, split, specs, checkpoint_dir, parallel_workers)
+            for command in commands:
+                print(
+                    f"Worker {command.index}: worlds {', '.join(command.world_ids)}; log {command.log_path}"
+                )
+            codes = run_worker_commands(commands)
+            if any(code != 0 for code in codes):
+                for command, code in zip(commands, codes):
+                    print(f"Worker {command.index} exited {code}")
+                    if code != 0:
+                        print("  last log lines:")
+                        for line in log_tail(command.log_path):
+                            print(f"    {line}")
+                raise WorkerFailure(worker_failure_exit_code(codes))
         dataset, dataset_dir, superseded = await build_split_dataset(
             split=split,
             specs=specs,
@@ -835,7 +999,7 @@ async def build_all_level_16_datasets(
             world_cards_root=world_cards_root,
             replay_profile_dir=replay_profile_dir,
             checkpoint_dir=checkpoint_dir,
-            assemble_only=assemble_only,
+            assemble_only=assemble_only or run_parallel,
         )
         elapsed = time.monotonic() - t0
         label_summary = summarize_labels_by_source_and_via(dataset)
@@ -934,6 +1098,12 @@ def main() -> None:
         help="Build the dataset from existing checkpoints without running any world (needs --checkpoint-dir)",
     )
     parser.add_argument(
+        "--parallel-workers",
+        type=int,
+        default=None,
+        help="Run this many child builds per split, then assemble here (needs --checkpoint-dir; default: one process)",
+    )
+    parser.add_argument(
         "--sampler-seed",
         type=int,
         default=1,
@@ -965,6 +1135,12 @@ def main() -> None:
         parser.error("--world-shard and --assemble-only require --checkpoint-dir")
     if args.world_shard is not None and args.assemble_only:
         parser.error("--world-shard and --assemble-only cannot be used together")
+    if args.parallel_workers is not None and checkpoint_dir is None:
+        parser.error("--parallel-workers requires --checkpoint-dir")
+    if args.parallel_workers is not None and args.world_shard is not None:
+        parser.error("--parallel-workers starts the shard workers itself, so --world-shard cannot be given")
+    if args.parallel_workers is not None and args.assemble_only:
+        parser.error("--parallel-workers already assembles after its workers, so --assemble-only cannot be given")
 
     selected_splits = [s.strip() for s in args.splits.split(",")] if args.splits else None
     worlds_per_split = parse_worlds_per_split(args.worlds_per_split) if args.worlds_per_split is not None else None
@@ -990,10 +1166,14 @@ def main() -> None:
                 worlds_per_split=worlds_per_split,
                 world_shard=args.world_shard,
                 assemble_only=args.assemble_only,
+                parallel_workers=args.parallel_workers,
+                base_argv=sys.argv[1:],
             )
         )
     except BuildStopped:
         sys.exit(EXIT_STOPPED)
+    except WorkerFailure as error:
+        sys.exit(error.exit_code)
     except MissingCheckpointsError as error:
         print(f"ERROR: {error}")
         sys.exit(1)
