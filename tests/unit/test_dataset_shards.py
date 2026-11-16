@@ -12,6 +12,7 @@ partial dataset, and a STOP file must stop before a world starts.
 
 import asyncio
 import sys
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ from scripts.dataset_checkpoints import (
     CHECKPOINT_FORMAT_VERSION,
     DatasetCheckpoint,
     checkpoint_path,
+    key_values_fingerprint,
     save_checkpoint,
 )
 from scripts.dataset_shards import (
@@ -85,6 +87,7 @@ def _save_checkpoint(checkpoint_dir: Path, spec: WorldSpec, *, run_id: str | Non
             preset_name="tiny",
             sampler_seed=1,
             code_version=TEST_CODE_VERSION,
+            key_values_sha256=key_values_fingerprint(spec.key_values),
             run_id=identity_run_id,
             world_end=datetime(2026, 9, 1, tzinfo=IST),
             record_seconds=1.5,
@@ -320,3 +323,28 @@ def test_assembly_follows_plan_order_not_completion_order(
     )
     assert [extract.world_id for extract in extracts] == ["training-0000", "training-0001"]
     assert world_ends == [datetime(2026, 9, 1, tzinfo=IST), datetime(2026, 9, 1, tzinfo=IST)]
+
+
+def test_assembly_refuses_a_checkpoint_with_different_key_values(tmp_path: Path) -> None:
+    """A checkpoint sampled with other key values than the plan's spec is refused, naming key_values_sha256."""
+    spec = replace(_specs(1)[0], key_values=(("world_population", 60),))
+    checkpoint_dir = tmp_path / "checkpoints"
+    _save_checkpoint(checkpoint_dir, spec)
+    planned = replace(spec, key_values=(("world_population", 61),))
+    assert checkpoint_path(checkpoint_dir, "training", spec.world_id).is_file()
+
+    with pytest.raises(ValueError) as error:
+        load_plan_checkpoints(
+            checkpoint_dir,
+            "training",
+            [planned],
+            preset_name="tiny",
+            sampler_seed=1,
+            code_version=TEST_CODE_VERSION,
+        )
+
+    message = str(error.value)
+    assert "key_values_sha256" in message
+    assert f"checkpoint={key_values_fingerprint(spec.key_values)!r}" in message
+    assert f"current={key_values_fingerprint(planned.key_values)!r}" in message
+    assert "world_id" not in message

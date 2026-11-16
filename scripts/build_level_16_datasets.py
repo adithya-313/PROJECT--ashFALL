@@ -46,6 +46,7 @@ from scripts.dataset_checkpoints import (
     CHECKPOINT_FORMAT_VERSION,
     DatasetCheckpoint,
     checkpoint_path,
+    key_values_fingerprint,
     load_checkpoint,
     save_checkpoint,
     verify_checkpoint_identity,
@@ -909,6 +910,7 @@ async def checkpoint_split_worlds(
                 preset_name=preset_name,
                 sampler_seed=sampler_seed,
                 code_version=code_version,
+                key_values_sha256=key_values_fingerprint(spec.key_values),
             )
             print(
                 f"Resumed world {spec.world_id} from {checkpoint_file} "
@@ -953,6 +955,7 @@ async def checkpoint_split_worlds(
                 preset_name=preset_name,
                 sampler_seed=sampler_seed,
                 code_version=code_version,
+                key_values_sha256=key_values_fingerprint(spec.key_values),
                 run_id=rec.output.result.run_id,
                 world_end=world_end,
                 record_seconds=record_seconds,

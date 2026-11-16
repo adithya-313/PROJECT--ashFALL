@@ -15,6 +15,7 @@ from pathlib import Path
 from replay.dataset_builder import WorldExtract
 from scripts.dataset_checkpoints import (
     checkpoint_path,
+    key_values_fingerprint,
     load_checkpoint,
     verify_checkpoint_identity,
 )
@@ -129,6 +130,7 @@ def load_plan_checkpoints(
             preset_name=preset_name,
             sampler_seed=sampler_seed,
             code_version=code_version,
+            key_values_sha256=key_values_fingerprint(spec.key_values),
         )
         extracts.append(checkpoint.extract)
         world_ends.append(checkpoint.world_end)
