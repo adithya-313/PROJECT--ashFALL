@@ -10,16 +10,18 @@ import argparse
 import asyncio
 import os
 import time
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import asyncpg
 import orjson
 import redis
 import yaml
 
 from core.config import config
+from core.config_validator import load_yaml
 from replay.dataset_builder import (
     Dataset,
     WorldExtract,
@@ -36,6 +38,14 @@ from replay.runner import (
     load_default_registry_poll_on_change,
     load_default_watermark_advance_skip_overlap,
     run_replay,
+)
+from scripts.dataset_checkpoints import (
+    CHECKPOINT_FORMAT_VERSION,
+    DatasetCheckpoint,
+    checkpoint_path,
+    load_checkpoint,
+    save_checkpoint,
+    verify_checkpoint_identity,
 )
 from showcase.framework import get_code_version
 from showcase.isolation import get_showcase_database_url
@@ -54,8 +64,22 @@ from world.world_sampler import WorldSpec, load_sampler_config, sample_worlds
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 DEFAULT_CONFIG_PATH = REPO_ROOT / "config" / "datasets.yaml"
+DEFAULT_DATASET_BUILD_CONFIG_PATH = REPO_ROOT / "config" / "dataset_build.yaml"
 DEFAULT_DATASETS_ROOT = REPO_ROOT / "data" / "datasets"
 DEFAULT_WORLD_CARDS_ROOT = REPO_ROOT / "runs" / "world_cards"
+
+# ConnectionResetError is a built-in subclass of ConnectionError. The redis and asyncpg classes
+# do not inherit from the built-in class, so each is named here. A lost connection surfaces as
+# one of these; anything else during a replay is a real failure and must not be retried.
+CONNECTION_ERROR_TYPES: tuple[type[BaseException], ...] = (
+    ConnectionResetError,
+    ConnectionError,
+    redis.exceptions.ConnectionError,
+    asyncpg.exceptions.ConnectionDoesNotExistError,
+    asyncpg.exceptions.ConnectionFailureError,
+    asyncpg.exceptions.CannotConnectNowError,
+    asyncpg.exceptions.ClientCannotConnectError,
+)
 
 
 def host_side_redis_url() -> str:
@@ -215,6 +239,31 @@ def find_fitting_sampler_seed(
     )
 
 
+def world_end_for_recorded(recorded: RecordedWorld) -> datetime:
+    """
+    WHAT: Returns the simulation end of one recorded world as midnight IST of its last simulated day.
+    WHY: Shared by the split cutoff and the per-world checkpoint, so a resumed build derives the
+    same cutoff it would derive from the recorded world.
+    """
+    cs = recorded.output.plan.clock.start_date
+    sim_start_date = cs.astimezone(IST).date() if isinstance(cs, datetime) else cs
+    start_midnight = datetime(
+        sim_start_date.year, sim_start_date.month, sim_start_date.day, 0, 0, 0, tzinfo=IST
+    )
+    return start_midnight + timedelta(days=recorded.output.plan.n_days)
+
+
+def cutoff_from_world_ends(world_ends: Sequence[datetime]) -> datetime:
+    """
+    WHAT: Returns the latest world end of a multi-world split.
+    WHY: A resumed build has a saved world end instead of a recorded world, and needs the same
+    cutoff rule: no simulation events before the planned completion of any world are excluded.
+    """
+    if not world_ends:
+        raise ValueError("Cannot derive cutoff from empty world end sequence")
+    return max(world_ends)
+
+
 def derive_dataset_cutoff(recorded_worlds: Sequence[RecordedWorld]) -> datetime:
     """
     WHAT: Derives the point-in-time dataset cutoff timestamp for a multi-world split.
@@ -225,16 +274,7 @@ def derive_dataset_cutoff(recorded_worlds: Sequence[RecordedWorld]) -> datetime:
     """
     if not recorded_worlds:
         raise ValueError("Cannot derive cutoff from empty recorded worlds sequence")
-    cutoffs: list[datetime] = []
-    for w in recorded_worlds:
-        cs = w.output.plan.clock.start_date
-        sim_start_date = cs.astimezone(IST).date() if isinstance(cs, datetime) else cs
-        start_midnight = datetime(
-            sim_start_date.year, sim_start_date.month, sim_start_date.day, 0, 0, 0, tzinfo=IST
-        )
-        world_end = start_midnight + timedelta(days=w.output.plan.n_days)
-        cutoffs.append(world_end)
-    return max(cutoffs)
+    return cutoff_from_world_ends([world_end_for_recorded(w) for w in recorded_worlds])
 
 
 def supersede_prior_datasets(
@@ -395,6 +435,63 @@ async def replay_and_extract(
     return holder[0]
 
 
+def load_dataset_build_config(path: Path = DEFAULT_DATASET_BUILD_CONFIG_PATH) -> dict[str, Any]:
+    """
+    WHAT: Reads config/dataset_build.yaml and returns its labelled parameters.
+    WHY: Retry policy is a choice, so it lives in config and not in code; the file is read only
+    here, never by the recording or run-id path (amendment A-041).
+    """
+    data = load_yaml(path)
+    parameters: dict[str, Any] = data["parameters"]
+    return parameters
+
+
+async def replay_world_with_retry(
+    recorded: RecordedWorld,
+    admin_pg: str,
+    base_redis_url: str,
+    *,
+    config: dict[str, Any],
+    profile_dir: Path | None = None,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> WorldExtract:
+    """
+    WHAT: Replays one world, retrying from scratch only when Redis or Postgres dropped the connection.
+    WHY: run_replay drops its workspace in a finally block, so a fresh call starts clean. Any other
+    exception is a real failure and is raised at once instead of burning the remaining attempts.
+    """
+    retry_enabled = config["retry_world_on_connection_error"]["value"]
+    if retry_enabled:
+        attempts = int(config["max_world_attempts"]["value"])
+        waits = list(config["retry_wait_seconds"]["value"])
+        if attempts < 1:
+            raise ValueError(f"max_world_attempts must be at least 1, got {attempts}")
+        if len(waits) != attempts - 1:
+            raise ValueError(
+                f"retry_wait_seconds has {len(waits)} entries but {attempts} attempts need {attempts - 1}"
+            )
+    else:
+        attempts = 1
+        waits = []
+
+    for attempt in range(1, attempts + 1):
+        try:
+            if profile_dir is None:
+                return await replay_and_extract(recorded, admin_pg, base_redis_url)
+            return await replay_and_extract(recorded, admin_pg, base_redis_url, profile_dir=profile_dir)
+        except CONNECTION_ERROR_TYPES as error:
+            if attempt == attempts:
+                raise
+            wait_seconds = waits[attempt - 1]
+            print(
+                f"Replay attempt {attempt}/{attempts} for world {recorded.world_id} failed with "
+                f"{type(error).__name__}: {error}; retrying in {wait_seconds}s"
+            )
+            await sleep(wait_seconds)
+
+    raise RuntimeError(f"replay of world {recorded.world_id} ended without a result or an error")
+
+
 def redis_command_calls(client: redis.Redis) -> int:
     """
     WHAT: Sums the `calls` counter over all INFO commandstats sections.
@@ -449,6 +546,7 @@ async def build_split_dataset(
     preset_name: str,
     sampler_cfg: dict[str, Any],
     code_version: str,
+    sampler_seed: int = 1,
     datasets_root: Path = DEFAULT_DATASETS_ROOT,
     admin_pg: str | None = None,
     base_redis_url: str | None = None,
@@ -456,12 +554,15 @@ async def build_split_dataset(
     truth_root: Path | None = None,
     world_cards_root: Path = DEFAULT_WORLD_CARDS_ROOT,
     replay_profile_dir: Path | None = None,
+    checkpoint_dir: Path | None = None,
 ) -> tuple[Dataset, Path, list[Path]]:
     """
     WHAT: Records, replays, extracts, builds and writes one dataset for a given split across its specs.
     WHY: Implements single-dataset-per-split building and automatic prior version supersession.
     When write_evaluation_inputs is on, each recorded world also saves its truth and base rate.
     When replay_profile_dir is on, each world's replay profile is written there with its record and replay seconds.
+    When checkpoint_dir is on, each world saves a checkpoint after its truth and replay, and a rerun
+    resumes a world whose checkpoint matches the current spec and settings.
     """
     loop = asyncio.get_running_loop()
     db_url = admin_pg if admin_pg is not None else get_showcase_database_url()
@@ -482,21 +583,77 @@ async def build_split_dataset(
 
     recorded_worlds: list[RecordedWorld] = []
     extracts: list[WorldExtract] = []
+    world_ends: list[datetime] = []
+    retry_config = load_dataset_build_config()
 
     for spec in specs:
+        if checkpoint_dir is not None:
+            checkpoint_file = checkpoint_path(checkpoint_dir, split, spec.world_id)
+            if checkpoint_file.is_file():
+                checkpoint = load_checkpoint(checkpoint_file)
+                verify_checkpoint_identity(
+                    checkpoint,
+                    split=split,
+                    world_id=spec.world_id,
+                    seed=spec.seed,
+                    preset_name=preset_name,
+                    sampler_seed=sampler_seed,
+                    code_version=code_version,
+                )
+                extracts.append(checkpoint.extract)
+                world_ends.append(checkpoint.world_end)
+                print(
+                    f"Resumed world {spec.world_id} from {checkpoint_file} "
+                    f"(record {checkpoint.record_seconds:.2f}s, replay {checkpoint.replay_seconds:.2f}s earlier)"
+                )
+                continue
+
         record_started = time.perf_counter()
         rec = record_world_for_spec(spec, preset_name, sampler_cfg, code_version, loop)
         record_seconds = time.perf_counter() - record_started
         recorded_worlds.append(rec)
-        if evaluation_truth_root is not None:
+        if evaluation_truth_root is not None and checkpoint_dir is None:
             save_evaluation_inputs(rec, evaluation_truth_root, world_cards_root)
         replay_started = time.perf_counter()
-        if replay_profile_dir is None:
-            extract = await replay_and_extract(rec, db_url, redis_url)
-        else:
-            extract = await replay_and_extract(rec, db_url, redis_url, profile_dir=replay_profile_dir)
+        extract = await replay_world_with_retry(
+            rec,
+            db_url,
+            redis_url,
+            config=retry_config,
+            profile_dir=replay_profile_dir,
+        )
         replay_seconds = time.perf_counter() - replay_started
         extracts.append(extract)
+
+        if checkpoint_dir is not None:
+            world_end = world_end_for_recorded(rec)
+            if evaluation_truth_root is not None:
+                truth_folder = evaluation_truth_root / rec.output.result.run_id
+                if truth_folder.exists():
+                    raise FileExistsError(
+                        f"truth folder '{truth_folder}' already exists from an earlier attempt; "
+                        f"delete it before resuming world {spec.world_id}, so a checkpoint never "
+                        "claims work that was not completed"
+                    )
+                save_evaluation_inputs(rec, evaluation_truth_root, world_cards_root)
+            save_checkpoint(
+                checkpoint_path(checkpoint_dir, split, spec.world_id),
+                DatasetCheckpoint(
+                    format_version=CHECKPOINT_FORMAT_VERSION,
+                    split=split,
+                    world_id=spec.world_id,
+                    seed=spec.seed,
+                    preset_name=preset_name,
+                    sampler_seed=sampler_seed,
+                    code_version=code_version,
+                    run_id=rec.output.result.run_id,
+                    world_end=world_end,
+                    record_seconds=record_seconds,
+                    replay_seconds=replay_seconds,
+                    extract=extract,
+                ),
+            )
+            world_ends.append(world_end)
 
         if replay_profile_dir is not None:
             profile_path = replay_profile_dir / f"{rec.world_id}.json"
@@ -507,7 +664,7 @@ async def build_split_dataset(
                 orjson.dumps(profile_payload, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2) + b"\n"
             )
 
-    cutoff = derive_dataset_cutoff(recorded_worlds)
+    cutoff = derive_dataset_cutoff(recorded_worlds) if checkpoint_dir is None else cutoff_from_world_ends(world_ends)
     dataset = build_dataset(extracts, split=split, cutoff=cutoff, code_version=code_version)
     dataset_dir = write_dataset(dataset, root=datasets_root)
     superseded = supersede_prior_datasets(split, dataset_dir, datasets_root=datasets_root)
@@ -524,6 +681,7 @@ async def build_all_level_16_datasets(
     world_cards_root: Path = DEFAULT_WORLD_CARDS_ROOT,
     replay_profile_dir: Path | None = None,
     worlds_per_split: dict[str, int] | None = None,
+    checkpoint_dir: Path | None = None,
 ) -> dict[str, dict[str, Any]]:
     """
     WHAT: Builds datasets for all configured splits sequentially, returning execution metrics per split.
@@ -552,11 +710,13 @@ async def build_all_level_16_datasets(
             preset_name=preset_name,
             sampler_cfg=sampler_cfg,
             code_version=code_ver,
+            sampler_seed=sampler_seed,
             datasets_root=datasets_root,
             write_evaluation_inputs=write_evaluation_inputs,
             truth_root=truth_root,
             world_cards_root=world_cards_root,
             replay_profile_dir=replay_profile_dir,
+            checkpoint_dir=checkpoint_dir,
         )
         elapsed = time.monotonic() - t0
         label_summary = summarize_labels_by_source_and_via(dataset)
@@ -630,6 +790,12 @@ def main() -> None:
         help="Directory for per-world replay profile JSON files (default: no profiles written)",
     )
     parser.add_argument(
+        "--checkpoint-dir",
+        type=str,
+        default=None,
+        help="Directory for one resumable checkpoint per world (default: no checkpoints)",
+    )
+    parser.add_argument(
         "--sampler-seed",
         type=int,
         default=1,
@@ -675,6 +841,7 @@ def main() -> None:
             write_evaluation_inputs=args.write_evaluation_inputs,
             world_cards_root=Path(args.world_cards_root),
             replay_profile_dir=Path(args.replay_profile_dir) if args.replay_profile_dir else None,
+            checkpoint_dir=Path(args.checkpoint_dir) if args.checkpoint_dir else None,
             worlds_per_split=worlds_per_split,
         )
     )
