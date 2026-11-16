@@ -403,3 +403,40 @@ Extracted directly via `dataclasses.fields`:
 
 - `tie_break_order`:
   - `[outside_events, planned_payments, fraud_payments, resumed_payments, gang_device_events, opened_routine_payments, cash_withdrawals, gang_observations]`
+
+## Round 2c — several Redis servers
+- Switch: `parameters.replay_redis_urls` in `config/dataset_build.yaml`. `value: []` is the OFF state
+  and reproduces the single-Redis behaviour exactly; each entry must be a non-empty `redis://` URL
+  and no address may repeat. `load_replay_redis_urls` refuses a bad entry by name.
+- Routing: `redis_url_for_worker(k, urls)` returns `None` when the list is empty, otherwise
+  `urls[k % len(urls)]`. Round-robin, so neighbouring workers start on different servers; with one
+  URL every worker keeps the parent's address.
+- Child environment: `start_worker_process(argv, log_path, redis_url=None)` passes no `env` when the
+  address is None (today's call unchanged) and otherwise a copy of the parent environment with
+  `TEST_REDIS_URL` set to that worker's URL. The parent's own environment is never modified.
+- New worker cap: `validate_parallel_workers` allows `pool_size * max(1, len(urls))` workers, where
+  `pool_size = redis_workspace_db_max - redis_workspace_db_min + 1` (15 here). With `[]` the cap is
+  15 and the old message is unchanged; with 3 URLs the cap is 45 and the message names the 3 servers.
+- Extra servers: `docker compose up -d redis-2 redis-3` starts the two new same-image services on
+  host ports 6380 and 6381 (`docker-compose.yml`; the existing `redis` service is untouched). A run
+  can then set `value: ["redis://localhost:6379/0", "redis://localhost:6380/0"]`.
+- Replay profile command count: `redis_commands_during_replay` in each world's profile JSON is
+  measured with that worker's client, so a multi-Redis run reports a per-server count; sum the
+  profiles to see the whole run.
+
+### Laptop acceptance (Windows laptop, SIMULATED, tiny)
+Preset tiny, sampler seed 2, training split only, `--parallel-workers 2`,
+`--write-evaluation-inputs`, fresh folders under `runs/r2c/off/` and `runs/r2c/on/`.
+| Run | Switch | Exit | Wall seconds | Comparison vs level_17 fixture |
+| --- | --- | --- | --- | --- |
+| OFF | `[]` | 0 | 818 | `VERDICT: IDENTICAL` (payments 5990, snapshots 5527, labels 22, 0 differing rows each) |
+| ON | `["redis://localhost:6379/0", "redis://localhost:6380/0"]` | 0 | 807 | `VERDICT: IDENTICAL` (payments 5990, snapshots 5527, labels 22, 0 differing rows each) |
+- Both runs wrote dataset `training-20261031T1830-a64b3975255d`; the split wall times were 814.41s
+  (OFF) and 804.39s (ON). The ON parent printed
+  `Worker 0: ...; redis redis://localhost:6379/0` and
+  `Worker 1: ...; redis redis://localhost:6380/0`; the OFF parent printed no redis part.
+- The worker logs themselves carry only the schema `apply` lines, so the per-worker address is
+  recorded by the parent start line. `docker exec project-ashfall-redis-2-1 redis-cli info commandstats`
+  shows server 2 really served work: `cmdstat_zrange:calls=1941222`, `cmdstat_set:calls=34673`,
+  `cmdstat_evalsha:calls=21952`.
+- The ON switch edit was local to that run and was reverted; the committed value is `[]`.
