@@ -9,11 +9,14 @@ Purpose: Rebuilds immutable point-in-time datasets across all configured simulat
 import argparse
 import asyncio
 import os
+import subprocess
+import sys
 import time
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import asyncpg
 import orjson
@@ -47,6 +50,15 @@ from scripts.dataset_checkpoints import (
     save_checkpoint,
     verify_checkpoint_identity,
 )
+from scripts.dataset_shards import (
+    EXIT_STOPPED,
+    MissingCheckpointsError,
+    WorldShard,
+    load_plan_checkpoints,
+    parse_world_shard,
+    shard_specs,
+    stop_requested,
+)
 from showcase.framework import get_code_version
 from showcase.isolation import get_showcase_database_url
 from world.bank_connectors import MockBankConnectors, load_bank_modes
@@ -56,7 +68,7 @@ from world.base_rate import base_rate_for
 from world.config_reader import read_world_ranges
 from world.interactive_runner import prepare_world
 from world.replay_recording import RecordedWorld, record_sampled_world_for_replay
-from world.replay_workspace import ReplayWorkspace, workspace_redis_client
+from world.replay_workspace import ReplayWorkspace, load_replay_settings, workspace_redis_client
 from world.sampled_world import fast_settings_for, pinned_configs, resolve_sampled_world_gangs
 from world.truth_writer import truth_root_from_env, write_truth_files
 from world.world_sampler import WorldSpec, load_sampler_config, sample_worlds
@@ -540,6 +552,248 @@ def save_evaluation_inputs(
     }
 
 
+class BuildStopped(Exception):
+    """WHAT: A STOP file ended the build before every planned world was built. WHY: main exits with EXIT_STOPPED."""
+
+
+class WorkerFailure(Exception):
+    """WHAT: At least one child build exited non-zero.
+    WHY: The parent must not assemble, and main exits with exit_code."""
+
+    def __init__(self, exit_code: int) -> None:
+        self.exit_code = exit_code
+        super().__init__(f"a child build failed; exiting {exit_code}")
+
+
+@dataclass(frozen=True)
+class WorkerCommand:
+    """WHAT: One child build: its shard, the worlds it will build, its command and its log file."""
+
+    index: int
+    world_ids: tuple[str, ...]
+    argv: tuple[str, ...]
+    log_path: Path
+
+
+class ProcessHandle(Protocol):
+    """WHAT: The part of subprocess.Popen the launcher uses, so tests can supply a fake process."""
+
+    def wait(self) -> int: ...
+
+
+def validate_parallel_workers(count: int) -> int:
+    """
+    WHAT: Checks a worker count against the replay workspace pool read from config/replay.yaml.
+    WHY: Each replay holds one Redis workspace DB for its whole run; more workers than the pool would
+    wait on each other's locks instead of running, so the count is refused up front.
+    """
+    if count < 1:
+        raise ValueError(f"--parallel-workers must be at least 1, got {count}")
+    settings = load_replay_settings()
+    pool_size = settings.redis_workspace_db_max - settings.redis_workspace_db_min + 1
+    if count > pool_size:
+        raise ValueError(
+            f"--parallel-workers {count} exceeds the replay workspace pool of {pool_size} "
+            f"(redis_workspace_db_min={settings.redis_workspace_db_min}, "
+            f"redis_workspace_db_max={settings.redis_workspace_db_max})"
+        )
+    return count
+
+
+def worker_argv(base_argv: Sequence[str], shard: WorldShard, split: str) -> list[str]:
+    """
+    WHAT: Builds one child's command: this script under this interpreter with the parent's flags,
+    its own split and its world shard.
+    WHY: The parent runs one split at a time, so the child is told that single split. --parallel-workers
+    and an earlier --splits are dropped so the child cannot start a nested pool or a second split.
+    """
+    stripped: list[str] = []
+    skip_value = False
+    for arg in base_argv:
+        if skip_value:
+            skip_value = False
+            continue
+        if arg in ("--parallel-workers", "--splits"):
+            skip_value = True
+            continue
+        if arg.startswith("--parallel-workers=") or arg.startswith("--splits="):
+            continue
+        stripped.append(arg)
+    return [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        *stripped,
+        "--splits",
+        split,
+        "--world-shard",
+        f"{shard.index}/{shard.count}",
+    ]
+
+
+def split_worker_commands(
+    base_argv: Sequence[str],
+    split: str,
+    specs: Sequence[WorldSpec],
+    checkpoint_dir: Path,
+    workers: int,
+) -> list[WorkerCommand]:
+    """WHAT: One WorkerCommand per worker K of N. WHY: The parent prints and starts exactly these."""
+    commands: list[WorkerCommand] = []
+    for index in range(workers):
+        shard = WorldShard(index, workers)
+        selected = shard_specs(specs, shard)
+        commands.append(
+            WorkerCommand(
+                index=index,
+                world_ids=tuple(spec.world_id for spec in selected),
+                argv=tuple(worker_argv(base_argv, shard, split)),
+                log_path=checkpoint_dir / split / f"worker-{index}.log",
+            )
+        )
+    return commands
+
+
+def start_worker_process(argv: Sequence[str], log_path: Path) -> subprocess.Popen[bytes]:
+    """
+    WHAT: Starts one child with an explicit argument list and its own log file.
+    WHY: No shell, so flags such as K/N reach argparse exactly as built, and each worker's output
+    stays in its own file.
+    """
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("wb") as log_handle:
+        return subprocess.Popen(list(argv), stdout=log_handle, stderr=subprocess.STDOUT)
+
+
+def run_worker_commands(
+    commands: Sequence[WorkerCommand],
+    *,
+    spawn: Callable[[Sequence[str], Path], ProcessHandle] = start_worker_process,
+) -> list[int]:
+    """
+    WHAT: Starts every worker first, then waits for all of them, returning their exit codes in worker order.
+    WHY: A failing worker must not kill a healthy one; every healthy worker is left to finish and checkpoint.
+    """
+    processes = [spawn(command.argv, command.log_path) for command in commands]
+    return [process.wait() for process in processes]
+
+
+def worker_failure_exit_code(codes: Sequence[int]) -> int:
+    """WHAT: EXIT_STOPPED when every failed worker stopped or was incomplete, otherwise 1."""
+    failed = [code for code in codes if code != 0]
+    if failed and all(code == EXIT_STOPPED for code in failed):
+        return EXIT_STOPPED
+    return 1
+
+
+def log_tail(log_path: Path, lines: int = 5) -> list[str]:
+    """
+    WHAT: The last lines of a worker log.
+    WHY: Child output can contain bytes that are not UTF-8, and a failure report must still print the tail.
+    """
+    text = log_path.read_bytes().decode("utf-8", errors="replace")
+    return text.splitlines()[-lines:]
+
+
+async def checkpoint_split_worlds(
+    split: str,
+    specs: Sequence[WorldSpec],
+    preset_name: str,
+    sampler_cfg: dict[str, Any],
+    code_version: str,
+    *,
+    sampler_seed: int,
+    checkpoint_dir: Path,
+    db_url: str,
+    redis_url: str,
+    evaluation_truth_root: Path | None,
+    world_cards_root: Path,
+    replay_profile_dir: Path | None,
+) -> bool:
+    """
+    WHAT: Resumes each world that has a valid checkpoint and builds and checkpoints the rest, in plan order.
+    WHY: A worker writes only checkpoints, so the dataset is assembled by one process from plan order.
+    Returns:
+        True when a STOP file was found before a world that still needed building; that world is not started.
+    """
+    loop = asyncio.get_running_loop()
+    retry_config = load_dataset_build_config()
+
+    for spec in specs:
+        checkpoint_file = checkpoint_path(checkpoint_dir, split, spec.world_id)
+        if checkpoint_file.is_file():
+            checkpoint = load_checkpoint(checkpoint_file)
+            verify_checkpoint_identity(
+                checkpoint,
+                split=split,
+                world_id=spec.world_id,
+                seed=spec.seed,
+                preset_name=preset_name,
+                sampler_seed=sampler_seed,
+                code_version=code_version,
+            )
+            print(
+                f"Resumed world {spec.world_id} from {checkpoint_file} "
+                f"(record {checkpoint.record_seconds:.2f}s, replay {checkpoint.replay_seconds:.2f}s earlier)"
+            )
+            continue
+
+        if stop_requested(checkpoint_dir, split):
+            print(f"STOP file found; not starting {spec.world_id}")
+            return True
+
+        record_started = time.perf_counter()
+        rec = record_world_for_spec(spec, preset_name, sampler_cfg, code_version, loop)
+        record_seconds = time.perf_counter() - record_started
+        replay_started = time.perf_counter()
+        extract = await replay_world_with_retry(
+            rec,
+            db_url,
+            redis_url,
+            config=retry_config,
+            profile_dir=replay_profile_dir,
+        )
+        replay_seconds = time.perf_counter() - replay_started
+
+        world_end = world_end_for_recorded(rec)
+        if evaluation_truth_root is not None:
+            truth_folder = evaluation_truth_root / rec.output.result.run_id
+            if truth_folder.exists():
+                raise FileExistsError(
+                    f"truth folder '{truth_folder}' already exists from an earlier attempt; "
+                    f"delete it before resuming world {spec.world_id}, so a checkpoint never "
+                    "claims work that was not completed"
+                )
+            save_evaluation_inputs(rec, evaluation_truth_root, world_cards_root)
+        save_checkpoint(
+            checkpoint_file,
+            DatasetCheckpoint(
+                format_version=CHECKPOINT_FORMAT_VERSION,
+                split=split,
+                world_id=spec.world_id,
+                seed=spec.seed,
+                preset_name=preset_name,
+                sampler_seed=sampler_seed,
+                code_version=code_version,
+                run_id=rec.output.result.run_id,
+                world_end=world_end,
+                record_seconds=record_seconds,
+                replay_seconds=replay_seconds,
+                extract=extract,
+            ),
+        )
+
+        if replay_profile_dir is not None:
+            profile_path = replay_profile_dir / f"{rec.world_id}.json"
+            profile_payload = orjson.loads(profile_path.read_bytes())
+            profile_payload["record_seconds"] = round(record_seconds, 3)
+            profile_payload["replay_seconds"] = round(replay_seconds, 3)
+            profile_path.write_bytes(
+                orjson.dumps(profile_payload, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2) + b"\n"
+            )
+
+    return False
+
+
 async def build_split_dataset(
     split: str,
     specs: list[WorldSpec],
@@ -555,6 +809,7 @@ async def build_split_dataset(
     world_cards_root: Path = DEFAULT_WORLD_CARDS_ROOT,
     replay_profile_dir: Path | None = None,
     checkpoint_dir: Path | None = None,
+    assemble_only: bool = False,
 ) -> tuple[Dataset, Path, list[Path]]:
     """
     WHAT: Records, replays, extracts, builds and writes one dataset for a given split across its specs.
@@ -563,8 +818,8 @@ async def build_split_dataset(
     When replay_profile_dir is on, each world's replay profile is written there with its record and replay seconds.
     When checkpoint_dir is on, each world saves a checkpoint after its truth and replay, and a rerun
     resumes a world whose checkpoint matches the current spec and settings.
+    When assemble_only is on, the dataset is built purely from checkpoints in plan order and no world runs.
     """
-    loop = asyncio.get_running_loop()
     db_url = admin_pg if admin_pg is not None else get_showcase_database_url()
     redis_url = base_redis_url if base_redis_url is not None else host_side_redis_url()
 
@@ -581,90 +836,68 @@ async def build_split_dataset(
             raise ValueError("write_evaluation_inputs requires a truth_root path")
         evaluation_truth_root = truth_root
 
-    recorded_worlds: list[RecordedWorld] = []
     extracts: list[WorldExtract] = []
-    world_ends: list[datetime] = []
-    retry_config = load_dataset_build_config()
+    if checkpoint_dir is None:
+        loop = asyncio.get_running_loop()
+        recorded_worlds: list[RecordedWorld] = []
+        retry_config = load_dataset_build_config()
 
-    for spec in specs:
-        if checkpoint_dir is not None:
-            checkpoint_file = checkpoint_path(checkpoint_dir, split, spec.world_id)
-            if checkpoint_file.is_file():
-                checkpoint = load_checkpoint(checkpoint_file)
-                verify_checkpoint_identity(
-                    checkpoint,
-                    split=split,
-                    world_id=spec.world_id,
-                    seed=spec.seed,
-                    preset_name=preset_name,
-                    sampler_seed=sampler_seed,
-                    code_version=code_version,
-                )
-                extracts.append(checkpoint.extract)
-                world_ends.append(checkpoint.world_end)
-                print(
-                    f"Resumed world {spec.world_id} from {checkpoint_file} "
-                    f"(record {checkpoint.record_seconds:.2f}s, replay {checkpoint.replay_seconds:.2f}s earlier)"
-                )
-                continue
-
-        record_started = time.perf_counter()
-        rec = record_world_for_spec(spec, preset_name, sampler_cfg, code_version, loop)
-        record_seconds = time.perf_counter() - record_started
-        recorded_worlds.append(rec)
-        if evaluation_truth_root is not None and checkpoint_dir is None:
-            save_evaluation_inputs(rec, evaluation_truth_root, world_cards_root)
-        replay_started = time.perf_counter()
-        extract = await replay_world_with_retry(
-            rec,
-            db_url,
-            redis_url,
-            config=retry_config,
-            profile_dir=replay_profile_dir,
-        )
-        replay_seconds = time.perf_counter() - replay_started
-        extracts.append(extract)
-
-        if checkpoint_dir is not None:
-            world_end = world_end_for_recorded(rec)
+        for spec in specs:
+            record_started = time.perf_counter()
+            rec = record_world_for_spec(spec, preset_name, sampler_cfg, code_version, loop)
+            record_seconds = time.perf_counter() - record_started
+            recorded_worlds.append(rec)
             if evaluation_truth_root is not None:
-                truth_folder = evaluation_truth_root / rec.output.result.run_id
-                if truth_folder.exists():
-                    raise FileExistsError(
-                        f"truth folder '{truth_folder}' already exists from an earlier attempt; "
-                        f"delete it before resuming world {spec.world_id}, so a checkpoint never "
-                        "claims work that was not completed"
-                    )
                 save_evaluation_inputs(rec, evaluation_truth_root, world_cards_root)
-            save_checkpoint(
-                checkpoint_path(checkpoint_dir, split, spec.world_id),
-                DatasetCheckpoint(
-                    format_version=CHECKPOINT_FORMAT_VERSION,
-                    split=split,
-                    world_id=spec.world_id,
-                    seed=spec.seed,
-                    preset_name=preset_name,
-                    sampler_seed=sampler_seed,
-                    code_version=code_version,
-                    run_id=rec.output.result.run_id,
-                    world_end=world_end,
-                    record_seconds=record_seconds,
-                    replay_seconds=replay_seconds,
-                    extract=extract,
-                ),
+            replay_started = time.perf_counter()
+            extract = await replay_world_with_retry(
+                rec,
+                db_url,
+                redis_url,
+                config=retry_config,
+                profile_dir=replay_profile_dir,
             )
-            world_ends.append(world_end)
+            replay_seconds = time.perf_counter() - replay_started
+            extracts.append(extract)
 
-        if replay_profile_dir is not None:
-            profile_path = replay_profile_dir / f"{rec.world_id}.json"
-            profile_payload = orjson.loads(profile_path.read_bytes())
-            profile_payload["record_seconds"] = round(record_seconds, 3)
-            profile_payload["replay_seconds"] = round(replay_seconds, 3)
-            profile_path.write_bytes(
-                orjson.dumps(profile_payload, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2) + b"\n"
+            if replay_profile_dir is not None:
+                profile_path = replay_profile_dir / f"{rec.world_id}.json"
+                profile_payload = orjson.loads(profile_path.read_bytes())
+                profile_payload["record_seconds"] = round(record_seconds, 3)
+                profile_payload["replay_seconds"] = round(replay_seconds, 3)
+                profile_path.write_bytes(
+                    orjson.dumps(profile_payload, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2) + b"\n"
+                )
+
+        cutoff = derive_dataset_cutoff(recorded_worlds)
+    else:
+        if not assemble_only:
+            stopped = await checkpoint_split_worlds(
+                split,
+                specs,
+                preset_name,
+                sampler_cfg,
+                code_version,
+                sampler_seed=sampler_seed,
+                checkpoint_dir=checkpoint_dir,
+                db_url=db_url,
+                redis_url=redis_url,
+                evaluation_truth_root=evaluation_truth_root,
+                world_cards_root=world_cards_root,
+                replay_profile_dir=replay_profile_dir,
             )
+            if stopped:
+                raise BuildStopped(f"split {split} stopped before every planned world was built")
+        extracts, world_ends = load_plan_checkpoints(
+            checkpoint_dir,
+            split,
+            specs,
+            preset_name=preset_name,
+            sampler_seed=sampler_seed,
+            code_version=code_version,
+        )
+        cutoff = cutoff_from_world_ends(world_ends)
 
-    cutoff = derive_dataset_cutoff(recorded_worlds) if checkpoint_dir is None else cutoff_from_world_ends(world_ends)
     dataset = build_dataset(extracts, split=split, cutoff=cutoff, code_version=code_version)
     dataset_dir = write_dataset(dataset, root=datasets_root)
     superseded = supersede_prior_datasets(split, dataset_dir, datasets_root=datasets_root)
@@ -682,11 +915,21 @@ async def build_all_level_16_datasets(
     replay_profile_dir: Path | None = None,
     worlds_per_split: dict[str, int] | None = None,
     checkpoint_dir: Path | None = None,
+    world_shard: WorldShard | None = None,
+    assemble_only: bool = False,
+    parallel_workers: int | None = None,
+    base_argv: Sequence[str] = (),
 ) -> dict[str, dict[str, Any]]:
     """
     WHAT: Builds datasets for all configured splits sequentially, returning execution metrics per split.
     WHY: Executes Level 16 dataset generation unattended while tracking wall time and label counts.
+    When world_shard is on, this process only writes checkpoints for its share of each split and
+    writes no dataset.
+    When assemble_only is on, every split's dataset is built from checkpoints and no world runs.
+    When parallel_workers is above 1, each split runs that many child builds and is then assembled here.
     """
+    if parallel_workers is not None:
+        validate_parallel_workers(parallel_workers)
     counts = load_datasets_config() if worlds_per_split is None else worlds_per_split
     print(f"Worlds per split: {counts} (source: {'flag' if worlds_per_split is not None else 'config'})")
     sampler_cfg = load_sampler_config()
@@ -704,6 +947,45 @@ async def build_all_level_16_datasets(
     for split in target_splits:
         specs = plan[split]
         t0 = time.monotonic()
+        if world_shard is not None:
+            if checkpoint_dir is None:
+                raise ValueError("world_shard requires checkpoint_dir")
+            stopped = await checkpoint_split_worlds(
+                split,
+                shard_specs(specs, world_shard),
+                preset_name,
+                sampler_cfg,
+                code_ver,
+                sampler_seed=sampler_seed,
+                checkpoint_dir=checkpoint_dir,
+                db_url=get_showcase_database_url(),
+                redis_url=host_side_redis_url(),
+                evaluation_truth_root=truth_root if write_evaluation_inputs else None,
+                world_cards_root=world_cards_root,
+                replay_profile_dir=replay_profile_dir,
+            )
+            if stopped:
+                raise BuildStopped(f"split {split} stopped before every planned world was built")
+            continue
+        run_parallel = False
+        if parallel_workers is not None and parallel_workers > 1:
+            run_parallel = True
+            if checkpoint_dir is None:
+                raise ValueError("parallel_workers requires checkpoint_dir")
+            commands = split_worker_commands(base_argv, split, specs, checkpoint_dir, parallel_workers)
+            for command in commands:
+                print(
+                    f"Worker {command.index}: worlds {', '.join(command.world_ids)}; log {command.log_path}"
+                )
+            codes = run_worker_commands(commands)
+            if any(code != 0 for code in codes):
+                for command, code in zip(commands, codes):
+                    print(f"Worker {command.index} exited {code}")
+                    if code != 0:
+                        print("  last log lines:")
+                        for line in log_tail(command.log_path):
+                            print(f"    {line}")
+                raise WorkerFailure(worker_failure_exit_code(codes))
         dataset, dataset_dir, superseded = await build_split_dataset(
             split=split,
             specs=specs,
@@ -717,6 +999,7 @@ async def build_all_level_16_datasets(
             world_cards_root=world_cards_root,
             replay_profile_dir=replay_profile_dir,
             checkpoint_dir=checkpoint_dir,
+            assemble_only=assemble_only or run_parallel,
         )
         elapsed = time.monotonic() - t0
         label_summary = summarize_labels_by_source_and_via(dataset)
@@ -750,6 +1033,14 @@ async def build_all_level_16_datasets(
         print(f"  Wall time: {split_result['wall_time_seconds']}s")
 
     return results
+
+
+def world_shard_argument(text: str) -> WorldShard:
+    """WHAT: argparse type for --world-shard. WHY: argparse shows ValueError text only through ArgumentTypeError."""
+    try:
+        return parse_world_shard(text)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
 
 
 def main() -> None:
@@ -796,6 +1087,23 @@ def main() -> None:
         help="Directory for one resumable checkpoint per world (default: no checkpoints)",
     )
     parser.add_argument(
+        "--world-shard",
+        type=world_shard_argument,
+        default=None,
+        help="Only build the worlds at plan positions where position %% N == K, given as K/N (needs --checkpoint-dir)",
+    )
+    parser.add_argument(
+        "--assemble-only",
+        action="store_true",
+        help="Build the dataset from existing checkpoints without running any world (needs --checkpoint-dir)",
+    )
+    parser.add_argument(
+        "--parallel-workers",
+        type=int,
+        default=None,
+        help="Run this many child builds per split, then assemble here (needs --checkpoint-dir; default: one process)",
+    )
+    parser.add_argument(
         "--sampler-seed",
         type=int,
         default=1,
@@ -822,6 +1130,18 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    checkpoint_dir = Path(args.checkpoint_dir) if args.checkpoint_dir else None
+    if (args.world_shard is not None or args.assemble_only) and checkpoint_dir is None:
+        parser.error("--world-shard and --assemble-only require --checkpoint-dir")
+    if args.world_shard is not None and args.assemble_only:
+        parser.error("--world-shard and --assemble-only cannot be used together")
+    if args.parallel_workers is not None and checkpoint_dir is None:
+        parser.error("--parallel-workers requires --checkpoint-dir")
+    if args.parallel_workers is not None and args.world_shard is not None:
+        parser.error("--parallel-workers starts the shard workers itself, so --world-shard cannot be given")
+    if args.parallel_workers is not None and args.assemble_only:
+        parser.error("--parallel-workers already assembles after its workers, so --assemble-only cannot be given")
+
     selected_splits = [s.strip() for s in args.splits.split(",")] if args.splits else None
     worlds_per_split = parse_worlds_per_split(args.worlds_per_split) if args.worlds_per_split is not None else None
     if args.find_sampler_seed:
@@ -832,19 +1152,31 @@ def main() -> None:
         )
         print(f"fitting sampler seed: {seed}")
         return
-    asyncio.run(
-        build_all_level_16_datasets(
-            splits=selected_splits,
-            preset_name=args.preset,
-            datasets_root=Path(args.root),
-            sampler_seed=args.sampler_seed,
-            write_evaluation_inputs=args.write_evaluation_inputs,
-            world_cards_root=Path(args.world_cards_root),
-            replay_profile_dir=Path(args.replay_profile_dir) if args.replay_profile_dir else None,
-            checkpoint_dir=Path(args.checkpoint_dir) if args.checkpoint_dir else None,
-            worlds_per_split=worlds_per_split,
+    try:
+        asyncio.run(
+            build_all_level_16_datasets(
+                splits=selected_splits,
+                preset_name=args.preset,
+                datasets_root=Path(args.root),
+                sampler_seed=args.sampler_seed,
+                write_evaluation_inputs=args.write_evaluation_inputs,
+                world_cards_root=Path(args.world_cards_root),
+                replay_profile_dir=Path(args.replay_profile_dir) if args.replay_profile_dir else None,
+                checkpoint_dir=checkpoint_dir,
+                worlds_per_split=worlds_per_split,
+                world_shard=args.world_shard,
+                assemble_only=args.assemble_only,
+                parallel_workers=args.parallel_workers,
+                base_argv=sys.argv[1:],
+            )
         )
-    )
+    except BuildStopped:
+        sys.exit(EXIT_STOPPED)
+    except WorkerFailure as error:
+        sys.exit(error.exit_code)
+    except MissingCheckpointsError as error:
+        print(f"ERROR: {error}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
