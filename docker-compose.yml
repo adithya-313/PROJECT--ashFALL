@@ -74,6 +74,29 @@ services:
       timeout: 5s
       retries: 5
 
+  # Second and third Redis servers for a multi-Redis parallel build (Level 18a1b Round 2c).
+  # scripts/build_level_16_datasets.py spreads workers over replay_redis_urls, so these are only
+  # needed when that switch lists more than one address. Same image and healthcheck as redis.
+  redis-2:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis-3:
+    image: redis:7-alpine
+    ports:
+      - "6381:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   prometheus:
     image: prom/prometheus:latest
     ports:

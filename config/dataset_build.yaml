@@ -44,3 +44,9 @@ parameters:
     value: [30, 120]
     derived_from: "Level 18a1b brief"
     reason: "Waits before attempt 2 and attempt 3 give a restarted Redis or Postgres time to come back."
+
+  replay_redis_urls:
+    label: policy
+    value: []
+    derived_from: "Level 18a1b Round 2c; lab measurement 2026-11-16 (one Redis at 88-92% of one core with 14 workers, ~20.5 small worlds/hour)"
+    reason: "An empty list keeps today's single-Redis behaviour, while several URLs spread parallel workers over several Redis servers."

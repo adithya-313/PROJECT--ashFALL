@@ -458,6 +458,64 @@ def load_dataset_build_config(path: Path = DEFAULT_DATASET_BUILD_CONFIG_PATH) ->
     return parameters
 
 
+def validate_replay_redis_urls(urls: Any) -> list[str]:
+    """
+    WHAT: Checks raw replay_redis_urls content and returns it as a list of addresses.
+    WHY: The config switch and the --replay-redis-urls flag must accept exactly the same addresses,
+    so both paths share these checks instead of growing two copies.
+    Raises:
+        ValueError: On a non-list value, a non-redis:// entry, or a repeated entry.
+    """
+    if not isinstance(urls, list):
+        raise ValueError(f"replay_redis_urls must be a list, got {urls!r}")
+    seen: set[str] = set()
+    for url in urls:
+        if not isinstance(url, str) or not url.startswith("redis://"):
+            raise ValueError(f"replay_redis_urls entry {url!r} is not a redis:// URL")
+        if url in seen:
+            raise ValueError(f"replay_redis_urls entry {url!r} appears more than once")
+        seen.add(url)
+    return list(urls)
+
+
+def load_replay_redis_urls(config: dict[str, Any]) -> list[str]:
+    """
+    WHAT: Reads and validates the replay_redis_urls switch from the dataset build config.
+    WHY: An empty list is the OFF state, so the switch must be checked here rather than trusted, and a
+    bad entry would otherwise reach a child as a broken Redis address.
+    Raises:
+        ValueError: On a non-list value, a non-redis:// entry, or a repeated entry.
+    """
+    return validate_replay_redis_urls(config["replay_redis_urls"]["value"])
+
+
+def resolve_replay_redis_urls(flag_text: str | None, config: dict[str, Any]) -> list[str]:
+    """
+    WHAT: The Redis address list for this run: the flag text when given, otherwise the config switch.
+    WHY: The flag turns multi-Redis on for one lab run without editing a tracked file, so the tree
+    stays clean and the run's code_version does not gain a "-dirty" suffix.
+    Raises:
+        ValueError: On an empty comma-separated piece, or any entry the config rules refuse.
+    """
+    if flag_text is None:
+        return load_replay_redis_urls(config)
+    pieces = [piece.strip() for piece in flag_text.split(",")]
+    if any(not piece for piece in pieces):
+        raise ValueError(f"--replay-redis-urls contains an empty URL: {flag_text!r}")
+    return validate_replay_redis_urls(pieces)
+
+
+def redis_url_for_worker(worker_index: int, urls: Sequence[str]) -> str | None:
+    """
+    WHAT: The Redis address for worker worker_index, or None when the switch is off.
+    WHY: Round-robin (index % server count) spreads neighbouring workers over different servers, so two
+    workers started together do not land on the same server; with one URL every worker keeps today's address.
+    """
+    if not urls:
+        return None
+    return urls[worker_index % len(urls)]
+
+
 async def replay_world_with_retry(
     recorded: RecordedWorld,
     admin_pg: str,
@@ -567,12 +625,13 @@ class WorkerFailure(Exception):
 
 @dataclass(frozen=True)
 class WorkerCommand:
-    """WHAT: One child build: its shard, the worlds it will build, its command and its log file."""
+    """WHAT: One child build: its shard, the worlds it will build, its command, log file and Redis address."""
 
     index: int
     world_ids: tuple[str, ...]
     argv: tuple[str, ...]
     log_path: Path
+    redis_url: str | None
 
 
 class ProcessHandle(Protocol):
@@ -581,19 +640,24 @@ class ProcessHandle(Protocol):
     def wait(self) -> int: ...
 
 
-def validate_parallel_workers(count: int) -> int:
+def validate_parallel_workers(count: int, redis_urls: Sequence[str] | None = None) -> int:
     """
-    WHAT: Checks a worker count against the replay workspace pool read from config/replay.yaml.
+    WHAT: Checks a worker count against the replay workspace pool read from config/replay.yaml,
+    multiplied by the number of Redis servers in use.
     WHY: Each replay holds one Redis workspace DB for its whole run; more workers than the pool would
-    wait on each other's locks instead of running, so the count is refused up front.
+    wait on each other's locks instead of running, so the count is refused up front. Every server has
+    its own pool, so the cap grows with the server count.
     """
     if count < 1:
         raise ValueError(f"--parallel-workers must be at least 1, got {count}")
     settings = load_replay_settings()
     pool_size = settings.redis_workspace_db_max - settings.redis_workspace_db_min + 1
-    if count > pool_size:
+    urls = load_replay_redis_urls(load_dataset_build_config()) if redis_urls is None else redis_urls
+    capacity = pool_size * max(1, len(urls))
+    if count > capacity:
+        servers = "" if len(urls) <= 1 else f" over {len(urls)} redis servers"
         raise ValueError(
-            f"--parallel-workers {count} exceeds the replay workspace pool of {pool_size} "
+            f"--parallel-workers {count} exceeds the replay workspace pool of {capacity}{servers} "
             f"(redis_workspace_db_min={settings.redis_workspace_db_min}, "
             f"redis_workspace_db_max={settings.redis_workspace_db_max})"
         )
@@ -605,7 +669,8 @@ def worker_argv(base_argv: Sequence[str], shard: WorldShard, split: str) -> list
     WHAT: Builds one child's command: this script under this interpreter with the parent's flags,
     its own split and its world shard.
     WHY: The parent runs one split at a time, so the child is told that single split. --parallel-workers
-    and an earlier --splits are dropped so the child cannot start a nested pool or a second split.
+    and an earlier --splits are dropped so the child cannot start a nested pool or a second split, and
+    --replay-redis-urls is dropped because the child's address arrives only through TEST_REDIS_URL.
     """
     stripped: list[str] = []
     skip_value = False
@@ -613,10 +678,12 @@ def worker_argv(base_argv: Sequence[str], shard: WorldShard, split: str) -> list
         if skip_value:
             skip_value = False
             continue
-        if arg in ("--parallel-workers", "--splits"):
+        if arg in ("--parallel-workers", "--splits", "--replay-redis-urls"):
             skip_value = True
             continue
         if arg.startswith("--parallel-workers=") or arg.startswith("--splits="):
+            continue
+        if arg.startswith("--replay-redis-urls="):
             continue
         stripped.append(arg)
     return [
@@ -636,6 +703,7 @@ def split_worker_commands(
     specs: Sequence[WorldSpec],
     checkpoint_dir: Path,
     workers: int,
+    redis_urls: Sequence[str],
 ) -> list[WorkerCommand]:
     """WHAT: One WorkerCommand per worker K of N. WHY: The parent prints and starts exactly these."""
     commands: list[WorkerCommand] = []
@@ -648,32 +716,39 @@ def split_worker_commands(
                 world_ids=tuple(spec.world_id for spec in selected),
                 argv=tuple(worker_argv(base_argv, shard, split)),
                 log_path=checkpoint_dir / split / f"worker-{index}.log",
+                redis_url=redis_url_for_worker(index, redis_urls),
             )
         )
     return commands
 
 
-def start_worker_process(argv: Sequence[str], log_path: Path) -> subprocess.Popen[bytes]:
+def start_worker_process(
+    argv: Sequence[str], log_path: Path, redis_url: str | None = None
+) -> subprocess.Popen[bytes]:
     """
     WHAT: Starts one child with an explicit argument list and its own log file.
     WHY: No shell, so flags such as K/N reach argparse exactly as built, and each worker's output
-    stays in its own file.
+    stays in its own file. A redis_url reaches the child as TEST_REDIS_URL in a copy of the parent
+    environment, so the parent's own environment (and its other children) keeps its address.
     """
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("wb") as log_handle:
-        return subprocess.Popen(list(argv), stdout=log_handle, stderr=subprocess.STDOUT)
+        if redis_url is None:
+            return subprocess.Popen(list(argv), stdout=log_handle, stderr=subprocess.STDOUT)
+        env = {**os.environ, "TEST_REDIS_URL": redis_url}
+        return subprocess.Popen(list(argv), stdout=log_handle, stderr=subprocess.STDOUT, env=env)
 
 
 def run_worker_commands(
     commands: Sequence[WorkerCommand],
     *,
-    spawn: Callable[[Sequence[str], Path], ProcessHandle] = start_worker_process,
+    spawn: Callable[[Sequence[str], Path, str | None], ProcessHandle] = start_worker_process,
 ) -> list[int]:
     """
     WHAT: Starts every worker first, then waits for all of them, returning their exit codes in worker order.
     WHY: A failing worker must not kill a healthy one; every healthy worker is left to finish and checkpoint.
     """
-    processes = [spawn(command.argv, command.log_path) for command in commands]
+    processes = [spawn(command.argv, command.log_path, command.redis_url) for command in commands]
     return [process.wait() for process in processes]
 
 
@@ -919,6 +994,7 @@ async def build_all_level_16_datasets(
     assemble_only: bool = False,
     parallel_workers: int | None = None,
     base_argv: Sequence[str] = (),
+    redis_urls_flag: str | None = None,
 ) -> dict[str, dict[str, Any]]:
     """
     WHAT: Builds datasets for all configured splits sequentially, returning execution metrics per split.
@@ -927,9 +1003,15 @@ async def build_all_level_16_datasets(
     writes no dataset.
     When assemble_only is on, every split's dataset is built from checkpoints and no world runs.
     When parallel_workers is above 1, each split runs that many child builds and is then assembled here.
+    redis_urls_flag overrides the config's replay_redis_urls for this run, so a multi-Redis build needs
+    no tracked-file edit.
     """
+    if redis_urls_flag is not None and (parallel_workers is None or parallel_workers <= 1):
+        raise ValueError("--replay-redis-urls requires --parallel-workers above 1")
+    redis_urls: Sequence[str] = []
     if parallel_workers is not None:
-        validate_parallel_workers(parallel_workers)
+        redis_urls = resolve_replay_redis_urls(redis_urls_flag, load_dataset_build_config())
+        validate_parallel_workers(parallel_workers, redis_urls)
     counts = load_datasets_config() if worlds_per_split is None else worlds_per_split
     print(f"Worlds per split: {counts} (source: {'flag' if worlds_per_split is not None else 'config'})")
     sampler_cfg = load_sampler_config()
@@ -972,11 +1054,14 @@ async def build_all_level_16_datasets(
             run_parallel = True
             if checkpoint_dir is None:
                 raise ValueError("parallel_workers requires checkpoint_dir")
-            commands = split_worker_commands(base_argv, split, specs, checkpoint_dir, parallel_workers)
+            commands = split_worker_commands(
+                base_argv, split, specs, checkpoint_dir, parallel_workers, redis_urls
+            )
             for command in commands:
-                print(
-                    f"Worker {command.index}: worlds {', '.join(command.world_ids)}; log {command.log_path}"
-                )
+                line = f"Worker {command.index}: worlds {', '.join(command.world_ids)}; log {command.log_path}"
+                if command.redis_url is not None:
+                    line += f"; redis {command.redis_url}"
+                print(line)
             codes = run_worker_commands(commands)
             if any(code != 0 for code in codes):
                 for command, code in zip(commands, codes):
@@ -1104,6 +1189,13 @@ def main() -> None:
         help="Run this many child builds per split, then assemble here (needs --checkpoint-dir; default: one process)",
     )
     parser.add_argument(
+        "--replay-redis-urls",
+        type=str,
+        default=None,
+        help="Comma-separated Redis URLs to spread parallel workers over; overrides replay_redis_urls in "
+        "config/dataset_build.yaml (default: use the config)",
+    )
+    parser.add_argument(
         "--sampler-seed",
         type=int,
         default=1,
@@ -1168,6 +1260,7 @@ def main() -> None:
                 assemble_only=args.assemble_only,
                 parallel_workers=args.parallel_workers,
                 base_argv=sys.argv[1:],
+                redis_urls_flag=args.replay_redis_urls,
             )
         )
     except BuildStopped:
