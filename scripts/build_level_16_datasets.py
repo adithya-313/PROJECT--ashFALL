@@ -599,12 +599,13 @@ class WorkerFailure(Exception):
 
 @dataclass(frozen=True)
 class WorkerCommand:
-    """WHAT: One child build: its shard, the worlds it will build, its command and its log file."""
+    """WHAT: One child build: its shard, the worlds it will build, its command, log file and Redis address."""
 
     index: int
     world_ids: tuple[str, ...]
     argv: tuple[str, ...]
     log_path: Path
+    redis_url: str | None
 
 
 class ProcessHandle(Protocol):
@@ -671,6 +672,7 @@ def split_worker_commands(
     specs: Sequence[WorldSpec],
     checkpoint_dir: Path,
     workers: int,
+    redis_urls: Sequence[str],
 ) -> list[WorkerCommand]:
     """WHAT: One WorkerCommand per worker K of N. WHY: The parent prints and starts exactly these."""
     commands: list[WorkerCommand] = []
@@ -683,32 +685,39 @@ def split_worker_commands(
                 world_ids=tuple(spec.world_id for spec in selected),
                 argv=tuple(worker_argv(base_argv, shard, split)),
                 log_path=checkpoint_dir / split / f"worker-{index}.log",
+                redis_url=redis_url_for_worker(index, redis_urls),
             )
         )
     return commands
 
 
-def start_worker_process(argv: Sequence[str], log_path: Path) -> subprocess.Popen[bytes]:
+def start_worker_process(
+    argv: Sequence[str], log_path: Path, redis_url: str | None = None
+) -> subprocess.Popen[bytes]:
     """
     WHAT: Starts one child with an explicit argument list and its own log file.
     WHY: No shell, so flags such as K/N reach argparse exactly as built, and each worker's output
-    stays in its own file.
+    stays in its own file. A redis_url reaches the child as TEST_REDIS_URL in a copy of the parent
+    environment, so the parent's own environment (and its other children) keeps its address.
     """
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("wb") as log_handle:
-        return subprocess.Popen(list(argv), stdout=log_handle, stderr=subprocess.STDOUT)
+        if redis_url is None:
+            return subprocess.Popen(list(argv), stdout=log_handle, stderr=subprocess.STDOUT)
+        env = {**os.environ, "TEST_REDIS_URL": redis_url}
+        return subprocess.Popen(list(argv), stdout=log_handle, stderr=subprocess.STDOUT, env=env)
 
 
 def run_worker_commands(
     commands: Sequence[WorkerCommand],
     *,
-    spawn: Callable[[Sequence[str], Path], ProcessHandle] = start_worker_process,
+    spawn: Callable[[Sequence[str], Path, str | None], ProcessHandle] = start_worker_process,
 ) -> list[int]:
     """
     WHAT: Starts every worker first, then waits for all of them, returning their exit codes in worker order.
     WHY: A failing worker must not kill a healthy one; every healthy worker is left to finish and checkpoint.
     """
-    processes = [spawn(command.argv, command.log_path) for command in commands]
+    processes = [spawn(command.argv, command.log_path, command.redis_url) for command in commands]
     return [process.wait() for process in processes]
 
 
@@ -1007,11 +1016,15 @@ async def build_all_level_16_datasets(
             run_parallel = True
             if checkpoint_dir is None:
                 raise ValueError("parallel_workers requires checkpoint_dir")
-            commands = split_worker_commands(base_argv, split, specs, checkpoint_dir, parallel_workers)
+            redis_urls = load_replay_redis_urls(load_dataset_build_config())
+            commands = split_worker_commands(
+                base_argv, split, specs, checkpoint_dir, parallel_workers, redis_urls
+            )
             for command in commands:
-                print(
-                    f"Worker {command.index}: worlds {', '.join(command.world_ids)}; log {command.log_path}"
-                )
+                line = f"Worker {command.index}: worlds {', '.join(command.world_ids)}; log {command.log_path}"
+                if command.redis_url is not None:
+                    line += f"; redis {command.redis_url}"
+                print(line)
             codes = run_worker_commands(commands)
             if any(code != 0 for code in codes):
                 for command, code in zip(commands, codes):

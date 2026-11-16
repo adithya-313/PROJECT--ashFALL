@@ -10,8 +10,10 @@ WHY: An empty list must reproduce today's single-Redis behaviour exactly, and a 
 refused by name instead of reaching a child build as a broken address.
 """
 
+import os
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -21,11 +23,16 @@ from scripts.build_level_16_datasets import (
     load_dataset_build_config,
     load_replay_redis_urls,
     redis_url_for_worker,
+    run_worker_commands,
+    split_worker_commands,
+    start_worker_process,
     validate_parallel_workers,
 )
+from world.world_sampler import WorldSpec
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 THREE_URLS = ["redis://localhost:6379/0", "redis://localhost:6380/0", "redis://localhost:6381/0"]
+TWO_URLS = THREE_URLS[:2]
 
 
 def _config_with_urls(urls: list[str]) -> dict[str, Any]:
@@ -86,3 +93,52 @@ def test_the_cap_is_forty_five_with_three_urls(monkeypatch: pytest.MonkeyPatch) 
 def test_the_committed_config_passes_the_validator() -> None:
     """The new labelled block must keep config/dataset_build.yaml at zero validator problems."""
     assert validate_file(REPO_ROOT / "config" / "dataset_build.yaml") == []
+
+
+def test_off_state_starts_a_child_with_no_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """With no address the child is started exactly as today: the same argv and no env argument."""
+    captured: dict[str, Any] = {}
+
+    def fake_popen(argv: list[str], **kwargs: Any) -> MagicMock:
+        captured["argv"] = argv
+        captured["kwargs"] = kwargs
+        return MagicMock()
+
+    monkeypatch.setattr(build_module.subprocess, "Popen", fake_popen)
+
+    start_worker_process(["py", "script.py", "--world-shard", "0/4"], tmp_path / "worker-0.log")
+
+    assert captured["argv"] == ["py", "script.py", "--world-shard", "0/4"]
+    assert "env" not in captured["kwargs"]
+
+
+def _specs(count: int) -> list[WorldSpec]:
+    """Returns count training worlds with distinct ids, in plan order."""
+    return [
+        WorldSpec(
+            world_id=f"training-{position:04d}",
+            split="training",
+            seed=1000000 + position,
+            range_name="training",
+            key_values=(),
+        )
+        for position in range(count)
+    ]
+
+
+def test_four_workers_over_two_urls_each_get_their_own_address(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Child K receives TEST_REDIS_URL = urls[K % 2], and the parent environment keeps its own value."""
+    commands = split_worker_commands(["--preset", "tiny"], "training", _specs(4), tmp_path, 4, TWO_URLS)
+    seen_urls: list[str] = []
+
+    def fake_popen(argv: list[str], **kwargs: Any) -> MagicMock:
+        seen_urls.append(kwargs["env"]["TEST_REDIS_URL"])
+        return MagicMock()
+
+    monkeypatch.setattr(build_module.subprocess, "Popen", fake_popen)
+    parent_env_before = dict(os.environ)
+
+    run_worker_commands(commands)
+
+    assert seen_urls == [TWO_URLS[0], TWO_URLS[1], TWO_URLS[0], TWO_URLS[1]]
+    assert dict(os.environ) == parent_env_before
