@@ -458,6 +458,38 @@ def load_dataset_build_config(path: Path = DEFAULT_DATASET_BUILD_CONFIG_PATH) ->
     return parameters
 
 
+def load_replay_redis_urls(config: dict[str, Any]) -> list[str]:
+    """
+    WHAT: Reads and validates the replay_redis_urls switch from the dataset build config.
+    WHY: An empty list is the OFF state, so the switch must be checked here rather than trusted, and a
+    bad entry would otherwise reach a child as a broken Redis address.
+    Raises:
+        ValueError: On a non-list value, a non-redis:// entry, or a repeated entry.
+    """
+    urls = config["replay_redis_urls"]["value"]
+    if not isinstance(urls, list):
+        raise ValueError(f"replay_redis_urls must be a list, got {urls!r}")
+    seen: set[str] = set()
+    for url in urls:
+        if not isinstance(url, str) or not url.startswith("redis://"):
+            raise ValueError(f"replay_redis_urls entry {url!r} is not a redis:// URL")
+        if url in seen:
+            raise ValueError(f"replay_redis_urls entry {url!r} appears more than once")
+        seen.add(url)
+    return list(urls)
+
+
+def redis_url_for_worker(worker_index: int, urls: Sequence[str]) -> str | None:
+    """
+    WHAT: The Redis address for worker worker_index, or None when the switch is off.
+    WHY: Round-robin (index % server count) spreads neighbouring workers over different servers, so two
+    workers started together do not land on the same server; with one URL every worker keeps today's address.
+    """
+    if not urls:
+        return None
+    return urls[worker_index % len(urls)]
+
+
 async def replay_world_with_retry(
     recorded: RecordedWorld,
     admin_pg: str,
@@ -591,9 +623,12 @@ def validate_parallel_workers(count: int) -> int:
         raise ValueError(f"--parallel-workers must be at least 1, got {count}")
     settings = load_replay_settings()
     pool_size = settings.redis_workspace_db_max - settings.redis_workspace_db_min + 1
-    if count > pool_size:
+    urls = load_replay_redis_urls(load_dataset_build_config())
+    capacity = pool_size * max(1, len(urls))
+    if count > capacity:
+        servers = "" if len(urls) <= 1 else f" over {len(urls)} redis servers"
         raise ValueError(
-            f"--parallel-workers {count} exceeds the replay workspace pool of {pool_size} "
+            f"--parallel-workers {count} exceeds the replay workspace pool of {capacity}{servers} "
             f"(redis_workspace_db_min={settings.redis_workspace_db_min}, "
             f"redis_workspace_db_max={settings.redis_workspace_db_max})"
         )
