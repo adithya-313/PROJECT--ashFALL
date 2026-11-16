@@ -19,6 +19,13 @@ Branch: `feature/level-18a1b-resumable-builds`, merged into `feature/level-18-mu
 - `config/dataset_build.yaml` holds the retry policy: the switch, the attempt count and the waits.
 - `replay_world_with_retry` re-runs one world after a dropped connection and raises anything else
   at once. It replays the whole world, not just the failed command.
+- `--world-shard K/N` on the same script builds only the worlds whose plan position is `K mod N`
+  (and writes checkpoints only, never a dataset), so several processes can share one split.
+- `--parallel-workers N` starts N children of the same script, one shard each, then assembles the
+  split in the parent from the checkpoints they wrote.
+- `--assemble-only` builds from checkpoints already on disk without recording or replaying.
+- Branch for the parallel work: `feature/level-18a1b-parallel-worlds`, merged into
+  `feature/level-18-mule-models`.
 
 ## What each component does
 - `DatasetCheckpoint`: format version, split, world id, seed, preset name, sampler seed, code
@@ -40,6 +47,24 @@ Branch: `feature/level-18a1b-resumable-builds`, merged into `feature/level-18-mu
   configured seconds between attempts and re-raises the original exception after the last one.
 - `config/dataset_build.yaml`: `retry_world_on_connection_error: true`, `max_world_attempts: 3`,
   `retry_wait_seconds: [30, 120]`, all labelled `policy`.
+- `scripts/dataset_shards.py`: `WorldShard` and `parse_world_shard` for `K/N`, `shard_specs` (a
+  world belongs to shard `position % N`), the STOP file path and check, and
+  `load_plan_checkpoints`, which loads and verifies every planned world's checkpoint in plan order
+  or raises `MissingCheckpointsError` naming the missing world ids.
+- `EXIT_STOPPED = 3` in `scripts/dataset_shards.py`: 0, 1 and 2 are already taken (success,
+  failure, usage refusal); 3 means "stopped or incomplete, run the same command again".
+- `checkpoint_split_worlds`: per world, loads an existing checkpoint and prints the resumed line,
+  or checks for the STOP file before starting a world that still needs building, or records,
+  replays and saves a checkpoint. Returns whether it stopped.
+- `split_worker_commands`, `worker_argv`, `start_worker_process` and `run_worker_commands`: the
+  parent builds one explicit argument list per child (same interpreter, same script, same flags
+  minus `--parallel-workers` and `--splits`, plus this split and `--world-shard K/N`), starts all
+  children without a shell, and waits for all of them.
+- `validate_parallel_workers`: refuses a count above the replay workspace pool
+  (`redis_workspace_db_max - redis_workspace_db_min + 1`, read from `config/replay.yaml`).
+- `worker_failure_exit_code`: 3 when every failed child exited 3, otherwise 1. On any child
+  failure the parent prints each exit code and the last 5 lines of each failing child's log and
+  does not assemble.
 
 ## Laptop verification (SIMULATED, tiny, test split only)
 Run at `0005729`, preset tiny, sampler seed 2, `--write-evaluation-inputs`, output rooted in
@@ -57,6 +82,42 @@ Run at `0005729`, preset tiny, sampler seed 2, `--write-evaluation-inputs`, outp
   reproducible at the fixture's `code_version` 38151de because `make_run_id` hashes the code
   version; the ruling accepted the identical-rows comparison instead (see Decisions).
 
+## Parallel worlds (Windows laptop, SIMULATED, tiny, training split only)
+Run at `413e388`, preset tiny, sampler seed 2, `--write-evaluation-inputs`, `--parallel-workers 2`,
+checkpoints and datasets rooted in `runs/par18a1b/`.
+- Run 1: exit 0, wall 796.72s (split wall 793.67s). Worker 0, training-0000: record 0.66s, replay
+  788.20s. Worker 1, training-0001: record 0.60s, replay 676.73s. The two worlds replayed at the
+  same time, so the split took about one world's replay time instead of two.
+- Dataset `training-20261031T1830-a0107f3a6a37`: payments 5990, snapshots 5527, labels 22.
+  `scripts/compare_datasets_normalised.py` against
+  `showcase/fixtures/level_17/datasets/training-20261031T1830-624c2ad40f4c` prints
+  `VERDICT: IDENTICAL` with 0 differing rows in each table.
+- Peak `docker stats --no-stream` during run 1, sampled every 30s: redis 22.40% CPU, 16.57MiB;
+  postgres 16.91% CPU, 351.5MiB (postgres memory peaked at 351.5MiB, redis at 16.57MiB).
+- Run 2 (same command): exit 0, wall 6.98s (split wall 4.3s). Both workers printed
+  `Resumed world ...` and no replay ran. The dataset id is the same folder, which is deterministic,
+  so run 2 rewrote it rather than creating a second tree; identity with run 1 and with the fixture
+  rests on that folder name and the IDENTICAL comparison, not on diffing two folders.
+- STOP check: `--world-shard 0/1` on the test split in a fresh `runs/par18a1b/stopcheck/` with the
+  STOP file created before start printed `STOP file found; not starting test-0000` and exited 3;
+  no world was recorded.
+
+## Stopping and resuming
+- Stop safely: create `<checkpoint-dir>/<split>/STOP` (for example
+  `runs/par18a1b/checkpoints/training/STOP`) while a build runs. A running world is not killed: it
+  finishes and saves its checkpoint. Before starting another world that still needs building, the
+  process prints `STOP file found; not starting <world_id>` and exits 3 (stopped or incomplete).
+  The parent then assembles nothing.
+- Resume: delete the STOP file and run the same command again. Finished worlds print
+  `Resumed world <world_id> from <path> (record Xs, replay Ys earlier)` and are not replayed; only
+  missing worlds are built, and the split is then assembled in plan order.
+- Open risk, Redis: Redis is single-threaded. Two workers used at most 22.40% CPU of the host, so
+  it was not the limit here, but the lab-machine scaling test (1, 4, 8, 12 replays) must measure
+  whether Redis becomes a per-core ceiling that flattens the speedup.
+- Open risk, Postgres: `max_locks_per_transaction` is 1024, sized for 3 parallel replays'
+  workspace `DROP SCHEMA ... CASCADE`; 8 and 12 parallel replays are unverified and must be
+  watched for lock-table exhaustion on the lab machine.
+
 ## Decisions and why
 - Retry a whole world, not a single command: `run_replay` drops its workspace in a `finally`
   block, so only a fresh replay is guaranteed to start clean; restarting one command would leave
@@ -67,14 +128,28 @@ Run at `0005729`, preset tiny, sampler seed 2, `--write-evaluation-inputs`, outp
 - Keep the retry policy out of the run-id inputs: `code_version` is part of `make_run_id`, and
   A-041 showed that a config read by the run-id path changes every run id. `config/dataset_build.yaml`
   is read only by the build script.
+- Assemble in plan order, never completion order: `build_dataset` builds its tables in extract
+  order and `write_dataset` writes those tables directly, so parquet row order follows the extract
+  order. Checkpoints are therefore loaded by plan position. The dataset id is unaffected because
+  the content hash sorts rows before hashing.
+- Parallel workers are child processes of the same script, not threads: each replay owns an event
+  loop, an asyncpg pool and a Redis workspace DB, and separate processes keep them apart. The pool
+  size check makes more workers than workspace DBs a refusal instead of a hang on the lock.
+- STOP is checked only before a world that still needs building, never before resuming, so creating
+  the file does not throw away work already on disk.
+- The parent starts every worker before waiting for any and never kills a healthy one, so one
+  failed worker costs only its own worlds; the split is not assembled until every worker succeeds.
 
 ## Known gaps and deferrals
-- Parallel worlds are not implemented; worlds still run one at a time. That is the next speed
-  lever, after `decision_post` and `snapshot_write` replay timings are measured.
+- Only 2 parallel workers were measured, on a Windows laptop, for 2 tiny worlds. The lab-machine
+  scaling test (1, 4, 8, 12 replays) has not run; see the Redis and Postgres open risks above.
+- `--world-shard` accepts `K < N` only; shards hold worlds by plan position, so uneven splits are
+  possible when N does not divide the split's world count.
 - `asyncpg.exceptions.InterfaceError` ("connection is closed", seen in the Level 15 flake) is not
   retried, deliberately, because `InterfaceError` also covers programming errors; revisit with
   evidence that it was raised by a lost connection.
-- The laptop check covered one world; a multi-world resume was not run in this round.
+- The parallel round resumed two worlds from checkpoints, but no run was interrupted in the middle
+  of a split and then resumed from a partial set.
 
 ## How to verify
 - `PYTHONPATH=. py -3.12 -B scripts/verify_world.py` -> ALL GOLDEN CHECKS PASSED.
@@ -83,6 +158,11 @@ Run at `0005729`, preset tiny, sampler seed 2, `--write-evaluation-inputs`, outp
 - `py -3.12 -m core.config_validator config/dataset_build.yaml`
 - Resume check: build the test split with `--checkpoint-dir`, then run the same command again;
   the second run prints the resumed line and writes the same dataset id.
+- Parallel check: `PYTHONPATH=. py -3.12 scripts/build_level_16_datasets.py --splits training
+  --checkpoint-dir runs/par18a1b/checkpoints --parallel-workers 2` prints one line per worker and
+  one dataset id; running it again resumes both worlds in seconds.
+- STOP check: create `<checkpoint-dir>/<split>/STOP` before starting; the build prints
+  `STOP file found; not starting <world_id>`, starts nothing and exits 3.
 
 ## Generated facts
 
@@ -98,11 +178,15 @@ Extracted directly via `inspect.signature`:
 ### `scripts/build_level_16_datasets.py`
 
 ```python
-build_all_level_16_datasets(splits: collections.abc.Sequence[str] | None = None, preset_name: str = 'tiny', datasets_root: pathlib.Path = WindowsPath('C:/Users/sinne/Downloads/PROJECT-ashFALL/data/datasets'), sampler_seed: int = 1, write_evaluation_inputs: bool = False, world_cards_root: pathlib.Path = WindowsPath('C:/Users/sinne/Downloads/PROJECT-ashFALL/runs/world_cards'), replay_profile_dir: pathlib.Path | None = None, worlds_per_split: dict[str, int] | None = None, checkpoint_dir: pathlib.Path | None = None) -> dict[str, dict[str, typing.Any]]
+build_all_level_16_datasets(splits: collections.abc.Sequence[str] | None = None, preset_name: str = 'tiny', datasets_root: pathlib.Path = WindowsPath('C:/Users/sinne/Downloads/PROJECT-ashFALL/data/datasets'), sampler_seed: int = 1, write_evaluation_inputs: bool = False, world_cards_root: pathlib.Path = WindowsPath('C:/Users/sinne/Downloads/PROJECT-ashFALL/runs/world_cards'), replay_profile_dir: pathlib.Path | None = None, worlds_per_split: dict[str, int] | None = None, checkpoint_dir: pathlib.Path | None = None, world_shard: scripts.dataset_shards.WorldShard | None = None, assemble_only: bool = False, parallel_workers: int | None = None, base_argv: collections.abc.Sequence[str] = ()) -> dict[str, dict[str, typing.Any]]
 ```
 
 ```python
-build_split_dataset(split: str, specs: list[world.world_sampler.WorldSpec], preset_name: str, sampler_cfg: dict[str, typing.Any], code_version: str, sampler_seed: int = 1, datasets_root: pathlib.Path = WindowsPath('C:/Users/sinne/Downloads/PROJECT-ashFALL/data/datasets'), admin_pg: str | None = None, base_redis_url: str | None = None, write_evaluation_inputs: bool = False, truth_root: pathlib.Path | None = None, world_cards_root: pathlib.Path = WindowsPath('C:/Users/sinne/Downloads/PROJECT-ashFALL/runs/world_cards'), replay_profile_dir: pathlib.Path | None = None, checkpoint_dir: pathlib.Path | None = None) -> tuple[replay.dataset_builder.Dataset, pathlib.Path, list[pathlib.Path]]
+build_split_dataset(split: str, specs: list[world.world_sampler.WorldSpec], preset_name: str, sampler_cfg: dict[str, typing.Any], code_version: str, sampler_seed: int = 1, datasets_root: pathlib.Path = WindowsPath('C:/Users/sinne/Downloads/PROJECT-ashFALL/data/datasets'), admin_pg: str | None = None, base_redis_url: str | None = None, write_evaluation_inputs: bool = False, truth_root: pathlib.Path | None = None, world_cards_root: pathlib.Path = WindowsPath('C:/Users/sinne/Downloads/PROJECT-ashFALL/runs/world_cards'), replay_profile_dir: pathlib.Path | None = None, checkpoint_dir: pathlib.Path | None = None, assemble_only: bool = False) -> tuple[replay.dataset_builder.Dataset, pathlib.Path, list[pathlib.Path]]
+```
+
+```python
+checkpoint_split_worlds(split: str, specs: collections.abc.Sequence[world.world_sampler.WorldSpec], preset_name: str, sampler_cfg: dict[str, typing.Any], code_version: str, *, sampler_seed: int, checkpoint_dir: pathlib.Path, db_url: str, redis_url: str, evaluation_truth_root: pathlib.Path | None, world_cards_root: pathlib.Path, replay_profile_dir: pathlib.Path | None) -> bool
 ```
 
 ```python
@@ -134,6 +218,10 @@ load_datasets_config(path: pathlib.Path | str | None = None) -> dict[str, int]
 ```
 
 ```python
+log_tail(log_path: pathlib.Path, lines: int = 5) -> list[str]
+```
+
+```python
 main() -> None
 ```
 
@@ -158,11 +246,23 @@ replay_and_extract(recorded: world.replay_recording.RecordedWorld, admin_pg: str
 ```
 
 ```python
-replay_world_with_retry(recorded: world.replay_recording.RecordedWorld, admin_pg: str, base_redis_url: str, *, config: dict[str, typing.Any], profile_dir: pathlib.Path | None = None, sleep: collections.abc.Callable[[float], collections.abc.Awaitable[None]] = <function sleep at 0x000001237B5974C0>) -> replay.dataset_builder.WorldExtract
+replay_world_with_retry(recorded: world.replay_recording.RecordedWorld, admin_pg: str, base_redis_url: str, *, config: dict[str, typing.Any], profile_dir: pathlib.Path | None = None, sleep: collections.abc.Callable[[float], collections.abc.Awaitable[None]] = <function sleep at 0x000002F30D8CF6A0>) -> replay.dataset_builder.WorldExtract
+```
+
+```python
+run_worker_commands(commands: collections.abc.Sequence[scripts.build_level_16_datasets.WorkerCommand], *, spawn: collections.abc.Callable[[collections.abc.Sequence[str], pathlib.Path], scripts.build_level_16_datasets.ProcessHandle] = <function start_worker_process at 0x000002F3295EEF20>) -> list[int]
 ```
 
 ```python
 save_evaluation_inputs(recorded: world.replay_recording.RecordedWorld, truth_root: pathlib.Path, world_cards_root: pathlib.Path) -> dict[str, typing.Any]
+```
+
+```python
+split_worker_commands(base_argv: collections.abc.Sequence[str], split: str, specs: collections.abc.Sequence[world.world_sampler.WorldSpec], checkpoint_dir: pathlib.Path, workers: int) -> list[scripts.build_level_16_datasets.WorkerCommand]
+```
+
+```python
+start_worker_process(argv: collections.abc.Sequence[str], log_path: pathlib.Path) -> subprocess.Popen[bytes]
 ```
 
 ```python
@@ -174,8 +274,29 @@ supersede_prior_datasets(split: str, new_dir: pathlib.Path, datasets_root: pathl
 ```
 
 ```python
+validate_parallel_workers(count: int) -> int
+```
+
+```python
+worker_argv(base_argv: collections.abc.Sequence[str], shard: scripts.dataset_shards.WorldShard, split: str) -> list[str]
+```
+
+```python
+worker_failure_exit_code(codes: collections.abc.Sequence[int]) -> int
+```
+
+```python
 world_end_for_recorded(recorded: world.replay_recording.RecordedWorld) -> datetime.datetime
 ```
+
+```python
+world_shard_argument(text: str) -> scripts.dataset_shards.WorldShard
+```
+
+```python
+WorkerCommand(index: int, world_ids: tuple[str, ...], argv: tuple[str, ...], log_path: pathlib.Path) -> None
+```
+- dataclass
 
 ### `scripts/dataset_checkpoints.py`
 
@@ -204,11 +325,37 @@ DatasetCheckpoint(format_version: int, split: str, world_id: str, seed: int, pre
 ```
 - dataclass
 
+### `scripts/dataset_shards.py`
+
+```python
+load_plan_checkpoints(checkpoint_dir: pathlib.Path, split: str, specs: collections.abc.Sequence[world.world_sampler.WorldSpec], *, preset_name: str, sampler_seed: int, code_version: str) -> tuple[list[replay.dataset_builder.WorldExtract], list[datetime.datetime]]
+```
+
+```python
+parse_world_shard(text: str) -> scripts.dataset_shards.WorldShard
+```
+
+```python
+shard_specs(specs: collections.abc.Sequence[world.world_sampler.WorldSpec], shard: scripts.dataset_shards.WorldShard) -> list[world.world_sampler.WorldSpec]
+```
+
+```python
+stop_file_path(checkpoint_dir: pathlib.Path, split: str) -> pathlib.Path
+```
+
+```python
+stop_requested(checkpoint_dir: pathlib.Path, split: str) -> bool
+```
+
 ---
 
 ## Records and Fields
 
 Extracted directly via `dataclasses.fields`:
+
+- `WorkerCommand`:
+  - Fields: `index: int`, `world_ids: tuple[str, ...]`, `argv: tuple[str, ...]`, `log_path: Path`
+  - Path: `scripts/build_level_16_datasets.py`
 
 - `DatasetCheckpoint`:
   - Fields: `format_version: int`, `split: str`, `world_id: str`, `seed: int`, `preset_name: str`, `sampler_seed: int`, `code_version: str`, `run_id: str`, `world_end: datetime`, `record_seconds: float`, `replay_seconds: float`, `extract: WorldExtract`

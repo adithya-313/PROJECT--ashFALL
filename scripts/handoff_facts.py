@@ -342,6 +342,7 @@ PART_CONFIGS: dict[str, dict[str, Any]] = {
         "INTERFACE_MODULES": (
             "scripts.build_level_16_datasets",
             "scripts.dataset_checkpoints",
+            "scripts.dataset_shards",
         ),
         "RECORDS_MODULE": ("scripts.dataset_checkpoints",),
         "RECORD_NAMES": ("DatasetCheckpoint",),
