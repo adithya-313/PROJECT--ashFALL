@@ -408,6 +408,12 @@ Extracted directly via `dataclasses.fields`:
 - Switch: `parameters.replay_redis_urls` in `config/dataset_build.yaml`. `value: []` is the OFF state
   and reproduces the single-Redis behaviour exactly; each entry must be a non-empty `redis://` URL
   and no address may repeat. `load_replay_redis_urls` refuses a bad entry by name.
+- CLI override: `--replay-redis-urls "url1,url2"` replaces the config switch for one run, so the
+  tracked config can stay at `[]` and the run's `code_version` does not gain a "-dirty" suffix. It is
+  refused unless `--parallel-workers` is above 1 (otherwise it would do nothing), goes through the
+  same `redis://` and duplicate checks as the config, and is stripped from the child commands.
+  Example:
+  `PYTHONPATH=. py -3.12 scripts/build_level_16_datasets.py --splits training --preset tiny --sampler-seed 2 --write-evaluation-inputs --parallel-workers 2 --replay-redis-urls "redis://localhost:6379/0,redis://localhost:6380/0" --checkpoint-dir runs/r2c/on/checkpoints --root runs/r2c/on/datasets --world-cards-root runs/r2c/on/world_cards`
 - Routing: `redis_url_for_worker(k, urls)` returns `None` when the list is empty, otherwise
   `urls[k % len(urls)]`. Round-robin, so neighbouring workers start on different servers; with one
   URL every worker keeps the parent's address.
@@ -420,9 +426,9 @@ Extracted directly via `dataclasses.fields`:
 - Extra servers: `docker compose up -d redis-2 redis-3` starts the two new same-image services on
   host ports 6380 and 6381 (`docker-compose.yml`; the existing `redis` service is untouched). A run
   can then set `value: ["redis://localhost:6379/0", "redis://localhost:6380/0"]`.
-- Replay profile command count: `redis_commands_during_replay` in each world's profile JSON is
-  measured with that worker's client, so a multi-Redis run reports a per-server count; sum the
-  profiles to see the whole run.
+- Replay profile command count: `redis_commands_during_replay` in each world's profile JSON is read
+  from the server's own command stats, so it includes every worker on that server during the world;
+  do not sum profiles.
 
 ### Laptop acceptance (Windows laptop, SIMULATED, tiny)
 Preset tiny, sampler seed 2, training split only, `--parallel-workers 2`,

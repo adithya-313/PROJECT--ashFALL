@@ -10,6 +10,7 @@ WHY: An empty list must reproduce today's single-Redis behaviour exactly, and a 
 refused by name instead of reaching a child build as a broken address.
 """
 
+import asyncio
 import os
 from pathlib import Path
 from typing import Any
@@ -20,14 +21,18 @@ import pytest
 import scripts.build_level_16_datasets as build_module
 from core.config_validator import validate_file
 from scripts.build_level_16_datasets import (
+    build_all_level_16_datasets,
     load_dataset_build_config,
     load_replay_redis_urls,
     redis_url_for_worker,
+    resolve_replay_redis_urls,
     run_worker_commands,
     split_worker_commands,
     start_worker_process,
     validate_parallel_workers,
+    worker_argv,
 )
+from scripts.dataset_shards import WorldShard
 from world.world_sampler import WorldSpec
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -142,3 +147,93 @@ def test_four_workers_over_two_urls_each_get_their_own_address(monkeypatch: pyte
 
     assert seen_urls == [TWO_URLS[0], TWO_URLS[1], TWO_URLS[0], TWO_URLS[1]]
     assert dict(os.environ) == parent_env_before
+
+
+def test_flag_absent_uses_the_config_list() -> None:
+    """No flag means the config switch decides, exactly as before."""
+    assert resolve_replay_redis_urls(None, load_dataset_build_config()) == []
+    assert resolve_replay_redis_urls(None, _config_with_urls(TWO_URLS)) == TWO_URLS
+
+
+def test_flag_text_is_split_and_stripped() -> None:
+    """A comma-separated flag with spaces becomes the same address list the config would hold."""
+    resolved = resolve_replay_redis_urls(
+        "redis://localhost:6379/0, redis://localhost:6380/0", load_dataset_build_config()
+    )
+
+    assert resolved == TWO_URLS
+
+
+def test_flag_duplicate_is_refused_by_name() -> None:
+    """The flag goes through the same duplicate rule as the config switch."""
+    with pytest.raises(ValueError, match=f"replay_redis_urls entry {THREE_URLS[0]!r} appears more than once"):
+        resolve_replay_redis_urls(f"{THREE_URLS[0]},{THREE_URLS[0]}", load_dataset_build_config())
+
+
+def test_flag_non_redis_is_refused_by_name() -> None:
+    """The flag goes through the same redis:// rule as the config switch."""
+    bad = "http://localhost:6379/0"
+
+    with pytest.raises(ValueError, match=f"replay_redis_urls entry {bad!r} is not a redis:// URL"):
+        resolve_replay_redis_urls(bad, load_dataset_build_config())
+
+
+def test_flag_empty_piece_is_refused() -> None:
+    """A stray comma would otherwise pass an empty address to validation."""
+    with pytest.raises(ValueError, match="contains an empty URL"):
+        resolve_replay_redis_urls("redis://localhost:6379/0, ,redis://localhost:6380/0", load_dataset_build_config())
+
+
+def test_flag_with_three_urls_allows_forty_five_and_refuses_forty_six() -> None:
+    """Three flag URLs give the same 3 x 15 cap the config switch gives."""
+    urls = resolve_replay_redis_urls(",".join(THREE_URLS), load_dataset_build_config())
+
+    assert validate_parallel_workers(45, urls) == 45
+    with pytest.raises(ValueError, match="exceeds the replay workspace pool of 45 over 3 redis servers"):
+        validate_parallel_workers(46, urls)
+
+
+def test_build_all_uses_the_flag_for_the_cap(tmp_path: Path) -> None:
+    """The real build caps on the resolved flag list, not on the empty config switch."""
+    with pytest.raises(ValueError, match="exceeds the replay workspace pool of 45 over 3 redis servers"):
+        asyncio.run(
+            build_all_level_16_datasets(
+                splits=["training"],
+                worlds_per_split={"training": 2},
+                checkpoint_dir=tmp_path / "checkpoints",
+                datasets_root=tmp_path / "datasets",
+                parallel_workers=46,
+                redis_urls_flag=",".join(THREE_URLS),
+            )
+        )
+
+
+@pytest.mark.parametrize("parallel_workers", [None, 1])
+def test_flag_without_a_parallel_pool_is_refused(tmp_path: Path, parallel_workers: int | None) -> None:
+    """The flag alone would do nothing, so it is refused rather than silently ignored."""
+    with pytest.raises(ValueError, match="--replay-redis-urls requires --parallel-workers above 1"):
+        asyncio.run(
+            build_all_level_16_datasets(
+                splits=["training"],
+                worlds_per_split={"training": 2},
+                checkpoint_dir=tmp_path / "checkpoints",
+                datasets_root=tmp_path / "datasets",
+                parallel_workers=parallel_workers,
+                redis_urls_flag=",".join(TWO_URLS),
+            )
+        )
+
+
+def test_worker_argv_strips_the_replay_redis_urls_flag() -> None:
+    """The child gets its address only through TEST_REDIS_URL, so the flag is removed in both forms."""
+    argv = worker_argv(
+        ["--replay-redis-urls", TWO_URLS[0], f"--replay-redis-urls={TWO_URLS[1]}", "--preset", "tiny"],
+        WorldShard(0, 2),
+        "training",
+    )
+
+    assert "--replay-redis-urls" not in argv
+    assert all(not arg.startswith("--replay-redis-urls=") for arg in argv)
+    assert TWO_URLS[0] not in argv
+    assert TWO_URLS[1] not in argv
+    assert "--preset" in argv

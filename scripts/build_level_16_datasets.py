@@ -458,15 +458,14 @@ def load_dataset_build_config(path: Path = DEFAULT_DATASET_BUILD_CONFIG_PATH) ->
     return parameters
 
 
-def load_replay_redis_urls(config: dict[str, Any]) -> list[str]:
+def validate_replay_redis_urls(urls: Any) -> list[str]:
     """
-    WHAT: Reads and validates the replay_redis_urls switch from the dataset build config.
-    WHY: An empty list is the OFF state, so the switch must be checked here rather than trusted, and a
-    bad entry would otherwise reach a child as a broken Redis address.
+    WHAT: Checks raw replay_redis_urls content and returns it as a list of addresses.
+    WHY: The config switch and the --replay-redis-urls flag must accept exactly the same addresses,
+    so both paths share these checks instead of growing two copies.
     Raises:
         ValueError: On a non-list value, a non-redis:// entry, or a repeated entry.
     """
-    urls = config["replay_redis_urls"]["value"]
     if not isinstance(urls, list):
         raise ValueError(f"replay_redis_urls must be a list, got {urls!r}")
     seen: set[str] = set()
@@ -477,6 +476,33 @@ def load_replay_redis_urls(config: dict[str, Any]) -> list[str]:
             raise ValueError(f"replay_redis_urls entry {url!r} appears more than once")
         seen.add(url)
     return list(urls)
+
+
+def load_replay_redis_urls(config: dict[str, Any]) -> list[str]:
+    """
+    WHAT: Reads and validates the replay_redis_urls switch from the dataset build config.
+    WHY: An empty list is the OFF state, so the switch must be checked here rather than trusted, and a
+    bad entry would otherwise reach a child as a broken Redis address.
+    Raises:
+        ValueError: On a non-list value, a non-redis:// entry, or a repeated entry.
+    """
+    return validate_replay_redis_urls(config["replay_redis_urls"]["value"])
+
+
+def resolve_replay_redis_urls(flag_text: str | None, config: dict[str, Any]) -> list[str]:
+    """
+    WHAT: The Redis address list for this run: the flag text when given, otherwise the config switch.
+    WHY: The flag turns multi-Redis on for one lab run without editing a tracked file, so the tree
+    stays clean and the run's code_version does not gain a "-dirty" suffix.
+    Raises:
+        ValueError: On an empty comma-separated piece, or any entry the config rules refuse.
+    """
+    if flag_text is None:
+        return load_replay_redis_urls(config)
+    pieces = [piece.strip() for piece in flag_text.split(",")]
+    if any(not piece for piece in pieces):
+        raise ValueError(f"--replay-redis-urls contains an empty URL: {flag_text!r}")
+    return validate_replay_redis_urls(pieces)
 
 
 def redis_url_for_worker(worker_index: int, urls: Sequence[str]) -> str | None:
@@ -614,17 +640,19 @@ class ProcessHandle(Protocol):
     def wait(self) -> int: ...
 
 
-def validate_parallel_workers(count: int) -> int:
+def validate_parallel_workers(count: int, redis_urls: Sequence[str] | None = None) -> int:
     """
-    WHAT: Checks a worker count against the replay workspace pool read from config/replay.yaml.
+    WHAT: Checks a worker count against the replay workspace pool read from config/replay.yaml,
+    multiplied by the number of Redis servers in use.
     WHY: Each replay holds one Redis workspace DB for its whole run; more workers than the pool would
-    wait on each other's locks instead of running, so the count is refused up front.
+    wait on each other's locks instead of running, so the count is refused up front. Every server has
+    its own pool, so the cap grows with the server count.
     """
     if count < 1:
         raise ValueError(f"--parallel-workers must be at least 1, got {count}")
     settings = load_replay_settings()
     pool_size = settings.redis_workspace_db_max - settings.redis_workspace_db_min + 1
-    urls = load_replay_redis_urls(load_dataset_build_config())
+    urls = load_replay_redis_urls(load_dataset_build_config()) if redis_urls is None else redis_urls
     capacity = pool_size * max(1, len(urls))
     if count > capacity:
         servers = "" if len(urls) <= 1 else f" over {len(urls)} redis servers"
@@ -641,7 +669,8 @@ def worker_argv(base_argv: Sequence[str], shard: WorldShard, split: str) -> list
     WHAT: Builds one child's command: this script under this interpreter with the parent's flags,
     its own split and its world shard.
     WHY: The parent runs one split at a time, so the child is told that single split. --parallel-workers
-    and an earlier --splits are dropped so the child cannot start a nested pool or a second split.
+    and an earlier --splits are dropped so the child cannot start a nested pool or a second split, and
+    --replay-redis-urls is dropped because the child's address arrives only through TEST_REDIS_URL.
     """
     stripped: list[str] = []
     skip_value = False
@@ -649,10 +678,12 @@ def worker_argv(base_argv: Sequence[str], shard: WorldShard, split: str) -> list
         if skip_value:
             skip_value = False
             continue
-        if arg in ("--parallel-workers", "--splits"):
+        if arg in ("--parallel-workers", "--splits", "--replay-redis-urls"):
             skip_value = True
             continue
         if arg.startswith("--parallel-workers=") or arg.startswith("--splits="):
+            continue
+        if arg.startswith("--replay-redis-urls="):
             continue
         stripped.append(arg)
     return [
@@ -963,6 +994,7 @@ async def build_all_level_16_datasets(
     assemble_only: bool = False,
     parallel_workers: int | None = None,
     base_argv: Sequence[str] = (),
+    redis_urls_flag: str | None = None,
 ) -> dict[str, dict[str, Any]]:
     """
     WHAT: Builds datasets for all configured splits sequentially, returning execution metrics per split.
@@ -971,9 +1003,15 @@ async def build_all_level_16_datasets(
     writes no dataset.
     When assemble_only is on, every split's dataset is built from checkpoints and no world runs.
     When parallel_workers is above 1, each split runs that many child builds and is then assembled here.
+    redis_urls_flag overrides the config's replay_redis_urls for this run, so a multi-Redis build needs
+    no tracked-file edit.
     """
+    if redis_urls_flag is not None and (parallel_workers is None or parallel_workers <= 1):
+        raise ValueError("--replay-redis-urls requires --parallel-workers above 1")
+    redis_urls: Sequence[str] = []
     if parallel_workers is not None:
-        validate_parallel_workers(parallel_workers)
+        redis_urls = resolve_replay_redis_urls(redis_urls_flag, load_dataset_build_config())
+        validate_parallel_workers(parallel_workers, redis_urls)
     counts = load_datasets_config() if worlds_per_split is None else worlds_per_split
     print(f"Worlds per split: {counts} (source: {'flag' if worlds_per_split is not None else 'config'})")
     sampler_cfg = load_sampler_config()
@@ -1016,7 +1054,6 @@ async def build_all_level_16_datasets(
             run_parallel = True
             if checkpoint_dir is None:
                 raise ValueError("parallel_workers requires checkpoint_dir")
-            redis_urls = load_replay_redis_urls(load_dataset_build_config())
             commands = split_worker_commands(
                 base_argv, split, specs, checkpoint_dir, parallel_workers, redis_urls
             )
@@ -1152,6 +1189,13 @@ def main() -> None:
         help="Run this many child builds per split, then assemble here (needs --checkpoint-dir; default: one process)",
     )
     parser.add_argument(
+        "--replay-redis-urls",
+        type=str,
+        default=None,
+        help="Comma-separated Redis URLs to spread parallel workers over; overrides replay_redis_urls in "
+        "config/dataset_build.yaml (default: use the config)",
+    )
+    parser.add_argument(
         "--sampler-seed",
         type=int,
         default=1,
@@ -1216,6 +1260,7 @@ def main() -> None:
                 assemble_only=args.assemble_only,
                 parallel_workers=args.parallel_workers,
                 base_argv=sys.argv[1:],
+                redis_urls_flag=args.replay_redis_urls,
             )
         )
     except BuildStopped:
