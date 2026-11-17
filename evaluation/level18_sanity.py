@@ -15,6 +15,7 @@ FileNotFoundError; nothing is guessed.
 """
 
 import argparse
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -22,7 +23,7 @@ from typing import Any
 
 import orjson
 
-from decisions.mule_account_model import account_model_feature_names
+from decisions.mule_account_model import account_model_feature_names, load_mule_model_config
 from decisions.rules_config import load_rules_config
 from evaluation.dataset_truth_join import join_truth
 from evaluation.level17_scoring import (
@@ -35,52 +36,83 @@ from evaluation.level17_scoring import (
 from evaluation.rules_metrics import recall_at_capacity, yield_rate
 from evaluation.run_level_17 import load_evaluation_settings
 
-__all__ = ["FEATURE_FILL_FLAG_SHARE", "build_sanity_report", "feature_fill_report", "main", "oracle_report"]
+__all__ = ["build_sanity_report", "feature_fill_report", "main", "oracle_report"]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# policy: a feature carried by fewer than 99.9% of the rows is flagged as sparse in the report.
-FEATURE_FILL_FLAG_SHARE: float = 0.999
+# policy: a feature missing from more than half the rows is listed as mostly missing, as information.
+MOSTLY_MISSING_SHARE: float = 0.5
 
 ORACLE_MULE_SCORE: float = 1.0
 ORACLE_GENUINE_SCORE: float = 0.0
 ORACLE_THRESHOLD: float = 0.5
 
 
-def feature_fill_report(snapshot_rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def feature_fill_report(
+    snapshot_rows: Sequence[Mapping[str, Any]],
+    config_path: Path | str | None = None,
+) -> dict[str, Any]:
     """
-    WHAT: Reports, for every account-model feature, the share of snapshot rows that carry a value.
+    WHAT: Reports, for every account-model feature, how many rows carry a value and how concentrated
+    its values are, then flags the features that cannot separate anything.
 
-    WHY: A feature that is None on most rows is either not produced by the replay or not needed;
-    either way it must be visible before the model treats it as missing.
+    WHY: A feature missing from every row, or holding the same value in almost every row, cannot
+    tell two accounts apart; both must be visible before the model treats them as informative. The
+    concentration cut is policy read from config/mule_model.yaml, never typed into this module.
 
     Args:
         snapshot_rows: Snapshot rows carrying the account-model feature columns.
+        config_path: Optional mule model config path; defaults to config/mule_model.yaml.
 
     Returns:
-        A dict with the row and feature counts, the flag threshold, every flagged feature with its
-        fill share, and the fill share of every feature.
+        A dict with the row and feature counts, the configured flag share, the flagged features,
+        the mostly-missing features, and one stats block per feature. A feature is flagged when it
+        is missing from every row or when its most common value covers at least the flag share, a
+        missing value counting as one value. A feature is listed as mostly missing, without being
+        flagged for that reason alone, when it is missing from more than half the rows.
 
     Raises:
-        ValueError: If no rows are given.
+        ValueError: If no rows are given or a feature value cannot be counted as one value.
     """
     rows = list(snapshot_rows)
     if not rows:
         raise ValueError("feature_fill_report requires at least one snapshot row")
+    flag_share = load_mule_model_config(config_path).feature_fill_flag_share
     feature_names = account_model_feature_names()
-    fill_share: dict[str, float] = {}
+    stats_by_feature: dict[str, dict[str, Any]] = {}
+    flagged: list[dict[str, Any]] = []
+    mostly_missing: list[dict[str, Any]] = []
     for name in feature_names:
-        filled = sum(1 for row in rows if row.get(name) is not None)
-        fill_share[name] = filled / len(rows)
-    flagged = [
-        {"feature": name, "fill_share": share} for name, share in fill_share.items() if share < FEATURE_FILL_FLAG_SHARE
-    ]
+        try:
+            counts: Counter[Any] = Counter(row.get(name) for row in rows)
+        except TypeError as error:
+            raise ValueError(f"Feature {name!r} holds a value that is not hashable, so it cannot be counted") from error
+        most_common_value, most_common_count = counts.most_common(1)[0]
+        row_count = len(rows)
+        missing_count = counts.get(None, 0)
+        stats = {
+            "rows": row_count,
+            "fill_share": (row_count - missing_count) / row_count,
+            "missing_share": missing_count / row_count,
+            "most_common_value": most_common_value,
+            "most_common_share": most_common_count / row_count,
+            "distinct_count": len(counts),
+        }
+        stats_by_feature[name] = stats
+        if stats["missing_share"] == 1.0 or stats["most_common_share"] >= flag_share:
+            flagged.append({"feature": name, **stats})
+        if stats["missing_share"] > MOSTLY_MISSING_SHARE:
+            mostly_missing.append(
+                {"feature": name, "missing_share": stats["missing_share"], "fill_share": stats["fill_share"]}
+            )
     return {
         "row_count": len(rows),
         "feature_count": len(feature_names),
-        "feature_fill_flag_share": FEATURE_FILL_FLAG_SHARE,
+        "feature_fill_flag_share": flag_share,
+        "mostly_missing_share": MOSTLY_MISSING_SHARE,
         "flagged_features": flagged,
-        "fill_share_by_feature": fill_share,
+        "mostly_missing_features": mostly_missing,
+        "feature_stats": stats_by_feature,
     }
 
 

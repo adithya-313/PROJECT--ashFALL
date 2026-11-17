@@ -40,7 +40,9 @@ __all__ = [
 ]
 
 ALLOWED_LABEL_CUTS: frozenset[str] = frozenset({"arrival_time", "label_day"})
-ALLOWED_MULE_MODEL_KEYS: frozenset[str] = frozenset({"label_cut", "label_maturity_days"})
+ALLOWED_MULE_MODEL_KEYS: frozenset[str] = frozenset(
+    {"feature_fill_flag_share", "label_cut", "label_maturity_days"}
+)
 
 
 @dataclass(frozen=True)
@@ -53,10 +55,13 @@ class MuleModelConfig:
             ALLOWED_LABEL_CUTS.
         label_maturity_days: Number of trailing IST days dropped at the end of every world, or None
             when the maturity window is off because the label delay has not been measured yet.
+        feature_fill_flag_share: Share of rows at or above which a feature's most common value makes
+            the feature unable to separate anything, so the sanity report flags it.
     """
 
     label_cut: str
     label_maturity_days: int | None
+    feature_fill_flag_share: float
 
 
 def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
@@ -129,7 +134,22 @@ def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
             f"label_maturity_days in {resolved_path} must be null or a non-negative integer; got {maturity_value!r}"
         )
 
-    return MuleModelConfig(label_cut=label_cut, label_maturity_days=label_maturity_days)
+    fill_share_block = parameters["feature_fill_flag_share"]
+    fill_share_value = fill_share_block.get("value")
+    if (
+        not isinstance(fill_share_value, (int, float))
+        or isinstance(fill_share_value, bool)
+        or not 0.0 < fill_share_value <= 1.0
+    ):
+        raise ValueError(
+            f"feature_fill_flag_share in {resolved_path} must be a number in (0.0, 1.0]; got {fill_share_value!r}"
+        )
+
+    return MuleModelConfig(
+        label_cut=label_cut,
+        label_maturity_days=label_maturity_days,
+        feature_fill_flag_share=float(fill_share_value),
+    )
 
 
 def account_model_feature_names() -> tuple[str, ...]:

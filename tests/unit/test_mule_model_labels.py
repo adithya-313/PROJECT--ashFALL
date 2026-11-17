@@ -137,6 +137,11 @@ def test_config_loader_refuses_unknown_value(tmp_path: Path) -> None:
         "    value: null\n"
         "    not_found: true\n"
         "    derived_from: test\n"
+        "    reason: test\n"
+        "  feature_fill_flag_share:\n"
+        "    label: policy\n"
+        "    value: 0.999\n"
+        "    derived_from: test\n"
         "    reason: test\n",
     )
 

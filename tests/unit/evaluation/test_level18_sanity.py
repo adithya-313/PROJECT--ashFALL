@@ -1,9 +1,9 @@
 """
-WHAT: Unit tests for the Level 18a4 sanity report: feature-fill flagging at the 0.999 boundary, an
+WHAT: Unit tests for the Level 18a4 sanity report: feature fill and concentration flagging, an
 oracle scored through the pilot's escalation and metric path, and the CLI report.
 
-WHY: A sparse feature or a capacity ceiling must be visible before a model is blamed; the oracle
-test proves the report reaches full precision when the ranking is perfect.
+WHY: A sparse or constant feature must be visible before a model is blamed; the oracle test proves
+the report reaches full precision when the ranking is perfect.
 """
 
 import json
@@ -11,10 +11,9 @@ from pathlib import Path
 
 import orjson
 
-from decisions.mule_account_model import account_model_feature_names
+from decisions.mule_account_model import account_model_feature_names, load_mule_model_config
 from evaluation.dataset_truth_join import join_truth
 from evaluation.level18_sanity import (
-    FEATURE_FILL_FLAG_SHARE,
     build_sanity_report,
     feature_fill_report,
     main,
@@ -27,35 +26,105 @@ VALIDATION = FIXTURES / "datasets" / "validation-20261031T1830-e5593f4c3f8e"
 TRUTH_ROOT = FIXTURES / "truth"
 
 
-def _filled_row() -> dict[str, object]:
-    """Builds one snapshot row carrying a value for every account-model feature."""
-    return {name: 1.0 for name in account_model_feature_names()}
+def _varied_row(index: int) -> dict[str, object]:
+    """Builds one snapshot row whose every feature value differs from the other rows."""
+    return {name: float(index) for name in account_model_feature_names()}
+
+
+def _config_body(flag_share: float) -> str:
+    """Returns a complete mule model config body carrying the given fill flag share."""
+    return (
+        "parameters:\n"
+        "  label_cut:\n"
+        "    label: policy\n"
+        "    value: arrival_time\n"
+        "    derived_from: test\n"
+        "    reason: test\n"
+        "  label_maturity_days:\n"
+        "    label: policy\n"
+        "    value: null\n"
+        "    not_found: true\n"
+        "    derived_from: test\n"
+        "    reason: test\n"
+        "  feature_fill_flag_share:\n"
+        "    label: policy\n"
+        f"    value: {flag_share}\n"
+        "    derived_from: test\n"
+        "    reason: test\n"
+    )
 
 
 def test_feature_fill_flags_a_feature_missing_from_every_row() -> None:
-    """A feature that is None on every row is reported with a zero fill share."""
-    rows = [_filled_row() for _ in range(10)]
+    """A feature that is None on every row is flagged with a zero fill share."""
+    rows = [_varied_row(index) for index in range(10)]
     for row in rows:
         row["distinct_payers_24h"] = None
 
     report = feature_fill_report(rows)
 
-    assert report["feature_fill_flag_share"] == FEATURE_FILL_FLAG_SHARE
+    assert report["feature_fill_flag_share"] == load_mule_model_config().feature_fill_flag_share
     assert report["row_count"] == 10
-    assert report["flagged_features"] == [{"feature": "distinct_payers_24h", "fill_share": 0.0}]
+    assert report["flagged_features"] == [
+        {
+            "feature": "distinct_payers_24h",
+            "rows": 10,
+            "fill_share": 0.0,
+            "missing_share": 1.0,
+            "most_common_value": None,
+            "most_common_share": 1.0,
+            "distinct_count": 1,
+        }
+    ]
 
 
-def test_feature_fill_flags_only_features_strictly_below_the_share() -> None:
-    """A feature carried by exactly 999 of 1000 rows is not flagged; 998 rows is."""
-    rows = [_filled_row() for _ in range(1000)]
-    rows[0]["distinct_payers_24h"] = None
-    rows[0]["distinct_payers_7d"] = None
-    rows[1]["distinct_payers_7d"] = None
+def test_feature_fill_flags_a_constant_feature_at_the_share() -> None:
+    """A feature that is 0 in 999 of 1000 rows is flagged at the 0.999 boundary; 998 is not."""
+    rows = [_varied_row(index) for index in range(1000)]
+    for row in rows:
+        row["distinct_payers_7d"] = 0.0
+        row["distinct_payers_24h"] = 0.0
+    rows[-1]["distinct_payers_7d"] = 1.0
+    for row in rows[-2:]:
+        row["distinct_payers_24h"] = 1.0
 
     report = feature_fill_report(rows)
 
-    flagged = {entry["feature"]: entry["fill_share"] for entry in report["flagged_features"]}
-    assert flagged == {"distinct_payers_7d": 0.998}
+    flagged = {entry["feature"]: entry for entry in report["flagged_features"]}
+    assert set(flagged) == {"distinct_payers_7d"}
+    assert flagged["distinct_payers_7d"]["most_common_value"] == 0.0
+    assert flagged["distinct_payers_7d"]["most_common_share"] == 0.999
+    assert flagged["distinct_payers_7d"]["distinct_count"] == 2
+
+
+def test_feature_fill_lists_a_mostly_missing_varied_feature_without_flagging_it() -> None:
+    """A feature missing from 600 of 1000 rows with varied values is listed, not flagged."""
+    rows = [_varied_row(index) for index in range(1000)]
+    for row in rows[:600]:
+        row["distinct_payers_24h"] = None
+
+    report = feature_fill_report(rows)
+
+    assert "distinct_payers_24h" not in {entry["feature"] for entry in report["flagged_features"]}
+    assert {"feature": "distinct_payers_24h", "missing_share": 0.6, "fill_share": 0.4} in report[
+        "mostly_missing_features"
+    ]
+
+
+def test_feature_fill_reads_the_flag_share_from_config(tmp_path: Path) -> None:
+    """The same rows are unflagged at the committed 0.999 and flagged at a 0.5 config."""
+    rows = [_varied_row(index) for index in range(1000)]
+    for row in rows[:600]:
+        row["distinct_payers_24h"] = 7.0
+    config_path = tmp_path / "mule_model.yaml"
+    config_path.write_text(_config_body(0.5), encoding="utf-8")
+
+    default_report = feature_fill_report(rows)
+    lowered_report = feature_fill_report(rows, config_path=config_path)
+
+    assert default_report["feature_fill_flag_share"] == 0.999
+    assert "distinct_payers_24h" not in {entry["feature"] for entry in default_report["flagged_features"]}
+    assert lowered_report["feature_fill_flag_share"] == 0.5
+    assert "distinct_payers_24h" in {entry["feature"] for entry in lowered_report["flagged_features"]}
 
 
 def test_oracle_reaches_full_yield_through_the_pilot_path() -> None:

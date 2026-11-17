@@ -34,3 +34,9 @@ parameters:
     not_found: true
     derived_from: "Level 18a4 Round 1 brief"
     reason: "Off until the label delay has been measured on the full training worlds; null means no trailing window is dropped."
+
+  feature_fill_flag_share:
+    label: policy
+    value: 0.999
+    derived_from: "Level 18a4 round 1 review"
+    reason: "A feature that is the same value in almost every row cannot separate anything, so a feature whose most common value covers this share of rows or more is flagged."
