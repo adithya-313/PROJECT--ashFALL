@@ -63,3 +63,9 @@ parameters:
       - shared_counterparties_with_flagged_7d
     derived_from: "Level 18a4 round 2 ruling R1"
     reason: "Built from bank_feedback confirmed_fraud rows; no replay component writes bank_feedback (feedback arrives with the simulated analyst in Levels 21-22), so these are empty in every built world. Revisit when feedback exists."
+
+  rules_plus_labels_and_registry:
+    label: policy
+    value: false
+    derived_from: "Level 18 engineer ruling 2026-11-17 (rule_6, 2x2 comparison)"
+    reason: "rule_6 joins the rules table only when this switch is true, so the default rules stay rules 1 to 5."

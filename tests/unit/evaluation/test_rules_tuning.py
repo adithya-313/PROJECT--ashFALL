@@ -9,6 +9,7 @@ untuned_start value is rejected.
 
 import time
 from datetime import date, datetime, timedelta
+from itertools import product
 from pathlib import Path
 from typing import Any
 
@@ -19,10 +20,13 @@ from core.event_clock import IST
 from decisions.rules_config import load_rules_config
 from evaluation.level17_scoring import ScoredDay
 from evaluation.rules_tuning import (
+    load_labels_tuning_config,
     load_tuning_config,
     tune_anomaly_threshold,
     tune_rules,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 TUNING_DAY = date(2025, 1, 1)
 BASELINE_VALUES = {
@@ -222,3 +226,39 @@ def test_load_tuning_config_rejects_grid_without_untuned_start(tmp_path: Path) -
 
     with pytest.raises(ValueError, match="do not include the untuned_start value"):
         load_tuning_config(tuning_file)
+
+
+def test_load_tuning_config_without_arguments_matches_rules_tuning_yaml() -> None:
+    """With no new arguments the loader returns exactly the candidates declared in rules_tuning.yaml."""
+    tuning_path = REPO_ROOT / "config" / "rules_tuning.yaml"
+    raw = yaml.safe_load(tuning_path.read_text(encoding="utf-8"))
+    expected_candidates = {
+        key: tuple(block["candidates"]) for key, block in raw["thresholds"].items()
+    }
+
+    tuning = load_tuning_config()
+
+    assert tuning.candidates == expected_candidates
+
+
+def test_labels_grid_enumerates_the_product_of_both_candidate_lists() -> None:
+    """The merged grid adds only the extension keys, and its size is the product of every list."""
+    baseline_tuning = load_tuning_config()
+    labels_tuning = load_labels_tuning_config()
+
+    extension_path = REPO_ROOT / "config" / "rules_labels_extension.yaml"
+    extension_raw = yaml.safe_load(extension_path.read_text(encoding="utf-8"))
+    extension_keys = set(extension_raw["tuning"]["thresholds"])
+    assert set(labels_tuning.candidates) == set(baseline_tuning.candidates) | extension_keys
+    for key in extension_keys:
+        assert labels_tuning.candidates[key] == tuple(extension_raw["tuning"]["thresholds"][key]["candidates"])
+
+    baseline_combinations = 1
+    for candidate_values in baseline_tuning.candidates.values():
+        baseline_combinations *= len(candidate_values)
+    extension_combinations = 1
+    for key in sorted(extension_keys):
+        extension_combinations *= len(labels_tuning.candidates[key])
+    enumerated_combinations = sum(1 for _ in product(*labels_tuning.candidates.values()))
+
+    assert enumerated_combinations == baseline_combinations * extension_combinations

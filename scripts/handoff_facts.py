@@ -293,6 +293,7 @@ PART_CONFIGS: dict[str, dict[str, Any]] = {
         ),
         "CONFIG_FILES": (
             "config/rules_baseline.yaml",
+            "config/rules_labels_extension.yaml",
             "config/anomaly_detector.yaml",
             "config/cold_start.yaml",
             "config/rules_tuning.yaml",

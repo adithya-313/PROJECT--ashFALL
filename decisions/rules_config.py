@@ -29,6 +29,7 @@ __all__ = [
     "RulesConfig",
     "all_thresholds_tuned",
     "load_rules_config",
+    "load_rules_config_with_labels",
     "with_thresholds",
 ]
 
@@ -423,5 +424,68 @@ def load_rules_config(path: Path | str | None = None) -> RulesConfig:
     return RulesConfig(
         thresholds=parsed_thresholds,
         rules=tuple(parsed_rules),
+    )
+
+
+def load_rules_config_with_labels(
+    baseline_path: Path | str | None = None,
+    extension_path: Path | str | None = None,
+) -> RulesConfig:
+    """
+    PURPOSE:
+        Loads the baseline rules table merged with the label-based extension that adds rule_6.
+
+    INPUTS:
+        baseline_path: Optional path to the baseline rules YAML; defaults to config/rules_baseline.yaml.
+        extension_path: Optional path to the extension YAML; defaults to
+            config/rules_labels_extension.yaml.
+
+    KEY LOGIC:
+        1. Loads and validates both files with load_rules_config, so each keeps its own schema checks.
+        2. Appends the extension thresholds to the baseline thresholds, refusing a key present in both.
+        3. Appends the extension rules after the baseline rules in file order, refusing a rule id or
+           reason code already present in the merged table.
+
+    RETURNS:
+        RulesConfig: The baseline rules 1 to 5 followed by the extension rule, and every threshold
+        from both files.
+
+    SIDE EFFECTS / ERRORS:
+        Raises FileNotFoundError if either file is missing.
+        Raises ValueError on any validation error in either file, or on a duplicate threshold key,
+        rule id or reason code across the two files.
+
+    CONSTRAINTS:
+        Pure apart from reading the two YAML files; neither input file is modified.
+    """
+    baseline = load_rules_config(baseline_path)
+    if extension_path is None:
+        root_dir = Path(__file__).resolve().parent.parent
+        resolved_extension_path = root_dir / "config" / "rules_labels_extension.yaml"
+    else:
+        resolved_extension_path = Path(extension_path)
+    extension = load_rules_config(resolved_extension_path)
+
+    merged_thresholds: dict[str, RuleThreshold] = dict(baseline.thresholds)
+    for key, threshold in extension.thresholds.items():
+        if key in merged_thresholds:
+            raise ValueError(f"Duplicate threshold key '{key}' when merging {resolved_extension_path}")
+        merged_thresholds[key] = threshold
+
+    merged_rules: list[Rule] = list(baseline.rules)
+    seen_rule_ids: set[str] = {rule.id for rule in baseline.rules}
+    seen_reason_codes: set[str] = {rule.reason_code for rule in baseline.rules}
+    for rule in extension.rules:
+        if rule.id in seen_rule_ids:
+            raise ValueError(f"Duplicate rule id '{rule.id}' when merging {resolved_extension_path}")
+        if rule.reason_code in seen_reason_codes:
+            raise ValueError(f"Duplicate reason code '{rule.reason_code}' when merging {resolved_extension_path}")
+        seen_rule_ids.add(rule.id)
+        seen_reason_codes.add(rule.reason_code)
+        merged_rules.append(rule)
+
+    return RulesConfig(
+        thresholds=merged_thresholds,
+        rules=tuple(merged_rules),
     )
 
