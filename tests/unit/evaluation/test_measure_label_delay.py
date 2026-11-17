@@ -53,8 +53,8 @@ def test_label_delay_counts_censored_mules_and_percentiles() -> None:
         _payment("p4", "acc_d", _moment(1), role="genuine"),
     ]
     labels = [
-        {"account_id": "acc_a", "arrival_time": _moment(2)},
-        {"account_id": "acc_b", "arrival_time": _moment(4)},
+        {"account_id": "acc_a", "source": "complaint", "arrival_time": _moment(2)},
+        {"account_id": "acc_b", "source": "police_bulk", "arrival_time": _moment(4)},
     ]
 
     report = measure_label_delay(payments, labels, _story_of)
@@ -73,8 +73,8 @@ def test_label_delay_uses_the_earliest_label_and_allows_zero() -> None:
     """An account labelled at the credit moment keeps a zero delay; a later label does not replace it."""
     payments = [_payment("p1", "acc_a", _moment(1))]
     labels = [
-        {"account_id": "acc_a", "arrival_time": _moment(6)},
-        {"account_id": "acc_a", "arrival_time": _moment(1)},
+        {"account_id": "acc_a", "source": "complaint", "arrival_time": _moment(6)},
+        {"account_id": "acc_a", "source": "registry", "arrival_time": _moment(1)},
     ]
 
     report = measure_label_delay(payments, labels, _story_of)
@@ -83,10 +83,30 @@ def test_label_delay_uses_the_earliest_label_and_allows_zero() -> None:
     assert report["delay_percentiles_days"] == pytest.approx({"p50": 0.0, "p90": 0.0, "p95": 0.0})
 
 
+def test_label_delay_reports_negative_delays_with_their_label_source() -> None:
+    """A label that arrives before the first credit is listed with its own source, not hidden."""
+    payments = [
+        _payment("p1", "acc_early_label", _moment(5)),
+        _payment("p2", "acc_late_label", _moment(1)),
+    ]
+    labels = [
+        {"account_id": "acc_early_label", "source": "registry", "arrival_time": _moment(2)},
+        {"account_id": "acc_late_label", "source": "complaint", "arrival_time": _moment(3)},
+    ]
+
+    report = measure_label_delay(payments, labels, _story_of)
+
+    assert report["delays_days"] == [-3.0, 2.0]
+    assert report["negative_delay_count"] == 1
+    assert report["negative_delays"] == [
+        {"account_id": "acc_early_label", "delay_days": -3.0, "label_source": "registry"}
+    ]
+
+
 def test_label_delay_with_no_mule_credit_is_empty_not_an_error() -> None:
     """A world with no fraud-origin credit reports zeros instead of raising."""
     payments = [_payment("p1", "acc_a", _moment(1), role="genuine")]
-    labels = [{"account_id": "acc_a", "arrival_time": _moment(2)}]
+    labels = [{"account_id": "acc_a", "source": "complaint", "arrival_time": _moment(2)}]
 
     report = measure_label_delay(payments, labels, _story_of)
 

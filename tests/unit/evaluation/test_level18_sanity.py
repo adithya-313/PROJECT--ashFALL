@@ -7,6 +7,7 @@ the report reaches full precision when the ranking is perfect.
 """
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import orjson
@@ -129,13 +130,84 @@ def test_feature_fill_reads_the_flag_share_from_config(tmp_path: Path) -> None:
 
 def test_oracle_reaches_full_yield_through_the_pilot_path() -> None:
     """With perfect ranking every escalated account-day is a mule day, so measured yield is 1.0."""
-    _, snapshots = join_truth(VALIDATION, TRUTH_ROOT)
-    report = oracle_report(snapshots.to_pylist())
+    payments, snapshots = join_truth(VALIDATION, TRUTH_ROOT)
+    report = oracle_report(snapshots.to_pylist(), payments.to_pylist())
 
     assert report["escalations"] > 0
     assert report["mule_accounts"] > 0
     assert report["yield_measured"] == 1.0
     assert report["recall_at_capacity"] > 0.0
+
+
+def _snapshot_row(account_id: str, day: int, role: str, depth: int | None) -> dict[str, object]:
+    """Builds one account-day row for a hand-built world with no rule-triggering features."""
+    return {
+        "world_id": "world-0",
+        "bank_id": "bank_0",
+        "account_id": account_id,
+        "snapshot_time": datetime(2026, 9, day, 12, 0, tzinfo=timezone.utc),
+        "snapshot_kind": "daily",
+        "truth_role": role,
+        "truth_depth": depth,
+    }
+
+
+def _payment_row(payment_id: str, receiver: str, role: str = "mule") -> dict[str, object]:
+    """Builds one joined payment row naming a receiver and its truth role."""
+    return {
+        "payment_id": payment_id,
+        "receiver_account_id": receiver,
+        "decision_time": datetime(2026, 9, 1, 0, 0, tzinfo=timezone.utc),
+        "truth_role_receiver": role,
+    }
+
+
+def test_oracle_misses_count_repeats_and_blocked_capacity_slots() -> None:
+    """At capacity one the alphabetically first mule takes every slot, so the second mule is missed."""
+    snapshots = [
+        row
+        for day in (1, 2)
+        for row in (
+            _snapshot_row("acc_a", day, "mule", 1),
+            _snapshot_row("acc_b", day, "mule", 1),
+            _snapshot_row("acc_g", day, "genuine", None),
+        )
+    ]
+    payments = [_payment_row("p1", "acc_a"), _payment_row("p2", "acc_b"), _payment_row("p3", "acc_c")]
+
+    report = oracle_report(snapshots, payments)
+
+    misses = report["misses"]
+    assert report["recall_at_capacity"] == 0.5
+    assert misses["ground_set_mules"] == 2
+    assert misses["truth_mule_accounts"] == 3
+    assert misses["found_mules"] == 1
+    assert misses["missed_with_mule_days"] == ["acc_b"]
+    assert misses["missed_without_mule_day"] == ["acc_c"]
+    assert misses["blocked_slots_on_missed_mule_days"] == 1
+    assert misses["missed_mule_day_slots"] == 2
+    assert misses["blocked_slot_share"] == 0.5
+    assert misses["total_escalations"] == 2
+    assert misses["repeat_escalations"] == 1
+    assert misses["repeat_escalation_share"] == 0.5
+
+
+def test_oracle_misses_count_a_mule_whose_snapshots_never_say_mule() -> None:
+    """A mule named only by payment truth is reported as missed without a mule-day snapshot."""
+    snapshots = [
+        _snapshot_row("acc_a", 1, "mule", 1),
+        _snapshot_row("acc_c", 1, "genuine", None),
+    ]
+    payments = [_payment_row("p1", "acc_a"), _payment_row("p2", "acc_c")]
+
+    report = oracle_report(snapshots, payments)
+
+    misses = report["misses"]
+    assert report["recall_at_capacity"] == 1.0
+    assert misses["ground_set_mules"] == 1
+    assert misses["found_mules"] == 1
+    assert misses["missed_with_mule_days"] == []
+    assert misses["missed_without_mule_day"] == ["acc_c"]
 
 
 def test_build_sanity_report_covers_every_validation_world() -> None:

@@ -26,9 +26,11 @@ from evaluation.rules_metrics import percentile_linear
 from evaluation.truth import load_truth
 from replay.dataset_builder import load_dataset
 
-__all__ = ["DELAY_PERCENTILES", "build_label_delay_report", "main", "measure_label_delay"]
+__all__ = ["ALLOWED_LABEL_SOURCES", "DELAY_PERCENTILES", "build_label_delay_report", "main", "measure_label_delay"]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+ALLOWED_LABEL_SOURCES: frozenset[str] = frozenset({"complaint", "police_bulk", "registry"})
 
 DELAY_PERCENTILES: tuple[float, ...] = (0.5, 0.9, 0.95)
 
@@ -97,29 +99,41 @@ def measure_label_delay(
 
     Returns:
         A dict with the number of accounts holding a first credit, the labelled count, the sorted
-        delay list in days, the percentiles, the min and max, and the sorted censored accounts.
+        delay list in days, the percentiles, the min and max, the sorted censored accounts, and the
+        accounts whose first label arrived before their first credit with that label's source.
 
     Raises:
-        ValueError: If a label row lacks account_id or a timezone-aware arrival_time.
+        ValueError: If a label row lacks account_id, a known source, or a timezone-aware arrival_time.
     """
     first_credit = first_illicit_credit(payment_rows, story_of)
     first_label: dict[str, datetime] = {}
+    first_label_source: dict[str, str] = {}
     for row in label_rows:
         account_id = _require_string(row, "account_id")
+        source = _require_string(row, "source")
+        if source not in ALLOWED_LABEL_SOURCES:
+            raise ValueError(f"Label source must be one of {sorted(ALLOWED_LABEL_SOURCES)}; got {source!r}")
         arrival = _require_datetime(row, "arrival_time")
         current = first_label.get(account_id)
         if current is None or arrival < current:
             first_label[account_id] = arrival
+            first_label_source[account_id] = source
 
-    delays: list[float] = []
+    delayed_accounts: list[tuple[float, str]] = []
     censored: list[str] = []
     for account_id, credit_moment in first_credit.items():
         labelled_at = first_label.get(account_id)
         if labelled_at is None:
             censored.append(account_id)
             continue
-        delays.append((labelled_at - credit_moment).total_seconds() / SECONDS_PER_DAY)
-    sorted_delays = sorted(delays)
+        delayed_accounts.append(((labelled_at - credit_moment).total_seconds() / SECONDS_PER_DAY, account_id))
+    delayed_accounts.sort()
+    sorted_delays = [delay for delay, _ in delayed_accounts]
+    negative_delays = [
+        {"account_id": account_id, "delay_days": delay, "label_source": first_label_source[account_id]}
+        for delay, account_id in delayed_accounts
+        if delay < 0.0
+    ]
     return {
         "accounts_with_first_credit": len(first_credit),
         "labelled_accounts": len(sorted_delays),
@@ -129,6 +143,8 @@ def measure_label_delay(
         "delay_percentiles_days": _percentiles(sorted_delays),
         "min_delay_days": sorted_delays[0] if sorted_delays else None,
         "max_delay_days": sorted_delays[-1] if sorted_delays else None,
+        "negative_delay_count": len(negative_delays),
+        "negative_delays": negative_delays,
     }
 
 
@@ -180,6 +196,7 @@ def build_label_delay_report(training_dirs: Sequence[Path], truth_root: Path) ->
             "accounts_with_first_credit": sum(block["accounts_with_first_credit"] for block in by_world),
             "labelled_accounts": len(pooled_sorted),
             "censored_count": sum(block["censored_count"] for block in by_world),
+            "negative_delay_count": sum(block["negative_delay_count"] for block in by_world),
             "delay_percentiles_days": _percentiles(pooled_sorted),
             "min_delay_days": pooled_sorted[0] if pooled_sorted else None,
             "max_delay_days": pooled_sorted[-1] if pooled_sorted else None,
