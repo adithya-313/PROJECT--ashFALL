@@ -50,9 +50,10 @@ def _write_config(path: Path, body: str) -> None:
 
 
 def test_config_default_cut_is_arrival_time() -> None:
-    """The committed config selects the exact arrival-time cut."""
+    """The committed config selects the exact arrival-time cut and leaves maturity off."""
     assert load_mule_model_config().label_cut == "arrival_time"
     assert load_mule_model_config(CONFIG_PATH).label_cut == "arrival_time"
+    assert load_mule_model_config().label_maturity_days is None
 
 
 def test_default_cut_drops_label_day_snapshot_after_arrival() -> None:
@@ -91,6 +92,35 @@ def test_unknown_label_cut_is_refused() -> None:
         build_training_rows([], [], label_cut="yesterday")
 
 
+def test_maturity_drops_each_worlds_own_trailing_days() -> None:
+    """The maturity window is applied against each world's last day, never a global one."""
+    snapshots: list[dict[str, object]] = []
+    for snapshot_day in range(1, 11):
+        snapshots.append(
+            _snapshot("acc_long", datetime(2026, 9, snapshot_day, 12, 0, tzinfo=timezone.utc), float(snapshot_day))
+        )
+    for snapshot_day in range(1, 6):
+        row = _snapshot("acc_short", datetime(2026, 9, snapshot_day, 12, 0, tzinfo=timezone.utc), float(snapshot_day))
+        row["world_id"] = "world-1"
+        snapshots.append(row)
+
+    _, _, row_keys = build_training_rows(snapshots, [], label_maturity_days=2)
+
+    kept: dict[str, list[str]] = {}
+    for world_id, _, _, day in row_keys:
+        kept.setdefault(world_id, []).append(day.isoformat())
+    assert kept == {
+        "world-0": [f"2026-09-{day:02d}" for day in range(1, 9)],
+        "world-1": ["2026-09-01", "2026-09-02", "2026-09-03"],
+    }
+
+
+def test_negative_label_maturity_is_refused() -> None:
+    """A negative maturity window is an error, never a silent no-op."""
+    with pytest.raises(ValueError, match="label_maturity_days must be a non-negative integer"):
+        build_training_rows([], [], label_maturity_days=-1)
+
+
 def test_config_loader_refuses_unknown_value(tmp_path: Path) -> None:
     """A config whose label_cut is not an allowed cut is refused."""
     config_path = tmp_path / "mule_model.yaml"
@@ -100,6 +130,12 @@ def test_config_loader_refuses_unknown_value(tmp_path: Path) -> None:
         "  label_cut:\n"
         "    label: policy\n"
         "    value: next_week\n"
+        "    derived_from: test\n"
+        "    reason: test\n"
+        "  label_maturity_days:\n"
+        "    label: policy\n"
+        "    value: null\n"
+        "    not_found: true\n"
         "    derived_from: test\n"
         "    reason: test\n",
     )

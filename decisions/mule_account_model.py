@@ -16,7 +16,7 @@ there is no silent fallback.
 
 import json
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -40,7 +40,7 @@ __all__ = [
 ]
 
 ALLOWED_LABEL_CUTS: frozenset[str] = frozenset({"arrival_time", "label_day"})
-ALLOWED_MULE_MODEL_KEYS: frozenset[str] = frozenset({"label_cut"})
+ALLOWED_MULE_MODEL_KEYS: frozenset[str] = frozenset({"label_cut", "label_maturity_days"})
 
 
 @dataclass(frozen=True)
@@ -51,9 +51,12 @@ class MuleModelConfig:
     Attributes:
         label_cut: How a positive account's rows are cut at its first label; one of
             ALLOWED_LABEL_CUTS.
+        label_maturity_days: Number of trailing IST days dropped at the end of every world, or None
+            when the maturity window is off because the label delay has not been measured yet.
     """
 
     label_cut: str
+    label_maturity_days: int | None
 
 
 def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
@@ -71,7 +74,7 @@ def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
 
     Raises:
         FileNotFoundError: If the config file does not exist.
-        ValueError: If the root, parameters, block metadata or label_cut value is missing or invalid.
+        ValueError: If the root, parameters, block metadata or a parameter value is missing or invalid.
     """
     if path is None:
         resolved_path = Path(__file__).resolve().parent.parent / "config" / "mule_model.yaml"
@@ -113,7 +116,20 @@ def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
     if not isinstance(label_cut, str) or label_cut not in ALLOWED_LABEL_CUTS:
         raise ValueError(f"label_cut in {resolved_path} must be one of {sorted(ALLOWED_LABEL_CUTS)}; got {label_cut!r}")
 
-    return MuleModelConfig(label_cut=label_cut)
+    maturity_block = parameters["label_maturity_days"]
+    maturity_value = maturity_block.get("value")
+    if maturity_value is None:
+        if maturity_block.get("not_found") is not True:
+            raise ValueError(f"label_maturity_days in {resolved_path} is null but not_found is not true")
+        label_maturity_days: int | None = None
+    elif isinstance(maturity_value, int) and not isinstance(maturity_value, bool) and maturity_value >= 0:
+        label_maturity_days = maturity_value
+    else:
+        raise ValueError(
+            f"label_maturity_days in {resolved_path} must be null or a non-negative integer; got {maturity_value!r}"
+        )
+
+    return MuleModelConfig(label_cut=label_cut, label_maturity_days=label_maturity_days)
 
 
 def account_model_feature_names() -> tuple[str, ...]:
@@ -236,6 +252,7 @@ def build_training_rows(
     snapshot_rows: list[dict[str, Any]],
     label_rows: list[dict[str, Any]],
     label_cut: str | None = None,
+    label_maturity_days: int | None = None,
 ) -> tuple[list[list[float]], list[int], list[tuple[str, str, str, date]]]:
     """
     WHAT: Builds the pilot model's training matrix and targets from snapshots and bank-visible labels.
@@ -251,6 +268,9 @@ def build_training_rows(
         label_cut: "arrival_time" drops a positive account's snapshots after the exact moment of its
             first label; "label_day" is the legacy cut after the IST day of that label. Defaults to
             the value in config/mule_model.yaml.
+        label_maturity_days: Drops each world's final N IST days, where labels have not had time to
+            arrive and positives are undercounted. Defaults to the value in config/mule_model.yaml,
+            where null keeps every day.
 
     Returns:
         (matrix, targets, row_keys) where matrix rows follow account_model_feature_names() order and
@@ -261,15 +281,24 @@ def build_training_rows(
         One row per account-day is selected inside each world, because account identifiers repeat
         across simulated worlds. A positive account keeps only snapshots up to its first label:
         under "arrival_time" the bank sees nothing after that instant, while "label_day" keeps the
-        whole IST day and exists only to reproduce the first pilot dataset.
+        whole IST day and exists only to reproduce the first pilot dataset. The maturity window is
+        measured per world against that world's own last snapshot day.
 
     Raises:
-        ValueError: If a required field is missing or malformed, or label_cut is not allowed.
+        ValueError: If a required field is missing or malformed, a switch is not allowed, or
+            label_maturity_days is negative.
     """
-    if label_cut is None:
-        label_cut = load_mule_model_config().label_cut
+    if label_cut is None or label_maturity_days is None:
+        config = load_mule_model_config()
+        if label_cut is None:
+            label_cut = config.label_cut
+        if label_maturity_days is None:
+            label_maturity_days = config.label_maturity_days
     if label_cut not in ALLOWED_LABEL_CUTS:
         raise ValueError(f"label_cut must be one of {sorted(ALLOWED_LABEL_CUTS)}; got {label_cut!r}")
+    if label_maturity_days is not None:
+        if not isinstance(label_maturity_days, int) or isinstance(label_maturity_days, bool) or label_maturity_days < 0:
+            raise ValueError(f"label_maturity_days must be a non-negative integer; got {label_maturity_days!r}")
 
     sources = sorted({_require_string(row, "source", "build_training_rows") for row in label_rows})
     verdicts = sorted({_require_string(row, "verdict", "build_training_rows") for row in label_rows})
@@ -300,12 +329,21 @@ def build_training_rows(
     targets: list[int] = []
     row_keys: list[tuple[str, str, str, date]] = []
     for world_id in sorted(rows_by_world):
-        day_rows = _one_row_per_account_day(rows_by_world[world_id])
+        world_rows = rows_by_world[world_id]
+        maturity_cutoff: date | None = None
+        if label_maturity_days is not None:
+            last_day = max(
+                _ist_day(_require_datetime(row, "snapshot_time", "build_training_rows")) for row in world_rows
+            )
+            maturity_cutoff = last_day - timedelta(days=label_maturity_days)
+        day_rows = _one_row_per_account_day(world_rows)
         for row in day_rows:
             bank_id = _require_string(row, "bank_id", "build_training_rows")
             account_id = _require_string(row, "account_id", "build_training_rows")
             moment = _require_datetime(row, "snapshot_time", "build_training_rows")
             day = _ist_day(moment)
+            if maturity_cutoff is not None and day > maturity_cutoff:
+                continue
             key = (world_id, account_id)
             is_positive = key in first_label_day
             if is_positive:
