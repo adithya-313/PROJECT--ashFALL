@@ -27,7 +27,9 @@ IDENTITY_FIELDS = ("split", "world_id", "seed", "preset_name", "sampler_seed", "
 
 def key_values_fingerprint(key_values: Iterable[tuple[str, float | int]]) -> str:
     """
-    WHAT: Returns the SHA-256 of a world's key values written as canonical JSON (sorted keys, no spaces).
+    WHAT: Returns the SHA-256 of a world's key values written as JSON: a list of [name, value] pairs in
+    the plan's order, with no spaces. sort_keys has no effect on a list, so the order is part of the
+    digest; that is safe because the plan always emits its key parameters in the same order.
     WHY: Key values are the sampled settings that make a world; the same world id and seed with different
     values describe a different world, so a checkpoint must fingerprint them to be refused on a mismatch.
     """
