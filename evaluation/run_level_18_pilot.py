@@ -30,9 +30,12 @@ from decisions.anomaly_config import load_anomaly_detector_config
 from decisions.anomaly_detector import TrainedAnomalyDetector, train_anomaly_detector
 from decisions.mule_account_model import (
     account_model_feature_names,
+    active_mule_model_config_path,
     build_training_rows,
+    load_mule_model_config,
     predict_account_days,
     save_model,
+    set_mule_model_config_path,
     train_account_model,
 )
 from decisions.rules_config import RulesConfig, load_rules_config, with_thresholds
@@ -752,6 +755,22 @@ def run_pilot(
         "shap": shap.__version__,
         "numpy": numpy.__version__,
     }
+    repo_root = Path(__file__).resolve().parents[1]
+    config_path = active_mule_model_config_path().resolve()
+    if config_path.is_relative_to(repo_root):
+        recorded_config_path = str(config_path.relative_to(repo_root))
+    else:
+        recorded_config_path = str(config_path)
+    committed_config_path = (repo_root / "config" / "mule_model.yaml").resolve()
+    mule_model_config = load_mule_model_config()
+    manifest["mule_model_config"] = {
+        "path": recorded_config_path,
+        "sha256": _sha256_of_file(config_path),
+        "overridden": config_path != committed_config_path,
+        "use_label_network_features": mule_model_config.use_label_network_features,
+        "label_cut": mule_model_config.label_cut,
+        "label_maturity_days": mule_model_config.label_maturity_days,
+    }
     manifest["pilot_account_model"] = {
         "n_estimators_scores": n_estimators_scores,
         "chosen_n_estimators": best_n_estimators,
@@ -861,15 +880,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--out-root", type=Path, required=True, help="root folder for the pilot result"
     )
-    args = parser.parse_args(argv)
-    return run_pilot(
-        tuple(args.training),
-        tuple(args.validation),
-        tuple(args.test),
-        args.truth_root,
-        args.world_cards_root,
-        args.out_root,
+    parser.add_argument(
+        "--mule-model-config",
+        type=Path,
+        default=None,
+        help="model config to use instead of the committed config/mule_model.yaml",
     )
+    args = parser.parse_args(argv)
+    if args.mule_model_config is not None:
+        set_mule_model_config_path(args.mule_model_config)
+    try:
+        return run_pilot(
+            tuple(args.training),
+            tuple(args.validation),
+            tuple(args.test),
+            args.truth_root,
+            args.world_cards_root,
+            args.out_root,
+        )
+    finally:
+        set_mule_model_config_path(None)
 
 
 if __name__ == "__main__":

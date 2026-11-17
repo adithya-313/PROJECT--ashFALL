@@ -31,11 +31,13 @@ __all__ = [
     "ALLOWED_LABEL_CUTS",
     "MuleModelConfig",
     "account_model_feature_names",
+    "active_mule_model_config_path",
     "build_training_rows",
     "load_model",
     "load_mule_model_config",
     "predict_account_days",
     "save_model",
+    "set_mule_model_config_path",
     "train_account_model",
 ]
 
@@ -124,15 +126,61 @@ def _validate_network_feature_names(
             raise ValueError(f"Feature {name!r} in {path} is not in the anomaly exclusion list")
 
 
+_COMMITTED_MULE_MODEL_CONFIG_PATH: Path = Path(__file__).resolve().parent.parent / "config" / "mule_model.yaml"
+_MULE_MODEL_CONFIG_OVERRIDE: Path | None = None
+
+
+def set_mule_model_config_path(path: Path | str | None) -> None:
+    """
+    WHAT: Points every loader in this process at one model config, or clears the override with None.
+
+    WHY: One override point rather than a config parameter on each function: every caller of
+    load_mule_model_config must see the same file during a run, and threading a parameter through
+    the feature-name builder, the training-row builder and every evaluation caller risks one call
+    site keeping the committed file and silently mixing two configs in one result.
+
+    The override is process-wide state, set once at start-up and cleared when the run ends; it is
+    not safe to change while a run is in progress.
+
+    Args:
+        path: Config file to use instead of the committed config; None restores the committed path.
+
+    Raises:
+        FileNotFoundError: If a given path does not exist, naming that path.
+    """
+    global _MULE_MODEL_CONFIG_OVERRIDE
+    if path is None:
+        _MULE_MODEL_CONFIG_OVERRIDE = None
+        return
+    resolved = Path(path)
+    if not resolved.exists():
+        raise FileNotFoundError(f"Mule model configuration not found at: {resolved}")
+    _MULE_MODEL_CONFIG_OVERRIDE = resolved
+
+
+def active_mule_model_config_path() -> Path:
+    """
+    WHAT: Returns the config file load_mule_model_config reads when no explicit path is given.
+
+    WHY: The run manifest records which config actually produced a result, so the overridden and
+    committed cases must both be answerable from one place.
+    """
+    if _MULE_MODEL_CONFIG_OVERRIDE is not None:
+        return _MULE_MODEL_CONFIG_OVERRIDE
+    return _COMMITTED_MULE_MODEL_CONFIG_PATH
+
+
 def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
     """
-    WHAT: Loads and validates the account model's policy switches from config/mule_model.yaml.
+    WHAT: Loads and validates the account model's policy switches from the active config file.
 
     WHY: Whether the cut uses the label's exact arrival time is a modelling decision, so it is read
     from a tracked config file instead of being typed into the builder.
 
     Args:
-        path: Optional config path; defaults to config/mule_model.yaml in the repository root.
+        path: Optional config path; an explicit path wins over the process-wide override; when
+            omitted the active path is config/mule_model.yaml unless set_mule_model_config_path
+            pointed elsewhere.
 
     Returns:
         The validated switches.
@@ -142,7 +190,7 @@ def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
         ValueError: If the root, parameters, block metadata or a parameter value is missing or invalid.
     """
     if path is None:
-        resolved_path = Path(__file__).resolve().parent.parent / "config" / "mule_model.yaml"
+        resolved_path = active_mule_model_config_path()
     else:
         resolved_path = Path(path)
 

@@ -8,19 +8,21 @@ through. Tiny fixtures are almost all fraud, so these tests assert structure, ne
 """
 
 import dataclasses
+import hashlib
 import json
 import shutil
 from pathlib import Path
 
 import pyarrow.parquet as pq
 import pytest
+import yaml
 
 import decisions.mule_account_model as mule_account_model
 from core.event_clock import IST
 from decisions.mule_account_model import _one_row_per_account_day
 from decisions.rules_config import load_rules_config
 from evaluation.level17_scoring import one_row_per_account_day
-from evaluation.run_level_18_pilot import run_pilot
+from evaluation.run_level_18_pilot import main, run_pilot
 from showcase.level_17_checks import TEST_DATASET, TRAINING_DATASET, VALIDATION_DATASET
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -137,6 +139,51 @@ def test_local_account_day_selection_matches_evaluation_selection() -> None:
         local_row is evaluation_row
         for local_row, evaluation_row in zip(local_rows, evaluation_rows, strict=True)
     )
+
+
+def test_main_with_switch_off_config_records_the_override_and_clears_it(tmp_path: Path) -> None:
+    """--mule-model-config is recorded in the manifest, used by the run, and cleared afterwards."""
+    raw = yaml.safe_load((REPO_ROOT / "config" / "mule_model.yaml").read_text(encoding="utf-8"))
+    raw["parameters"]["use_label_network_features"]["value"] = False
+    switch_off = tmp_path / "mule_model_off.yaml"
+    switch_off.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    expected_sha256 = hashlib.sha256(switch_off.read_bytes()).hexdigest()
+
+    exit_code = main(
+        [
+            "--training",
+            str(TRAINING),
+            "--validation",
+            str(VALIDATION),
+            "--test",
+            str(TEST),
+            "--truth-root",
+            str(TRUTH_ROOT),
+            "--world-cards-root",
+            str(WORLD_CARDS_ROOT),
+            "--out-root",
+            str(tmp_path),
+            "--mule-model-config",
+            str(switch_off),
+        ]
+    )
+
+    assert exit_code == 0
+    result_dir = _single_result_dir(tmp_path)
+    result = json.loads((result_dir / "result.json").read_text(encoding="utf-8"))
+    recorded = result["manifest"]["mule_model_config"]
+    assert recorded["overridden"] is True
+    assert recorded["use_label_network_features"] is False
+    assert recorded["sha256"] == expected_sha256
+
+    leakage = json.loads((result_dir / "leakage_checks.json").read_text(encoding="utf-8"))
+    assert leakage["checks"]["section_23_check_7"] == {
+        "status": "not run",
+        "reason": "label network features are off",
+    }
+
+    committed = (REPO_ROOT / "config" / "mule_model.yaml").resolve()
+    assert mule_account_model.active_mule_model_config_path().resolve() == committed
 
 
 def test_overlapping_test_and_validation_splits_are_refused(tmp_path: Path) -> None:
