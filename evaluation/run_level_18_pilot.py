@@ -43,6 +43,7 @@ from evaluation.level17_evaluation import (
     world_start_by_world,
 )
 from evaluation.level17_scoring import ScoredDay, one_row_per_account_day, score_account_days
+from evaluation.level18_sanity import load_escalation_repeat_policy
 from evaluation.rules_tuning import (
     TuningConfig,
     load_tuning_config,
@@ -360,6 +361,7 @@ def _evaluate_test_worlds(
     """
     per_world: dict[str, dict[str, Any]] = {}
     test_day_rows: list[dict[str, Any]] = []
+    repeat_policy = load_escalation_repeat_policy()
     for dataset_dir, dataset in test_pairs:
         payments, snapshots = join_truth(dataset_dir, truth_root)
         payment_rows = payments.to_pylist()
@@ -404,6 +406,7 @@ def _evaluate_test_worlds(
                     snapshot_times,
                     first_credit,
                     reported,
+                    repeat_policy=repeat_policy,
                 )
             scorers["xgboost"] = evaluate_world(
                 xgboost_scored,
@@ -417,6 +420,7 @@ def _evaluate_test_worlds(
                 snapshot_times,
                 first_credit,
                 reported,
+                repeat_policy=repeat_policy,
             )
             per_world[world_id] = {"run_id": run_id, "split": "test", "scorers": scorers}
     return per_world, test_day_rows

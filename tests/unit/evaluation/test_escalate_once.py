@@ -7,10 +7,11 @@ WHY: A-043 replaces re-queuing a known account with review that lasts for the re
 the switch must be provably inert until a Level 18 caller asks for it.
 """
 
-from datetime import date
+from datetime import date, datetime, timezone
 
 import pytest
 
+from evaluation.level17_evaluation import evaluate_world
 from evaluation.level17_scoring import ScoredDay, daily_escalations
 from evaluation.rules_metrics import recall_at_capacity
 
@@ -66,3 +67,59 @@ def test_unknown_repeat_policy_is_refused() -> None:
     """An unrecognised policy is an error, never a silent default."""
     with pytest.raises(ValueError, match="Unknown repeat policy"):
         daily_escalations(_two_mule_days(), "rules", None, 10.0, repeat_policy="never_again")
+
+
+def test_evaluate_world_forwards_the_repeat_policy() -> None:
+    """The C1 world gives recall 0.5 under every_day and 1.0 under once_per_world through evaluate_world."""
+    scored = _two_mule_days() + [
+        ScoredDay(
+            bank_id="bank_a",
+            account_id="acc_g",
+            day=day,
+            rules_score=0,
+            rules_fired=(),
+            anomaly_score=None,
+            role="genuine",
+            depth=None,
+        )
+        for day in DAYS
+    ]
+    snapshot_times = {
+        (scored_day.account_id, scored_day.day): datetime(2026, 9, scored_day.day.day, 12, 0, tzinfo=timezone.utc)
+        for scored_day in scored
+    }
+    first_credit = {
+        "acc_a": datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc),
+        "acc_b": datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc),
+    }
+
+    every_day = evaluate_world(
+        scored,
+        "rules",
+        None,
+        10.0,
+        1.0,
+        lambda _account: "genuine",
+        {},
+        1,
+        snapshot_times,
+        first_credit,
+        set(),
+    )
+    once_per_world = evaluate_world(
+        scored,
+        "rules",
+        None,
+        10.0,
+        1.0,
+        lambda _account: "genuine",
+        {},
+        1,
+        snapshot_times,
+        first_credit,
+        set(),
+        repeat_policy="once_per_world",
+    )
+
+    assert every_day["recall_at_capacity"] == 0.5
+    assert once_per_world["recall_at_capacity"] == 1.0

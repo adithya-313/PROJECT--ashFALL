@@ -214,6 +214,7 @@ def evaluate_world(
     snapshot_time_by_account_day: Mapping[tuple[str, date], datetime],
     first_credit: Mapping[str, datetime],
     reported: set[str],
+    repeat_policy: str = "every_day",
 ) -> dict[str, Any]:
     """
     WHAT: Scores one world's account-days with one scorer and returns the six headline metrics.
@@ -235,6 +236,8 @@ def evaluate_world(
             used as the detection flag time.
         first_credit: Mule account -> first illicit credit time.
         reported: Accounts already reported to the national registry.
+        repeat_policy: Escalation repeats policy forwarded to daily_escalations; "every_day" is the
+            Level 17 behaviour, "once_per_world" is the A-043 Level 18 policy.
 
     Returns:
         A dict with keys recall_at_capacity, yield_rate, genuine_harm,
@@ -257,7 +260,7 @@ def evaluate_world(
         anomaly_restricted = anomaly_restricted_days(scored, anomaly_threshold)
 
     restricted = _merge_restrictions(rules_restricted, anomaly_restricted)
-    escalations = daily_escalations(scored, scorer, anomaly_threshold, capacity_pct)
+    escalations = daily_escalations(scored, scorer, anomaly_threshold, capacity_pct, repeat_policy=repeat_policy)
     escalation_pairs = [
         (account_id, day)
         for day, account_ids in escalations.items()

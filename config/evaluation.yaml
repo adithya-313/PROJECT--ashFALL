@@ -547,6 +547,22 @@ validation_worlds:
   reason: Tuning needs a split of its own, otherwise it would happen on training or test worlds and leak into the final judgement.
 
 # ---------------------------------------------------------------------
+# escalation_repeats: does an escalated account return to the queue?
+#   value: once_per_world -> an account escalated on one day is under
+#                           review for the rest of its world and is not a
+#                           candidate again; the slot goes to the next
+#                           account in rank order.
+#   Level 17 keeps every_day: it re-ranks every bank-day from scratch.
+#   Source: amendment A-043.
+# ---------------------------------------------------------------------
+escalation_repeats:
+  label: policy
+  issue_ids_v2: [17-3]
+  derived_from: "A-043 (2026-11-17); Level 18a4 oracle check on pilot validation worlds"
+  value: once_per_world
+  reason: "An escalated account is under review for the rest of the world, as in real review; the previous every_day behaviour re-queued known accounts and capped a truth oracle at 69% recall at capacity."
+
+# ---------------------------------------------------------------------
 # earlier_work_note: the old v1 model does not count
 #   The first model (v1, trained on PaySim) and its settings existed
 #   before these rules. It is left out of every comparison above. These
