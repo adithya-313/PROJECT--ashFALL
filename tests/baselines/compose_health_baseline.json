@@ -10,6 +10,8 @@
   "postgres": true,
   "prometheus": false,
   "redis": true,
+  "redis-2": true,
+  "redis-3": true,
   "redpanda": true,
   "tempo": false,
   "triton": false
