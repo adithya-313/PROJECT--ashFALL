@@ -5,6 +5,7 @@ Purpose: Unit tests for the Level 16 resumable-build checkpoints: an exact save/
          and the cutoff a resumed build derives from saved world ends.
 """
 
+import dataclasses
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -19,10 +20,13 @@ from scripts.dataset_checkpoints import (
     DatasetCheckpoint,
     checkpoint_path,
     checkpoint_temp_path,
+    key_values_fingerprint,
     load_checkpoint,
     save_checkpoint,
     verify_checkpoint_identity,
 )
+
+KEY_VALUES = [("world_population", 60), ("fraud_rate", 0.05)]
 
 
 def _extract() -> WorldExtract:
@@ -74,6 +78,7 @@ def _checkpoint(extract: WorldExtract, *, seed: int = 101) -> DatasetCheckpoint:
         preset_name="tiny",
         sampler_seed=2,
         code_version="abc123",
+        key_values_sha256=key_values_fingerprint(KEY_VALUES),
         run_id=extract.run_id,
         world_end=datetime(2026, 10, 1, 0, 0, tzinfo=IST),
         record_seconds=12.5,
@@ -111,11 +116,63 @@ def test_identity_mismatch_names_the_field_and_both_values() -> None:
             preset_name="tiny",
             sampler_seed=2,
             code_version="abc123",
+            key_values_sha256=key_values_fingerprint(KEY_VALUES),
         )
 
     message = str(error.value)
     assert "seed: checkpoint=101 current=202" in message
     assert "preset_name" not in message
+
+
+def test_identity_accepts_the_same_key_values() -> None:
+    """Verifies a checkpoint whose key values match the spec's is accepted."""
+    checkpoint = _checkpoint(_extract())
+
+    verify_checkpoint_identity(
+        checkpoint,
+        split="test",
+        world_id="test-0000",
+        seed=101,
+        preset_name="tiny",
+        sampler_seed=2,
+        code_version="abc123",
+        key_values_sha256=key_values_fingerprint(KEY_VALUES),
+    )
+
+
+def test_identity_mismatch_names_the_changed_key_values() -> None:
+    """Verifies a checkpoint sampled with different key values is refused, naming key_values_sha256 and both values."""
+    checkpoint = _checkpoint(_extract())
+    changed = key_values_fingerprint([("world_population", 60), ("fraud_rate", 0.5)])
+
+    with pytest.raises(ValueError) as error:
+        verify_checkpoint_identity(
+            checkpoint,
+            split="test",
+            world_id="test-0000",
+            seed=101,
+            preset_name="tiny",
+            sampler_seed=2,
+            code_version="abc123",
+            key_values_sha256=changed,
+        )
+
+    message = str(error.value)
+    assert f"key_values_sha256: checkpoint={key_values_fingerprint(KEY_VALUES)!r} current={changed!r}" in message
+    assert "seed:" not in message
+
+
+def test_format_version_one_checkpoint_is_refused(tmp_path: Path) -> None:
+    """Verifies a checkpoint written in format version 1 is refused at load, naming both versions."""
+    path = checkpoint_path(tmp_path, "test", "test-0000")
+    save_checkpoint(path, dataclasses.replace(_checkpoint(_extract()), format_version=1))
+
+    with pytest.raises(ValueError) as error:
+        load_checkpoint(path)
+
+    message = str(error.value)
+    assert "format version is 1" in message
+    assert f"this build reads version {CHECKPOINT_FORMAT_VERSION}" in message
 
 
 def test_leftover_temp_file_is_ignored_and_never_loaded(tmp_path: Path) -> None:

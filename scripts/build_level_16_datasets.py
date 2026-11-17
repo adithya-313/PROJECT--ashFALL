@@ -46,6 +46,7 @@ from scripts.dataset_checkpoints import (
     CHECKPOINT_FORMAT_VERSION,
     DatasetCheckpoint,
     checkpoint_path,
+    key_values_fingerprint,
     load_checkpoint,
     save_checkpoint,
     verify_checkpoint_identity,
@@ -71,7 +72,7 @@ from world.replay_recording import RecordedWorld, record_sampled_world_for_repla
 from world.replay_workspace import ReplayWorkspace, load_replay_settings, workspace_redis_client
 from world.sampled_world import fast_settings_for, pinned_configs, resolve_sampled_world_gangs
 from world.truth_writer import truth_root_from_env, write_truth_files
-from world.world_sampler import WorldSpec, load_sampler_config, sample_worlds
+from world.world_sampler import WorldSpec, load_sampler_config, sample_block, sample_worlds
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -191,6 +192,101 @@ def plan_datasets(
     return plan
 
 
+def parse_blocks(text: str) -> dict[str, list[int]]:
+    """
+    WHAT: Parses "validation=1-2,test=0-0,training=1-1" into {split: [block numbers]}.
+    WHY: The committed Level 12f plan is blocks of block_size worlds, each block its own Latin
+    hypercube; the build must name the blocks it wants without a count that changes the plan.
+    Args:
+        text: Comma-separated split=start-end pieces with inclusive block ranges.
+    Returns:
+        Block numbers per split, in the order the splits were given.
+    Raises:
+        ValueError: On an empty piece, a malformed piece, an unknown split, a repeated split, a
+        negative block number, or a range whose start is after its end.
+    """
+    allowed_splits = set(load_sampler_config()["seed_blocks"])
+    blocks: dict[str, list[int]] = {}
+    for item in text.split(","):
+        piece = item.strip()
+        if not piece:
+            raise ValueError(f"empty block piece in {text!r}")
+        split_name, separator, range_text = piece.partition("=")
+        if not separator:
+            raise ValueError(f"block piece {piece!r} is not split=start-end")
+        split_name = split_name.strip()
+        if split_name not in allowed_splits:
+            raise ValueError(f"unknown split {split_name!r}; expected some of {sorted(allowed_splits)}")
+        if split_name in blocks:
+            raise ValueError(f"split {split_name!r} appears more than once")
+        start_text, dash, end_text = range_text.strip().partition("-")
+        if not dash:
+            raise ValueError(f"block range {range_text.strip()!r} for split {split_name!r} is not start-end")
+        try:
+            start = int(start_text.strip())
+            end = int(end_text.strip())
+        except ValueError:
+            raise ValueError(
+                f"block range {range_text.strip()!r} for split {split_name!r} is not two integers"
+            ) from None
+        if start < 0 or end < 0:
+            raise ValueError(
+                f"block numbers for split {split_name!r} must be at least 0, got {range_text.strip()!r}"
+            )
+        if start > end:
+            raise ValueError(
+                f"block range for split {split_name!r} starts at {start} after it ends at {end}"
+            )
+        blocks[split_name] = list(range(start, end + 1))
+    return blocks
+
+
+def plan_blocks(
+    blocks: dict[str, list[int]],
+    sampler_seed: int,
+    sampler_cfg: dict[str, Any],
+    world_ranges: dict[str, Any],
+) -> dict[str, list[WorldSpec]]:
+    """
+    WHAT: Builds the plan of the named blocks: each split gets its blocks concatenated in ascending order.
+    WHY: Every committed block is a complete Latin hypercube, so building blocks 0..n covers each key
+    parameter's whole range at every n; world ids keep the "<split>-bNN-NNNN" form sample_block gives.
+    """
+    plan: dict[str, list[WorldSpec]] = {}
+    for split, numbers in blocks.items():
+        specs: list[WorldSpec] = []
+        for number in sorted(numbers):
+            specs.extend(sample_block(split, number, sampler_seed, sampler_cfg, world_ranges))
+        plan[split] = specs
+    return plan
+
+
+def plan_run(
+    counts: dict[str, int],
+    blocks: dict[str, list[int]] | None,
+    sampler_seed: int,
+    sampler_cfg: dict[str, Any],
+    world_ranges: dict[str, Any],
+) -> dict[str, list[WorldSpec]]:
+    """
+    WHAT: The plan for one run: the block plan when blocks are named, otherwise the per-split plan.
+    WHY: The build and the seed scan must plan the same worlds, and a legacy count above one block is
+    refused because such a plan is not the committed Level 12f block plan.
+    Raises:
+        ValueError: When no blocks are named and a per-split count is larger than block_size.
+    """
+    if blocks is not None:
+        return plan_blocks(blocks, sampler_seed, sampler_cfg, world_ranges)
+    block_size = int(sampler_cfg["block_size"]["value"])
+    oversized = {split: count for split, count in counts.items() if count > block_size}
+    if oversized:
+        raise ValueError(
+            f"world counts above the {block_size}-world block ({oversized}) are not the committed "
+            "Level 12f block plan; build these worlds with --blocks"
+        )
+    return plan_datasets(counts, sampler_cfg, world_ranges, sampler_seed=sampler_seed)
+
+
 def _gang_mix_fits(spec: WorldSpec, preset_name: str, sampler_cfg: dict[str, Any]) -> bool:
     """
     WHAT: Reports whether one planned world can generate its gang mix from the preset's people.
@@ -215,6 +311,7 @@ def find_fitting_sampler_seed(
     start_seed: int,
     max_tries: int,
     datasets_cfg: dict[str, int] | None = None,
+    blocks: dict[str, list[int]] | None = None,
 ) -> int:
     """
     WHAT: Returns the first sampler seed whose planned worlds in the given splits all have enough
@@ -228,10 +325,11 @@ def find_fitting_sampler_seed(
         start_seed: First sampler seed to try.
         max_tries: Number of consecutive seeds to try, starting at start_seed.
         datasets_cfg: Split counts to plan, or None to read config/datasets.yaml.
+        blocks: Block numbers per split to plan instead of the split counts, or None for the legacy plan.
     Returns:
         The first seed in [start_seed, start_seed + max_tries) where every planned world fits.
     Raises:
-        ValueError: If a split is unknown, or if no seed fits within max_tries.
+        ValueError: If a split is unknown or not listed in blocks, or if no seed fits within max_tries.
     """
     counts = load_datasets_config() if datasets_cfg is None else datasets_cfg
     sampler_cfg = load_sampler_config()
@@ -240,10 +338,17 @@ def find_fitting_sampler_seed(
     unknown_splits = [split for split in splits if split not in counts]
     if unknown_splits:
         raise ValueError(f"Unknown split(s) {', '.join(unknown_splits)}; expected some of {sorted(counts)}")
+    if blocks is not None:
+        missing_blocks = [split for split in splits if split not in blocks]
+        if missing_blocks:
+            raise ValueError(
+                f"--blocks does not list split(s) {', '.join(missing_blocks)}; "
+                f"it lists {', '.join(sorted(blocks))}"
+            )
 
     splits_text = ", ".join(splits)
     for seed in range(start_seed, start_seed + max_tries):
-        plan = plan_datasets(counts, sampler_cfg, world_ranges, sampler_seed=seed)
+        plan = plan_run(counts, blocks, seed, sampler_cfg, world_ranges)
         if all(_gang_mix_fits(spec, preset_name, sampler_cfg) for split in splits for spec in plan[split]):
             return seed
     raise ValueError(
@@ -289,19 +394,48 @@ def derive_dataset_cutoff(recorded_worlds: Sequence[RecordedWorld]) -> datetime:
     return cutoff_from_world_ends([world_end_for_recorded(w) for w in recorded_worlds])
 
 
+def manifest_world_seeds(manifest_data: dict[str, Any]) -> set[int] | None:
+    """
+    WHAT: Returns the seeds of the worlds a dataset manifest lists, or None when it has no worlds list.
+    WHY: A dataset supersedes another only when the two recorded some of the same worlds; datasets of
+    other seeds describe other worlds and must stay usable alongside the new one.
+    Raises:
+        ValueError: If the worlds list is present but not a list, or a world has no seed.
+    """
+    worlds = manifest_data.get("worlds")
+    if worlds is None:
+        return None
+    if not isinstance(worlds, list):
+        raise ValueError(f"manifest worlds is {type(worlds).__name__}, not a list")
+    seeds: set[int] = set()
+    for world in worlds:
+        if "seed" not in world:
+            raise ValueError(f"manifest world {world.get('world_id')!r} has no seed")
+        seeds.add(int(world["seed"]))
+    return seeds
+
+
 def supersede_prior_datasets(
     split: str,
     new_dir: Path,
     datasets_root: Path = DEFAULT_DATASETS_ROOT,
 ) -> list[Path]:
     """
-    WHAT: Inspects existing dataset directories under datasets_root and marks prior datasets
-    of the same split as superseded by new_dir.
-    WHY: Guarantees historical lineage without deleting past artifacts, preventing accidental
-    usage of superseded data per Rule R8.
+    WHAT: Inspects existing dataset directories under datasets_root and marks prior datasets of the same
+    split that share a world seed with new_dir as superseded by it.
+    WHY: Guarantees historical lineage without deleting past artifacts, preventing accidental usage of
+    superseded data per Rule R8; datasets of other seeds are not superseded because they hold other
+    worlds. A manifest without a worlds list cannot be compared, so it keeps the old same-split rule.
+    Raises:
+        ValueError: If the new dataset has no manifest, or its worlds list is malformed.
     """
     if not datasets_root.exists():
         return []
+
+    new_manifest_path = new_dir / "manifest.json"
+    if not new_manifest_path.is_file():
+        raise ValueError(f"new dataset {new_dir} has no manifest.json to compare world seeds with")
+    new_seeds = manifest_world_seeds(orjson.loads(new_manifest_path.read_bytes()))
 
     superseded: list[Path] = []
     for candidate in sorted(datasets_root.iterdir()):
@@ -316,6 +450,9 @@ def supersede_prior_datasets(
         except Exception:
             continue
         if manifest_data.get("split") == split:
+            candidate_seeds = manifest_world_seeds(manifest_data)
+            if new_seeds is not None and candidate_seeds is not None and candidate_seeds.isdisjoint(new_seeds):
+                continue
             if manifest_data.get("superseded_by") != new_dir.name:
                 mark_superseded(candidate, new_dir)
                 superseded.append(candidate)
@@ -805,6 +942,7 @@ async def checkpoint_split_worlds(
                 preset_name=preset_name,
                 sampler_seed=sampler_seed,
                 code_version=code_version,
+                key_values_sha256=key_values_fingerprint(spec.key_values),
             )
             print(
                 f"Resumed world {spec.world_id} from {checkpoint_file} "
@@ -849,6 +987,7 @@ async def checkpoint_split_worlds(
                 preset_name=preset_name,
                 sampler_seed=sampler_seed,
                 code_version=code_version,
+                key_values_sha256=key_values_fingerprint(spec.key_values),
                 run_id=rec.output.result.run_id,
                 world_end=world_end,
                 record_seconds=record_seconds,
@@ -995,6 +1134,7 @@ async def build_all_level_16_datasets(
     parallel_workers: int | None = None,
     base_argv: Sequence[str] = (),
     redis_urls_flag: str | None = None,
+    blocks: dict[str, list[int]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """
     WHAT: Builds datasets for all configured splits sequentially, returning execution metrics per split.
@@ -1005,7 +1145,10 @@ async def build_all_level_16_datasets(
     When parallel_workers is above 1, each split runs that many child builds and is then assembled here.
     redis_urls_flag overrides the config's replay_redis_urls for this run, so a multi-Redis build needs
     no tracked-file edit.
+    blocks names the committed Level 12f blocks to build; it replaces the per-split counts.
     """
+    if blocks is not None and worlds_per_split is not None:
+        raise ValueError("--blocks and --worlds-per-split cannot be used together")
     if redis_urls_flag is not None and (parallel_workers is None or parallel_workers <= 1):
         raise ValueError("--replay-redis-urls requires --parallel-workers above 1")
     redis_urls: Sequence[str] = []
@@ -1013,7 +1156,10 @@ async def build_all_level_16_datasets(
         redis_urls = resolve_replay_redis_urls(redis_urls_flag, load_dataset_build_config())
         validate_parallel_workers(parallel_workers, redis_urls)
     counts = load_datasets_config() if worlds_per_split is None else worlds_per_split
-    print(f"Worlds per split: {counts} (source: {'flag' if worlds_per_split is not None else 'config'})")
+    if blocks is not None:
+        print(f"World blocks per split: {blocks} (source: flag)")
+    else:
+        print(f"Worlds per split: {counts} (source: {'flag' if worlds_per_split is not None else 'config'})")
     sampler_cfg = load_sampler_config()
     world_ranges = read_world_ranges()
     code_ver = get_code_version()
@@ -1022,8 +1168,14 @@ async def build_all_level_16_datasets(
     if write_evaluation_inputs:
         truth_root = truth_root_from_env(os.environ)
 
-    target_splits = list(splits) if splits is not None else list(counts.keys())
-    plan = plan_datasets(counts, sampler_cfg, world_ranges, sampler_seed=sampler_seed)
+    target_splits = list(splits) if splits is not None else list(blocks if blocks is not None else counts)
+    if blocks is not None:
+        missing_blocks = [split for split in target_splits if split not in blocks]
+        if missing_blocks:
+            raise ValueError(
+                f"--splits names {', '.join(missing_blocks)}, but --blocks lists {', '.join(sorted(blocks))}"
+            )
+    plan = plan_run(counts, blocks, sampler_seed, sampler_cfg, world_ranges)
 
     results: dict[str, dict[str, Any]] = {}
     for split in target_splits:
@@ -1220,6 +1372,13 @@ def main() -> None:
         default=None,
         help='Override worlds per split for this run, for example "training=6,validation=3,test=3"',
     )
+    parser.add_argument(
+        "--blocks",
+        type=str,
+        default=None,
+        help='Build committed Level 12f blocks, for example "validation=1-2,test=0-0,training=1-1" '
+        "(cannot be combined with --worlds-per-split)",
+    )
     args = parser.parse_args()
 
     checkpoint_dir = Path(args.checkpoint_dir) if args.checkpoint_dir else None
@@ -1233,14 +1392,29 @@ def main() -> None:
         parser.error("--parallel-workers starts the shard workers itself, so --world-shard cannot be given")
     if args.parallel_workers is not None and args.assemble_only:
         parser.error("--parallel-workers already assembles after its workers, so --assemble-only cannot be given")
+    if args.blocks is not None and args.worlds_per_split is not None:
+        parser.error("--blocks and --worlds-per-split cannot be used together")
 
+    blocks = parse_blocks(args.blocks) if args.blocks is not None else None
     selected_splits = [s.strip() for s in args.splits.split(",")] if args.splits else None
+    if blocks is not None and selected_splits is None:
+        selected_splits = list(blocks)
     worlds_per_split = parse_worlds_per_split(args.worlds_per_split) if args.worlds_per_split is not None else None
     if args.find_sampler_seed:
-        default_splits = list(load_datasets_config().keys()) if worlds_per_split is None else list(worlds_per_split)
+        if blocks is not None:
+            default_splits = list(blocks)
+        elif worlds_per_split is None:
+            default_splits = list(load_datasets_config().keys())
+        else:
+            default_splits = list(worlds_per_split)
         scan_splits = selected_splits if selected_splits is not None else default_splits
         seed = find_fitting_sampler_seed(
-            scan_splits, args.preset, args.sampler_seed, args.max_seed_tries, datasets_cfg=worlds_per_split
+            scan_splits,
+            args.preset,
+            args.sampler_seed,
+            args.max_seed_tries,
+            datasets_cfg=worlds_per_split,
+            blocks=blocks,
         )
         print(f"fitting sampler seed: {seed}")
         return
@@ -1261,6 +1435,7 @@ def main() -> None:
                 parallel_workers=args.parallel_workers,
                 base_argv=sys.argv[1:],
                 redis_urls_flag=args.replay_redis_urls,
+                blocks=blocks,
             )
         )
     except BuildStopped:

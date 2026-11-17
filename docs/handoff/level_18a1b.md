@@ -446,3 +446,35 @@ Preset tiny, sampler seed 2, training split only, `--parallel-workers 2`,
   shows server 2 really served work: `cmdstat_zrange:calls=1941222`, `cmdstat_set:calls=34673`,
   `cmdstat_evalsha:calls=21952`.
 - The ON switch edit was local to that run and was reverted; the committed value is `[]`.
+
+## Block plan
+
+- `--blocks "split=start-end,..."` builds committed Level 12f blocks: each block comes from
+  `sample_block`, so a block is its own Latin hypercube and world ids keep the `<split>-bNN-NNNN`
+  form (`validation-b01-0003`). `--blocks` cannot be combined with `--worlds-per-split`, `--splits`
+  must name a subset of the blocks, and `--find-sampler-seed` plans exactly the blocks the build will.
+- Without `--blocks`, a per-split count above `block_size` (40) is refused: the legacy plan of 40
+  worlds per split is block 0 world for world (same seeds and key values, legacy ids `<split>-NNNN`),
+  and a larger count would build worlds that are not part of the committed plan.
+- Plan check:
+  `PYTHONPATH=. py -3.12 scripts/build_level_16_datasets.py --blocks validation=1-2,test=1-2,stress=1-2,training=1-7 --preset small --find-sampler-seed --sampler-seed 1 --max-seed-tries 1`
+  prints `fitting sampler seed: 1`.
+- Checkpoint format version 2: the identity now includes `key_values_sha256`, the SHA-256 of the
+  world's key values as canonical JSON. Both production callers (the build's resume check and
+  `load_plan_checkpoints` at assembly) compute it from the plan's `WorldSpec.key_values`, never from
+  the checkpoint file, so a checkpoint of the same world id and seed sampled with other settings is
+  refused with `key_values_sha256: checkpoint=... current=...`. Version 1 checkpoints are refused at
+  load, so an old `--checkpoint-dir` starts fresh.
+- Superseding: `supersede_prior_datasets` marks an older same-split dataset only when the two
+  manifests list at least one common world seed. A dataset of disjoint seeds stays usable; a manifest
+  without a `worlds` list cannot be compared and keeps the old same-split rule.
+
+### Laptop acceptance (Windows laptop, SIMULATED, tiny, training split only)
+Legacy plan (no `--blocks`), preset tiny, sampler seed 2, `--parallel-workers 2`,
+`--write-evaluation-inputs`, fresh folders under `runs/blk/`.
+- Exit 0, split wall 808.22s. Worker logs: `runs/blk/checkpoints/training/worker-0.log` and
+  `worker-1.log`. Dataset `training-20261031T1830-f22ba692d7f9`: payments 5990, snapshots 5527,
+  labels 22; `Superseded: 0 older datasets`.
+- `scripts/compare_datasets_normalised.py` against
+  `showcase/fixtures/level_17/datasets/training-20261031T1830-624c2ad40f4c` prints
+  `VERDICT: IDENTICAL` with 0 differing rows in each table.

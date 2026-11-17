@@ -8,18 +8,33 @@ by scripts/build_level_16_datasets.py on the owner's machine. Never load a check
 from anywhere else: unpickling can execute code.
 """
 
+import hashlib
+import json
 import os
 import pickle
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Iterable
 
 from replay.dataset_builder import WorldExtract
 
-CHECKPOINT_FORMAT_VERSION = 1
+CHECKPOINT_FORMAT_VERSION = 2
 CHECKPOINT_SUFFIX = ".pkl"
 CHECKPOINT_TEMP_SUFFIX = ".pkl.tmp"
-IDENTITY_FIELDS = ("split", "world_id", "seed", "preset_name", "sampler_seed", "code_version")
+IDENTITY_FIELDS = ("split", "world_id", "seed", "preset_name", "sampler_seed", "code_version", "key_values_sha256")
+
+
+def key_values_fingerprint(key_values: Iterable[tuple[str, float | int]]) -> str:
+    """
+    WHAT: Returns the SHA-256 of a world's key values written as JSON: a list of [name, value] pairs in
+    the plan's order, with no spaces. sort_keys has no effect on a list, so the order is part of the
+    digest; that is safe because the plan always emits its key parameters in the same order.
+    WHY: Key values are the sampled settings that make a world; the same world id and seed with different
+    values describe a different world, so a checkpoint must fingerprint them to be refused on a mismatch.
+    """
+    canonical = json.dumps([[name, value] for name, value in key_values], sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -36,6 +51,7 @@ class DatasetCheckpoint:
     preset_name: str
     sampler_seed: int
     code_version: str
+    key_values_sha256: str
     run_id: str
     world_end: datetime
     record_seconds: float
@@ -103,11 +119,13 @@ def verify_checkpoint_identity(
     preset_name: str,
     sampler_seed: int,
     code_version: str,
+    key_values_sha256: str,
 ) -> None:
     """
     WHAT: Compares a checkpoint's identity fields with the current build's spec and settings.
     WHY: A changed seed, preset or sampler seed describes a different world, so its checkpoint
-    must be refused instead of reused.
+    must be refused instead of reused; a changed key-value fingerprint means the same world id and
+    seed now sample different settings, which is equally a different world.
     """
     expected: dict[str, object] = {
         "split": split,
@@ -116,6 +134,7 @@ def verify_checkpoint_identity(
         "preset_name": preset_name,
         "sampler_seed": sampler_seed,
         "code_version": code_version,
+        "key_values_sha256": key_values_sha256,
     }
     mismatches = [
         f"{field}: checkpoint={getattr(checkpoint, field)!r} current={expected[field]!r}"
