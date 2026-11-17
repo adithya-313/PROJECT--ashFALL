@@ -30,13 +30,17 @@ from decisions.anomaly_config import load_anomaly_detector_config
 from decisions.anomaly_detector import TrainedAnomalyDetector, train_anomaly_detector
 from decisions.mule_account_model import (
     account_model_feature_names,
+    active_mule_model_config_path,
     build_training_rows,
+    load_mule_model_config,
     predict_account_days,
     save_model,
+    set_mule_model_config_path,
     train_account_model,
 )
 from decisions.rules_config import RulesConfig, load_rules_config, with_thresholds
 from evaluation.dataset_truth_join import join_truth
+from evaluation.leakage_checks import COMPLAINED_FEATURE, check_label_features_by_arrival
 from evaluation.level17_evaluation import (
     evaluate_world,
     first_illicit_credit,
@@ -751,6 +755,22 @@ def run_pilot(
         "shap": shap.__version__,
         "numpy": numpy.__version__,
     }
+    repo_root = Path(__file__).resolve().parents[1]
+    config_path = active_mule_model_config_path().resolve()
+    if config_path.is_relative_to(repo_root):
+        recorded_config_path = str(config_path.relative_to(repo_root))
+    else:
+        recorded_config_path = str(config_path)
+    committed_config_path = (repo_root / "config" / "mule_model.yaml").resolve()
+    mule_model_config = load_mule_model_config()
+    manifest["mule_model_config"] = {
+        "path": recorded_config_path,
+        "sha256": _sha256_of_file(config_path),
+        "overridden": config_path != committed_config_path,
+        "use_label_network_features": mule_model_config.use_label_network_features,
+        "label_cut": mule_model_config.label_cut,
+        "label_maturity_days": mule_model_config.label_maturity_days,
+    }
     manifest["pilot_account_model"] = {
         "n_estimators_scores": n_estimators_scores,
         "chosen_n_estimators": best_n_estimators,
@@ -787,15 +807,27 @@ def run_pilot(
 
     truth_leak = _truth_leak_check()
     trivial_world = _trivial_world_check(training_matrix, training_targets)
+    if COMPLAINED_FEATURE in account_model_feature_names():
+        check_7_training = check_label_features_by_arrival(training_snapshot_rows, training_label_rows)
+        check_7_validation = check_label_features_by_arrival(validation_snapshot_rows, validation_label_rows)
+        check_7_status = "fail" if "fail" in {check_7_training["status"], check_7_validation["status"]} else "pass"
+        check_7 = {
+            "status": check_7_status,
+            "training": check_7_training,
+            "validation": check_7_validation,
+        }
+    else:
+        check_7 = {"status": "not run", "reason": "label network features are off"}
     checks = {
         "split_leak": split_leak,
         "truth_leak": truth_leak,
         "trivial_world": trivial_world,
         "section_23_checks_4_to_7": {
             "status": "not run",
-            "reason": "pilot",
-            "checks": [4, 5, 6, 7],
+            "reason": "later round",
+            "checks": [4, 5, 6],
         },
+        "section_23_check_7": check_7,
     }
     _write_leakage(leakage_path, checks)
 
@@ -848,15 +880,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--out-root", type=Path, required=True, help="root folder for the pilot result"
     )
-    args = parser.parse_args(argv)
-    return run_pilot(
-        tuple(args.training),
-        tuple(args.validation),
-        tuple(args.test),
-        args.truth_root,
-        args.world_cards_root,
-        args.out_root,
+    parser.add_argument(
+        "--mule-model-config",
+        type=Path,
+        default=None,
+        help="model config to use instead of the committed config/mule_model.yaml",
     )
+    args = parser.parse_args(argv)
+    if args.mule_model_config is not None:
+        set_mule_model_config_path(args.mule_model_config)
+    try:
+        return run_pilot(
+            tuple(args.training),
+            tuple(args.validation),
+            tuple(args.test),
+            args.truth_root,
+            args.world_cards_root,
+            args.out_root,
+        )
+    finally:
+        set_mule_model_config_path(None)
 
 
 if __name__ == "__main__":

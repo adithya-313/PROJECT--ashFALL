@@ -31,17 +31,29 @@ __all__ = [
     "ALLOWED_LABEL_CUTS",
     "MuleModelConfig",
     "account_model_feature_names",
+    "active_mule_model_config_path",
     "build_training_rows",
     "load_model",
     "load_mule_model_config",
     "predict_account_days",
     "save_model",
+    "set_mule_model_config_path",
     "train_account_model",
 ]
 
 ALLOWED_LABEL_CUTS: frozenset[str] = frozenset({"arrival_time", "label_day"})
 ALLOWED_MULE_MODEL_KEYS: frozenset[str] = frozenset(
-    {"feature_fill_flag_share", "label_cut", "label_maturity_days"}
+    {
+        "feature_fill_flag_share",
+        "label_cut",
+        "label_maturity_days",
+        "use_label_network_features",
+        "label_network_features",
+        "feedback_network_features_not_used",
+    }
+)
+OPTIONAL_MULE_MODEL_KEYS: frozenset[str] = frozenset(
+    {"use_label_network_features", "label_network_features", "feedback_network_features_not_used"}
 )
 
 
@@ -57,22 +69,118 @@ class MuleModelConfig:
             when the maturity window is off because the label delay has not been measured yet.
         feature_fill_flag_share: Share of rows at or above which a feature's most common value makes
             the feature unable to separate anything, so the sanity report flags it.
+        use_label_network_features: Whether the account model may use the configured label-based
+            network features, or None when the config file does not carry the switch.
+        label_network_features: Bank-visible label-based network features the model may use.
+        feedback_network_features_not_used: Label-based network features built from bank_feedback,
+            which no built world writes; recorded so the omission is explicit.
     """
 
     label_cut: str
     label_maturity_days: int | None
     feature_fill_flag_share: float
+    use_label_network_features: bool | None
+    label_network_features: tuple[str, ...]
+    feedback_network_features_not_used: tuple[str, ...]
+
+
+def _parse_feature_name_list(block: dict[str, Any], key: str, path: Path) -> tuple[str, ...]:
+    """
+    WHAT: Returns a non-empty, duplicate-free list of feature names from a config block.
+
+    Raises:
+        ValueError: If the value is not a non-empty list of non-empty distinct strings.
+    """
+    value = block.get("value")
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"Block '{key}' in {path} must hold a non-empty list of feature names")
+    for name in value:
+        if not isinstance(name, str) or not name:
+            raise ValueError(f"Block '{key}' in {path} holds a feature name that is not a non-empty string")
+    if len(set(value)) != len(value):
+        raise ValueError(f"Block '{key}' in {path} holds duplicate feature names")
+    return tuple(value)
+
+
+def _validate_network_feature_names(
+    label_network_features: tuple[str, ...],
+    feedback_network_features_not_used: tuple[str, ...],
+    path: Path,
+) -> None:
+    """
+    WHAT: Requires every listed network feature to exist in the canonical catalogue and in the
+    anomaly detector's exclusion list.
+
+    WHY: The model may only add features the catalogue defines, and adding one the anomaly
+    detector still uses would silently change that detector's no-labels contract.
+
+    Raises:
+        ValueError: Naming the first listed feature that fails either check.
+    """
+    canonical = set(account_feature_names())
+    excluded = set(load_anomaly_detector_config().excluded_features)
+    for name in (*label_network_features, *feedback_network_features_not_used):
+        if name not in canonical:
+            raise ValueError(f"Feature {name!r} in {path} is not in the canonical account feature catalogue")
+        if name not in excluded:
+            raise ValueError(f"Feature {name!r} in {path} is not in the anomaly exclusion list")
+
+
+_COMMITTED_MULE_MODEL_CONFIG_PATH: Path = Path(__file__).resolve().parent.parent / "config" / "mule_model.yaml"
+_MULE_MODEL_CONFIG_OVERRIDE: Path | None = None
+
+
+def set_mule_model_config_path(path: Path | str | None) -> None:
+    """
+    WHAT: Points every loader in this process at one model config, or clears the override with None.
+
+    WHY: One override point rather than a config parameter on each function: every caller of
+    load_mule_model_config must see the same file during a run, and threading a parameter through
+    the feature-name builder, the training-row builder and every evaluation caller risks one call
+    site keeping the committed file and silently mixing two configs in one result.
+
+    The override is process-wide state, set once at start-up and cleared when the run ends; it is
+    not safe to change while a run is in progress.
+
+    Args:
+        path: Config file to use instead of the committed config; None restores the committed path.
+
+    Raises:
+        FileNotFoundError: If a given path does not exist, naming that path.
+    """
+    global _MULE_MODEL_CONFIG_OVERRIDE
+    if path is None:
+        _MULE_MODEL_CONFIG_OVERRIDE = None
+        return
+    resolved = Path(path)
+    if not resolved.exists():
+        raise FileNotFoundError(f"Mule model configuration not found at: {resolved}")
+    _MULE_MODEL_CONFIG_OVERRIDE = resolved
+
+
+def active_mule_model_config_path() -> Path:
+    """
+    WHAT: Returns the config file load_mule_model_config reads when no explicit path is given.
+
+    WHY: The run manifest records which config actually produced a result, so the overridden and
+    committed cases must both be answerable from one place.
+    """
+    if _MULE_MODEL_CONFIG_OVERRIDE is not None:
+        return _MULE_MODEL_CONFIG_OVERRIDE
+    return _COMMITTED_MULE_MODEL_CONFIG_PATH
 
 
 def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
     """
-    WHAT: Loads and validates the account model's policy switches from config/mule_model.yaml.
+    WHAT: Loads and validates the account model's policy switches from the active config file.
 
     WHY: Whether the cut uses the label's exact arrival time is a modelling decision, so it is read
     from a tracked config file instead of being typed into the builder.
 
     Args:
-        path: Optional config path; defaults to config/mule_model.yaml in the repository root.
+        path: Optional config path; an explicit path wins over the process-wide override; when
+            omitted the active path is config/mule_model.yaml unless set_mule_model_config_path
+            pointed elsewhere.
 
     Returns:
         The validated switches.
@@ -82,7 +190,7 @@ def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
         ValueError: If the root, parameters, block metadata or a parameter value is missing or invalid.
     """
     if path is None:
-        resolved_path = Path(__file__).resolve().parent.parent / "config" / "mule_model.yaml"
+        resolved_path = active_mule_model_config_path()
     else:
         resolved_path = Path(path)
 
@@ -107,6 +215,8 @@ def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
         raise ValueError(f"Unknown keys in {resolved_path}: {sorted(unknown_keys)}")
 
     for key in ALLOWED_MULE_MODEL_KEYS:
+        if key in OPTIONAL_MULE_MODEL_KEYS and key not in parameters:
+            continue
         block = parameters.get(key)
         if not isinstance(block, dict):
             raise ValueError(f"Missing parameter block '{key}' in {resolved_path}")
@@ -145,28 +255,76 @@ def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
             f"feature_fill_flag_share in {resolved_path} must be a number in (0.0, 1.0]; got {fill_share_value!r}"
         )
 
+    use_label_network_features: bool | None = None
+    if "use_label_network_features" in parameters:
+        switch_value = parameters["use_label_network_features"].get("value")
+        if not isinstance(switch_value, bool):
+            raise ValueError(
+                f"use_label_network_features in {resolved_path} must be a boolean; got {switch_value!r}"
+            )
+        use_label_network_features = switch_value
+
+    label_network_features: tuple[str, ...] = ()
+    if "label_network_features" in parameters:
+        label_network_features = _parse_feature_name_list(
+            parameters["label_network_features"], "label_network_features", resolved_path
+        )
+    elif use_label_network_features is True:
+        raise ValueError(
+            f"label_network_features in {resolved_path} is required when use_label_network_features is true"
+        )
+
+    feedback_network_features_not_used: tuple[str, ...] = ()
+    if "feedback_network_features_not_used" in parameters:
+        feedback_network_features_not_used = _parse_feature_name_list(
+            parameters["feedback_network_features_not_used"], "feedback_network_features_not_used", resolved_path
+        )
+
+    _validate_network_feature_names(label_network_features, feedback_network_features_not_used, resolved_path)
+
     return MuleModelConfig(
         label_cut=label_cut,
         label_maturity_days=label_maturity_days,
         feature_fill_flag_share=float(fill_share_value),
+        use_label_network_features=use_label_network_features,
+        label_network_features=label_network_features,
+        feedback_network_features_not_used=feedback_network_features_not_used,
     )
 
 
-def account_model_feature_names() -> tuple[str, ...]:
+def account_model_feature_names(use_label_network_features: bool | None = None) -> tuple[str, ...]:
     """
-    WHAT: Returns the canonical account features minus the anomaly config's excluded features.
+    WHAT: Returns the canonical account features minus the anomaly config's excluded features, plus
+    the configured label network features when that switch is on.
 
     WHY: The pilot must use the same bank-visible feature contract as the anomaly detector, and the
-    exclusion list is policy read from config/anomaly_detector.yaml rather than copied here.
+    exclusion list is policy read from config/anomaly_detector.yaml rather than copied here. The
+    label network switch is policy too, so it is read from config/mule_model.yaml unless the caller
+    states it explicitly.
+
+    Args:
+        use_label_network_features: Overrides the config switch when given; when None the committed
+            config decides.
 
     Returns:
-        Canonical feature names in catalog order, with every configured exclusion removed.
+        Canonical feature names in catalog order, with every configured exclusion removed except
+        the label network features the switch admits.
 
     Raises:
-        ValueError: If the anomaly config is missing or malformed (raised by its loader).
+        ValueError: If the anomaly config is missing or malformed (raised by its loader), the switch
+            is absent from the config and not given, or a configured network feature fails
+            validation (raised by the config loader).
     """
+    config = load_mule_model_config()
+    if use_label_network_features is None:
+        if config.use_label_network_features is None:
+            raise ValueError("use_label_network_features is missing from the mule model configuration")
+        use_label_network_features = config.use_label_network_features
     excluded = set(load_anomaly_detector_config().excluded_features)
-    return tuple(name for name in account_feature_names() if name not in excluded)
+    if not use_label_network_features:
+        return tuple(name for name in account_feature_names() if name not in excluded)
+    admitted = set(config.label_network_features)
+    return tuple(name for name in account_feature_names() if name not in excluded or name in admitted)
 
 
 def _require_string(row: dict[str, Any], key: str, caller: str) -> str:

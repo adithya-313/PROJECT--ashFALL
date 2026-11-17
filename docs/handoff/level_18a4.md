@@ -198,3 +198,81 @@ Rule thresholds are unaffected: rules are tuned on restricted days and genuine h
 (`rules_tuning._validation_metrics`), which do not depend on the repeats policy. A-043 changes reported
 recall, yield and time-to-detection only. The rules baseline is re-tuned on validation under A-043
 later in 17-3.
+
+## Level 18a4 round 2: label-based network features behind a switch (SIMULATED)
+
+Branch `feature/level-18a4-network-features`, base `f95c657` of `feature/level-18-mule-models`.
+Commits: `7f068cf` (feature switch and 42-feature catalogue), `0682179` (Section 23 check 7),
+`57e7a3a` (pilot records check 7 as not run when the switch is off), `8d4026a`
+(`--mule-model-config` recorded in the run manifest).
+
+### The switch
+- `config/mule_model.yaml` keeps three labelled `policy` blocks: `use_label_network_features: true`,
+  `label_network_features` (3 names) and `feedback_network_features_not_used` (2 names). Only the
+  first list joins the model; the feedback pair is documented as empty because no replay component
+  writes `bank_feedback` in these levels.
+- `account_model_feature_names(use_label_network_features=None)` follows the switch: off returns the
+  39 canonical features minus the anomaly exclusions, on returns 42 in catalogue order (the three
+  label-based names at the end, all in the anomaly exclusion list). `build_training_rows` builds its
+  matrix from the same function, so the rows and the feature names cannot drift apart.
+- `set_mule_model_config_path(path)` / `active_mule_model_config_path()` are the one process-wide
+  override point; `load_mule_model_config` reads the active path when no explicit path is given, so
+  the feature builder, the row builder, the pilot's audit and check 7 all see one config. The pilot
+  CLI exposes `--mule-model-config PATH`, sets it before any data is read and clears it in a
+  `finally` block.
+- Every pilot result now records `manifest.mule_model_config`:
+  `path` (repo-relative when inside the repo), `sha256` of the file's bytes, `overridden`,
+  `use_label_network_features`, `label_cut`, `label_maturity_days`.
+
+### Feature list on (42), verbatim output of
+```
+PYTHONPATH=. py -3.12 -B -c "from decisions.mule_account_model import account_model_feature_names; names=account_model_feature_names(); print(len(names)); print('\n'.join(names))"
+```
+42
+distinct_payers_1h, distinct_payers_24h, distinct_payers_7d, first_time_payer_share_24h,
+small_credit_count_24h, small_credit_count_7d, largest_credit_paise_24h,
+below_threshold_credit_count_7d, pass_through_ratio_24h, pass_through_ratio_7d,
+median_credit_to_debit_seconds_7d, top_receiver_share_7d, other_bank_outflow_share_7d,
+outflow_to_person_paise_7d, outflow_to_merchant_paise_7d, cash_atm_paise_7d, cash_branch_paise_7d,
+current_balance_paise, min_balance_paise_7d, near_zero_cycles_7d, salary_like_payer_count,
+recurring_merchant_payee_count, regular_transfer_payee_count, routine_life_present,
+history_days_available, account_age_days, dormancy_days_before_recent_activity,
+volume_vs_own_history_ratio, days_since_device_change, accounts_on_same_device,
+device_hardware_changed, sim_swapped, app_reinstalled_same_phone, new_device_r5,
+distinct_fingerprints_lifetime, machine_regular_timing_score, distinct_same_bank_payer_regions_7d,
+unknown_region_payer_count_7d, local_cluster_density, hops_to_complained_account,
+registry_match_count, registry_match_age_days.
+
+### Section 23 check 7
+`check_label_features_by_arrival` fails when a snapshot sees a complained label that had not arrived
+by the snapshot time (complained = source `complaint`, `via` null, per world and account), when a
+feedback feature carries more than one distinct non-null value (no source data otherwise), or when a
+positive training row has zero complained hops; registry visibility is delegated to the
+`test_registry_as_of.py` function tests. The pilot writes `section_23_check_7` with training and
+validation blocks, and records `{"status": "not run", "reason": "label network features are off"}`
+when the switch is off.
+
+### OFF and ON pilot (SIMULATED, 3 test worlds; not a conclusion)
+Both runs at `code_version 8d4026a`, clean tree. OFF used a copy of the committed config with only
+`use_label_network_features` set to false (`runs/pilot18/r2_off/mule_model_off.yaml`, sha256
+`a0452314e00e…`, 39 features); ON used the committed config (`ec2d274a19ad…`, 42 features).
+
+| across-world median | rules | anomaly | rules+anomaly | XGBoost OFF | XGBoost ON |
+|---|---|---|---|---|---|
+| recall at capacity | 0.4286 | 0.0 | 0.4286 | 0.0714 | 0.0714 |
+| yield measured | 0.5 | no numeric values | 0.5 | 1.0 | 1.0 |
+| yield re-weighted | 0.0493 | no numeric values | 0.0493 | 1.0 | 1.0 |
+| genuine restriction rate | 0.0235 | 0.0 | 0.0235 | 0.0 | 0.0 |
+| median time to detection (h) | 14.47 | no numeric values | 14.47 | 22.53 | 364.47 (2 worlds) |
+| XGBoost validation average precision | – | – | – | 0.034679 | 0.033514 |
+| check 7 | – | – | – | not run | pass (training and validation) |
+| wall seconds | – | – | – | 2954 | 2076 |
+
+Top 10 SHAP features, ON: `account_age_days` 2.4972, `history_days_available` 1.9362,
+`days_since_device_change` 1.6923, `min_balance_paise_7d` 1.1776, `local_cluster_density` 0.8600,
+`volume_vs_own_history_ratio` 0.7237, `current_balance_paise` 0.5940,
+`outflow_to_person_paise_7d` 0.5723, `outflow_to_merchant_paise_7d` 0.4936,
+`distinct_fingerprints_lifetime` 0.4241.
+
+The rules and anomaly numbers are identical in both runs because neither scorer reads the switch.
+Three worlds are far too few to read the XGBoost difference as a signal either way.
