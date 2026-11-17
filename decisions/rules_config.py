@@ -21,6 +21,7 @@ import yaml
 from features.feature_log import canonical_feature_names
 
 __all__ = [
+    "ALLOWED_MATCH_VALUES",
     "ALLOWED_OPERATORS",
     "Rule",
     "RuleCondition",
@@ -32,6 +33,7 @@ __all__ = [
 ]
 
 ALLOWED_OPERATORS: frozenset[str] = frozenset({">=", "<=", "=="})
+ALLOWED_MATCH_VALUES: frozenset[str] = frozenset({"all", "any"})
 
 
 @dataclass(frozen=True)
@@ -89,12 +91,15 @@ class Rule:
         reason_code: Machine-readable reason code (e.g. 'RB1_FAST_PASS_THROUGH').
         plain_english: Human-readable description of rule logic.
         conditions: Ordered tuple of predicates that must all hold for the rule to fire.
+        match: How conditions combine: 'all' requires every condition, 'any' fires when at least
+            one condition whose feature is present passes. Defaults to 'all'.
     """
 
     id: str
     reason_code: str
     plain_english: str
     conditions: tuple[RuleCondition, ...]
+    match: str = "all"
 
 
 @dataclass(frozen=True)
@@ -210,7 +215,7 @@ def _rule_with_new_threshold_values(rule: Rule, new_values: dict[str, float | in
 
     RETURNS:
         Rule: The original rule when no condition references a replaced threshold, otherwise a new Rule
-        whose referencing conditions carry the new threshold_value.
+        whose referencing conditions carry the new threshold_value and whose match mode is copied.
 
     CONSTRAINTS:
         A condition with a literal threshold (threshold_key None) and a rule with no affected
@@ -239,6 +244,7 @@ def _rule_with_new_threshold_values(rule: Rule, new_values: dict[str, float | in
         reason_code=rule.reason_code,
         plain_english=rule.plain_english,
         conditions=tuple(rebuilt_conditions),
+        match=rule.match,
     )
 
 
@@ -255,16 +261,19 @@ def load_rules_config(path: Path | str | None = None) -> RulesConfig:
         2. Validates threshold structure: required fields (label, derived_from, status, value).
         3. Validates rule conditions: unknown features, unknown threshold keys, unknown operators.
         4. Validates rule integrity: duplicate rule ids, duplicate reason codes, rules with no conditions.
-        5. Constructs immutable frozen dataclass instances.
+        5. Reads the optional per-rule match mode ('all' or 'any'), defaulting to 'all'.
+        6. Constructs immutable frozen dataclass instances.
 
     SIDE EFFECTS / ERRORS:
         Raises FileNotFoundError: If the target YAML file does not exist.
         Raises ValueError: On any validation error (unknown feature, unknown threshold key,
-                           unknown op, duplicate rule id/reason code, empty conditions, missing threshold fields).
+                           unknown op, unknown match value, duplicate rule id/reason code, empty
+                           conditions, missing threshold fields).
 
     CONSTRAINTS:
         Feature names are strictly verified against canonical_feature_names().
         Operators must be in ALLOWED_OPERATORS ('>=', '<=', '==').
+        Match values must be in ALLOWED_MATCH_VALUES ('all', 'any').
     """
     if path is None:
         root_dir = Path(__file__).resolve().parent.parent
@@ -353,6 +362,12 @@ def load_rules_config(path: Path | str | None = None) -> RulesConfig:
 
         plain_english = str(rule_entry.get("plain_english", "")).strip()
 
+        match = rule_entry.get("match", "all")
+        if not isinstance(match, str) or match not in ALLOWED_MATCH_VALUES:
+            raise ValueError(
+                f"Unknown match '{match}' in rule '{rule_id}'; must be one of {sorted(ALLOWED_MATCH_VALUES)}"
+            )
+
         raw_conditions = rule_entry.get("conditions")
         if not raw_conditions or not isinstance(raw_conditions, list) or len(raw_conditions) == 0:
             raise ValueError(f"Rule '{rule_id}' has no conditions configured")
@@ -401,6 +416,7 @@ def load_rules_config(path: Path | str | None = None) -> RulesConfig:
                 reason_code=reason_code,
                 plain_english=plain_english,
                 conditions=tuple(parsed_conditions),
+                match=match,
             )
         )
 
