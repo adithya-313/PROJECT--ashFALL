@@ -503,3 +503,15 @@ No model code exists yet (models start in Level 18; `world/` is simulator code).
 | What changed | The four take-control share ranges of A-040 now live in `config/takeover_realism.yaml` under `parameters`, not in `config/world_ranges.yaml`, with the same label, unit, training/test/stress ranges, reason, issue ids and derived_from; `config/world_ranges.yaml` is back to 79 settings. `world/gang_mix.py` reads the new file through `load_takeover_shares`, only when `takeover_realism` is true, and the file is deliberately not part of WorldConfigs. Everything else in A-040 stands. |
 | Why | `config/world_ranges.yaml` is part of the effective config hashed into the run id, so adding the four entries there changed every fraud-on run id even with the switch off. |
 | Results exist? | No |
+
+## A-042
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-17 |
+| Issue IDs | 16-4 |
+| Issue IDs v2 | 16-4 |
+| Files | `scripts/build_level_16_datasets.py`, `scripts/dataset_checkpoints.py`, `scripts/dataset_shards.py`, `tests/unit/test_block_plan.py`, `tests/unit/test_dataset_build_plan.py`, `tests/unit/test_dataset_checkpoints.py`, `tests/unit/test_dataset_shards.py`, `docs/handoff/level_18a1b.md`, `docs/research/amendments.md` |
+| What changed | The dataset build now follows the committed Level 12f block plan. (a) A new `--blocks` flag names committed blocks per split (`validation=1-2,test=1-2,stress=1-2,training=1-7`); each block is built with `sample_block`, so world ids keep the `<split>-bNN-NNNN` form and every block is its own Latin hypercube. (b) Without `--blocks`, a per-split count above `block_size` is refused: only a count of at most one block is the committed plan, and the legacy plan of 40 worlds per split has block 0's key values and seeds world for world. (c) `--blocks` cannot be combined with `--worlds-per-split`, and `--splits` must be a subset of the named blocks; `--find-sampler-seed` plans the same blocks the build will. (d) Checkpoint format version 2 adds `key_values_sha256`, the SHA-256 of the world's key values as canonical JSON, to the checkpoint identity; both production callers (the build resume and the assembly check) compute it from the plan's spec, never from the checkpoint file, and a version 1 checkpoint is refused at load. (e) Superseding a prior dataset now requires a shared world seed: a same-split dataset whose manifest lists no common seed is left alone, and a manifest without a worlds list keeps the old same-split rule. (f) The legacy acceptance build (`--preset tiny --sampler-seed 2 --splits training --parallel-workers 2`) is identical to the Level 17 fixture `showcase/fixtures/level_17/datasets/training-20261031T1830-624c2ad40f4c`, and the block plan check with `--preset small --sampler-seed 1 --max-seed-tries 1` fits at sampler seed 1. |
+| Why | Issue 16-4 needs Level 18a1b datasets built from the committed Level 12f block plan instead of ad hoc counts, resumable checkpoints that refuse a reused world whose sampled settings changed, and superseding that never hides an earlier dataset of different worlds. |
+| Results exist? | No |

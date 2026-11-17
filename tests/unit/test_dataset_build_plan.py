@@ -161,6 +161,46 @@ def test_supersede_prior_datasets_handles_empty_root(tmp_path: Path) -> None:
     assert supersede_prior_datasets("training", new_dir, datasets_root=empty_dir) == []
 
 
+def _write_manifest(folder: Path, split: str, seeds: list[int] | None) -> Path:
+    """Creates a dataset folder whose manifest lists one world per seed, or no worlds list when seeds is None."""
+    folder.mkdir()
+    manifest: dict[str, Any] = {"split": split}
+    if seeds is not None:
+        manifest["worlds"] = [
+            {"world_id": f"{split}-{position:04d}", "split": split, "seed": seed}
+            for position, seed in enumerate(seeds)
+        ]
+    (folder / "manifest.json").write_bytes(orjson.dumps(manifest))
+    return folder
+
+
+def test_supersede_skips_a_dataset_of_other_world_seeds(tmp_path: Path) -> None:
+    """An older same-split dataset of disjoint seeds holds other worlds, so it is not marked superseded."""
+    old = _write_manifest(tmp_path / "training-20260901T0000", "training", [1000000, 1000001])
+    new = _write_manifest(tmp_path / "training-20261101T0000", "training", [3000000, 3000001])
+
+    assert supersede_prior_datasets("training", new, datasets_root=tmp_path) == []
+    assert "superseded_by" not in orjson.loads((old / "manifest.json").read_bytes())
+
+
+def test_supersede_marks_a_dataset_sharing_one_world_seed(tmp_path: Path) -> None:
+    """An older same-split dataset that recorded even one of the new seeds is superseded."""
+    old = _write_manifest(tmp_path / "training-20260901T0000", "training", [1000000, 1000001])
+    new = _write_manifest(tmp_path / "training-20261101T0000", "training", [1000001, 1000002])
+
+    assert supersede_prior_datasets("training", new, datasets_root=tmp_path) == [old]
+    assert orjson.loads((old / "manifest.json").read_bytes()).get("superseded_by") == new.name
+
+
+def test_supersede_marks_a_legacy_manifest_without_worlds(tmp_path: Path) -> None:
+    """A manifest written before worlds were listed cannot be compared, so the old same-split rule marks it."""
+    old = _write_manifest(tmp_path / "training-20260901T0000", "training", None)
+    new = _write_manifest(tmp_path / "training-20261101T0000", "training", [3000000])
+
+    assert supersede_prior_datasets("training", new, datasets_root=tmp_path) == [old]
+    assert orjson.loads((old / "manifest.json").read_bytes()).get("superseded_by") == new.name
+
+
 def test_derive_dataset_cutoff_uses_max_world_end() -> None:
     """Verifies that derive_dataset_cutoff derives the maximum simulation end timestamp."""
     # World 1: starts 2026-09-01, 61 days -> ends 2026-11-01 00:00:00 IST

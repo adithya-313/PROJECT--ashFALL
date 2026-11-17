@@ -394,19 +394,48 @@ def derive_dataset_cutoff(recorded_worlds: Sequence[RecordedWorld]) -> datetime:
     return cutoff_from_world_ends([world_end_for_recorded(w) for w in recorded_worlds])
 
 
+def manifest_world_seeds(manifest_data: dict[str, Any]) -> set[int] | None:
+    """
+    WHAT: Returns the seeds of the worlds a dataset manifest lists, or None when it has no worlds list.
+    WHY: A dataset supersedes another only when the two recorded some of the same worlds; datasets of
+    other seeds describe other worlds and must stay usable alongside the new one.
+    Raises:
+        ValueError: If the worlds list is present but not a list, or a world has no seed.
+    """
+    worlds = manifest_data.get("worlds")
+    if worlds is None:
+        return None
+    if not isinstance(worlds, list):
+        raise ValueError(f"manifest worlds is {type(worlds).__name__}, not a list")
+    seeds: set[int] = set()
+    for world in worlds:
+        if "seed" not in world:
+            raise ValueError(f"manifest world {world.get('world_id')!r} has no seed")
+        seeds.add(int(world["seed"]))
+    return seeds
+
+
 def supersede_prior_datasets(
     split: str,
     new_dir: Path,
     datasets_root: Path = DEFAULT_DATASETS_ROOT,
 ) -> list[Path]:
     """
-    WHAT: Inspects existing dataset directories under datasets_root and marks prior datasets
-    of the same split as superseded by new_dir.
-    WHY: Guarantees historical lineage without deleting past artifacts, preventing accidental
-    usage of superseded data per Rule R8.
+    WHAT: Inspects existing dataset directories under datasets_root and marks prior datasets of the same
+    split that share a world seed with new_dir as superseded by it.
+    WHY: Guarantees historical lineage without deleting past artifacts, preventing accidental usage of
+    superseded data per Rule R8; datasets of other seeds are not superseded because they hold other
+    worlds. A manifest without a worlds list cannot be compared, so it keeps the old same-split rule.
+    Raises:
+        ValueError: If the new dataset has no manifest, or its worlds list is malformed.
     """
     if not datasets_root.exists():
         return []
+
+    new_manifest_path = new_dir / "manifest.json"
+    if not new_manifest_path.is_file():
+        raise ValueError(f"new dataset {new_dir} has no manifest.json to compare world seeds with")
+    new_seeds = manifest_world_seeds(orjson.loads(new_manifest_path.read_bytes()))
 
     superseded: list[Path] = []
     for candidate in sorted(datasets_root.iterdir()):
@@ -421,6 +450,9 @@ def supersede_prior_datasets(
         except Exception:
             continue
         if manifest_data.get("split") == split:
+            candidate_seeds = manifest_world_seeds(manifest_data)
+            if new_seeds is not None and candidate_seeds is not None and candidate_seeds.isdisjoint(new_seeds):
+                continue
             if manifest_data.get("superseded_by") != new_dir.name:
                 mark_superseded(candidate, new_dir)
                 superseded.append(candidate)
