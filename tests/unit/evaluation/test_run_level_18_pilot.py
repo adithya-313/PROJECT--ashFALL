@@ -211,3 +211,79 @@ def test_overlapping_test_and_validation_splits_are_refused(tmp_path: Path) -> N
     leakage = json.loads(leakage_paths[0].read_text(encoding="utf-8"))
     assert leakage["checks"]["split_leak"]["status"] == "fail"
     assert leakage["checks"]["split_leak"]["overlaps"]
+
+
+def _write_rules_switch_config(tmp_path: Path, rules_switch: bool) -> Path:
+    """Copies the committed mule model config with the rule_6 switch set as given."""
+    raw = yaml.safe_load((REPO_ROOT / "config" / "mule_model.yaml").read_text(encoding="utf-8"))
+    raw["parameters"]["rules_plus_labels_and_registry"]["value"] = rules_switch
+    config_path = tmp_path / f"mule_model_rules_{rules_switch}.yaml"
+    config_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    return config_path
+
+
+def _run_main_with_mule_config(tmp_path: Path, config_path: Path) -> int:
+    """Runs the pilot CLI on the committed fixtures with the given mule model config."""
+    return main(
+        [
+            "--training",
+            str(TRAINING),
+            "--validation",
+            str(VALIDATION),
+            "--test",
+            str(TEST),
+            "--truth-root",
+            str(TRUTH_ROOT),
+            "--world-cards-root",
+            str(WORLD_CARDS_ROOT),
+            "--out-root",
+            str(tmp_path),
+            "--mule-model-config",
+            str(config_path),
+        ]
+    )
+
+
+def test_switch_on_records_rules_1_to_6_and_rule_6_standalone(tmp_path: Path) -> None:
+    """With the rule_6 switch on the manifest records six rules and both rules config hashes."""
+    config_path = _write_rules_switch_config(tmp_path, rules_switch=True)
+
+    exit_code = _run_main_with_mule_config(tmp_path, config_path)
+
+    assert exit_code == 0
+    result = json.loads((_single_result_dir(tmp_path) / "result.json").read_text(encoding="utf-8"))
+    manifest = result["manifest"]
+    assert manifest["rules_variant"] == "rules_1_to_6"
+    assert manifest["mule_model_config"]["rules_plus_labels_and_registry"] is True
+    reason_codes = [entry["reason_code"] for entry in manifest["per_rule_standalone"]]
+    assert len(reason_codes) == 6
+    assert "RB6_LABEL_OR_REGISTRY_NEIGHBOUR" in reason_codes
+
+    recorded_files = manifest["rules_config_files"]
+    assert [entry["path"] for entry in recorded_files] == [
+        "config/rules_baseline.yaml",
+        "config/rules_labels_extension.yaml",
+    ]
+    extension_path = REPO_ROOT / "config" / "rules_labels_extension.yaml"
+    assert recorded_files[1]["sha256"] == hashlib.sha256(extension_path.read_bytes()).hexdigest()
+
+
+def test_switch_off_records_rules_1_to_5_without_rule_6(tmp_path: Path) -> None:
+    """With the rule_6 switch off the manifest records five rules and only the baseline hash."""
+    config_path = _write_rules_switch_config(tmp_path, rules_switch=False)
+
+    exit_code = _run_main_with_mule_config(tmp_path, config_path)
+
+    assert exit_code == 0
+    result = json.loads((_single_result_dir(tmp_path) / "result.json").read_text(encoding="utf-8"))
+    manifest = result["manifest"]
+    assert manifest["rules_variant"] == "rules_1_to_5"
+    assert manifest["mule_model_config"]["rules_plus_labels_and_registry"] is False
+    reason_codes = [entry["reason_code"] for entry in manifest["per_rule_standalone"]]
+    assert len(reason_codes) == 5
+    assert "RB6_LABEL_OR_REGISTRY_NEIGHBOUR" not in reason_codes
+
+    recorded_files = manifest["rules_config_files"]
+    assert [entry["path"] for entry in recorded_files] == ["config/rules_baseline.yaml"]
+    baseline_path = REPO_ROOT / "config" / "rules_baseline.yaml"
+    assert recorded_files[0]["sha256"] == hashlib.sha256(baseline_path.read_bytes()).hexdigest()

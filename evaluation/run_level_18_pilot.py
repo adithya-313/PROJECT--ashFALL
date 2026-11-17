@@ -38,7 +38,12 @@ from decisions.mule_account_model import (
     set_mule_model_config_path,
     train_account_model,
 )
-from decisions.rules_config import RulesConfig, load_rules_config, with_thresholds
+from decisions.rules_config import (
+    RulesConfig,
+    load_rules_config,
+    load_rules_config_with_labels,
+    with_thresholds,
+)
 from evaluation.dataset_truth_join import join_truth
 from evaluation.leakage_checks import COMPLAINED_FEATURE, check_label_features_by_arrival
 from evaluation.level17_evaluation import (
@@ -50,6 +55,7 @@ from evaluation.level17_scoring import ScoredDay, one_row_per_account_day, score
 from evaluation.level18_sanity import load_escalation_repeat_policy
 from evaluation.rules_tuning import (
     TuningConfig,
+    load_labels_tuning_config,
     load_tuning_config,
     tune_anomaly_threshold,
     tune_rules,
@@ -614,14 +620,32 @@ def run_pilot(
     Returns:
         Process exit code: 0 when every run leakage check passes, 1 otherwise.
 
+    Key logic:
+        The mule model config's rules_plus_labels_and_registry switch decides the rules table:
+        true loads rules 1 to 6 and the merged tuning grid, false keeps rules 1 to 5 exactly as
+        before. The manifest records which variant ran and the sha256 of each rules config file.
+
     Raises:
         ValueError: If a split is mismatched, a split leaks, a world card or truth manifest is
             missing, or any input is malformed.
     """
     settings = load_evaluation_settings()
-    tuning = load_tuning_config()
+    mule_model_config = load_mule_model_config()
+    rules_config_paths: tuple[str, ...]
+    if mule_model_config.rules_plus_labels_and_registry is True:
+        base_rules_config = load_rules_config_with_labels()
+        tuning = load_labels_tuning_config()
+        rules_variant = "rules_1_to_6"
+        rules_config_paths = (
+            "config/rules_baseline.yaml",
+            "config/rules_labels_extension.yaml",
+        )
+    else:
+        tuning = load_tuning_config()
+        base_rules_config = load_rules_config()
+        rules_variant = "rules_1_to_5"
+        rules_config_paths = ("config/rules_baseline.yaml",)
     anomaly_config = load_anomaly_detector_config()
-    base_rules_config = load_rules_config()
 
     training_datasets = load_split_datasets("training", training_dirs)
     validation_datasets = load_split_datasets("validation", validation_dirs)
@@ -762,15 +786,22 @@ def run_pilot(
     else:
         recorded_config_path = str(config_path)
     committed_config_path = (repo_root / "config" / "mule_model.yaml").resolve()
-    mule_model_config = load_mule_model_config()
     manifest["mule_model_config"] = {
         "path": recorded_config_path,
         "sha256": _sha256_of_file(config_path),
         "overridden": config_path != committed_config_path,
         "use_label_network_features": mule_model_config.use_label_network_features,
+        "rules_plus_labels_and_registry": mule_model_config.rules_plus_labels_and_registry,
         "label_cut": mule_model_config.label_cut,
         "label_maturity_days": mule_model_config.label_maturity_days,
     }
+    rules_config_files: list[dict[str, str]] = []
+    for relative_path in rules_config_paths:
+        rules_config_files.append(
+            {"path": relative_path, "sha256": _sha256_of_file(REPO_ROOT / relative_path)}
+        )
+    manifest["rules_variant"] = rules_variant
+    manifest["rules_config_files"] = rules_config_files
     manifest["pilot_account_model"] = {
         "n_estimators_scores": n_estimators_scores,
         "chosen_n_estimators": best_n_estimators,
