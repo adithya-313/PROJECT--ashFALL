@@ -46,6 +46,7 @@ GENUINE_ROLES: frozenset[str] = frozenset({"genuine", "victim"})
 
 _SNAPSHOT_KINDS: frozenset[str] = frozenset({"daily", "full"})
 _ESCALATION_MODES: frozenset[str] = frozenset({"rules", "anomaly", "rules_and_anomaly"})
+ALLOWED_REPEAT_POLICIES: frozenset[str] = frozenset({"every_day", "once_per_world"})
 
 
 @dataclass(frozen=True)
@@ -457,6 +458,7 @@ def daily_escalations(
     mode: str,
     anomaly_threshold: float | None,
     capacity_pct: float,
+    repeat_policy: str = "every_day",
 ) -> dict[date, list[str]]:
     """
     WHAT: Builds the per-day escalation list an analyst would receive, respecting per-bank capacity.
@@ -469,22 +471,41 @@ def daily_escalations(
         mode: 'rules', 'anomaly', or 'rules_and_anomaly'.
         anomaly_threshold: Inclusive anomaly cut; required for the two anomaly modes.
         capacity_pct: Percentage of a bank's active accounts that can be escalated that day.
+        repeat_policy: 'every_day' re-ranks every bank-day from scratch, which is the Level 17
+            behaviour; 'once_per_world' treats an account escalated on an earlier day as not a
+            candidate on any later day, so the slot goes to the next-ranked account.
 
     Returns:
         IST date -> ordered account ids, merged across banks. Every day present in scored gets
         an entry, possibly an empty list, so an honest zero-escalation day is still recorded.
 
     Key logic:
-        Per bank and day, capacity = max(1, ceil(active_accounts * capacity_pct / 100)). Candidates
-        are ranked with decisions.cold_start.rank_for_review; a missing anomaly score ranks as 0.0
+        Per bank and day, capacity = max(1, ceil(active_accounts * capacity_pct / 100)) and is always
+        computed from every row that bank has that day, whatever the repeat policy. Candidates are
+        ranked with decisions.cold_start.rank_for_review; a missing anomaly score ranks as 0.0
         because ranking must stay deterministic when no detector was used.
 
+    Why the policy exists:
+        A-043: under 'every_day' an escalated account is re-queued the next day in the same world.
+        On the Level 18a4 pilot validation worlds 298 of 343 escalations (87%) repeated an already
+        escalated account and a truth oracle was capped at 69% recall at capacity. 'once_per_world'
+        models review that lasts for the rest of the world.
+
+    Complexity:
+        O(banks * days * scored rows) to collect each bank-day's rows, plus the ranking of each
+        day's candidates; 'once_per_world' adds one set lookup per candidate.
+
     Raises:
-        ValueError: If mode is unknown, if an anomaly mode is given no threshold, or if mode
-            'anomaly' is requested for rows that have no anomaly scores.
+        ValueError: If mode is unknown, if an anomaly mode is given no threshold, if mode
+            'anomaly' is requested for rows that have no anomaly scores, or if repeat_policy is
+            unknown.
     """
     if mode not in _ESCALATION_MODES:
         raise ValueError(f"Unknown escalation mode {mode!r}; expected one of {sorted(_ESCALATION_MODES)}")
+    if repeat_policy not in ALLOWED_REPEAT_POLICIES:
+        raise ValueError(
+            f"Unknown repeat policy {repeat_policy!r}; expected one of {sorted(ALLOWED_REPEAT_POLICIES)}"
+        )
     if mode in ("anomaly", "rules_and_anomaly") and anomaly_threshold is None:
         raise ValueError(f"Escalation mode {mode!r} requires an anomaly_threshold")
     if mode == "anomaly":
@@ -496,6 +517,7 @@ def daily_escalations(
     escalations: dict[date, list[str]] = {day: [] for day in days}
     banks = sorted({scored_day.bank_id for scored_day in scored})
     for bank_id in banks:
+        escalated_earlier: set[str] = set()
         for day in days:
             bank_day_rows = [
                 scored_day
@@ -513,6 +535,9 @@ def daily_escalations(
                 }
                 for scored_day in bank_day_rows
                 if _is_candidate(scored_day, mode, anomaly_threshold)
+                and (repeat_policy == "every_day" or scored_day.account_id not in escalated_earlier)
             ]
-            escalations[day].extend(rank_for_review(candidates, capacity))
+            chosen = rank_for_review(candidates, capacity)
+            escalations[day].extend(chosen)
+            escalated_earlier.update(chosen)
     return escalations
