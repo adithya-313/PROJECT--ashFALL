@@ -37,6 +37,7 @@ from decisions.mule_account_model import (
 )
 from decisions.rules_config import RulesConfig, load_rules_config, with_thresholds
 from evaluation.dataset_truth_join import join_truth
+from evaluation.leakage_checks import check_label_features_by_arrival
 from evaluation.level17_evaluation import (
     evaluate_world,
     first_illicit_credit,
@@ -787,14 +788,24 @@ def run_pilot(
 
     truth_leak = _truth_leak_check()
     trivial_world = _trivial_world_check(training_matrix, training_targets)
+    check_7_training = check_label_features_by_arrival(training_snapshot_rows, training_label_rows)
+    check_7_validation = check_label_features_by_arrival(validation_snapshot_rows, validation_label_rows)
+    check_7_status = (
+        "fail" if "fail" in {check_7_training["status"], check_7_validation["status"]} else "pass"
+    )
     checks = {
         "split_leak": split_leak,
         "truth_leak": truth_leak,
         "trivial_world": trivial_world,
         "section_23_checks_4_to_7": {
             "status": "not run",
-            "reason": "pilot",
-            "checks": [4, 5, 6, 7],
+            "reason": "later round",
+            "checks": [4, 5, 6],
+        },
+        "section_23_check_7": {
+            "status": check_7_status,
+            "training": check_7_training,
+            "validation": check_7_validation,
         },
     }
     _write_leakage(leakage_path, checks)
