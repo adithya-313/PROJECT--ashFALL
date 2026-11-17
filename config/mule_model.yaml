@@ -40,3 +40,26 @@ parameters:
     value: 0.999
     derived_from: "Level 18a4 round 1 review"
     reason: "A feature that is the same value in almost every row cannot separate anything, so a feature whose most common value covers this share of rows or more is flagged."
+
+  use_label_network_features:
+    label: policy
+    value: true
+    derived_from: "Level 18 handoff P4; Section 23 check 7 enforced in evaluation/leakage_checks.py"
+    reason: "Mules work in chains, so a label that has already arrived exposes neighbours; these features read labels by arrival time only."
+
+  label_network_features:
+    label: policy
+    value:
+      - hops_to_complained_account
+      - registry_match_count
+      - registry_match_age_days
+    derived_from: "Level 18 handoff P4; Section 23 check 7 enforced in evaluation/leakage_checks.py"
+    reason: "Bank-visible features built from labels that have arrived; excluded from the anomaly detector, which uses no labels."
+
+  feedback_network_features_not_used:
+    label: policy
+    value:
+      - hops_to_confirmed_label
+      - shared_counterparties_with_flagged_7d
+    derived_from: "Level 18a4 round 2 ruling R1"
+    reason: "Built from bank_feedback confirmed_fraud rows; no replay component writes bank_feedback (feedback arrives with the simulated analyst in Levels 21-22), so these are empty in every built world. Revisit when feedback exists."
