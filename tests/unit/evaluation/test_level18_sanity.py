@@ -11,12 +11,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import orjson
+import pytest
 
 from decisions.mule_account_model import account_model_feature_names, load_mule_model_config
 from evaluation.dataset_truth_join import join_truth
 from evaluation.level18_sanity import (
     build_sanity_report,
     feature_fill_report,
+    load_escalation_repeat_policy,
     main,
     oracle_report,
 )
@@ -220,6 +222,30 @@ def test_build_sanity_report_covers_every_validation_world() -> None:
         str(world["world_id"]) for world in manifest["worlds"]
     ]
     assert report["feature_fill"]["row_count"] > 0
+
+
+def test_sanity_report_uses_the_configured_repeat_policy(tmp_path: Path) -> None:
+    """The committed once_per_world config beats every_day; a temp every_day config reproduces 0.7692."""
+    legacy_config = tmp_path / "evaluation.yaml"
+    legacy_config.write_text("escalation_repeats:\n  value: every_day\n", encoding="utf-8")
+
+    current = build_sanity_report((VALIDATION,), TRUTH_ROOT)
+    legacy = build_sanity_report((VALIDATION,), TRUTH_ROOT, evaluation_config_path=legacy_config)
+
+    assert load_escalation_repeat_policy() == "once_per_world"
+    assert current["oracle_by_world"][0]["oracle"]["recall_at_capacity"] == pytest.approx(0.8461538461538461)
+    assert current["oracle_by_world"][0]["oracle"]["escalations"] == 11
+    assert legacy["oracle_by_world"][0]["oracle"]["recall_at_capacity"] == pytest.approx(0.7692307692307693)
+    assert legacy["oracle_by_world"][0]["oracle"]["escalations"] == 140
+
+
+def test_escalation_repeat_policy_refuses_an_unknown_value(tmp_path: Path) -> None:
+    """A policy that is not allowed is an error, never a silent fallback."""
+    bad_config = tmp_path / "evaluation.yaml"
+    bad_config.write_text("escalation_repeats:\n  value: never_again\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="escalation_repeats value must be one of"):
+        load_escalation_repeat_policy(bad_config)
 
 
 def test_cli_writes_the_report(tmp_path: Path) -> None:

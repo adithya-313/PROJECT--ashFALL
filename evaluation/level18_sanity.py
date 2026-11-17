@@ -24,10 +24,12 @@ from typing import Any
 
 import orjson
 
+from core.config_validator import load_yaml
 from decisions.mule_account_model import account_model_feature_names, load_mule_model_config
 from decisions.rules_config import load_rules_config
 from evaluation.dataset_truth_join import join_truth
 from evaluation.level17_scoring import (
+    ALLOWED_REPEAT_POLICIES,
     MULE_ROLES,
     ScoredDay,
     daily_escalations,
@@ -38,9 +40,16 @@ from evaluation.level17_scoring import (
 from evaluation.rules_metrics import recall_at_capacity, yield_rate
 from evaluation.run_level_17 import load_evaluation_settings
 
-__all__ = ["build_sanity_report", "feature_fill_report", "main", "oracle_report"]
+__all__ = [
+    "build_sanity_report",
+    "feature_fill_report",
+    "load_escalation_repeat_policy",
+    "main",
+    "oracle_report",
+]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+EVALUATION_CONFIG_PATH = REPO_ROOT / "config" / "evaluation.yaml"
 
 # policy: a feature missing from more than half the rows is listed as mostly missing, as information.
 MOSTLY_MISSING_SHARE: float = 0.5
@@ -48,6 +57,39 @@ MOSTLY_MISSING_SHARE: float = 0.5
 ORACLE_MULE_SCORE: float = 1.0
 ORACLE_GENUINE_SCORE: float = 0.0
 ORACLE_THRESHOLD: float = 0.5
+
+
+def load_escalation_repeat_policy(path: Path | str | None = None) -> str:
+    """
+    WHAT: Reads the escalation repeats policy from config/evaluation.yaml.
+
+    WHY: A-043 makes "an escalated account is under review for the rest of the world" a policy
+    choice, so the oracle reads it from the pre-registered config instead of carrying a typed-in
+    value. Level 17 callers keep their every_day default and never read this.
+
+    Args:
+        path: Optional evaluation config path; defaults to config/evaluation.yaml.
+
+    Returns:
+        One of ALLOWED_REPEAT_POLICIES.
+
+    Raises:
+        FileNotFoundError: If the config file is missing.
+        ValueError: If the root or the block is not a mapping, or the value is not an allowed policy.
+    """
+    target = EVALUATION_CONFIG_PATH if path is None else Path(path)
+    raw = load_yaml(target)
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"{target} must hold a mapping at the root")
+    block = raw.get("escalation_repeats")
+    if not isinstance(block, Mapping):
+        raise ValueError(f"{target} requires an 'escalation_repeats' mapping")
+    value = block.get("value")
+    if value not in ALLOWED_REPEAT_POLICIES:
+        raise ValueError(
+            f"{target} escalation_repeats value must be one of {sorted(ALLOWED_REPEAT_POLICIES)}; got {value!r}"
+        )
+    return str(value)
 
 
 def feature_fill_report(
@@ -231,6 +273,7 @@ def _oracle_misses(
 def oracle_report(
     snapshot_rows: Sequence[Mapping[str, Any]],
     payment_rows: Sequence[Mapping[str, Any]],
+    repeat_policy: str = "every_day",
 ) -> dict[str, Any]:
     """
     WHAT: Scores one world's account-days with the perfect oracle and measures what the pilot's
@@ -245,6 +288,8 @@ def oracle_report(
             snapshot_time, snapshot_kind, truth_role and truth_depth.
         payment_rows: Joined payment rows of the same world, carrying receiver_account_id and
             truth_role_receiver, used only to explain mules the oracle misses.
+        repeat_policy: Escalation repeats policy forwarded to daily_escalations; the caller reads
+            it from config/evaluation.yaml, and the default keeps the Level 17 behaviour.
 
     Returns:
         A dict with the account-day and mule-account counts, the number of escalations, recall at
@@ -268,6 +313,7 @@ def oracle_report(
         "anomaly",
         ORACLE_THRESHOLD,
         settings.capacity_pct_active_accounts_per_day,
+        repeat_policy=repeat_policy,
     )
     escalation_pairs = [(account_id, day) for day, account_ids in escalations.items() for account_id in account_ids]
     mules, _, _, is_mule = ground_sets(scored)
@@ -305,16 +351,22 @@ def _manifest_for(dataset_dir: Path) -> Mapping[str, Any]:
     return manifest
 
 
-def build_sanity_report(validation_dirs: Sequence[Path], truth_root: Path) -> dict[str, Any]:
+def build_sanity_report(
+    validation_dirs: Sequence[Path],
+    truth_root: Path,
+    evaluation_config_path: Path | str | None = None,
+) -> dict[str, Any]:
     """
     WHAT: Builds the feature-fill and oracle sanity report for the given validation datasets.
 
     WHY: One entry point keeps the feature check and the oracle check on the same joined rows, so
-    both describe exactly the split a reader passed in.
+    both describe exactly the split a reader passed in. The oracle also applies the escalation
+    repeats policy Level 18 reads from config/evaluation.yaml (A-043).
 
     Args:
         validation_dirs: Validation dataset folders.
         truth_root: Root folder holding one truth folder per run_id.
+        evaluation_config_path: Optional evaluation config path; defaults to config/evaluation.yaml.
 
     Returns:
         A dict with the checked dataset names, the feature-fill report over every row, and one
@@ -326,6 +378,7 @@ def build_sanity_report(validation_dirs: Sequence[Path], truth_root: Path) -> di
     """
     if not validation_dirs:
         raise ValueError("build_sanity_report requires at least one validation dataset folder")
+    repeat_policy = load_escalation_repeat_policy(evaluation_config_path)
     all_rows: list[dict[str, Any]] = []
     oracle_blocks: list[dict[str, Any]] = []
     for dataset_dir in validation_dirs:
@@ -346,6 +399,7 @@ def build_sanity_report(validation_dirs: Sequence[Path], truth_root: Path) -> di
                     "oracle": oracle_report(
                         world_rows,
                         [row for row in payment_rows if row.get("world_id") == world_id],
+                        repeat_policy=repeat_policy,
                     ),
                 }
             )

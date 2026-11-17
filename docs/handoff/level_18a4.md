@@ -158,3 +158,43 @@ label_maturity_days
 - Choose a `label_maturity_days` value after measuring on the full training worlds; today it is off.
 - `evaluation/run_level_18_pilot.py` was not edited and now runs with the `arrival_time` default by
   design.
+
+## A-043 escalation repeats (SIMULATED, pilot validation)
+- Policy: `config/evaluation.yaml` block `escalation_repeats: once_per_world` (amendment A-043). An
+  account escalated on one day is under review for the rest of its world and is not a candidate on a
+  later day; the slot goes to the next account in rank order. Per-bank-day capacity is unchanged.
+- Where it applies: Level 18 only. `evaluate_world` and the Level 18 sanity oracle read the config
+  value; Level 17 callers keep the `every_day` default and are unchanged.
+- Commands: `py -3.12 -m showcase --level 17` → `Overall: PASSED`; the sanity CLI below.
+
+Oracle ceiling on pilot validation (`validation-20261031T1830-efb891155a7e`), once_per_world:
+
+| world | account-days | mules | escalations | recall at capacity | yield measured | repeats |
+|---|---|---|---|---|---|---|
+| validation-0000 | 12909 | 14 | 12 | 0.8571 | 1.0 | 0 |
+| validation-0001 | 10824 | 28 | 23 | 0.8214 | 1.0 | 0 |
+| validation-0002 | 12141 | 23 | 20 | 0.8696 | 1.0 | 0 |
+| total | 35874 | 65 | 55 | 0.8462 | 1.0 | 0 |
+
+Oracle misses (a–f, per world and total), once_per_world:
+
+| measure | 0000 | 0001 | 0002 | total |
+|---|---|---|---|---|
+| a ground-set mules | 14 | 28 | 23 | 65 |
+| b found by the oracle | 12 | 23 | 20 | 55 |
+| c missed, no mule-day snapshot | 0 | 0 | 0 | 0 |
+| d missed, had mule days | 2 | 5 | 3 | 10 |
+| e blocked slots / mule-day slots | 0 / 4 | 0 / 14 | 0 / 15 | 0 / 33 |
+| e blocked-slot share | 0.0 | 0.0 | 0.0 | 0.0 |
+| f escalations / repeats | 12 / 0 | 23 / 0 | 20 / 0 | 55 / 0 |
+| f repeat share | 0.0 | 0.0 | 0.0 | 0.0 |
+
+Control run with a temporary `every_day` config (not committed) reproduces the previous round
+exactly: 130 / 125 / 88 escalations, recall 0.7143 / 0.6786 / 0.6957 (10/14, 19/28, 16/23), repeats
+120 / 106 / 72 (298 of 343). The once_per_world policy lifts the oracle ceiling from 45/65 (0.6923)
+to 55/65 (0.8462) with the same capacity, and no escalation is a repeat.
+
+Rule thresholds are unaffected: rules are tuned on restricted days and genuine harm
+(`rules_tuning._validation_metrics`), which do not depend on the repeats policy. A-043 changes reported
+recall, yield and time-to-detection only. The rules baseline is re-tuned on validation under A-043
+later in 17-3.
