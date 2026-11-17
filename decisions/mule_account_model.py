@@ -15,24 +15,105 @@ there is no silent fallback.
 """
 
 import json
+from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 import xgboost
+import yaml
 
 from core.event_clock import IST
 from decisions.anomaly_config import load_anomaly_detector_config
 from features.account_snapshots import account_feature_names
 
 __all__ = [
+    "ALLOWED_LABEL_CUTS",
+    "MuleModelConfig",
     "account_model_feature_names",
     "build_training_rows",
     "load_model",
+    "load_mule_model_config",
     "predict_account_days",
     "save_model",
     "train_account_model",
 ]
+
+ALLOWED_LABEL_CUTS: frozenset[str] = frozenset({"arrival_time", "label_day"})
+ALLOWED_MULE_MODEL_KEYS: frozenset[str] = frozenset({"label_cut"})
+
+
+@dataclass(frozen=True)
+class MuleModelConfig:
+    """
+    WHAT: Holds the validated policy switches that shape the account model's training rows.
+
+    Attributes:
+        label_cut: How a positive account's rows are cut at its first label; one of
+            ALLOWED_LABEL_CUTS.
+    """
+
+    label_cut: str
+
+
+def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
+    """
+    WHAT: Loads and validates the account model's policy switches from config/mule_model.yaml.
+
+    WHY: Whether the cut uses the label's exact arrival time is a modelling decision, so it is read
+    from a tracked config file instead of being typed into the builder.
+
+    Args:
+        path: Optional config path; defaults to config/mule_model.yaml in the repository root.
+
+    Returns:
+        The validated switches.
+
+    Raises:
+        FileNotFoundError: If the config file does not exist.
+        ValueError: If the root, parameters, block metadata or label_cut value is missing or invalid.
+    """
+    if path is None:
+        resolved_path = Path(__file__).resolve().parent.parent / "config" / "mule_model.yaml"
+    else:
+        resolved_path = Path(path)
+
+    if not resolved_path.exists():
+        raise FileNotFoundError(f"Mule model configuration not found at: {resolved_path}")
+
+    with open(resolved_path, "r", encoding="utf-8") as f:
+        raw: Any = yaml.safe_load(f)
+
+    if not isinstance(raw, dict):
+        raise ValueError(f"Invalid YAML content in {resolved_path}; expected mapping at root.")
+    unknown_root = set(raw.keys()) - {"parameters"}
+    if unknown_root:
+        raise ValueError(f"Unknown keys in {resolved_path}: {sorted(unknown_root)}")
+
+    parameters = raw.get("parameters")
+    if not isinstance(parameters, dict):
+        raise ValueError(f"Missing 'parameters' mapping in {resolved_path}")
+
+    unknown_keys = set(parameters.keys()) - ALLOWED_MULE_MODEL_KEYS
+    if unknown_keys:
+        raise ValueError(f"Unknown keys in {resolved_path}: {sorted(unknown_keys)}")
+
+    for key in ALLOWED_MULE_MODEL_KEYS:
+        block = parameters.get(key)
+        if not isinstance(block, dict):
+            raise ValueError(f"Missing parameter block '{key}' in {resolved_path}")
+        label = block.get("label")
+        if not isinstance(label, str) or not label:
+            raise ValueError(f"Block '{key}' in {resolved_path} is missing a non-empty 'label'")
+        derived_from = block.get("derived_from")
+        if not isinstance(derived_from, str) or not derived_from:
+            raise ValueError(f"Block '{key}' in {resolved_path} is missing a non-empty 'derived_from'")
+
+    label_cut = parameters["label_cut"].get("value")
+    if not isinstance(label_cut, str) or label_cut not in ALLOWED_LABEL_CUTS:
+        raise ValueError(f"label_cut in {resolved_path} must be one of {sorted(ALLOWED_LABEL_CUTS)}; got {label_cut!r}")
+
+    return MuleModelConfig(label_cut=label_cut)
 
 
 def account_model_feature_names() -> tuple[str, ...]:
@@ -154,6 +235,7 @@ def _feature_value(value: Any, name: str) -> float:
 def build_training_rows(
     snapshot_rows: list[dict[str, Any]],
     label_rows: list[dict[str, Any]],
+    label_cut: str | None = None,
 ) -> tuple[list[list[float]], list[int], list[tuple[str, str, str, date]]]:
     """
     WHAT: Builds the pilot model's training matrix and targets from snapshots and bank-visible labels.
@@ -166,6 +248,9 @@ def build_training_rows(
         snapshot_rows: Raw snapshot rows carrying world_id, bank_id, account_id, snapshot_time and
             snapshot_kind, plus the account features.
         label_rows: Bank-visible label rows carrying world_id, account_id and arrival_time.
+        label_cut: "arrival_time" drops a positive account's snapshots after the exact moment of its
+            first label; "label_day" is the legacy cut after the IST day of that label. Defaults to
+            the value in config/mule_model.yaml.
 
     Returns:
         (matrix, targets, row_keys) where matrix rows follow account_model_feature_names() order and
@@ -174,17 +259,24 @@ def build_training_rows(
 
     Key logic:
         One row per account-day is selected inside each world, because account identifiers repeat
-        across simulated worlds. A positive account keeps only the days on or before the IST day of
-        its first label.
+        across simulated worlds. A positive account keeps only snapshots up to its first label:
+        under "arrival_time" the bank sees nothing after that instant, while "label_day" keeps the
+        whole IST day and exists only to reproduce the first pilot dataset.
 
     Raises:
-        ValueError: If a required field is missing or malformed.
+        ValueError: If a required field is missing or malformed, or label_cut is not allowed.
     """
+    if label_cut is None:
+        label_cut = load_mule_model_config().label_cut
+    if label_cut not in ALLOWED_LABEL_CUTS:
+        raise ValueError(f"label_cut must be one of {sorted(ALLOWED_LABEL_CUTS)}; got {label_cut!r}")
+
     sources = sorted({_require_string(row, "source", "build_training_rows") for row in label_rows})
     verdicts = sorted({_require_string(row, "verdict", "build_training_rows") for row in label_rows})
     print(f"Label values: source={sources} verdict={verdicts}")
 
     first_label_day: dict[tuple[str, str], date] = {}
+    first_label_arrival: dict[tuple[str, str], datetime] = {}
     for row in label_rows:
         world_id = _require_string(row, "world_id", "build_training_rows")
         account_id = _require_string(row, "account_id", "build_training_rows")
@@ -194,6 +286,9 @@ def build_training_rows(
         current = first_label_day.get(key)
         if current is None or day < current:
             first_label_day[key] = day
+        current_arrival = first_label_arrival.get(key)
+        if current_arrival is None or arrival_time < current_arrival:
+            first_label_arrival[key] = arrival_time
 
     feature_names = account_model_feature_names()
     rows_by_world: dict[str, list[dict[str, Any]]] = {}
@@ -213,8 +308,12 @@ def build_training_rows(
             day = _ist_day(moment)
             key = (world_id, account_id)
             is_positive = key in first_label_day
-            if is_positive and day > first_label_day[key]:
-                continue
+            if is_positive:
+                if label_cut == "arrival_time":
+                    if moment > first_label_arrival[key]:
+                        continue
+                elif day > first_label_day[key]:
+                    continue
             matrix.append([_feature_value(row.get(name), name) for name in feature_names])
             targets.append(1 if is_positive else 0)
             row_keys.append((world_id, bank_id, account_id, day))
