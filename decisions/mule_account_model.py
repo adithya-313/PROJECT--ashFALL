@@ -265,9 +265,9 @@ def build_training_rows(
         snapshot_rows: Raw snapshot rows carrying world_id, bank_id, account_id, snapshot_time and
             snapshot_kind, plus the account features.
         label_rows: Bank-visible label rows carrying world_id, account_id and arrival_time.
-        label_cut: "arrival_time" drops a positive account's snapshots after the exact moment of its
-            first label; "label_day" is the legacy cut after the IST day of that label. Defaults to
-            the value in config/mule_model.yaml.
+        label_cut: "arrival_time" keeps a positive account's snapshots only strictly before the
+            exact moment of its first label; "label_day" is the legacy cut after the IST day of that
+            label. Defaults to the value in config/mule_model.yaml.
         label_maturity_days: Drops each world's final N IST days, where labels have not had time to
             arrive and positives are undercounted. Defaults to the value in config/mule_model.yaml,
             where null keeps every day.
@@ -280,8 +280,8 @@ def build_training_rows(
     Key logic:
         One row per account-day is selected inside each world, because account identifiers repeat
         across simulated worlds. A positive account keeps only snapshots up to its first label:
-        under "arrival_time" the bank sees nothing after that instant, while "label_day" keeps the
-        whole IST day and exists only to reproduce the first pilot dataset. The maturity window is
+        under "arrival_time" the bank sees nothing at or after that instant, while "label_day"
+        keeps the whole IST day and exists only to reproduce the first pilot dataset. The maturity window is
         measured per world against that world's own last snapshot day.
 
     Raises:
@@ -348,7 +348,7 @@ def build_training_rows(
             is_positive = key in first_label_day
             if is_positive:
                 if label_cut == "arrival_time":
-                    if moment > first_label_arrival[key]:
+                    if moment >= first_label_arrival[key]:
                         continue
                 elif day > first_label_day[key]:
                     continue

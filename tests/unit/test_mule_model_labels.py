@@ -1,6 +1,6 @@
 """
 WHAT: Unit tests for the Level 18a4 label-cut switch: the config default, the exact arrival-time cut,
-its inclusive boundary, and refusal of unknown cuts or malformed config files.
+its strict boundary, and refusal of unknown cuts or malformed config files.
 
 WHY: A training row taken after the bank learned about an account leaks the label, so the builder
 must cut at the label's exact arrival time by default and must never silently accept an unknown cut.
@@ -71,8 +71,8 @@ def test_default_cut_drops_label_day_snapshot_after_arrival() -> None:
     assert row_keys[0][3].isoformat() == "2026-09-01"
 
 
-def test_snapshot_exactly_at_arrival_time_is_kept() -> None:
-    """A snapshot at the same instant as the first label is still a row the bank could have seen."""
+def test_snapshot_exactly_at_arrival_time_is_dropped() -> None:
+    """A snapshot at the same instant as the first label is not a row the bank held before it."""
     snapshots = [
         _snapshot("acc_labelled", datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc), 1.0),
         _snapshot("acc_labelled", datetime(2026, 9, 2, 10, 0, tzinfo=timezone.utc), 2.0),
@@ -81,9 +81,9 @@ def test_snapshot_exactly_at_arrival_time_is_kept() -> None:
 
     matrix, targets, row_keys = build_training_rows(snapshots, labels, label_cut="arrival_time")
 
-    assert len(matrix) == 2
-    assert targets == [1, 1]
-    assert [key[3].isoformat() for key in row_keys] == ["2026-09-01", "2026-09-02"]
+    assert len(matrix) == 1
+    assert targets == [1]
+    assert [key[3].isoformat() for key in row_keys] == ["2026-09-01"]
 
 
 def test_unknown_label_cut_is_refused() -> None:

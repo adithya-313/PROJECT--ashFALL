@@ -26,7 +26,7 @@ parameters:
     label: policy
     value: arrival_time
     derived_from: "Level 18a4 Round 1 brief"
-    reason: "The bank learns about the account at the label's exact arrival_time, so snapshots after that moment must not train the model; label_day stays available only to reproduce the first pilot dataset's rows."
+    reason: "The bank learns about the account at the label's exact arrival_time, so snapshots at or after that moment must not train the model; label_day stays available only to reproduce the first pilot dataset's rows."
 
   label_maturity_days:
     label: policy
