@@ -1,0 +1,42 @@
+# =====================================================================
+# MULE MODEL: how the Level 18 account model cuts training rows at the first label
+# =====================================================================
+#
+# What this file is
+#   The switch that decides which account-days the supervised account model may
+#   learn from. A positive account keeps only snapshots the bank could have seen
+#   before it learned the account was suspicious; everything after the first
+#   label is dropped so the model cannot learn the answer.
+#
+# Who reads it
+#   decisions/mule_account_model.py (load_mule_model_config) reads it when
+#   build_training_rows is called without an explicit label_cut.
+#
+# How to read an entry
+#   label       "policy": we chose the value; no source published it.
+#   value       the setting used by the model build.
+#   derived_from  the brief or handoff the choice came from.
+#   reason      one sentence on why the value looks the way it does.
+#
+# Checked by: python -m core.config_validator config/mule_model.yaml
+# =====================================================================
+
+parameters:
+  label_cut:
+    label: policy
+    value: arrival_time
+    derived_from: "Level 18a4 Round 1 brief"
+    reason: "The bank learns about the account at the label's exact arrival_time, so snapshots at or after that moment must not train the model; label_day stays available only to reproduce the first pilot dataset's rows."
+
+  label_maturity_days:
+    label: policy
+    value: null
+    not_found: true
+    derived_from: "Level 18a4 Round 1 brief"
+    reason: "Off until the label delay has been measured on the full training worlds; null means no trailing window is dropped."
+
+  feature_fill_flag_share:
+    label: policy
+    value: 0.999
+    derived_from: "Level 18a4 round 1 review"
+    reason: "A feature that is the same value in almost every row cannot separate anything, so a feature whose most common value covers this share of rows or more is flagged."

@@ -82,11 +82,27 @@ def test_positive_account_days_after_first_label_day_are_dropped() -> None:
     ]
     labels = [_label("world-0", "acc_positive", 2)]
 
-    matrix, targets, row_keys = build_training_rows(snapshots, labels)
+    matrix, targets, row_keys = build_training_rows(snapshots, labels, label_cut="label_day")
 
     assert len(matrix) == 2
     assert targets == [1, 1]
     assert [key[3].isoformat() for key in row_keys] == ["2026-09-01", "2026-09-02"]
+
+
+def test_positive_account_snapshot_after_first_arrival_on_label_day_is_dropped() -> None:
+    """An exact label-time cut drops the label day's snapshot taken after the label arrived."""
+    snapshots = [
+        _snapshot("world-0", "acc_positive", 1, 1.0),
+        _snapshot("world-0", "acc_positive", 2, 2.0),
+        _snapshot("world-0", "acc_positive", 3, 3.0),
+    ]
+    labels = [_label("world-0", "acc_positive", 2)]
+
+    matrix, targets, row_keys = build_training_rows(snapshots, labels, label_cut="arrival_time")
+
+    assert len(matrix) == 1
+    assert targets == [1]
+    assert [key[3].isoformat() for key in row_keys] == ["2026-09-01"]
 
 
 def test_unlabelled_account_keeps_all_its_days() -> None:
@@ -99,7 +115,7 @@ def test_unlabelled_account_keeps_all_its_days() -> None:
     ]
     labels = [_label("world-0", "acc_positive", 2)]
 
-    matrix, targets, row_keys = build_training_rows(snapshots, labels)
+    matrix, targets, row_keys = build_training_rows(snapshots, labels, label_cut="label_day")
 
     unlabelled_keys = [key for key in row_keys if key[2] == "acc_unlabelled"]
     unlabelled_targets = [
@@ -124,7 +140,7 @@ def test_training_without_negatives_raises() -> None:
 def test_save_then_load_gives_identical_predictions(tmp_path: Path) -> None:
     """A saved model reloads with the same feature order and the same probabilities."""
     snapshots, labels = _training_fixture()
-    matrix, targets, _ = build_training_rows(snapshots, labels)
+    matrix, targets, _ = build_training_rows(snapshots, labels, label_cut="label_day")
     model, scale_pos_weight = train_account_model(matrix, targets, seed=7, n_estimators=10)
 
     day_rows = [
@@ -152,7 +168,7 @@ def test_save_then_load_gives_identical_predictions(tmp_path: Path) -> None:
 def test_feature_order_mismatch_on_load_raises(tmp_path: Path) -> None:
     """A sidecar whose feature order changed is refused instead of scoring the wrong columns."""
     snapshots, labels = _training_fixture()
-    matrix, targets, _ = build_training_rows(snapshots, labels)
+    matrix, targets, _ = build_training_rows(snapshots, labels, label_cut="label_day")
     model, scale_pos_weight = train_account_model(matrix, targets, seed=7, n_estimators=10)
 
     model_path = tmp_path / "account_model.ubj"
