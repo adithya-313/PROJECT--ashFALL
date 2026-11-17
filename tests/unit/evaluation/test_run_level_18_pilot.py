@@ -7,12 +7,15 @@ WHY: The pilot is only trustworthy if its plumbing works end to end and a split 
 through. Tiny fixtures are almost all fraud, so these tests assert structure, never metric values.
 """
 
+import dataclasses
 import json
 import shutil
 from pathlib import Path
 
 import pyarrow.parquet as pq
+import pytest
 
+import decisions.mule_account_model as mule_account_model
 from core.event_clock import IST
 from decisions.mule_account_model import _one_row_per_account_day
 from decisions.rules_config import load_rules_config
@@ -83,6 +86,33 @@ def test_pilot_run_on_fixtures_writes_the_expected_files(tmp_path: Path) -> None
     expected_reason_codes = [rule.reason_code for rule in load_rules_config().rules]
     assert [entry["reason_code"] for entry in per_rule] == expected_reason_codes
     assert len(per_rule) == 5
+
+
+def test_switch_off_records_check_7_as_not_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """With the label network switch off the pilot records check 7 as not run instead of crashing."""
+    committed = mule_account_model.load_mule_model_config()
+    switched_off = dataclasses.replace(committed, use_label_network_features=False)
+    monkeypatch.setattr(
+        mule_account_model, "load_mule_model_config", lambda path=None: switched_off
+    )
+
+    exit_code = run_pilot(
+        [TRAINING],
+        [VALIDATION],
+        [TEST],
+        TRUTH_ROOT,
+        WORLD_CARDS_ROOT,
+        tmp_path,
+    )
+
+    assert exit_code == 0
+    leakage = json.loads(
+        (_single_result_dir(tmp_path) / "leakage_checks.json").read_text(encoding="utf-8")
+    )
+    assert leakage["checks"]["section_23_check_7"] == {
+        "status": "not run",
+        "reason": "label network features are off",
+    }
 
 
 def test_local_account_day_selection_matches_evaluation_selection() -> None:
