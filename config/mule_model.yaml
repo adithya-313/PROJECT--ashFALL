@@ -69,3 +69,30 @@ parameters:
     value: false
     derived_from: "Level 18 engineer ruling 2026-11-17 (rule_6, 2x2 comparison)"
     reason: "rule_6 joins the rules table only when this switch is true, so the default rules stay rules 1 to 5."
+
+  pu_method:
+    label: policy
+    value: "none"
+    derived_from: "Level 18 handoff next steps; Level 18a4 round 5 brief"
+    reason: "Positive-unlabelled learning is off by default so the pilot keeps the supervised path until the full-scale run compares the methods; allowed values are none, bagging and elkan_noto."
+
+  pu_bagging_n_bags:
+    label: policy
+    value: 50
+    derived_from: "Level 18 handoff next steps: about 50 small models"
+    reason: "Each bag trains one model on all positives plus a small unlabelled sample, so 50 bags average out the arbitrary negatives each sample invents."
+
+  pu_unlabelled_per_positive_candidates:
+    label: policy
+    value:
+      - 1
+      - 5
+      - 20
+    derived_from: "architect search grid; the value is chosen on validation AP"
+    reason: "How many unlabelled rows each bag draws per positive row; the pilot scores every candidate on validation average precision and keeps the best."
+
+  pu_probability_clip:
+    label: policy
+    value: 0.999999
+    derived_from: "numerical guard, not a modelling choice"
+    reason: "Caps g(x) below 1 so the Elkan-Noto factor p/(1-p) stays finite; the value is a numerical guard, not a modelling choice."

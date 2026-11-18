@@ -10,7 +10,9 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy
 import pytest
+import xgboost
 
 from decisions.mule_account_model import (
     account_model_feature_names,
@@ -189,3 +191,68 @@ def test_feature_order_mismatch_on_load_raises(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="feature order"):
         load_model(model_path)
+
+
+def _weighted_fixture() -> tuple[list[list[float]], list[int]]:
+    """Builds a small synthetic matrix with three positives and five negatives."""
+    rows = [
+        [0.0, 1.0, 2.0],
+        [1.0, 0.0, 0.5],
+        [0.2, 0.9, 1.8],
+        [0.9, 0.1, 0.6],
+        [0.5, 0.5, 1.0],
+        [0.6, 0.4, 0.8],
+        [0.1, 0.8, 1.9],
+        [0.8, 0.2, 0.7],
+    ]
+    targets = [0, 1, 0, 1, 0, 1, 0, 0]
+    return rows, targets
+
+
+def test_default_call_matches_the_old_construction_bit_for_bit() -> None:
+    """With neither optional argument the fit is the exact previous model and fit call."""
+    rows, targets = _weighted_fixture()
+    positives = sum(1 for target in targets if target == 1)
+    negatives = sum(1 for target in targets if target == 0)
+
+    model, scale_pos_weight = train_account_model(rows, targets, seed=11, n_estimators=10)
+
+    reference = xgboost.XGBClassifier(
+        objective="binary:logistic",
+        tree_method="hist",
+        random_state=11,
+        scale_pos_weight=negatives / positives,
+        n_estimators=10,
+    )
+    reference.fit(rows, targets)
+
+    assert scale_pos_weight == pytest.approx(negatives / positives)
+    numpy.testing.assert_array_equal(model.predict_proba(rows), reference.predict_proba(rows))
+
+
+def test_sample_weight_length_mismatch_is_refused() -> None:
+    """Weights shorter than the rows cannot be aligned, so the fit is refused."""
+    rows, targets = _weighted_fixture()
+
+    with pytest.raises(ValueError, match="sample_weight length"):
+        train_account_model(rows, targets, seed=11, n_estimators=10, sample_weight=[1.0] * (len(rows) - 1))
+
+
+def test_negative_sample_weight_is_refused() -> None:
+    """A negative row weight is meaningless and is refused instead of silently fitted."""
+    rows, targets = _weighted_fixture()
+    weights = [1.0] * len(rows)
+    weights[0] = -0.5
+
+    with pytest.raises(ValueError, match="non-negative"):
+        train_account_model(rows, targets, seed=11, n_estimators=10, sample_weight=weights)
+
+
+def test_non_positive_scale_pos_weight_override_is_refused() -> None:
+    """A zero override would zero the positive class, so it is refused."""
+    rows, targets = _weighted_fixture()
+
+    with pytest.raises(ValueError, match="scale_pos_weight_override .* positive finite"):
+        train_account_model(
+            rows, targets, seed=11, n_estimators=10, scale_pos_weight_override=0.0
+        )
