@@ -53,7 +53,9 @@ from evaluation.level17_evaluation import (
 )
 from evaluation.level17_scoring import ScoredDay, one_row_per_account_day, score_account_days
 from evaluation.level18_sanity import load_escalation_repeat_policy
+from evaluation.operating_points import operating_points, rules_curve, score_curve
 from evaluation.rules_tuning import (
+    AnomalyTuningResult,
     TuningConfig,
     load_labels_tuning_config,
     load_tuning_config,
@@ -289,6 +291,8 @@ def _tune_on_validation(
     tuning: TuningConfig,
     detector: TrainedAnomalyDetector,
     budget_pct: float,
+    *,
+    collect_grid_points: bool = False,
 ) -> tuple[TunedThresholds, list[ScoredDay], list[dict[str, Any]]]:
     """
     WHAT: Tunes the rules thresholds and both anomaly-style cuts on the validation account-days.
@@ -304,6 +308,8 @@ def _tune_on_validation(
         tuning: Candidate grid and allowed tuning splits.
         detector: Trained anomaly detector.
         budget_pct: Maximum share of genuine account-days either system may restrict.
+        collect_grid_points: When true, the rules result keeps every grid point so the pilot can
+            report operating points at the extra committed budgets from the same scoring pass.
 
     Returns:
         (tuned thresholds, validation scored days with detector scores, the account-day rows
@@ -318,7 +324,14 @@ def _tune_on_validation(
         snapshot_rows.extend(snapshots.to_pylist())
     day_rows = one_row_per_account_day(snapshot_rows)
 
-    rules_result = tune_rules(day_rows, base_rules_config, tuning, "validation", budget_pct)
+    rules_result = tune_rules(
+        day_rows,
+        base_rules_config,
+        tuning,
+        "validation",
+        budget_pct,
+        collect_grid_points=collect_grid_points,
+    )
     tuned_config = with_thresholds(
         base_rules_config,
         rules_result.thresholds,
@@ -466,6 +479,190 @@ def _summarise_pilot(
     for window in ("test", "stress"):
         across_worlds[window]["xgboost"] = xgboost_summaries[window]["anomaly"]
     return across_worlds
+
+
+def _test_metric_median(test_across: dict[str, Any], scorer: str, metric: str) -> float | None:
+    """
+    WHAT: Returns one scorer's test median for a headline metric, or None when it is not numeric.
+
+    Args:
+        test_across: across_worlds["test"] block.
+        scorer: scorer name such as "rules" or "xgboost".
+        metric: headline metric name such as "recall_at_capacity".
+
+    Returns:
+        The median, or None when the summariser recorded no numeric value.
+    """
+    block = test_across[scorer][metric]
+    if "median" not in block:
+        return None
+    median = block["median"]
+    return float(median) if isinstance(median, (int, float)) else None
+
+
+def _success_criterion(
+    validation_scorers: dict[str, Any],
+    test_across: dict[str, Any],
+    budget_pct: float,
+) -> dict[str, Any]:
+    """
+    WHAT: Applies the committed success rule for the main budget.
+
+    WHY: The brief allows saying the model beats the rules only when both scorers met the validation
+    harm budget and XGBoost beats rules on BOTH test median recall at capacity and test median yield.
+    A tie never passes, and a missing median makes the comparison unjudgeable rather than a win.
+
+    Args:
+        validation_scorers: the main budget's per-scorer validation block from the operating points.
+        test_across: across_worlds["test"] on the main budget.
+        budget_pct: the committed main genuine-restriction budget the operating points were built for.
+
+    Returns:
+        A block with status "not_judgeable", "pass" or "fail", a reason, the committed budget, the
+        validation rates and both scorers' test medians and genuine-restriction rates.
+
+    Key logic:
+        A validation budget miss by rules or XGBoost, or any missing rules/XGBoost test median for
+        recall at capacity or yield, makes the comparison not judgeable and the reason names each
+        cause. Otherwise the status is pass only when XGBoost's median recall and median yield both
+        strictly exceed the rules values; a tie fails.
+
+    Raises:
+        KeyError: If the blocks do not carry the expected scorer keys.
+    """
+    rules_validation = validation_scorers["rules"]
+    xgboost_validation = validation_scorers["xgboost"]
+    rules_recall = _test_metric_median(test_across, "rules", "recall_at_capacity")
+    xgboost_recall = _test_metric_median(test_across, "xgboost", "recall_at_capacity")
+    rules_yield = _test_metric_median(test_across, "rules", "yield_measured")
+    xgboost_yield = _test_metric_median(test_across, "xgboost", "yield_measured")
+    rules_harm = _test_metric_median(test_across, "rules", "genuine_restriction_rate")
+    xgboost_harm = _test_metric_median(test_across, "xgboost", "genuine_restriction_rate")
+
+    problems: list[str] = []
+    if not rules_validation["meets_budget"]:
+        problems.append(f"validation budget missed by rules at {rules_validation['validation_rate_pct']}%")
+    if not xgboost_validation["meets_budget"]:
+        problems.append(
+            f"validation budget missed by xgboost at {xgboost_validation['validation_rate_pct']}%"
+        )
+    missing_medians = [
+        name
+        for name, value in (
+            ("rules recall_at_capacity", rules_recall),
+            ("xgboost recall_at_capacity", xgboost_recall),
+            ("rules yield_measured", rules_yield),
+            ("xgboost yield_measured", xgboost_yield),
+        )
+        if value is None
+    ]
+    if missing_medians:
+        problems.append("missing test median(s): " + ", ".join(missing_medians))
+
+    if problems:
+        status = "not_judgeable"
+        reason = "; ".join(problems)
+    elif (
+        xgboost_recall is not None
+        and rules_recall is not None
+        and xgboost_yield is not None
+        and rules_yield is not None
+        and xgboost_recall > rules_recall
+        and xgboost_yield > rules_yield
+    ):
+        status = "pass"
+        reason = "xgboost median recall and median yield both exceed rules on test"
+    else:
+        status = "fail"
+        reason = "xgboost does not strictly exceed rules on both median recall and median yield on test"
+
+    return {
+        "budget_pct": budget_pct,
+        "status": status,
+        "reason": reason,
+        "rules_validation_rate_pct": rules_validation["validation_rate_pct"],
+        "xgboost_validation_rate_pct": xgboost_validation["validation_rate_pct"],
+        "rules_test_median_recall_at_capacity": rules_recall,
+        "xgboost_test_median_recall_at_capacity": xgboost_recall,
+        "rules_test_median_yield_measured": rules_yield,
+        "xgboost_test_median_yield_measured": xgboost_yield,
+        "rules_test_genuine_restriction_rate": rules_harm,
+        "xgboost_test_genuine_restriction_rate": xgboost_harm,
+    }
+
+
+def _by_budget_test_results(
+    test_pairs: Sequence[tuple[Path, Dataset]],
+    truth_root: Path,
+    world_cards_root: Path,
+    base_rules_config: RulesConfig,
+    tuned: TunedThresholds,
+    validation_operating_points: dict[str, Any],
+    detector: TrainedAnomalyDetector,
+    best_model: xgboost.XGBClassifier,
+    settings: EvaluationSettings,
+) -> dict[str, Any]:
+    """
+    WHAT: Evaluates every scorer on the test worlds at each committed budget's validation-tuned point.
+
+    WHY: Harm must be matched at the extra budgets too, or a comparison at 0.5 percent alone could
+    hide that the model only wins when one side is allowed more harm.
+
+    Args:
+        test_pairs: (dataset folder, loaded Dataset) pairs of the test split.
+        truth_root: Root folder holding one truth folder per run_id.
+        world_cards_root: Root folder holding one world card per run_id.
+        base_rules_config: Baseline rules table supplying the committed thresholds.
+        tuned: main-budget tuning results, reused for per-rule standalone data.
+        validation_operating_points: operating_points block with one entry per budget.
+        detector: Trained anomaly detector.
+        best_model: Fitted XGBoost account model.
+        settings: Capacity, persona weights and world-count policy.
+
+    Returns:
+        {"budgets_pct": [...], "test": {budget label: {"budget_pct", "validation", "across_worlds"}}}
+        where across_worlds is the same summary shape as the existing main-budget block.
+
+    Raises:
+        ValueError: If a world repeats, a world card is missing or invalid, or a metric refuses the data.
+    """
+    results: dict[str, Any] = {}
+    for point in validation_operating_points["points"]:
+        budget_pct = point["budget_pct"]
+        scorers = point["scorers"]
+        rules_at_budget = with_thresholds(
+            base_rules_config,
+            scorers["rules"]["thresholds"],
+            f"pilot validation operating point at {budget_pct}%",
+        )
+        anomaly_at_budget = AnomalyTuningResult(
+            threshold=scorers["anomaly"]["threshold"],
+            validation_rate_pct=scorers["anomaly"]["validation_rate_pct"],
+            validation_recall=scorers["anomaly"]["validation_recall"],
+            meets_budget=scorers["anomaly"]["meets_budget"],
+        )
+        tuned_at_budget = TunedThresholds(
+            rules_config=rules_at_budget,
+            rules_result=tuned.rules_result,
+            anomaly_result=anomaly_at_budget,
+        )
+        per_world_at_budget, _ = _evaluate_test_worlds(
+            test_pairs,
+            truth_root,
+            world_cards_root,
+            tuned_at_budget,
+            detector,
+            best_model,
+            scorers["xgboost"]["threshold"],
+            settings,
+        )
+        across_worlds_at_budget = _summarise_pilot(per_world_at_budget, settings.min_test_worlds)
+        results[f"{budget_pct:g}"] = {
+            "budget_pct": budget_pct,
+            "validation": scorers,
+            "across_worlds": across_worlds_at_budget["test"],
+        }
+    return {"budgets_pct": list(validation_operating_points["budgets_pct"]), "test": results}
 
 
 def _truth_leak_check() -> dict[str, Any]:
@@ -725,6 +922,7 @@ def run_pilot(
         tuning,
         detector,
         settings.genuine_restriction_budget_pct,
+        collect_grid_points=True,
     )
     validation_probabilities = predict_account_days(best_model, validation_scored_rows)
     validation_xgboost_scored = [
@@ -737,9 +935,16 @@ def run_pilot(
         "validation",
         settings.genuine_restriction_budget_pct,
     )
+    validation_operating_points = operating_points(
+        rules_grid_points=tuned.rules_result.grid_points,
+        anomaly_scored=validation_scored,
+        xgboost_scored=validation_xgboost_scored,
+        run_manifest_id=key,
+    )
 
+    test_pairs = list(zip(test_dirs, test_datasets, strict=True))
     per_world, test_day_rows = _evaluate_test_worlds(
-        list(zip(test_dirs, test_datasets, strict=True)),
+        test_pairs,
         truth_root,
         world_cards_root,
         tuned,
@@ -749,6 +954,24 @@ def run_pilot(
         settings,
     )
     across_worlds = _summarise_pilot(per_world, settings.min_test_worlds)
+    by_budget = _by_budget_test_results(
+        test_pairs,
+        truth_root,
+        world_cards_root,
+        base_rules_config,
+        tuned,
+        validation_operating_points,
+        detector,
+        best_model,
+        settings,
+    )
+    main_budget_pct = validation_operating_points["budgets_pct"][0]
+    main_budget_label = f"{main_budget_pct:g}"
+    success_criterion = _success_criterion(
+        validation_operating_points["points"][0]["scorers"],
+        by_budget["test"][main_budget_label]["across_worlds"],
+        main_budget_pct,
+    )
 
     model_path = result_dir / "account_model.ubj"
     save_model(
@@ -828,8 +1051,24 @@ def run_pilot(
         }
         for rule in tuned.rules_result.per_rule_standalone
     ]
+    manifest["validation_operating_points"] = validation_operating_points
+    manifest["by_budget"] = by_budget
+    manifest["success_criterion"] = success_criterion
+    validation_curves = {
+        "simulated": True,
+        "run_manifest_id": key,
+        "score_curves": {
+            "anomaly": score_curve(validation_scored),
+            "xgboost": score_curve(validation_xgboost_scored),
+        },
+        "rules_curve": rules_curve(tuned.rules_result.grid_points),
+    }
 
     result_path = write_result(out_root, key, manifest, per_world, across_worlds)
+    curves_path = result_dir / "validation_curves.json"
+    curves_path.write_bytes(
+        orjson.dumps(validation_curves, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2) + b"\n"
+    )
     payload = orjson.loads(result_path.read_bytes())
     payload["pilot"] = True
     result_path.write_bytes(
