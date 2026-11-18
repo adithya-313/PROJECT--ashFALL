@@ -53,6 +53,7 @@ from evaluation.level17_evaluation import (
 )
 from evaluation.level17_scoring import ScoredDay, one_row_per_account_day, score_account_days
 from evaluation.level18_sanity import load_escalation_repeat_policy
+from evaluation.operating_points import operating_points, rules_curve, score_curve
 from evaluation.rules_tuning import (
     TuningConfig,
     load_labels_tuning_config,
@@ -289,6 +290,8 @@ def _tune_on_validation(
     tuning: TuningConfig,
     detector: TrainedAnomalyDetector,
     budget_pct: float,
+    *,
+    collect_grid_points: bool = False,
 ) -> tuple[TunedThresholds, list[ScoredDay], list[dict[str, Any]]]:
     """
     WHAT: Tunes the rules thresholds and both anomaly-style cuts on the validation account-days.
@@ -304,6 +307,8 @@ def _tune_on_validation(
         tuning: Candidate grid and allowed tuning splits.
         detector: Trained anomaly detector.
         budget_pct: Maximum share of genuine account-days either system may restrict.
+        collect_grid_points: When true, the rules result keeps every grid point so the pilot can
+            report operating points at the extra committed budgets from the same scoring pass.
 
     Returns:
         (tuned thresholds, validation scored days with detector scores, the account-day rows
@@ -318,7 +323,14 @@ def _tune_on_validation(
         snapshot_rows.extend(snapshots.to_pylist())
     day_rows = one_row_per_account_day(snapshot_rows)
 
-    rules_result = tune_rules(day_rows, base_rules_config, tuning, "validation", budget_pct)
+    rules_result = tune_rules(
+        day_rows,
+        base_rules_config,
+        tuning,
+        "validation",
+        budget_pct,
+        collect_grid_points=collect_grid_points,
+    )
     tuned_config = with_thresholds(
         base_rules_config,
         rules_result.thresholds,
@@ -725,6 +737,7 @@ def run_pilot(
         tuning,
         detector,
         settings.genuine_restriction_budget_pct,
+        collect_grid_points=True,
     )
     validation_probabilities = predict_account_days(best_model, validation_scored_rows)
     validation_xgboost_scored = [
@@ -736,6 +749,12 @@ def run_pilot(
         tuning,
         "validation",
         settings.genuine_restriction_budget_pct,
+    )
+    validation_operating_points = operating_points(
+        rules_grid_points=tuned.rules_result.grid_points,
+        anomaly_scored=validation_scored,
+        xgboost_scored=validation_xgboost_scored,
+        run_manifest_id=key,
     )
 
     per_world, test_day_rows = _evaluate_test_worlds(
@@ -828,8 +847,22 @@ def run_pilot(
         }
         for rule in tuned.rules_result.per_rule_standalone
     ]
+    manifest["validation_operating_points"] = validation_operating_points
+    validation_curves = {
+        "simulated": True,
+        "run_manifest_id": key,
+        "score_curves": {
+            "anomaly": score_curve(validation_scored),
+            "xgboost": score_curve(validation_xgboost_scored),
+        },
+        "rules_curve": rules_curve(tuned.rules_result.grid_points),
+    }
 
     result_path = write_result(out_root, key, manifest, per_world, across_worlds)
+    curves_path = result_dir / "validation_curves.json"
+    curves_path.write_bytes(
+        orjson.dumps(validation_curves, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2) + b"\n"
+    )
     payload = orjson.loads(result_path.read_bytes())
     payload["pilot"] = True
     result_path.write_bytes(

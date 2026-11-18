@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import date
 from itertools import product
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from core.config_validator import load_yaml
 from decisions.rules_config import RulesConfig, load_rules_config, load_rules_config_with_labels, with_thresholds
@@ -38,23 +38,19 @@ from evaluation.level17_scoring import (
 )
 
 __all__ = [
+    "AnomalyScoreCut",
     "AnomalyTuningResult",
     "RuleStandalone",
+    "RulesGridPoint",
     "RulesTuningResult",
     "TuningConfig",
     "load_labels_tuning_config",
     "load_tuning_config",
+    "score_cut_curve",
+    "select_anomaly_cut",
+    "select_rules_grid_point",
     "tune_anomaly_threshold",
     "tune_rules",
-]
-
-
-_ScoredPoint = tuple[
-    tuple[float, float, int, int],
-    dict[str, int | float],
-    float,
-    float,
-    list[ScoredDay],
 ]
 
 
@@ -96,6 +92,42 @@ class RuleStandalone:
 
 
 @dataclass(frozen=True)
+class RulesGridPoint:
+    """
+    WHAT: Validation numbers of one rules threshold combination from the tuning grid.
+
+    ATTRIBUTES:
+        thresholds: the combination's value for every baseline threshold key.
+        validation_rate_pct: percentage of genuinely active accounts this point restricts.
+        validation_recall: share of mule accounts this point detects.
+        changed_count: how many thresholds differ from the config's untuned_start values.
+        grid_index: position of the combination in the declared grid order.
+    """
+
+    thresholds: dict[str, int | float]
+    validation_rate_pct: float
+    validation_recall: float
+    changed_count: int
+    grid_index: int
+
+
+@dataclass(frozen=True)
+class AnomalyScoreCut:
+    """
+    WHAT: Validation numbers of one inclusive anomaly score cut.
+
+    ATTRIBUTES:
+        cut: inclusive anomaly score threshold.
+        validation_rate_pct: percentage of genuinely active accounts the cut restricts.
+        validation_recall: share of mule accounts the cut detects.
+    """
+
+    cut: float
+    validation_rate_pct: float
+    validation_recall: float
+
+
+@dataclass(frozen=True)
 class RulesTuningResult:
     """
     WHAT: Outcome of the joint rules-threshold search on validation worlds.
@@ -107,6 +139,8 @@ class RulesTuningResult:
         meets_budget: True when validation_rate_pct is within the genuine-restriction budget.
         combinations_evaluated: number of grid points scored.
         per_rule_standalone: each rule's rate and recall on its own at the chosen thresholds.
+        grid_points: every evaluated point, in declared order, when the caller asked to collect
+            them; empty otherwise.
     """
 
     thresholds: dict[str, int | float]
@@ -115,6 +149,7 @@ class RulesTuningResult:
     meets_budget: bool
     combinations_evaluated: int
     per_rule_standalone: tuple[RuleStandalone, ...]
+    grid_points: tuple[RulesGridPoint, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -443,12 +478,57 @@ def _per_rule_standalone(scored: list[ScoredDay], config: RulesConfig) -> tuple[
     return tuple(results)
 
 
+def select_rules_grid_point(points: Sequence[RulesGridPoint], budget_pct: float) -> RulesGridPoint:
+    """
+    WHAT: Picks the rules grid point the tuning rule chooses for one genuine-restriction budget.
+
+    WHY: Operating points at several budgets must use exactly the ordering tune_rules applies, so
+    both call this one function instead of repeating the comparison keys.
+
+    Args:
+        points: every evaluated grid point, in declared grid order.
+        budget_pct: maximum percentage of genuinely active accounts that may be restricted.
+
+    Returns:
+        The point with the highest recall among budget-meeting points, then the lowest rate, then
+        the fewest changed thresholds, then the earliest grid position. When no point meets the
+        budget, the ordering starts from the lowest rate instead.
+
+    Raises:
+        ValueError: If the grid is empty.
+    """
+    _check_budget(budget_pct)
+
+    best_meeting: tuple[tuple[float, float, int, int], RulesGridPoint] | None = None
+    best_any: tuple[tuple[float, float, int, int], RulesGridPoint] | None = None
+    for point in points:
+        if point.validation_rate_pct <= budget_pct:
+            meeting_key = (
+                -point.validation_recall,
+                point.validation_rate_pct,
+                point.changed_count,
+                point.grid_index,
+            )
+            if best_meeting is None or meeting_key < best_meeting[0]:
+                best_meeting = (meeting_key, point)
+        any_key = (point.validation_rate_pct, -point.validation_recall, point.changed_count, point.grid_index)
+        if best_any is None or any_key < best_any[0]:
+            best_any = (any_key, point)
+
+    chosen = best_meeting if best_meeting is not None else best_any
+    if chosen is None:
+        raise ValueError("Tuning grid is empty; cannot select a threshold point")
+    return chosen[1]
+
+
 def tune_rules(
     rows: list[dict[str, Any]],
     config: RulesConfig,
     tuning: TuningConfig,
     split: str,
     budget_pct: float,
+    *,
+    collect_grid_points: bool = False,
 ) -> RulesTuningResult:
     """
     WHAT: Searches the whole threshold grid on validation account-days and returns the best point
@@ -463,16 +543,16 @@ def tune_rules(
         tuning: Candidate grid and allowed splits.
         split: Dataset split; must be allowed for tuning.
         budget_pct: Maximum percentage of genuinely active accounts that may be restricted.
+        collect_grid_points: When true, keep every evaluated point on the result so operating
+            points at other budgets can be selected from the same scoring pass.
 
     Returns:
         RulesTuningResult for the selected point. When no point meets the budget, the lowest-rate
         point is returned with meets_budget False.
 
     Key logic:
-        Every combination of candidate values is evaluated in declared order. Selection prefers,
-        among budget-meeting points, highest recall, then lowest rate, then fewest thresholds
-        changed from untuned_start, then the earliest combination. Without a budget-meeting point
-        the same ordering starts from the lowest rate.
+        Every combination of candidate values is evaluated in declared order, and the choice is
+        delegated to select_rules_grid_point so multi-budget reporting uses the same ordering.
 
     Raises:
         ValueError: If the split is not allowed, the budget is invalid, or the rows lack genuine
@@ -485,10 +565,7 @@ def tune_rules(
     threshold_keys = list(config.thresholds)
     candidate_lists = [tuning.candidates[key] for key in threshold_keys]
 
-    combinations_evaluated = 0
-    best_meeting: _ScoredPoint | None = None
-    best_any: _ScoredPoint | None = None
-
+    points: list[RulesGridPoint] = []
     for index, combination in enumerate(product(*candidate_lists)):
         new_values: dict[str, int | float] = dict(zip(threshold_keys, combination, strict=True))
         tuned_config = with_thresholds(config, new_values, tuning.derived_from)
@@ -496,29 +573,28 @@ def tune_rules(
         restricted = rules_restricted_days(scored)
         validation_rate_pct, validation_recall = _validation_metrics(scored, restricted)
         changed = sum(1 for key in threshold_keys if new_values[key] != config.thresholds[key].value)
-        combinations_evaluated += 1
+        points.append(
+            RulesGridPoint(
+                thresholds=new_values,
+                validation_rate_pct=validation_rate_pct,
+                validation_recall=validation_recall,
+                changed_count=changed,
+                grid_index=index,
+            )
+        )
 
-        if validation_rate_pct <= budget_pct:
-            meeting_key = (-validation_recall, validation_rate_pct, changed, index)
-            if best_meeting is None or meeting_key < best_meeting[0]:
-                best_meeting = (meeting_key, new_values, validation_rate_pct, validation_recall, scored)
-        any_key = (validation_rate_pct, -validation_recall, changed, index)
-        if best_any is None or any_key < best_any[0]:
-            best_any = (any_key, new_values, validation_rate_pct, validation_recall, scored)
-
-    chosen = best_meeting if best_meeting is not None else best_any
-    if chosen is None:
-        raise ValueError("Tuning grid is empty; cannot select a threshold point")
-    _, chosen_values, validation_rate_pct, validation_recall, chosen_scored = chosen
-    chosen_config = with_thresholds(config, chosen_values, tuning.derived_from)
+    chosen = select_rules_grid_point(points, budget_pct)
+    chosen_config = with_thresholds(config, chosen.thresholds, tuning.derived_from)
+    chosen_scored = score_account_days(day_rows, chosen_config, None)
 
     return RulesTuningResult(
-        thresholds=dict(chosen_values),
-        validation_rate_pct=validation_rate_pct,
-        validation_recall=validation_recall,
-        meets_budget=validation_rate_pct <= budget_pct,
-        combinations_evaluated=combinations_evaluated,
+        thresholds=dict(chosen.thresholds),
+        validation_rate_pct=chosen.validation_rate_pct,
+        validation_recall=chosen.validation_recall,
+        meets_budget=chosen.validation_rate_pct <= budget_pct,
+        combinations_evaluated=len(points),
         per_rule_standalone=_per_rule_standalone(chosen_scored, chosen_config),
+        grid_points=tuple(points) if collect_grid_points else (),
     )
 
 
@@ -569,6 +645,112 @@ def _account_peak_scores(scored: list[ScoredDay]) -> tuple[dict[str, float], dic
     return genuine_peak, mule_peak
 
 
+def score_cut_curve(scored: list[ScoredDay]) -> tuple[AnomalyScoreCut, ...]:
+    """
+    WHAT: Measures every candidate anomaly cut once, in ascending cut order.
+
+    WHY: Tuning one budget and reporting several budgets must share one sweep, so this is the only
+    place that counts restricted accounts per cut.
+
+    Args:
+        scored: Scored account-days; every row must carry an anomaly score.
+
+    Returns:
+        One AnomalyScoreCut per distinct score seen on a genuine account-day, ascending by cut.
+
+    Key logic:
+        Candidate cuts are the distinct anomaly scores on genuine account-days. Each account's peak
+        score on its genuine days (for the rate) and on its mule days (for recall) is computed once;
+        bisect then counts how many peaks clear each cut.
+
+    Complexity:
+        O(rows + C log C + C log A) time for C cuts and A peaks; memory O(rows).
+
+    Raises:
+        ValueError: If there are no genuine account-days or a row has no anomaly score.
+    """
+    genuine_days = [scored_day for scored_day in scored if scored_day.role in GENUINE_ROLES]
+    if not genuine_days:
+        raise ValueError("Cannot tune an anomaly threshold without genuine account-days")
+
+    candidate_thresholds: list[float] = []
+    for scored_day in genuine_days:
+        if scored_day.anomaly_score is None:
+            raise ValueError("anomaly scores are required on every genuine account-day for tuning")
+        candidate_thresholds.append(scored_day.anomaly_score)
+    thresholds = sorted(set(candidate_thresholds))
+
+    genuine_peak, mule_peak = _account_peak_scores(scored)
+    sorted_genuine_peaks = sorted(genuine_peak.values())
+    sorted_mule_peaks = sorted(mule_peak.values())
+    genuine_total = len(sorted_genuine_peaks)
+    mule_total = len(sorted_mule_peaks)
+    if genuine_total == 0:
+        raise ValueError("Cannot measure a genuine-restriction rate without genuine accounts")
+
+    curve: list[AnomalyScoreCut] = []
+    for threshold in thresholds:
+        genuine_restricted = genuine_total - bisect_left(sorted_genuine_peaks, threshold)
+        validation_rate_pct = 100.0 * genuine_restricted / genuine_total
+        if mule_total:
+            mule_detected = mule_total - bisect_left(sorted_mule_peaks, threshold)
+            validation_recall = mule_detected / mule_total
+        else:
+            validation_recall = 0.0
+        curve.append(
+            AnomalyScoreCut(
+                cut=threshold,
+                validation_rate_pct=validation_rate_pct,
+                validation_recall=validation_recall,
+            )
+        )
+    return tuple(curve)
+
+
+def select_anomaly_cut(curve: Sequence[AnomalyScoreCut], budget_pct: float) -> AnomalyTuningResult:
+    """
+    WHAT: Applies the tuning selection rule to an already measured score-cut curve.
+
+    WHY: Several budgets can be reported from one sweep only if the selection order lives in one
+    function that both the tuner and the multi-budget report call.
+
+    Args:
+        curve: cuts in ascending order, as returned by score_cut_curve.
+        budget_pct: maximum percentage of genuinely active accounts that may be restricted.
+
+    Returns:
+        AnomalyTuningResult for the selected cut: highest recall, then lowest rate, then earliest
+        candidate among budget-meeting cuts; otherwise lowest rate, then highest recall, then
+        earliest candidate with meets_budget False.
+
+    Raises:
+        ValueError: If the curve is empty or the budget is invalid.
+    """
+    _check_budget(budget_pct)
+
+    best_meeting: tuple[tuple[float, float, int], AnomalyScoreCut] | None = None
+    best_any: tuple[tuple[float, float, int], AnomalyScoreCut] | None = None
+    for index, point in enumerate(curve):
+        if point.validation_rate_pct <= budget_pct:
+            meeting_key = (-point.validation_recall, point.validation_rate_pct, index)
+            if best_meeting is None or meeting_key < best_meeting[0]:
+                best_meeting = (meeting_key, point)
+        any_key = (point.validation_rate_pct, -point.validation_recall, index)
+        if best_any is None or any_key < best_any[0]:
+            best_any = (any_key, point)
+
+    chosen = best_meeting if best_meeting is not None else best_any
+    if chosen is None:
+        raise ValueError("No anomaly score candidates available; cannot select a threshold")
+    point = chosen[1]
+    return AnomalyTuningResult(
+        threshold=point.cut,
+        validation_rate_pct=point.validation_rate_pct,
+        validation_recall=point.validation_recall,
+        meets_budget=point.validation_rate_pct <= budget_pct,
+    )
+
+
 def tune_anomaly_threshold(
     scored: list[ScoredDay],
     tuning: TuningConfig,
@@ -610,53 +792,5 @@ def tune_anomaly_threshold(
     """
     _check_split(tuning, split)
     _check_budget(budget_pct)
-
-    genuine_days = [scored_day for scored_day in scored if scored_day.role in GENUINE_ROLES]
-    if not genuine_days:
-        raise ValueError("Cannot tune an anomaly threshold without genuine account-days")
-
-    candidate_thresholds: list[float] = []
-    for scored_day in genuine_days:
-        if scored_day.anomaly_score is None:
-            raise ValueError("anomaly scores are required on every genuine account-day for tuning")
-        candidate_thresholds.append(scored_day.anomaly_score)
-    thresholds = sorted(set(candidate_thresholds))
-
-    genuine_peak, mule_peak = _account_peak_scores(scored)
-    sorted_genuine_peaks = sorted(genuine_peak.values())
-    sorted_mule_peaks = sorted(mule_peak.values())
-    genuine_total = len(sorted_genuine_peaks)
-    mule_total = len(sorted_mule_peaks)
-    if genuine_total == 0:
-        raise ValueError("Cannot measure a genuine-restriction rate without genuine accounts")
-
-    best_meeting: tuple[tuple[float, float, int], float, float, float] | None = None
-    best_any: tuple[tuple[float, float, int], float, float, float] | None = None
-    for index, threshold in enumerate(thresholds):
-        genuine_restricted = genuine_total - bisect_left(sorted_genuine_peaks, threshold)
-        validation_rate_pct = 100.0 * genuine_restricted / genuine_total
-        if mule_total:
-            mule_detected = mule_total - bisect_left(sorted_mule_peaks, threshold)
-            validation_recall = mule_detected / mule_total
-        else:
-            validation_recall = 0.0
-
-        if validation_rate_pct <= budget_pct:
-            meeting_key = (-validation_recall, validation_rate_pct, index)
-            if best_meeting is None or meeting_key < best_meeting[0]:
-                best_meeting = (meeting_key, threshold, validation_rate_pct, validation_recall)
-        any_key = (validation_rate_pct, -validation_recall, index)
-        if best_any is None or any_key < best_any[0]:
-            best_any = (any_key, threshold, validation_rate_pct, validation_recall)
-
-    chosen = best_meeting if best_meeting is not None else best_any
-    if chosen is None:
-        raise ValueError("No anomaly score candidates available; cannot select a threshold")
-    _, threshold, validation_rate_pct, validation_recall = chosen
-
-    return AnomalyTuningResult(
-        threshold=threshold,
-        validation_rate_pct=validation_rate_pct,
-        validation_recall=validation_recall,
-        meets_budget=validation_rate_pct <= budget_pct,
-    )
+    curve = score_cut_curve(scored)
+    return select_anomaly_cut(curve, budget_pct)
