@@ -12,16 +12,16 @@ from typing import Any
 from evaluation.run_level_18_pilot import _success_criterion
 
 
-def _metric(median: float) -> dict[str, Any]:
+def _metric(median: float | None) -> dict[str, Any]:
     """Returns a headline-metric summary block carrying a median, as the summariser writes it."""
     return {"world_count": 3, "median": median, "unit": "fraction"}
 
 
 def _test_across(
-    rules_recall: float,
-    rules_yield: float,
-    xgboost_recall: float,
-    xgboost_yield: float,
+    rules_recall: float | None,
+    rules_yield: float | None,
+    xgboost_recall: float | None,
+    xgboost_yield: float | None,
 ) -> dict[str, Any]:
     """Returns an across_worlds["test"] block with the headline metrics the criterion reads."""
     return {
@@ -59,6 +59,7 @@ def test_pass_requires_strictly_higher_recall_and_yield() -> None:
     block = _success_criterion(
         _validation(0.5, 0.5, both_meet=True),
         _test_across(0.4, 500.0, 0.7, 900.0),
+        0.5,
     )
 
     assert block["status"] == "pass"
@@ -75,6 +76,7 @@ def test_equal_recall_never_passes_even_with_higher_yield() -> None:
     block = _success_criterion(
         _validation(0.5, 0.5, both_meet=True),
         _test_across(0.6, 500.0, 0.6, 900.0),
+        0.5,
     )
 
     assert block["status"] == "fail"
@@ -87,6 +89,7 @@ def test_equal_yield_never_passes_even_with_higher_recall() -> None:
     block = _success_criterion(
         _validation(0.5, 0.5, both_meet=True),
         _test_across(0.4, 900.0, 0.7, 900.0),
+        0.5,
     )
 
     assert block["status"] == "fail"
@@ -97,9 +100,48 @@ def test_validation_budget_miss_is_not_judgeable_even_when_the_model_wins_on_tes
     block = _success_criterion(
         _validation(0.9, 0.5, both_meet=False),
         _test_across(0.4, 500.0, 0.7, 900.0),
+        0.5,
     )
 
     assert block["status"] == "not_judgeable"
     assert "0.9" in block["reason"]
     assert block["rules_test_median_recall_at_capacity"] == 0.4
     assert block["xgboost_test_median_recall_at_capacity"] == 0.7
+
+
+def test_budget_pct_is_the_committed_budget_not_either_scorer_rate() -> None:
+    """The recorded budget is the passed committed budget, never a scorer's validation rate."""
+    block = _success_criterion(
+        _validation(5.882352941176471, 0.29411764705882354, both_meet=False),
+        _test_across(0.4, 500.0, 0.7, 900.0),
+        2.5,
+    )
+
+    assert block["budget_pct"] == 2.5
+    assert block["rules_validation_rate_pct"] == 5.882352941176471
+    assert block["xgboost_validation_rate_pct"] == 0.29411764705882354
+
+
+def test_missing_rules_recall_is_not_judgeable_even_when_the_model_wins() -> None:
+    """A missing rules recall median makes the comparison not judgeable and names it."""
+    block = _success_criterion(
+        _validation(0.5, 0.5, both_meet=True),
+        _test_across(None, 500.0, 0.7, 900.0),
+        0.5,
+    )
+
+    assert block["status"] == "not_judgeable"
+    assert "rules recall_at_capacity" in block["reason"]
+    assert block["xgboost_test_median_recall_at_capacity"] == 0.7
+
+
+def test_missing_xgboost_yield_is_not_judgeable() -> None:
+    """A missing XGBoost yield median makes the comparison not judgeable and names it."""
+    block = _success_criterion(
+        _validation(0.5, 0.5, both_meet=True),
+        _test_across(0.4, 500.0, 0.7, None),
+        0.5,
+    )
+
+    assert block["status"] == "not_judgeable"
+    assert "xgboost yield_measured" in block["reason"]

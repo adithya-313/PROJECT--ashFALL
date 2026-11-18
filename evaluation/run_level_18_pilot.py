@@ -503,26 +503,29 @@ def _test_metric_median(test_across: dict[str, Any], scorer: str, metric: str) -
 def _success_criterion(
     validation_scorers: dict[str, Any],
     test_across: dict[str, Any],
+    budget_pct: float,
 ) -> dict[str, Any]:
     """
     WHAT: Applies the committed success rule for the main budget.
 
     WHY: The brief allows saying the model beats the rules only when both scorers met the validation
     harm budget and XGBoost beats rules on BOTH test median recall at capacity and test median yield.
-    A tie never passes.
+    A tie never passes, and a missing median makes the comparison unjudgeable rather than a win.
 
     Args:
         validation_scorers: the main budget's per-scorer validation block from the operating points.
         test_across: across_worlds["test"] on the main budget.
+        budget_pct: the committed main genuine-restriction budget the operating points were built for.
 
     Returns:
-        A block with status "not_judgeable", "pass" or "fail", a reason, the validation rates and
-        both scorers' test medians and genuine-restriction rates for the main budget.
+        A block with status "not_judgeable", "pass" or "fail", a reason, the committed budget, the
+        validation rates and both scorers' test medians and genuine-restriction rates.
 
     Key logic:
-        A validation budget miss by rules or XGBoost makes the comparison not judgeable. Otherwise
-        the status is pass only when XGBoost's median recall and median yield both strictly exceed
-        the rules values; missing medians are treated as not exceeding, so they fail.
+        A validation budget miss by rules or XGBoost, or any missing rules/XGBoost test median for
+        recall at capacity or yield, makes the comparison not judgeable and the reason names each
+        cause. Otherwise the status is pass only when XGBoost's median recall and median yield both
+        strictly exceed the rules values; a tie fails.
 
     Raises:
         KeyError: If the blocks do not carry the expected scorer keys.
@@ -536,29 +539,45 @@ def _success_criterion(
     rules_harm = _test_metric_median(test_across, "rules", "genuine_restriction_rate")
     xgboost_harm = _test_metric_median(test_across, "xgboost", "genuine_restriction_rate")
 
-    missed_budgets: list[str] = []
+    problems: list[str] = []
     if not rules_validation["meets_budget"]:
-        missed_budgets.append(f"rules at {rules_validation['validation_rate_pct']}%")
+        problems.append(f"validation budget missed by rules at {rules_validation['validation_rate_pct']}%")
     if not xgboost_validation["meets_budget"]:
-        missed_budgets.append(f"xgboost at {xgboost_validation['validation_rate_pct']}%")
+        problems.append(
+            f"validation budget missed by xgboost at {xgboost_validation['validation_rate_pct']}%"
+        )
+    missing_medians = [
+        name
+        for name, value in (
+            ("rules recall_at_capacity", rules_recall),
+            ("xgboost recall_at_capacity", xgboost_recall),
+            ("rules yield_measured", rules_yield),
+            ("xgboost yield_measured", xgboost_yield),
+        )
+        if value is None
+    ]
+    if missing_medians:
+        problems.append("missing test median(s): " + ", ".join(missing_medians))
 
-    if missed_budgets:
+    if problems:
         status = "not_judgeable"
-        reason = "validation budget missed by " + " and ".join(missed_budgets)
+        reason = "; ".join(problems)
+    elif (
+        xgboost_recall is not None
+        and rules_recall is not None
+        and xgboost_yield is not None
+        and rules_yield is not None
+        and xgboost_recall > rules_recall
+        and xgboost_yield > rules_yield
+    ):
+        status = "pass"
+        reason = "xgboost median recall and median yield both exceed rules on test"
     else:
-        lower_recall = float("-inf") if rules_recall is None else rules_recall
-        lower_yield = float("-inf") if rules_yield is None else rules_yield
-        xgboost_higher_recall = xgboost_recall is not None and xgboost_recall > lower_recall
-        xgboost_higher_yield = xgboost_yield is not None and xgboost_yield > lower_yield
-        if xgboost_higher_recall and xgboost_higher_yield:
-            status = "pass"
-            reason = "xgboost median recall and median yield both exceed rules on test"
-        else:
-            status = "fail"
-            reason = "xgboost does not strictly exceed rules on both median recall and median yield on test"
+        status = "fail"
+        reason = "xgboost does not strictly exceed rules on both median recall and median yield on test"
 
     return {
-        "budget_pct": validation_scorers["rules"]["validation_rate_pct"],
+        "budget_pct": budget_pct,
         "status": status,
         "reason": reason,
         "rules_validation_rate_pct": rules_validation["validation_rate_pct"],
@@ -951,6 +970,7 @@ def run_pilot(
     success_criterion = _success_criterion(
         validation_operating_points["points"][0]["scorers"],
         by_budget["test"][main_budget_label]["across_worlds"],
+        main_budget_pct,
     )
 
     model_path = result_dir / "account_model.ubj"
