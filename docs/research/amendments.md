@@ -554,3 +554,16 @@ No model code exists yet (models start in Level 18; `world/` is simulator code).
 | Why | The `-dirty` suffix falsely suggests the recorded commit differs from the code that produced the data, which weakens the provenance every result depends on. |
 | Disclosure | Provenance label only. No data, threshold or result changed. |
 | Results exist? | No |
+
+## A-046
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-19 |
+| Issue IDs | None |
+| Issue IDs v2 | None |
+| Files | `config/mule_model.yaml`, `decisions/mule_account_model.py`, `decisions/pu_learning.py` (new), `evaluation/run_level_18_pilot.py`, `tests/unit/decisions/test_mule_account_model.py`, `tests/unit/decisions/test_pu_config.py` (new), `tests/unit/test_pu_learning.py` (new), `tests/unit/evaluation/test_run_level_18_pilot.py`, `docs/research/amendments.md` |
+| What changed | The pilot account model can now be trained as a positive-unlabelled problem, selected by `pu_method` in `config/mule_model.yaml`: `none` (the committed default, the existing supervised path unchanged), `bagging`, or `elkan_noto`. PU bagging trains `pu_bagging_n_bags` members, each on all positive rows plus `min(unlabelled, ratio * positives)` unlabelled rows drawn without replacement with a seeded generator, and averages member margins before applying the logistic link. Each candidate `(n_estimators, ratio)` in `pu_unlabelled_per_positive_candidates` is scored on validation average precision and the best wins, ties going to fewer estimators then the smaller ratio. Weighted Elkan-Noto trains one unbalanced `g` to estimate P(labelled \| x), takes `c` as the mean of `g` over validation positives, turns each unlabelled row into a target-1 row with weight `((1 - c) / c) * p / (1 - p)` and a target-0 row with weight `1 - weight`, and sets the final class weight from the weight totals; `pu_probability_clip` keeps the factor finite. The manifest records the method, every candidate AP and training time, the chosen values, bag member seeds, and `c`, weight summary and clip count. |
+| Why | The bank only holds positive labels and treats every unlabelled account as a negative, so unreported frauds train the model the wrong way. Both methods stay behind a switch that defaults off so the supervised pilot result is unchanged, the method choice is deferred to the full-scale run, and the pilot can compare the candidates on validation. Averaging margins keeps the ensemble SHAP values exact and leaves the members mergeable into one booster for ONNX later. Plain Elkan-Noto probability rescaling is not used because a constant divisor cannot change any ranking metric. |
+| Disclosure | Methods added behind a default-off switch before any full-scale result. No committed threshold or existing result changed; the `none` path calls the same code and produces the same `n_estimators_scores` keys as before. |
+| Results exist? | No |
