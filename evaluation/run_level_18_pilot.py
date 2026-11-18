@@ -38,6 +38,7 @@ from decisions.mule_account_model import (
     set_mule_model_config_path,
     train_account_model,
 )
+from decisions.pu_learning import PUBaggedAccountModel
 from decisions.rules_config import (
     RulesConfig,
     load_rules_config,
@@ -733,7 +734,7 @@ def _trivial_world_check(
 
 def _write_shap(
     path: Path,
-    model: xgboost.XGBClassifier,
+    model: xgboost.XGBClassifier | PUBaggedAccountModel,
     feature_names: Sequence[str],
     day_rows: Sequence[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -742,10 +743,11 @@ def _write_shap(
 
     WHY: The pilot needs to show which features drive the account model, without plots. A SHAP
     runtime failure is recorded verbatim and does not stop the evaluation, as the architect ruled.
+    A PU bagging ensemble explains itself with the mean of its members' margin-space SHAP values.
 
     Args:
         path: Destination shap_top_features.json.
-        model: Fitted XGBoost account model.
+        model: Fitted XGBoost account model or PUBaggedAccountModel ensemble.
         feature_names: Canonical model feature order.
         day_rows: Test account-day rows that were scored.
 
@@ -758,12 +760,15 @@ def _write_shap(
     payload: dict[str, Any]
     try:
         matrix = _feature_matrix(day_rows, feature_names)
-        explainer = shap.TreeExplainer(model)
-        shap_values = explainer.shap_values(matrix)
-        if isinstance(shap_values, list):
-            values = shap_values[1] if len(shap_values) > 1 else shap_values[0]
+        if isinstance(model, PUBaggedAccountModel):
+            values = model.shap_values(matrix)
         else:
-            values = shap_values
+            explainer = shap.TreeExplainer(model)
+            shap_values = explainer.shap_values(matrix)
+            if isinstance(shap_values, list):
+                values = shap_values[1] if len(shap_values) > 1 else shap_values[0]
+            else:
+                values = shap_values
         array = numpy.asarray(values)
         if array.ndim == 3:
             array = array[:, :, 1]

@@ -19,7 +19,10 @@ import math
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from decisions.pu_learning import PUBaggedAccountModel
 
 import xgboost
 import yaml
@@ -710,15 +713,19 @@ def train_account_model(
     return model, scale_pos_weight
 
 
-def predict_account_days(model: xgboost.XGBClassifier, day_rows: list[dict[str, Any]]) -> list[float]:
+def predict_account_days(
+    model: "xgboost.XGBClassifier | PUBaggedAccountModel",
+    day_rows: list[dict[str, Any]],
+) -> list[float]:
     """
     WHAT: Returns the model's fraud probability for every supplied account-day row, in row order.
 
     WHY: Evaluation keeps the same row order as one_row_per_account_day, so callers can attach a
-    probability to each ScoredDay without a separate join key.
+    probability to each ScoredDay without a separate join key. A PU bagging ensemble is scored as
+    the logistic probability of its mean margin, so both model types answer the same question.
 
     Args:
-        model: Fitted XGBoost account model.
+        model: Fitted XGBoost account model or PUBaggedAccountModel ensemble.
         day_rows: Account-day rows carrying the canonical features.
 
     Returns:
@@ -731,6 +738,13 @@ def predict_account_days(model: xgboost.XGBClassifier, day_rows: list[dict[str, 
     matrix = [[_feature_value(row.get(name), name) for name in feature_names] for row in day_rows]
     if not matrix:
         raise ValueError("predict_account_days requires at least one account-day row")
+
+    # Imported here because pu_learning imports train_account_model from this module; a module-level
+    # import would make the two modules import each other during start-up.
+    from decisions.pu_learning import PUBaggedAccountModel as BaggedModel
+
+    if isinstance(model, BaggedModel):
+        return model.predict_probabilities(matrix)
     probabilities = model.predict_proba(matrix)[:, 1]
     return [float(probability) for probability in probabilities]
 
