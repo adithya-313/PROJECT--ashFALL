@@ -5,6 +5,7 @@ envs/nationalsim.env
 __pycache__/
 *.py[cod]
 *$py.class
+.venv/
 
 # Model weight files — these can be hundreds of MB to several GB.
 # They must never be committed to git; use DVC or cloud storage instead.

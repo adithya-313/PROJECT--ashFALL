@@ -541,3 +541,16 @@ No model code exists yet (models start in Level 18; `world/` is simulator code).
 | Why | The engineer ruling of 2026-11-17 asks for a rule_6 label-or-registry signal to be compared with the XGBoost model in the 2x2 pilot, while keeping the default rules table and every Level 17 result byte-for-byte unchanged. |
 | Disclosure | Decided before any full-scale result. No threshold moved; Level 17 unchanged. |
 | Results exist? | No |
+
+## A-045
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-18 |
+| Issue IDs | None |
+| Issue IDs v2 | None |
+| Files | `.gitignore`, `docs/research/amendments.md` |
+| What changed | `.venv/` is now ignored. Every Level 16 and Level 18 lab dataset built so far carries a `-dirty` code version: block 0 at `71a6d97-dirty`, blocks 1 and later at `d61a65e-dirty`. The stamp was caused only by an untracked `.venv/` folder present in the working tree at build time; no tracked file differed from the recorded commit. No dataset was rebuilt. Datasets built from now on stamp clean. |
+| Why | The `-dirty` suffix falsely suggests the recorded commit differs from the code that produced the data, which weakens the provenance every result depends on. |
+| Disclosure | Provenance label only. No data, threshold or result changed. |
+| Results exist? | No |
