@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from core.config_validator import load_yaml
-from decisions.rules_config import RulesConfig, load_rules_config, with_thresholds
+from decisions.rules_config import RulesConfig, load_rules_config, load_rules_config_with_labels, with_thresholds
 from evaluation.level17_scoring import (
     GENUINE_ROLES,
     ScoredDay,
@@ -41,6 +41,7 @@ __all__ = [
     "RuleStandalone",
     "RulesTuningResult",
     "TuningConfig",
+    "load_labels_tuning_config",
     "load_tuning_config",
     "tune_anomaly_threshold",
     "tune_rules",
@@ -190,7 +191,45 @@ def _parse_candidates(
     return tuple(parsed)
 
 
-def load_tuning_config(path: Path | str | None = None) -> TuningConfig:
+def _load_extension_tuning_thresholds(extension_path: Path) -> dict[str, Any]:
+    """
+    WHAT: Reads and validates the thresholds block of an extension file's tuning grid.
+
+    Args:
+        extension_path: Rules extension YAML holding a tuning block.
+
+    Returns:
+        threshold key -> raw candidate block, exactly as declared in the extension file.
+
+    Raises:
+        FileNotFoundError: If the extension file does not exist.
+        ValueError: If the tuning block or its thresholds mapping is missing or malformed, or a
+            candidate list is not a non-empty mapping for that threshold.
+    """
+    if not extension_path.exists():
+        raise FileNotFoundError(f"Rules extension file not found at: {extension_path}")
+
+    raw = load_yaml(extension_path)
+    if not isinstance(raw, dict):
+        raise ValueError(f"Invalid rules extension in {extension_path}; expected mapping at root.")
+    tuning_block = raw.get("tuning")
+    if not isinstance(tuning_block, dict):
+        raise ValueError(f"Rules extension {extension_path} requires a 'tuning' mapping")
+    raw_thresholds = tuning_block.get("thresholds")
+    if not isinstance(raw_thresholds, dict) or not raw_thresholds:
+        raise ValueError(f"Rules extension {extension_path} requires a non-empty tuning 'thresholds' mapping")
+    for key, block in raw_thresholds.items():
+        if not isinstance(block, dict):
+            raise ValueError(f"Tuning threshold '{key}' must be a mapping in {extension_path}")
+    return raw_thresholds
+
+
+def load_tuning_config(
+    path: Path | str | None = None,
+    *,
+    rules_config: RulesConfig | None = None,
+    extension_path: Path | str | None = None,
+) -> TuningConfig:
     """
     WHAT: Loads and validates config/rules_tuning.yaml against the baseline thresholds.
 
@@ -199,15 +238,20 @@ def load_tuning_config(path: Path | str | None = None) -> TuningConfig:
 
     Args:
         path: Optional tuning YAML path; defaults to config/rules_tuning.yaml in the repository.
+        rules_config: Optional rules table whose threshold keys the grid must match; defaults to
+            load_rules_config(). Pass the merged rules config to tune the label extension.
+        extension_path: Optional rules extension YAML whose tuning block adds candidate lists for
+            thresholds not present in the main tuning file. When None the main grid stands alone.
 
     Returns:
         A validated TuningConfig.
 
     Raises:
-        FileNotFoundError: If the tuning file does not exist.
+        FileNotFoundError: If a tuning or extension file does not exist.
         ValueError: On a malformed root, missing fields, empty or non-numeric candidates,
-            duplicate candidates, a threshold missing from the baseline, an undeclared baseline
-            threshold, or a candidate list without the untuned_start value.
+            duplicate candidates, a threshold missing from the rules config, an undeclared
+            threshold, a candidate list without the untuned_start value, or a threshold declared by
+            both the main grid and the extension grid.
     """
     if path is None:
         root_dir = Path(__file__).resolve().parent.parent
@@ -239,7 +283,17 @@ def load_tuning_config(path: Path | str | None = None) -> TuningConfig:
     if not isinstance(raw_thresholds, dict) or not raw_thresholds:
         raise ValueError(f"Tuning config {resolved_path} requires a non-empty 'thresholds' mapping")
 
-    baseline = load_rules_config()
+    if extension_path is not None:
+        resolved_extension_path = Path(extension_path)
+        extension_thresholds = _load_extension_tuning_thresholds(resolved_extension_path)
+        duplicate_keys = sorted(set(raw_thresholds) & set(extension_thresholds))
+        if duplicate_keys:
+            raise ValueError(
+                f"Thresholds declared by both {resolved_path} and {resolved_extension_path}: {duplicate_keys}"
+            )
+        raw_thresholds = {**raw_thresholds, **extension_thresholds}
+
+    baseline = rules_config if rules_config is not None else load_rules_config()
     baseline_keys = set(baseline.thresholds)
     declared_keys = set(raw_thresholds)
     if declared_keys != baseline_keys:
@@ -260,6 +314,38 @@ def load_tuning_config(path: Path | str | None = None) -> TuningConfig:
         label=label,
         reason=reason,
         derived_from=derived_from,
+    )
+
+
+def load_labels_tuning_config(
+    path: Path | str | None = None,
+    extension_path: Path | str | None = None,
+) -> TuningConfig:
+    """
+    WHAT: Returns the merged tuning grid for the rules table that includes rule_6.
+
+    Args:
+        path: Optional main tuning YAML path; defaults to config/rules_tuning.yaml.
+        extension_path: Optional rules extension YAML path; defaults to
+            config/rules_labels_extension.yaml.
+
+    Returns:
+        A TuningConfig whose candidate keys cover the baseline and extension thresholds, with the
+        policy metadata taken from the main tuning file.
+
+    Raises:
+        FileNotFoundError: If a tuning or extension file does not exist.
+        ValueError: On any validation error raised by load_tuning_config or the rules loaders.
+    """
+    if extension_path is None:
+        root_dir = Path(__file__).resolve().parent.parent
+        resolved_extension_path = root_dir / "config" / "rules_labels_extension.yaml"
+    else:
+        resolved_extension_path = Path(extension_path)
+    return load_tuning_config(
+        path,
+        rules_config=load_rules_config_with_labels(extension_path=resolved_extension_path),
+        extension_path=resolved_extension_path,
     )
 
 

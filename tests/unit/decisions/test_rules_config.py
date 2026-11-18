@@ -10,6 +10,7 @@ import yaml
 from decisions.rules_config import (
     all_thresholds_tuned,
     load_rules_config,
+    load_rules_config_with_labels,
     with_thresholds,
 )
 from decisions.rules_engine import evaluate_rules
@@ -261,3 +262,56 @@ def test_evaluate_rules_uses_tuned_payer_count() -> None:
     assert default_decision.score == 1
     assert tuned_decision.fired == ()
     assert tuned_decision.score == 0
+
+
+def test_merged_loader_has_six_rules_and_eight_thresholds() -> None:
+    """The baseline plus the label extension yields rules 1-5 then rule_6 and eight thresholds."""
+    merged = load_rules_config_with_labels()
+
+    assert len(merged.rules) == 6
+    assert len(merged.thresholds) == 8
+    assert [rule.id for rule in merged.rules] == [
+        "rule_1",
+        "rule_2",
+        "rule_3",
+        "rule_4",
+        "rule_5",
+        "rule_6",
+    ]
+    assert merged.rules[-1].reason_code == "RB6_LABEL_OR_REGISTRY_NEIGHBOUR"
+    assert merged.rules[-1].match == "any"
+
+
+def test_merged_loader_refuses_a_duplicate_rule_id(tmp_path: Path) -> None:
+    """A rule id already present in the baseline is refused when merging the extension."""
+    baseline_data = _base_valid_config()
+    extension_data = {
+        "thresholds": {
+            "extension_threshold": {
+                "value": 1,
+                "label": "policy",
+                "reason": "test reason",
+                "derived_from": "test spec",
+                "status": "untuned_start",
+            },
+        },
+        "rules": [
+            {
+                "id": "rule_1",
+                "reason_code": "RB9_DUPLICATE_ID_TEST",
+                "plain_english": "Duplicate id across files",
+                "conditions": [
+                    {
+                        "feature": "largest_credit_paise_24h",
+                        "op": ">=",
+                        "threshold": "extension_threshold",
+                    }
+                ],
+            }
+        ],
+    }
+    baseline_path = _write_yaml(tmp_path / "baseline.yaml", baseline_data)
+    extension_path = _write_yaml(tmp_path / "extension.yaml", extension_data)
+
+    with pytest.raises(ValueError, match="Duplicate rule id 'rule_1'"):
+        load_rules_config_with_labels(baseline_path, extension_path)

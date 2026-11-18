@@ -50,10 +50,16 @@ ALLOWED_MULE_MODEL_KEYS: frozenset[str] = frozenset(
         "use_label_network_features",
         "label_network_features",
         "feedback_network_features_not_used",
+        "rules_plus_labels_and_registry",
     }
 )
 OPTIONAL_MULE_MODEL_KEYS: frozenset[str] = frozenset(
-    {"use_label_network_features", "label_network_features", "feedback_network_features_not_used"}
+    {
+        "use_label_network_features",
+        "label_network_features",
+        "feedback_network_features_not_used",
+        "rules_plus_labels_and_registry",
+    }
 )
 
 
@@ -74,6 +80,8 @@ class MuleModelConfig:
         label_network_features: Bank-visible label-based network features the model may use.
         feedback_network_features_not_used: Label-based network features built from bank_feedback,
             which no built world writes; recorded so the omission is explicit.
+        rules_plus_labels_and_registry: Whether the rules table also carries rule_6, the label-based
+            OR rule, or None when the config file does not carry the switch.
     """
 
     label_cut: str
@@ -82,6 +90,7 @@ class MuleModelConfig:
     use_label_network_features: bool | None
     label_network_features: tuple[str, ...]
     feedback_network_features_not_used: tuple[str, ...]
+    rules_plus_labels_and_registry: bool | None
 
 
 def _parse_feature_name_list(block: dict[str, Any], key: str, path: Path) -> tuple[str, ...]:
@@ -282,6 +291,15 @@ def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
 
     _validate_network_feature_names(label_network_features, feedback_network_features_not_used, resolved_path)
 
+    rules_plus_labels_and_registry: bool | None = None
+    if "rules_plus_labels_and_registry" in parameters:
+        rules_switch_value = parameters["rules_plus_labels_and_registry"].get("value")
+        if not isinstance(rules_switch_value, bool):
+            raise ValueError(
+                f"rules_plus_labels_and_registry in {resolved_path} must be a boolean; got {rules_switch_value!r}"
+            )
+        rules_plus_labels_and_registry = rules_switch_value
+
     return MuleModelConfig(
         label_cut=label_cut,
         label_maturity_days=label_maturity_days,
@@ -289,6 +307,7 @@ def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
         use_label_network_features=use_label_network_features,
         label_network_features=label_network_features,
         feedback_network_features_not_used=feedback_network_features_not_used,
+        rules_plus_labels_and_registry=rules_plus_labels_and_registry,
     )
 
 

@@ -1,0 +1,40 @@
+# =====================================================================
+# RULES LABELS EXTENSION: rule_6, loaded only when rules_plus_labels_and_registry is on
+# =====================================================================
+# Status untuned_start: "starting value; replaced only by validation-world tuning in the label pilot; never used for reported test results"
+
+thresholds:
+  registry_match_min:
+    value: 1
+    label: policy
+    reason: "Minimum count of this account's identifiers matching active national registry listings."
+    derived_from: "Level 18 engineer ruling 2026-11-17 (rule_6, 2x2 comparison)"
+    status: untuned_start
+
+  complained_hops_max:
+    value: 1
+    label: policy
+    reason: "Maximum network hops from this account to an account with an arrived complaint; hops_to_complained_account comes from complaints, not confirmed labels."
+    derived_from: "Level 18 engineer ruling 2026-11-17 (rule_6, 2x2 comparison)"
+    status: untuned_start
+
+rules:
+  - id: "rule_6"
+    reason_code: "RB6_LABEL_OR_REGISTRY_NEIGHBOUR"
+    plain_english: "Registry identifier match, or a short network path to an account with an arrived complaint"
+    match: any
+    conditions:
+      - feature: "registry_match_count"
+        op: ">="
+        threshold: "registry_match_min"
+      - feature: "hops_to_complained_account"
+        op: "<="
+        threshold: "complained_hops_max"
+
+tuning:
+  thresholds:
+    registry_match_min:
+      candidates: [1]
+
+    complained_hops_max:
+      candidates: [0, 1, 2]

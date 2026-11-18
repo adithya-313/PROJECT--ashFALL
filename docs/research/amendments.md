@@ -528,3 +528,16 @@ No model code exists yet (models start in Level 18; `world/` is simulator code).
 | Why | The Level 18a4 oracle on the pilot validation worlds was capped at 69% recall at capacity because 87% (298/343) of escalations repeated an already-escalated account. An escalated account is under review for the rest of the world, as in real review. |
 | Disclosure | Found on validation worlds before any test-world evaluation. No success threshold moved. Rules thresholds are tuned on restricted days and genuine harm (`rules_tuning._validation_metrics`), so A-043 changes reported recall, yield and time-to-detection, not the tuned thresholds. Approved by the project engineer 2026-11-17. |
 | Results exist? | No |
+
+## A-044
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-18 |
+| Issue IDs | None |
+| Issue IDs v2 | None |
+| Files | `config/rules_labels_extension.yaml` (new), `config/mule_model.yaml`, `decisions/rules_engine.py`, `decisions/rules_config.py`, `decisions/mule_account_model.py`, `evaluation/rules_tuning.py`, `evaluation/run_level_18_pilot.py`, `scripts/handoff_facts.py`, `tests/unit/decisions/test_rules_config.py`, `tests/unit/decisions/test_rules_engine.py`, `tests/unit/evaluation/test_rules_tuning.py`, `tests/unit/evaluation/test_run_level_18_pilot.py`, `tests/unit/test_mule_model_features.py`, `docs/research/amendments.md` |
+| What changed | A sixth heuristic rule, `rule_6` (`RB6_LABEL_OR_REGISTRY_NEIGHBOUR`), is defined in `config/rules_labels_extension.yaml` but is loaded only when `rules_plus_labels_and_registry` in `config/mule_model.yaml` is true; the committed value is false. Rule match modes become 'all' (the previous behaviour, default) or 'any'; rule_6 is an 'any' rule over `registry_match_count >= registry_match_min` and `hops_to_complained_account <= complained_hops_max`. `hops_to_complained_account` is built from arrived complaints, not confirmed labels. The extension ships registry_match_min 1 and complained_hops_max 1, both untuned_start, with tuning candidates [1] and [0, 1, 2]. A merged loader adds the extension thresholds and rule_6 after rules 1 to 5 and refuses duplicate threshold keys, rule ids and reason codes; the merged tuning grid is 972 x 1 x 3 = 2916 points. `config/rules_baseline.yaml`, `config/rules_tuning.yaml` and the Level 17 runner are unchanged. |
+| Why | The engineer ruling of 2026-11-17 asks for a rule_6 label-or-registry signal to be compared with the XGBoost model in the 2x2 pilot, while keeping the default rules table and every Level 17 result byte-for-byte unchanged. |
+| Disclosure | Decided before any full-scale result. No threshold moved; Level 17 unchanged. |
+| Results exist? | No |

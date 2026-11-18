@@ -9,6 +9,7 @@ comparable only when the switch is made on deliberately.
 from pathlib import Path
 
 import pytest
+import yaml
 
 from decisions.anomaly_config import load_anomaly_detector_config
 from decisions.mule_account_model import (
@@ -16,6 +17,9 @@ from decisions.mule_account_model import (
     load_mule_model_config,
 )
 from features.account_snapshots import account_feature_names
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+MULE_MODEL_CONFIG = REPO_ROOT / "config" / "mule_model.yaml"
 
 LABEL_FEATURES = (
     "hops_to_complained_account",
@@ -131,4 +135,22 @@ def test_feature_outside_the_anomaly_exclusions_is_refused(tmp_path: Path) -> No
     config_path.write_text(_config_body(label_features=(*LABEL_FEATURES, "local_cluster_density")), encoding="utf-8")
 
     with pytest.raises(ValueError, match="'local_cluster_density' .* not in the anomaly exclusion list"):
+        load_mule_model_config(config_path)
+
+
+def test_rules_plus_labels_and_registry_parses_from_the_committed_config() -> None:
+    """The committed config carries the rule_6 switch and it is off."""
+    config = load_mule_model_config(MULE_MODEL_CONFIG)
+
+    assert config.rules_plus_labels_and_registry is False
+
+
+def test_rules_plus_labels_and_registry_rejects_a_non_boolean(tmp_path: Path) -> None:
+    """A non-boolean value for the rule_6 switch is refused and the key is named."""
+    raw = yaml.safe_load(MULE_MODEL_CONFIG.read_text(encoding="utf-8"))
+    raw["parameters"]["rules_plus_labels_and_registry"]["value"] = "yes"
+    config_path = tmp_path / "mule_model_bad_rules_switch.yaml"
+    config_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="rules_plus_labels_and_registry .* must be a boolean"):
         load_mule_model_config(config_path)

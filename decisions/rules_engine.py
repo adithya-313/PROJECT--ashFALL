@@ -42,13 +42,39 @@ class RulesDecision:
     score: int
 
 
+def _condition_passes(feature_value: int | float, threshold_value: int | float, op: str, rule_id: str) -> bool:
+    """
+    PURPOSE:
+        Evaluates one condition's comparison, with the boundary value included.
+
+    INPUTS:
+        feature_value: Present, non-None feature value from the account.
+        threshold_value: Resolved numeric threshold from the condition.
+        op: Comparison operator, one of '>=', '<=', '=='.
+        rule_id: Rule identifier used in the error message.
+
+    RETURNS:
+        bool: True when the comparison holds.
+
+    SIDE EFFECTS / ERRORS:
+        Raises ValueError naming the rule if the operator is not supported.
+    """
+    if op == ">=":
+        return feature_value >= threshold_value
+    if op == "<=":
+        return feature_value <= threshold_value
+    if op == "==":
+        return feature_value == threshold_value
+    raise ValueError(f"Unsupported comparison operator '{op}' in rule '{rule_id}'")
+
+
 def evaluate_rules(
     features: Mapping[str, float | int | None],
     config: RulesConfig | None = None,
 ) -> RulesDecision:
     """
     PURPOSE:
-        Evaluates a set of account features against the baseline heuristic decision table.
+        Evaluates a set of account features against the configured heuristic decision table.
 
     INPUTS:
         features: Mapping of canonical feature names to numeric values or None.
@@ -56,13 +82,15 @@ def evaluate_rules(
 
     KEY LOGIC:
         1. Iterates through configured rules in exact table definition order.
-        2. Inspects condition inputs for missing keys or None values. If any condition's feature
-           is missing or None, the rule is marked not_evaluable and immediately skipped.
-        3. For evaluable rules, evaluates all conditions using configured comparison operators
-           ('>=', '<=', '=='). Comparisons include the boundary value.
-        4. If and only if ALL conditions evaluate to True, the rule fires and its (id, reason_code)
-           is appended to the fired tuple in table order.
-        5. Computes score as integer count of fired rules (policy: rules have equal unit weights).
+        2. For a rule with match 'all': if any condition's feature is missing or None, the rule is
+           marked not_evaluable and immediately skipped. Otherwise the rule fires only when ALL
+           conditions pass.
+        3. For a rule with match 'any': only conditions whose feature is present and not None take
+           part. The rule fires when at least one of those passes, is not_evaluable only when every
+           condition's feature is missing or None, and otherwise does not fire.
+        4. Conditions use configured comparison operators ('>=', '<=', '=='), including the boundary.
+        5. Fired (id, reason_code) pairs are appended in table order.
+        6. Computes score as integer count of fired rules (policy: rules have equal unit weights).
 
     RETURNS:
         RulesDecision: Frozen dataclass with fired pairs, not_evaluable ids, and composite score.
@@ -78,42 +106,49 @@ def evaluate_rules(
     not_evaluable_list: list[str] = []
 
     for rule in config.rules:
-        # Check if all features required by this rule are present and not None
-        is_evaluable = True
-        for cond in rule.conditions:
-            val = features.get(cond.feature)
-            if val is None:
-                is_evaluable = False
-                break
+        if rule.match == "all":
+            # Every condition's feature must be present and non-None for the rule to be evaluable
+            is_evaluable = True
+            for cond in rule.conditions:
+                val = features.get(cond.feature)
+                if val is None:
+                    is_evaluable = False
+                    break
 
-        if not is_evaluable:
-            not_evaluable_list.append(rule.id)
-            continue
+            if not is_evaluable:
+                not_evaluable_list.append(rule.id)
+                continue
 
-        # All features are present and non-None; evaluate all conditions
-        all_passed = True
-        for cond in rule.conditions:
-            feature_val = features[cond.feature]
-            assert feature_val is not None  # Guaranteed by is_evaluable check
+            all_passed = True
+            for cond in rule.conditions:
+                feature_val = features[cond.feature]
+                assert feature_val is not None  # Guaranteed by is_evaluable check
 
-            thresh_val = cond.threshold_value
-            op = cond.op
+                if not _condition_passes(feature_val, cond.threshold_value, cond.op, rule.id):
+                    all_passed = False
+                    break
 
-            if op == ">=":
-                condition_passed = feature_val >= thresh_val
-            elif op == "<=":
-                condition_passed = feature_val <= thresh_val
-            elif op == "==":
-                condition_passed = feature_val == thresh_val
-            else:
-                raise ValueError(f"Unsupported comparison operator '{op}' in rule '{rule.id}'")
+            if all_passed:
+                fired_list.append((rule.id, rule.reason_code))
+        elif rule.match == "any":
+            # Only conditions with a present, non-None feature take part in an OR rule
+            evaluated_any = False
+            passed_any = False
+            for cond in rule.conditions:
+                feature_val = features.get(cond.feature)
+                if feature_val is None:
+                    continue
+                evaluated_any = True
+                if _condition_passes(feature_val, cond.threshold_value, cond.op, rule.id):
+                    passed_any = True
+                    break
 
-            if not condition_passed:
-                all_passed = False
-                break
-
-        if all_passed:
-            fired_list.append((rule.id, rule.reason_code))
+            if not evaluated_any:
+                not_evaluable_list.append(rule.id)
+            elif passed_any:
+                fired_list.append((rule.id, rule.reason_code))
+        else:
+            raise ValueError(f"Unsupported match value '{rule.match}' in rule '{rule.id}'")
 
     return RulesDecision(
         fired=tuple(fired_list),
