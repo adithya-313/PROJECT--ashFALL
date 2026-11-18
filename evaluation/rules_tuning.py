@@ -17,6 +17,7 @@ Every function is pure apart from load_tuning_config, which reads one YAML file.
 malformed data raises a plain ValueError instead of being guessed.
 """
 
+from bisect import bisect_left
 from dataclasses import dataclass
 from datetime import date
 from itertools import product
@@ -27,8 +28,8 @@ from core.config_validator import load_yaml
 from decisions.rules_config import RulesConfig, load_rules_config, load_rules_config_with_labels, with_thresholds
 from evaluation.level17_scoring import (
     GENUINE_ROLES,
+    MULE_ROLES,
     ScoredDay,
-    anomaly_restricted_days,
     genuine_restricted_days,
     ground_sets,
     one_row_per_account_day,
@@ -521,6 +522,53 @@ def tune_rules(
     )
 
 
+def _account_peak_scores(scored: list[ScoredDay]) -> tuple[dict[str, float], dict[str, float]]:
+    """
+    WHAT: Reduces scored account-days to the highest anomaly score each account reached on its
+    genuine days and on its mule days.
+
+    WHY: A cut restricts an account on a day when the day's score clears the cut, so an account is
+    restricted on at least one genuine (or mule) day exactly when its best such day clears the cut.
+    Collapsing each account-day to its last role and highest score keeps the day-level definition
+    intact even if a caller passes two rows for the same account and day.
+
+    Args:
+        scored: Scored account-days; every row must carry an anomaly score.
+
+    Returns:
+        (genuine_peak, mule_peak), each mapping account id to its highest score on days whose last
+        role for that account belongs to the matching role set. Accounts with no such day are
+        absent.
+
+    Raises:
+        ValueError: If any row has no anomaly score, because a numeric cut cannot be applied to it.
+
+    Complexity:
+        O(rows) time and O(account-days) memory; each account-day is visited once.
+    """
+    day_best: dict[tuple[str, date], tuple[float, str]] = {}
+    for scored_day in scored:
+        if scored_day.anomaly_score is None:
+            raise ValueError("anomaly_restricted_days requires anomaly scores on every row")
+        key = (scored_day.account_id, scored_day.day)
+        previous = day_best.get(key)
+        if previous is None or scored_day.anomaly_score > previous[0]:
+            day_best[key] = (scored_day.anomaly_score, scored_day.role)
+        else:
+            day_best[key] = (previous[0], scored_day.role)
+
+    genuine_peak: dict[str, float] = {}
+    mule_peak: dict[str, float] = {}
+    for (account_id, _day), (score, role) in day_best.items():
+        if role in GENUINE_ROLES:
+            if score > genuine_peak.get(account_id, float("-inf")):
+                genuine_peak[account_id] = score
+        elif role in MULE_ROLES:
+            if score > mule_peak.get(account_id, float("-inf")):
+                mule_peak[account_id] = score
+    return genuine_peak, mule_peak
+
+
 def tune_anomaly_threshold(
     scored: list[ScoredDay],
     tuning: TuningConfig,
@@ -548,6 +596,13 @@ def tune_anomaly_threshold(
         point uses the budget rather than an arbitrary stricter cut. Selection prefers, among
         budget-meeting cuts, highest recall, then lowest rate, then the earliest candidate.
         Without a budget-meeting cut, the lowest-rate cut is returned with meets_budget False.
+        Every cut's metrics come from one pass: the scores are collapsed to each account's peak on
+        its genuine days and on its mule days, and a cut restricts an account exactly when that
+        peak clears the cut. Counting with bisect over the sorted peaks keeps the sweep exact.
+
+    Complexity:
+        O(rows + C log C + C log A) time for C candidate cuts and A peak scores, instead of the old
+        O(C * rows); memory is O(rows).
 
     Raises:
         ValueError: If the split is not allowed, the budget is invalid, there are no genuine
@@ -567,11 +622,24 @@ def tune_anomaly_threshold(
         candidate_thresholds.append(scored_day.anomaly_score)
     thresholds = sorted(set(candidate_thresholds))
 
+    genuine_peak, mule_peak = _account_peak_scores(scored)
+    sorted_genuine_peaks = sorted(genuine_peak.values())
+    sorted_mule_peaks = sorted(mule_peak.values())
+    genuine_total = len(sorted_genuine_peaks)
+    mule_total = len(sorted_mule_peaks)
+    if genuine_total == 0:
+        raise ValueError("Cannot measure a genuine-restriction rate without genuine accounts")
+
     best_meeting: tuple[tuple[float, float, int], float, float, float] | None = None
     best_any: tuple[tuple[float, float, int], float, float, float] | None = None
     for index, threshold in enumerate(thresholds):
-        restricted = anomaly_restricted_days(scored, threshold)
-        validation_rate_pct, validation_recall = _validation_metrics(scored, restricted)
+        genuine_restricted = genuine_total - bisect_left(sorted_genuine_peaks, threshold)
+        validation_rate_pct = 100.0 * genuine_restricted / genuine_total
+        if mule_total:
+            mule_detected = mule_total - bisect_left(sorted_mule_peaks, threshold)
+            validation_recall = mule_detected / mule_total
+        else:
+            validation_recall = 0.0
 
         if validation_rate_pct <= budget_pct:
             meeting_key = (-validation_recall, validation_rate_pct, index)
