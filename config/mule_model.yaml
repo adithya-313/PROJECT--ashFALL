@@ -96,3 +96,9 @@ parameters:
     value: 0.999999
     derived_from: "numerical guard, not a modelling choice"
     reason: "Caps g(x) below 1 so the Elkan-Noto factor p/(1-p) stays finite; the value is a numerical guard, not a modelling choice."
+
+  data_path:
+    label: policy
+    value: "rows"
+    derived_from: "architect memory measurement: ~19 GB with rows on full scale; laptop has 16 GB"
+    reason: "Rows keeps today's dict-based path exactly; compact loads one world at a time into float32 arrays so the full-scale run fits a 16 GB laptop."

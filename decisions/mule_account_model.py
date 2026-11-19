@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from decisions.pu_learning import PUBaggedAccountModel
 
+import numpy
 import xgboost
 import yaml
 
@@ -32,7 +33,9 @@ from decisions.anomaly_config import load_anomaly_detector_config
 from features.account_snapshots import account_feature_names
 
 __all__ = [
+    "ALLOWED_DATA_PATHS",
     "ALLOWED_LABEL_CUTS",
+    "FeatureRows",
     "MuleModelConfig",
     "account_model_feature_names",
     "active_mule_model_config_path",
@@ -45,10 +48,14 @@ __all__ = [
     "train_account_model",
 ]
 
+ALLOWED_DATA_PATHS: frozenset[str] = frozenset({"rows", "compact"})
+#: Feature rows in account_model_feature_names() order: plain Python rows or a numpy array.
+FeatureRows = list[list[float]] | numpy.ndarray
 ALLOWED_LABEL_CUTS: frozenset[str] = frozenset({"arrival_time", "label_day"})
 ALLOWED_PU_METHODS: frozenset[str] = frozenset({"none", "bagging", "elkan_noto"})
 ALLOWED_MULE_MODEL_KEYS: frozenset[str] = frozenset(
     {
+        "data_path",
         "feature_fill_flag_share",
         "label_cut",
         "label_maturity_days",
@@ -64,6 +71,7 @@ ALLOWED_MULE_MODEL_KEYS: frozenset[str] = frozenset(
 )
 OPTIONAL_MULE_MODEL_KEYS: frozenset[str] = frozenset(
     {
+        "data_path",
         "use_label_network_features",
         "label_network_features",
         "feedback_network_features_not_used",
@@ -102,6 +110,8 @@ class MuleModelConfig:
             bagging candidate, or None when the config file does not carry the value.
         pu_probability_clip: Cap below 1 on g(x) so the Elkan-Noto weight stays finite, or None when
             the config file does not carry the value.
+        data_path: How the pilot loads the account model's rows, one of ALLOWED_DATA_PATHS, or None
+            when the config file does not carry the switch.
     """
 
     label_cut: str
@@ -115,6 +125,7 @@ class MuleModelConfig:
     pu_bagging_n_bags: int | None
     pu_unlabelled_per_positive_candidates: tuple[int, ...] | None
     pu_probability_clip: float | None
+    data_path: str | None
 
 
 def _parse_feature_name_list(block: dict[str, Any], key: str, path: Path) -> tuple[str, ...]:
@@ -369,6 +380,15 @@ def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
             )
         pu_probability_clip = float(clip_value)
 
+    data_path: str | None = None
+    if "data_path" in parameters:
+        data_path_value = parameters["data_path"].get("value")
+        if not isinstance(data_path_value, str) or data_path_value not in ALLOWED_DATA_PATHS:
+            raise ValueError(
+                f"data_path in {resolved_path} must be one of {sorted(ALLOWED_DATA_PATHS)}; got {data_path_value!r}"
+            )
+        data_path = data_path_value
+
     return MuleModelConfig(
         label_cut=label_cut,
         label_maturity_days=label_maturity_days,
@@ -381,6 +401,7 @@ def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
         pu_bagging_n_bags=pu_bagging_n_bags,
         pu_unlabelled_per_positive_candidates=pu_unlabelled_per_positive_candidates,
         pu_probability_clip=pu_probability_clip,
+        data_path=data_path,
     )
 
 
@@ -629,8 +650,8 @@ def build_training_rows(
 
 
 def train_account_model(
-    rows: list[list[float]],
-    targets: list[int],
+    rows: FeatureRows,
+    targets: list[int] | numpy.ndarray,
     seed: int,
     n_estimators: int = 100,
     *,
@@ -646,7 +667,8 @@ def train_account_model(
     be supplied without changing the default supervised call.
 
     Args:
-        rows: Feature rows in account_model_feature_names() order.
+        rows: Feature rows in account_model_feature_names() order; plain Python rows or a
+            float32 numpy array, because XGBoost converts either to the same internal matrix.
         targets: Binary labels aligned with rows.
         seed: Random seed recorded in the model sidecar.
         n_estimators: Number of boosting rounds; chosen on validation, never on test.
@@ -715,7 +737,7 @@ def train_account_model(
 
 def predict_account_days(
     model: "xgboost.XGBClassifier | PUBaggedAccountModel",
-    day_rows: list[dict[str, Any]],
+    day_rows: list[dict[str, Any]] | numpy.ndarray,
 ) -> list[float]:
     """
     WHAT: Returns the model's fraud probability for every supplied account-day row, in row order.
@@ -726,17 +748,29 @@ def predict_account_days(
 
     Args:
         model: Fitted XGBoost account model or PUBaggedAccountModel ensemble.
-        day_rows: Account-day rows carrying the canonical features.
+        day_rows: Account-day rows carrying the canonical features, or an already built matrix in
+            account_model_feature_names() order with a missing value stored as NaN. The compact data
+            path passes the matrix so it never rebuilds row dictionaries; XGBoost converts both
+            inputs to float32, so the probabilities are the same.
 
     Returns:
         One probability per input row, in the same order.
 
     Raises:
-        ValueError: If a feature value is not numeric, or the rows cannot be scored.
+        ValueError: If a feature value is not numeric, the matrix has the wrong shape, or the rows
+            cannot be scored.
     """
     feature_names = account_model_feature_names()
-    matrix = [[_feature_value(row.get(name), name) for name in feature_names] for row in day_rows]
-    if not matrix:
+    matrix: list[list[float]] | numpy.ndarray
+    if isinstance(day_rows, numpy.ndarray):
+        if day_rows.ndim != 2 or day_rows.shape[1] != len(feature_names):
+            raise ValueError(
+                f"predict_account_days needs a 2-D matrix with {len(feature_names)} columns; got shape {day_rows.shape}"
+            )
+        matrix = day_rows
+    else:
+        matrix = [[_feature_value(row.get(name), name) for name in feature_names] for row in day_rows]
+    if len(matrix) == 0:
         raise ValueError("predict_account_days requires at least one account-day row")
 
     # Imported here because pu_learning imports train_account_model from this module; a module-level
