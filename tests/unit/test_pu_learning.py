@@ -201,6 +201,18 @@ def test_elkan_noto_weight_formula_on_hand_values_including_the_clip() -> None:
     assert clip_count == 1
 
 
+def test_elkan_noto_weight_formula_direction_and_probability_clip() -> None:
+    """With c = 0.2 the factor is 4, not 1, and the probability clip is applied before the formula."""
+    weights, clip_count = _elkan_noto_weights([0.1, 0.25], c=0.2, probability_clip=0.999999)
+    clipped_weights, clipped_count = _elkan_noto_weights([0.1], c=0.2, probability_clip=0.05)
+
+    assert weights[0] == pytest.approx(0.4444444444444444)
+    assert weights[1] == pytest.approx(1.0)
+    assert clip_count == 1
+    assert clipped_weights[0] == pytest.approx(0.21052631578947367)
+    assert clipped_count == 0
+
+
 def test_elkan_noto_end_to_end_records_the_estimated_c_and_weight_summary() -> None:
     """A real fit estimates c from g on validation and reports weights within [0, 1]."""
     train_matrix, train_targets = _matrix_and_targets()
