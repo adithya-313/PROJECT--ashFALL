@@ -298,7 +298,9 @@ def oracle_report(
     Raises:
         ValueError: If the rows are malformed or hold no mule account.
     """
-    day_rows = one_row_per_account_day(list(snapshot_rows))
+    # The parameter accepts read-only mappings, but the callee takes plain dicts; copying each
+    # row keeps the caller's rows untouched and satisfies the types.
+    day_rows = one_row_per_account_day([dict(row) for row in snapshot_rows])
     base_scored = score_account_days(day_rows, load_rules_config(), None)
     scored = [
         replace(
