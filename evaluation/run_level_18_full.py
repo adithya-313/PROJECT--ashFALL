@@ -650,6 +650,8 @@ def _select_by_label_average_precision(
     best_model: xgboost.XGBClassifier | PUBaggedAccountModel | None = None
     best_ap = -1.0
     chosen: dict[str, Any] = {}
+    # It holds a plain model or a bagged ensemble, depending on pu_method.
+    model: xgboost.XGBClassifier | PUBaggedAccountModel
     if method == "none":
         for n_estimators in N_ESTIMATOR_CANDIDATES:
             model, _ = train_account_model(training_matrix, training_targets, seed, n_estimators=n_estimators)
