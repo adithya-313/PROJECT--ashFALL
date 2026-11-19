@@ -12,6 +12,8 @@
 xgboost==3.2.0
 # shap 0.51 reads xgboost 3.x models (0.49.1 cannot parse the new base_score format); needs numpy>=2, which this file does not pin
 shap==0.51.0
+# optuna: Level 18a4 full-run driver searches six XGBoost hyperparameters on validation truth AP (same pin as requirements-ml.txt)
+optuna==4.7.0
 
 # pydantic: core/config.py imports it directly. It was only installed as a dependency of pydantic-settings and
 # fastapi, so it is declared here with the range those packages already require.

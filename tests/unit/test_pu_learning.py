@@ -78,6 +78,11 @@ def test_each_bag_has_all_positives_and_the_formula_sample_size(
         *,
         sample_weight: list[float] | None = None,
         scale_pos_weight_override: float | None = None,
+        max_depth: int = 6,
+        learning_rate: float = 0.3,
+        min_child_weight: float = 1.0,
+        subsample: float = 1.0,
+        colsample_bytree: float = 1.0,
     ) -> tuple[object, float]:
         """Records each bag's rows, targets and seed and returns a stand-in model."""
         captured.append((bag_rows, bag_targets, seed))

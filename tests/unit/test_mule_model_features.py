@@ -17,64 +17,14 @@ from decisions.mule_account_model import (
     load_mule_model_config,
 )
 from features.account_snapshots import account_feature_names
+from tests.unit.mule_model_config_fixture import (
+    FEEDBACK_FEATURES,
+    LABEL_FEATURES,
+    write_mule_model_config,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MULE_MODEL_CONFIG = REPO_ROOT / "config" / "mule_model.yaml"
-
-LABEL_FEATURES = (
-    "hops_to_complained_account",
-    "registry_match_count",
-    "registry_match_age_days",
-)
-FEEDBACK_FEATURES = (
-    "hops_to_confirmed_label",
-    "shared_counterparties_with_flagged_7d",
-)
-
-
-def _config_body(
-    label_features: tuple[str, ...] = LABEL_FEATURES,
-    feedback_features: tuple[str, ...] = FEEDBACK_FEATURES,
-) -> str:
-    """Returns a complete mule model config body listing the given network feature names."""
-    label_lines = "".join(f"      - {name}\n" for name in label_features)
-    feedback_lines = "".join(f"      - {name}\n" for name in feedback_features)
-    return (
-        "parameters:\n"
-        "  label_cut:\n"
-        "    label: policy\n"
-        "    value: arrival_time\n"
-        "    derived_from: test\n"
-        "    reason: test\n"
-        "  label_maturity_days:\n"
-        "    label: policy\n"
-        "    value: null\n"
-        "    not_found: true\n"
-        "    derived_from: test\n"
-        "    reason: test\n"
-        "  feature_fill_flag_share:\n"
-        "    label: policy\n"
-        "    value: 0.999\n"
-        "    derived_from: test\n"
-        "    reason: test\n"
-        "  use_label_network_features:\n"
-        "    label: policy\n"
-        "    value: true\n"
-        "    derived_from: test\n"
-        "    reason: test\n"
-        "  label_network_features:\n"
-        "    label: policy\n"
-        "    value:\n"
-        f"{label_lines}"
-        "    derived_from: test\n"
-        "    reason: test\n"
-        "  feedback_network_features_not_used:\n"
-        "    label: policy\n"
-        "    value:\n"
-        f"{feedback_lines}"
-        "    derived_from: test\n"
-        "    reason: test\n"
-    )
 
 
 def _catalogue_minus(exclusions: set[str], admitted: set[str]) -> tuple[str, ...]:
@@ -123,7 +73,7 @@ def test_switch_on_exposes_three_and_hides_feedback_and_account_type() -> None:
 def test_unknown_feature_name_is_refused(tmp_path: Path) -> None:
     """A listed name missing from the canonical catalogue is refused and named."""
     config_path = tmp_path / "mule_model.yaml"
-    config_path.write_text(_config_body(label_features=(*LABEL_FEATURES, "not_a_feature")), encoding="utf-8")
+    write_mule_model_config(config_path, label_features=(*LABEL_FEATURES, "not_a_feature"))
 
     with pytest.raises(ValueError, match="'not_a_feature' .* not in the canonical account feature catalogue"):
         load_mule_model_config(config_path)
@@ -132,7 +82,7 @@ def test_unknown_feature_name_is_refused(tmp_path: Path) -> None:
 def test_feature_outside_the_anomaly_exclusions_is_refused(tmp_path: Path) -> None:
     """A canonical feature the anomaly detector still uses is refused and named."""
     config_path = tmp_path / "mule_model.yaml"
-    config_path.write_text(_config_body(label_features=(*LABEL_FEATURES, "local_cluster_density")), encoding="utf-8")
+    write_mule_model_config(config_path, label_features=(*LABEL_FEATURES, "local_cluster_density"))
 
     with pytest.raises(ValueError, match="'local_cluster_density' .* not in the anomaly exclusion list"):
         load_mule_model_config(config_path)

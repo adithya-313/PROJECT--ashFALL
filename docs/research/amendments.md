@@ -567,3 +567,16 @@ No model code exists yet (models start in Level 18; `world/` is simulator code).
 | Why | The bank only holds positive labels and treats every unlabelled account as a negative, so unreported frauds train the model the wrong way. Both methods stay behind a switch that defaults off so the supervised pilot result is unchanged, the method choice is deferred to the full-scale run, and the pilot can compare the candidates on validation. Averaging margins keeps the ensemble SHAP values exact and leaves the members mergeable into one booster for ONNX later. Plain Elkan-Noto probability rescaling is not used because a constant divisor cannot change any ranking metric. |
 | Disclosure | Methods added behind a default-off switch before any full-scale result. No committed threshold or existing result changed; the `none` path calls the same code and produces the same `n_estimators_scores` keys as before. |
 | Results exist? | No |
+
+## A-047
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-19 |
+| Issue IDs | None |
+| Issue IDs v2 | None |
+| Files | `config/mule_model.yaml`, `docs/research/amendments.md` |
+| What changed | `label_maturity_days` in `config/mule_model.yaml` is now 28, up from null with `not_found: true`. The value is the pooled p90 of the measured label delay (27.5687 days) on the 160 full training worlds, rounded up to whole days, so each training world drops its final 28 IST days. Measured with `evaluation/measure_label_delay.py` over `training-20261031T1830-2cdf8145a8d5`, `training-20261031T1830-9e76fa11f9db` and `training-20261031T1830-b16d733022fe`: 3551 accounts with a first illicit credit, 674 labelled, 2877 censored, 12 negative delays, p50 7.56 days, p90 27.57 days, p95 43.37 days. Report `runs/full/label_delay_r7.json`, sha256 `7886a2f6a357d7f5e7964ae086ae5e1547f851552abef02254e0fb553c27d824`. |
+| Why | A training row near the end of a world sits in a window where the bank's labels have not arrived yet, so its positives are undercounted; dropping the window up to the pooled p90 delay removes most of that immaturity. |
+| Disclosure | Chosen on training worlds only, before any full-scale validation or test result. The p90 is a lower bound because of censoring (674 labelled vs 2877 censored first-credit accounts), and the window is confirmed or switched off by the `maturity_check` stage on validation. |
+| Results exist? | No |

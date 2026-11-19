@@ -30,10 +30,9 @@ parameters:
 
   label_maturity_days:
     label: policy
-    value: null
-    not_found: true
-    derived_from: "Level 18a4 Round 1 brief"
-    reason: "Off until the label delay has been measured on the full training worlds; null means no trailing window is dropped."
+    value: 28
+    derived_from: "evaluation/measure_label_delay.py on the 160 full training worlds, pooled p90, runs/full/label_delay_r7.json sha256 7886a2f6a357d7f5e7964ae086ae5e1547f851552abef02254e0fb553c27d824"
+    reason: "Dropping the final 28 days of every training world removes rows whose labels had not arrived yet at the pooled p90 delay of 27.6 days."
 
   feature_fill_flag_share:
     label: policy
@@ -102,3 +101,51 @@ parameters:
     value: "rows"
     derived_from: "architect memory measurement: ~19 GB with rows on full scale; laptop has 16 GB"
     reason: "Rows keeps today's dict-based path exactly; compact loads one world at a time into float32 arrays so the full-scale run fits a 16 GB laptop."
+
+  hyperparameter_search:
+    label: policy
+    value: "off"
+    derived_from: "Level 18a4 round 7 brief"
+    reason: "Optuna search is off until the staged full-run driver runs it; allowed values are off and optuna, and off keeps today's n_estimators candidates exactly."
+
+  optuna_trials:
+    label: policy
+    value: 40
+    derived_from: "architect time budget: ~13 s per model at full scale"
+    reason: "40 trials keeps one PU method's search to about nine minutes at full scale while still covering the six-parameter space."
+
+  optuna_seed:
+    label: policy
+    value: 1717
+    derived_from: "Level 18a4 round 7 brief"
+    reason: "A fixed seed makes the sampled parameter sequence and the chosen trial reproducible across runs."
+
+  hyperparameter_space:
+    label: policy
+    value:
+      max_depth:
+        min: 3
+        max: 10
+        log: false
+      learning_rate:
+        min: 0.02
+        max: 0.3
+        log: true
+      n_estimators:
+        min: 100
+        max: 800
+        log: false
+      min_child_weight:
+        min: 1
+        max: 20
+        log: true
+      subsample:
+        min: 0.5
+        max: 1.0
+        log: false
+      colsample_bytree:
+        min: 0.5
+        max: 1.0
+        log: false
+    derived_from: "architect search ranges, set before any full-scale result"
+    reason: "The ranges bracket the XGBoost defaults without searching implausibly deep trees or extreme learning rates."
