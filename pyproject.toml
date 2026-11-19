@@ -20,6 +20,11 @@ select = ["E", "F", "I"]
 python_version = "3.11"
 ignore_missing_imports = true
 
+# optuna pulls in alembic, which crashes mypy 1.10.0; neither module's types are ours to check.
+[[tool.mypy.overrides]]
+module = ["optuna.*", "alembic.*"]
+follow_imports = "skip"
+
 [tool.pytest.ini_options]
 markers = [
     "needs_stack: test needs the Docker Compose stack (database, Kafka) running",
