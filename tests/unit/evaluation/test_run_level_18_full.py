@@ -14,6 +14,7 @@ import pytest
 from evaluation.run_level_18_full import (
     _choose_pu_method,
     _learning_curve_choice,
+    _maturity_decision,
     _read_matching_stage,
     _run_stage,
 )
@@ -58,6 +59,22 @@ def test_changed_fingerprint_is_refused(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="different inputs"):
         _run_stage("tune_each_pu_method", tmp_path, changed, lambda: {"value": 8})
+
+
+def test_maturity_window_is_kept_below_the_switch_threshold() -> None:
+    """Removing the window must gain at least 0.01 truth AP before the committed value is dropped."""
+    chosen, reason = _maturity_decision(28, committed_ap=0.40, off_ap=0.4099)
+
+    assert chosen == 28
+    assert "Window kept at 28 days" in reason
+
+
+def test_maturity_window_is_switched_off_at_the_threshold() -> None:
+    """A gain of exactly 0.01 switches the window off."""
+    chosen, reason = _maturity_decision(28, committed_ap=0.50, off_ap=0.51)
+
+    assert chosen == 0
+    assert "Window off" in reason
 
 
 def test_learning_curve_flattens_at_80() -> None:
@@ -125,9 +142,7 @@ def test_learning_curve_ignores_non_doubling_pair() -> None:
 def test_learning_curve_needs_two_points() -> None:
     """One measured count cannot show a doubling, so the rule refuses it."""
     with pytest.raises(ValueError, match="at least two"):
-        _learning_curve_choice(
-            [{"training_world_count": 40, "validation_truth_average_precision": 0.5}]
-        )
+        _learning_curve_choice([{"training_world_count": 40, "validation_truth_average_precision": 0.5}])
 
 
 def _method_record(

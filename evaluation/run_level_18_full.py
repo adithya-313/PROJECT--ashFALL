@@ -76,8 +76,11 @@ LEARNING_CURVE_N_ESTIMATORS = 100
 LEARNING_CURVE_FLAT_IMPROVEMENT = 0.01
 #: PU methods scored in stage 2, in the order stage 3 prefers them on an exact tie.
 PU_METHODS: tuple[str, ...] = ("none", "elkan_noto", "bagging")
+#: The maturity window is switched off when doing so gains at least this much validation truth AP.
+MATURITY_SWITCH_IMPROVEMENT = 0.01
 
 STAGE_NAMES: tuple[str, ...] = (
+    "maturity_check",
     "learning_curve",
     "tune_each_pu_method",
     "choose_pu_method",
@@ -112,9 +115,7 @@ def _read_dataset_manifest(dataset_dir: Path, split: str) -> dict[str, Any]:
         raise ValueError(f"Dataset manifest {manifest_path} must hold a mapping")
     recorded_split = manifest.get("split")
     if recorded_split != split:
-        raise ValueError(
-            f"Dataset {dataset_dir} records split {recorded_split!r}, but it was passed as {split!r}"
-        )
+        raise ValueError(f"Dataset {dataset_dir} records split {recorded_split!r}, but it was passed as {split!r}")
     successor = manifest.get("superseded_by")
     if successor:
         raise ValueError(f"Dataset {dataset_dir} is superseded by {successor}")
@@ -184,9 +185,7 @@ def _parse_training_world_counts(text: str) -> tuple[int, ...]:
         try:
             count = int(stripped)
         except ValueError as error:
-            raise ValueError(
-                f"--training-world-counts value {stripped!r} is not an integer"
-            ) from error
+            raise ValueError(f"--training-world-counts value {stripped!r} is not an integer") from error
         if count <= 0:
             raise ValueError(f"--training-world-counts value {count} must be positive")
         counts.append(count)
@@ -299,9 +298,7 @@ def _write_stage(
         "result": result,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(
-        orjson.dumps(payload, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2) + b"\n"
-    )
+    path.write_bytes(orjson.dumps(payload, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2) + b"\n")
 
 
 def _run_stage(
@@ -339,6 +336,159 @@ def _run_stage(
     _write_stage(path, name, fingerprint, result, started)
     print(f"DONE stage {name}: {seconds:.1f} s -> {path}")
     return result
+
+
+def _write_maturity_config(source: Path, destination: Path, maturity_days: int) -> None:
+    """
+    WHAT: Writes a copy of the model config whose label_maturity_days value is the given day count.
+
+    WHY: The compact loader reads the maturity window from the process-wide config, so the check must
+    hand it one file per candidate value instead of editing the committed config.
+
+    Args:
+        source: Active config file the run started from.
+        destination: Copy to write, inside the stage folder.
+        maturity_days: Day count to store; 0 drops nothing.
+
+    Raises:
+        ValueError: If the config is not a mapping or holds no label_maturity_days block.
+    """
+    raw = yaml.safe_load(source.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError(f"Model config {source} must hold a mapping at the root")
+    parameters = raw.get("parameters")
+    if not isinstance(parameters, dict):
+        raise ValueError(f"Model config {source} must hold a parameters mapping")
+    block = parameters.get("label_maturity_days")
+    if not isinstance(block, dict):
+        raise ValueError(f"Model config {source} must hold a label_maturity_days block")
+    block["value"] = maturity_days
+    block.pop("not_found", None)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+
+
+def _maturity_decision(committed_days: int, committed_ap: float, off_ap: float) -> tuple[int, str]:
+    """
+    WHAT: Applies the pre-registered maturity rule to the two measured validation truth APs.
+
+    WHY: The committed p90 is a lower bound because most first-credit accounts are censored, so the
+    window is kept only while disabling it does not gain at least the fixed improvement on validation.
+
+    Args:
+        committed_days: Window length read from the committed config.
+        committed_ap: Validation truth AP with that window.
+        off_ap: Validation truth AP with the window off (0 days).
+
+    Returns:
+        (chosen day count, one-sentence reason).
+    """
+    improvement = off_ap - committed_ap
+    if improvement >= MATURITY_SWITCH_IMPROVEMENT:
+        return 0, (
+            f"Window off: validation truth AP rose by {improvement:.4f} (>= {MATURITY_SWITCH_IMPROVEMENT}) "
+            f"when the {committed_days}-day window was removed."
+        )
+    return committed_days, (
+        f"Window kept at {committed_days} days: removing it changed validation truth AP by "
+        f"{improvement:.4f}, less than the {MATURITY_SWITCH_IMPROVEMENT} needed to switch it off."
+    )
+
+
+def _maturity_check(
+    training_dirs: Sequence[Path],
+    training_world_ids: Sequence[str],
+    validation_dirs: Sequence[Path],
+    truth_root: Path,
+    base_rules_config: RulesConfig,
+    seed: int,
+    mule_config: MuleModelConfig,
+    out_root: Path,
+) -> dict[str, Any]:
+    """
+    WHAT: Trains the fixed probe model with the committed maturity window and with it off, and picks
+    the window on validation truth.
+
+    WHY: The measured p90 is a lower bound because most first-credit accounts are censored, so the
+    window must be shown not to hurt validation before every later stage trains under it.
+
+    Args:
+        training_dirs: Training dataset folders.
+        training_world_ids: Every training world id, sorted.
+        validation_dirs: Validation dataset folders.
+        truth_root: Root folder holding one truth folder per run_id.
+        base_rules_config: Rules table the compact loader needs to build ScoredDays.
+        seed: Model random seed.
+        mule_config: Loaded model config holding the committed window.
+        out_root: Driver output root; the per-candidate config copies land under its stages folder.
+
+    Returns:
+        The two candidate records, the chosen day count and the reason.
+
+    Raises:
+        ValueError: If the committed window is null, a split cannot be loaded, or a variant has no
+            positive or negative training row.
+    """
+    committed_days = mule_config.label_maturity_days
+    if committed_days is None:
+        raise ValueError(
+            "The maturity_check stage needs a committed label_maturity_days value; "
+            f"the model config sets {committed_days!r}"
+        )
+    validation = load_compact_split(
+        validation_dirs,
+        truth_root,
+        include_days=True,
+        rules_config=base_rules_config,
+    )
+    if validation.days is None:
+        raise ValueError("compact validation load did not return account-day arrays")
+    truth_scored = _validation_scored_in_model_row_order(
+        "compact",
+        validation.days,
+        validation.days.aligned_features,
+        _compact_row_keys(validation.rows),
+        base_rules_config,
+        None,
+    )
+    source_config = active_mule_model_config_path().resolve()
+    previous_config = active_mule_model_config_path()
+    variants: list[dict[str, Any]] = []
+    for maturity_days in (committed_days, 0):
+        candidate_config = out_root / "stages" / f"maturity_days_{maturity_days}.yaml"
+        _write_maturity_config(source_config, candidate_config, maturity_days)
+        set_mule_model_config_path(candidate_config)
+        try:
+            training = load_compact_split(training_dirs, world_ids=training_world_ids)
+        finally:
+            set_mule_model_config_path(previous_config)
+        targets = [int(target) for target in training.rows.targets]
+        model, _ = train_account_model(training.rows.matrix, targets, seed, LEARNING_CURVE_N_ESTIMATORS)
+        probabilities = predict_account_days(model, validation.days.aligned_features)
+        average_precision_truth = validation_truth_average_precision(probabilities, truth_scored)
+        variants.append(
+            {
+                "label_maturity_days": maturity_days,
+                "training_row_count": int(training.rows.matrix.shape[0]),
+                "training_positive_count": sum(targets),
+                "validation_truth_average_precision": float(average_precision_truth),
+            }
+        )
+        del training, targets, model, probabilities
+    committed_variant = variants[0]
+    off_variant = variants[1] if variants[1]["label_maturity_days"] != committed_days else variants[0]
+    chosen_days, reason = _maturity_decision(
+        int(committed_variant["label_maturity_days"]),
+        float(committed_variant["validation_truth_average_precision"]),
+        float(off_variant["validation_truth_average_precision"]),
+    )
+    return {
+        "committed_label_maturity_days": committed_days,
+        "variants": variants,
+        "chosen_label_maturity_days": chosen_days,
+        "reason": reason,
+        "switch_improvement_threshold": MATURITY_SWITCH_IMPROVEMENT,
+    }
 
 
 def _learning_curve_choice(points: Sequence[dict[str, Any]]) -> tuple[int, bool, list[dict[str, Any]]]:
@@ -499,12 +649,8 @@ def _select_by_label_average_precision(
     chosen: dict[str, Any] = {}
     if method == "none":
         for n_estimators in N_ESTIMATOR_CANDIDATES:
-            model, _ = train_account_model(
-                training_matrix, training_targets, seed, n_estimators=n_estimators
-            )
-            score = average_precision(
-                predict_account_days(model, validation_rows_for_keys), validation_targets
-            )
+            model, _ = train_account_model(training_matrix, training_targets, seed, n_estimators=n_estimators)
+            score = average_precision(predict_account_days(model, validation_rows_for_keys), validation_targets)
             if score > best_ap:
                 best_ap = score
                 best_model = model
@@ -515,9 +661,7 @@ def _select_by_label_average_precision(
             raise ValueError("pu_bagging_n_bags is required when pu_method is 'bagging'")
         candidates = mule_config.pu_unlabelled_per_positive_candidates
         if candidates is None:
-            raise ValueError(
-                "pu_unlabelled_per_positive_candidates is required when pu_method is 'bagging'"
-            )
+            raise ValueError("pu_unlabelled_per_positive_candidates is required when pu_method is 'bagging'")
         for n_estimators in N_ESTIMATOR_CANDIDATES:
             for unlabelled_per_positive in candidates:
                 model = train_pu_bagged_model(
@@ -528,9 +672,7 @@ def _select_by_label_average_precision(
                     n_bags,
                     unlabelled_per_positive,
                 )
-                score = average_precision(
-                    predict_account_days(model, validation_rows_for_keys), validation_targets
-                )
+                score = average_precision(predict_account_days(model, validation_rows_for_keys), validation_targets)
                 if score > best_ap:
                     best_ap = score
                     best_model = model
@@ -552,9 +694,7 @@ def _select_by_label_average_precision(
                 n_estimators,
                 probability_clip,
             )
-            score = average_precision(
-                predict_account_days(model, validation_rows_for_keys), validation_targets
-            )
+            score = average_precision(predict_account_days(model, validation_rows_for_keys), validation_targets)
             if score > best_ap:
                 best_ap = score
                 best_model = model
@@ -644,9 +784,7 @@ def _train_pu_method(
         n_bags = configured_bags
         candidates = mule_config.pu_unlabelled_per_positive_candidates
         if candidates is None:
-            raise ValueError(
-                "pu_unlabelled_per_positive_candidates is required when pu_method is 'bagging'"
-            )
+            raise ValueError("pu_unlabelled_per_positive_candidates is required when pu_method is 'bagging'")
         categorical_choices = {"unlabelled_per_positive": candidates}
 
         def train_bagging_trial(params: dict[str, int | float]) -> Sequence[float]:
@@ -772,9 +910,7 @@ def _tune_each_pu_method(
             f"Chosen training-world count {chosen_training_world_count} exceeds "
             f"the {len(training_world_ids)} available worlds"
         )
-    training = load_compact_split(
-        training_dirs, world_ids=training_world_ids[:chosen_training_world_count]
-    )
+    training = load_compact_split(training_dirs, world_ids=training_world_ids[:chosen_training_world_count])
     training_matrix = training.rows.matrix
     training_targets = [int(target) for target in training.rows.targets]
     validation = load_compact_split(
@@ -814,9 +950,7 @@ def _tune_each_pu_method(
             replace(day, anomaly_score=probability)
             for day, probability in zip(truth_scored, probabilities, strict=True)
         ]
-        method_tuning = tune_anomaly_threshold(
-            method_scored, tuning, "validation", main_budget_pct
-        )
+        method_tuning = tune_anomaly_threshold(method_scored, tuning, "validation", main_budget_pct)
         records.append(
             {
                 "pu_method": method,
@@ -925,19 +1059,19 @@ def _final_validation_and_test(
     """
     WHAT: Runs the existing pilot pipeline on the chosen PU method and records its result location.
 
-    WHY: Stage 4 is the only stage allowed to read test, so it must run the same frozen pipeline the
+    WHY: Stage 5 is the only stage allowed to read test, so it must run the same frozen pipeline the
     pilot uses; reusing run_pilot keeps the score-cut tuning, operating points, 2x2 comparison and
     success criterion identical to a pilot run.
 
     Args:
-        chosen_method: PU method stage 3 chose.
+        chosen_method: PU method stage 4 chose.
         training_dirs: Training dataset folders.
         validation_dirs: Validation dataset folders.
         test_dirs: Test dataset folders.
         truth_root: Root folder holding one truth folder per run_id.
         world_cards_root: Root folder holding one world card per run_id.
         out_root: Driver output root; the pilot result lands under its final/ folder.
-        config_path: Active config the driver started from.
+        config_path: Active config the driver started from, already carrying the chosen window.
         all_dataset_ids: Training, validation and test dataset folder names.
 
     Returns:
@@ -964,12 +1098,10 @@ def _final_validation_and_test(
         set_mule_model_config_path(previous_config)
     result_path = final_root / run_key(all_dataset_ids) / "result.json"
     if not result_path.is_file():
-        raise ValueError(f"Stage 4 wrote no result file at {result_path}")
+        raise ValueError(f"Stage 5 wrote no result file at {result_path}")
     payload = orjson.loads(result_path.read_bytes())
     if exit_code != 0:
-        raise ValueError(
-            f"The pilot's leakage checks failed (exit {exit_code}); see {result_path.parent}"
-        )
+        raise ValueError(f"The pilot's leakage checks failed (exit {exit_code}); see {result_path.parent}")
     manifest = payload.get("manifest")
     if not isinstance(manifest, dict):
         raise ValueError(f"Pilot result {result_path} holds no manifest mapping")
@@ -993,10 +1125,10 @@ def run_full(
     training_world_counts: Sequence[int],
 ) -> int:
     """
-    WHAT: Runs the four stages in order, resuming every stage whose fingerprint matches.
+    WHAT: Runs the five stages in order, resuming every stage whose fingerprint matches.
 
-    WHY: One entry point fixes the order world count -> method tuning -> method choice -> test, and
-    the fingerprint check makes a resume safe after a crash or a code change.
+    WHY: One entry point fixes the order maturity window -> world count -> method tuning -> method
+    choice -> test, and the fingerprint check makes a resume safe after a crash or a code change.
 
     Args:
         training_dirs: Training dataset folders.
@@ -1012,7 +1144,7 @@ def run_full(
 
     Raises:
         ValueError: If the config is not the compact path, a count is invalid, a stage's fingerprint
-            differs from the current inputs, or stage 4's pilot fails its leakage checks.
+            differs from the current inputs, or stage 5's pilot fails its leakage checks.
     """
     counts = tuple(int(count) for count in training_world_counts)
     if list(counts) != sorted(set(counts)) or not counts:
@@ -1020,8 +1152,7 @@ def run_full(
     mule_config = load_mule_model_config()
     if mule_config.data_path != "compact":
         raise ValueError(
-            "The full-run driver requires data_path 'compact'; "
-            f"the model config sets {mule_config.data_path!r}"
+            f"The full-run driver requires data_path 'compact'; the model config sets {mule_config.data_path!r}"
         )
     if mule_config.rules_plus_labels_and_registry is True:
         base_rules_config = load_rules_config_with_labels()
@@ -1049,60 +1180,87 @@ def run_full(
     )
     stages_dir = out_root / "stages"
 
-    learning_curve = _run_stage(
-        "learning_curve",
+    maturity = _run_stage(
+        "maturity_check",
         stages_dir,
         fingerprint,
-        lambda: _learning_curve(
+        lambda: _maturity_check(
             training_dirs,
             training_world_ids,
             validation_dirs,
             truth_root,
             base_rules_config,
             seed,
-            counts,
-        ),
-    )
-    chosen_count = learning_curve["chosen_training_world_count"]
-    tuned_methods = _run_stage(
-        "tune_each_pu_method",
-        stages_dir,
-        fingerprint,
-        lambda: _tune_each_pu_method(
-            training_dirs,
-            training_world_ids,
-            chosen_count,
-            validation_dirs,
-            truth_root,
-            base_rules_config,
-            tuning,
-            main_budget_pct,
             mule_config,
-            seed,
-        ),
-    )
-    method_choice = _run_stage(
-        "choose_pu_method",
-        stages_dir,
-        fingerprint,
-        lambda: _choose_pu_method(tuned_methods["methods"]),
-    )
-    final = _run_stage(
-        "final_validation_and_test",
-        stages_dir,
-        fingerprint,
-        lambda: _final_validation_and_test(
-            method_choice["pu_method"],
-            training_dirs,
-            validation_dirs,
-            test_dirs,
-            truth_root,
-            world_cards_root,
             out_root,
-            config_path,
-            [*training_dataset_ids, *validation_dataset_ids, *test_dataset_ids],
         ),
     )
+    chosen_maturity_days = int(maturity["chosen_label_maturity_days"])
+    chosen_config = stages_dir / "chosen_mule_model.yaml"
+    _write_maturity_config(config_path, chosen_config, chosen_maturity_days)
+    previous_config = active_mule_model_config_path()
+    set_mule_model_config_path(chosen_config)
+    try:
+        learning_curve = _run_stage(
+            "learning_curve",
+            stages_dir,
+            fingerprint,
+            lambda: _learning_curve(
+                training_dirs,
+                training_world_ids,
+                validation_dirs,
+                truth_root,
+                base_rules_config,
+                seed,
+                counts,
+            ),
+        )
+        chosen_count = learning_curve["chosen_training_world_count"]
+        tuned_methods = _run_stage(
+            "tune_each_pu_method",
+            stages_dir,
+            fingerprint,
+            lambda: _tune_each_pu_method(
+                training_dirs,
+                training_world_ids,
+                chosen_count,
+                validation_dirs,
+                truth_root,
+                base_rules_config,
+                tuning,
+                main_budget_pct,
+                mule_config,
+                seed,
+            ),
+        )
+        method_choice = _run_stage(
+            "choose_pu_method",
+            stages_dir,
+            fingerprint,
+            lambda: _choose_pu_method(tuned_methods["methods"]),
+        )
+        final = _run_stage(
+            "final_validation_and_test",
+            stages_dir,
+            fingerprint,
+            lambda: _final_validation_and_test(
+                method_choice["pu_method"],
+                training_dirs,
+                validation_dirs,
+                test_dirs,
+                truth_root,
+                world_cards_root,
+                out_root,
+                chosen_config,
+                [
+                    *training_dataset_ids,
+                    *validation_dataset_ids,
+                    *test_dataset_ids,
+                ],
+            ),
+        )
+    finally:
+        set_mule_model_config_path(previous_config)
     if final["exit_code"] != 0:
         return int(final["exit_code"])
     return 0
@@ -1127,9 +1285,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--validation", type=Path, action="append", required=True, help="validation dataset folder; repeatable"
     )
-    parser.add_argument(
-        "--test", type=Path, action="append", required=True, help="test dataset folder; repeatable"
-    )
+    parser.add_argument("--test", type=Path, action="append", required=True, help="test dataset folder; repeatable")
     parser.add_argument(
         "--truth-root", type=Path, required=True, help="root folder holding one truth folder per run_id"
     )
@@ -1139,9 +1295,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         required=True,
         help="root folder holding one world card per run_id",
     )
-    parser.add_argument(
-        "--out-root", type=Path, required=True, help="root folder for the stage files and pilot result"
-    )
+    parser.add_argument("--out-root", type=Path, required=True, help="root folder for the stage files and pilot result")
     parser.add_argument(
         "--training-world-counts",
         required=True,
