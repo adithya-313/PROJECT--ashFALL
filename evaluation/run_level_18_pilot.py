@@ -33,6 +33,8 @@ from decisions.anomaly_config import load_anomaly_detector_config
 from decisions.anomaly_detector import TrainedAnomalyDetector, train_anomaly_detector
 from decisions.mule_account_model import (
     FeatureRows,
+    HyperparameterRange,
+    MuleModelConfig,
     account_model_feature_names,
     active_mule_model_config_path,
     build_training_rows,
@@ -55,6 +57,10 @@ from decisions.rules_config import (
 )
 from evaluation.compact_rows import CompactDayRows, CompactRows, iter_world_tables, load_compact_split
 from evaluation.dataset_truth_join import join_truth
+from evaluation.hyperparameter_search import (
+    OptunaSearchResult,
+    run_optuna_search,
+)
 from evaluation.leakage_checks import (
     COMPLAINED_FEATURE,
     check_label_features_by_arrival,
@@ -350,6 +356,162 @@ def _align_rows(
             raise ValueError(f"Training row key {key!r} has no matching account-day snapshot")
         aligned.append(row)
     return aligned
+
+
+def _xgb_hyperparameters(params: dict[str, int | float]) -> dict[str, Any]:
+    """
+    WHAT: Converts one sampled parameter set into the keyword arguments train_account_model and the
+    PU trainers accept.
+
+    WHY: Trial parameters arrive as plain numbers, while the trainers type-check them; converting
+    here keeps the sampled integers integers and the sampled floats floats before any model is fit.
+
+    Args:
+        params: Sampled values holding at least the five non-count hyperparameters.
+
+    Returns:
+        max_depth, learning_rate, min_child_weight, subsample and colsample_bytree, in trainer form.
+    """
+    return {
+        "max_depth": int(params["max_depth"]),
+        "learning_rate": float(params["learning_rate"]),
+        "min_child_weight": float(params["min_child_weight"]),
+        "subsample": float(params["subsample"]),
+        "colsample_bytree": float(params["colsample_bytree"]),
+    }
+
+
+def _optuna_requirements(
+    config: MuleModelConfig,
+) -> tuple[dict[str, HyperparameterRange], int, int]:
+    """
+    WHAT: Returns the validated search space, trial count and seed the optuna setting needs.
+
+    WHY: The loader makes all three required, but the dataclass types them optional; refusing a
+    missing one here names it instead of letting the search run with an invented default.
+
+    Args:
+        config: Loaded mule model configuration.
+
+    Returns:
+        (space, trial_count, seed).
+
+    Raises:
+        ValueError: If any of the three is missing from the configuration.
+    """
+    space = config.hyperparameter_space
+    if space is None:
+        raise ValueError("hyperparameter_space is required when hyperparameter_search is 'optuna'")
+    trial_count = config.optuna_trials
+    if trial_count is None:
+        raise ValueError("optuna_trials is required when hyperparameter_search is 'optuna'")
+    seed = config.optuna_seed
+    if seed is None:
+        raise ValueError("optuna_seed is required when hyperparameter_search is 'optuna'")
+    return space, trial_count, seed
+
+
+def _write_search_trials(
+    path: Path,
+    search_result: OptunaSearchResult,
+    pu_method: str,
+    trial_count: int,
+    seed: int,
+) -> None:
+    """
+    WHAT: Writes every Optuna trial's sampled parameters and validation truth AP beside the result.
+
+    WHY: The chosen parameters are only trustworthy if the full search is auditable, so the file
+    keeps each trial's numbers instead of only the winner; the manifest records its sha256.
+
+    Args:
+        path: Destination JSON file, inside the run's result folder.
+        search_result: Study outcome holding every completed trial.
+        pu_method: PU method the trials trained, recorded so the file explains itself.
+        trial_count: Requested number of trials.
+        seed: Sampler seed, recorded so the sequence can be reproduced.
+
+    Side effects:
+        Creates the destination folder when needed and overwrites the file.
+    """
+    payload = {
+        "pu_method": pu_method,
+        "trial_count": trial_count,
+        "seed": seed,
+        "best_params": search_result.best_params,
+        "best_score": search_result.best_score,
+        "trials": list(search_result.trials),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(
+        orjson.dumps(payload, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2) + b"\n"
+    )
+
+
+def _validation_scored_in_model_row_order(
+    data_path: str,
+    validation_days: CompactDayRows | None,
+    validation_rows_for_keys: list[dict[str, Any]] | numpy.ndarray,
+    validation_keys: Sequence[tuple[str, str, str, date]],
+    base_rules_config: RulesConfig,
+    detector: TrainedAnomalyDetector,
+) -> list[ScoredDay]:
+    """
+    WHAT: Returns one validation ScoredDay per account model row, in that row's order.
+
+    WHY: Truth average precision compares a probability list with the truth roles of the same
+    account-days, but the compact path stores ScoredDays in account-day order while the model rows
+    follow build_training_rows key order, so the two orders must be joined by key before any trial
+    is scored.
+
+    Args:
+        data_path: "compact" or "rows", the switch that decided how validation was loaded.
+        validation_days: Compact account-day arrays, required on the compact path.
+        validation_rows_for_keys: The rows or aligned feature matrix the model predicts on.
+        validation_keys: (world, bank, account, IST day) key of every model row, in row order.
+        base_rules_config: Rules table used to score the rows path's account-days.
+        detector: Trained anomaly detector, scored with the rules so the days carry full records.
+
+    Returns:
+        ScoredDays aligned with the model rows, same length as validation_keys.
+
+    Raises:
+        ValueError: If the compact arrays are missing, hold duplicate day keys, or any model key
+            has no account-day, or the rows path does not receive row dictionaries.
+    """
+    if data_path == "compact":
+        if validation_days is None:
+            raise ValueError("compact validation load did not return account-day arrays")
+        index_by_key: dict[tuple[str, str, str, date], ScoredDay] = {}
+        for world_id, bank_id, account_id, ordinal, scored_day in zip(
+            validation_days.world_ids,
+            validation_days.bank_ids,
+            validation_days.account_ids,
+            validation_days.day_ordinals,
+            validation_days.scored,
+            strict=True,
+        ):
+            key = (str(world_id), str(bank_id), str(account_id), date.fromordinal(int(ordinal)))
+            if key in index_by_key:
+                raise ValueError(f"Duplicate account-day key {key!r} in the compact validation arrays")
+            index_by_key[key] = scored_day
+        aligned: list[ScoredDay] = []
+        for key in validation_keys:
+            scored_day = index_by_key.get(key)
+            if scored_day is None:
+                raise ValueError(f"Training row key {key!r} has no compact validation account-day")
+            aligned.append(scored_day)
+        return aligned
+    if data_path == "rows":
+        if not isinstance(validation_rows_for_keys, list):
+            raise ValueError("The rows path must validate on account-day row dictionaries")
+        scored = score_account_days(validation_rows_for_keys, base_rules_config, detector)
+        if len(scored) != len(validation_keys):
+            raise ValueError(
+                f"Scored {len(scored)} validation account-days for {len(validation_keys)} model rows"
+            )
+        return scored
+    raise ValueError(f"Unsupported data_path: {data_path!r}")
 
 
 def _feature_matrix(day_rows: Sequence[dict[str, Any]], feature_names: Sequence[str]) -> list[list[float]]:
@@ -1173,6 +1335,22 @@ def run_pilot(
     if pu_method is None:
         raise ValueError("pu_method is missing from the mule model configuration")
 
+    search_setting = mule_model_config.hyperparameter_search
+    if search_setting is None:
+        raise ValueError("hyperparameter_search is missing from the mule model configuration")
+    validation_truth_scored: list[ScoredDay] | None = None
+    if search_setting == "optuna":
+        validation_truth_scored = _validation_scored_in_model_row_order(
+            data_path,
+            validation_days,
+            validation_rows_for_keys,
+            validation_keys,
+            base_rules_config,
+            detector,
+        )
+    elif search_setting != "off":
+        raise ValueError(f"Unsupported hyperparameter_search: {search_setting!r}")
+
     n_estimators_scores: dict[str, float] = {}
     pu_average_precision_scores: dict[str, float] = {}
     training_seconds: dict[str, float] = {}
@@ -1184,23 +1362,61 @@ def run_pilot(
     best_c: float | None = None
     best_weight_summary: dict[str, float] | None = None
     best_clip_count: int | None = None
+    search_result: OptunaSearchResult | None = None
 
     model: xgboost.XGBClassifier | PUBaggedAccountModel
     if pu_method == "none":
-        for n_estimators in N_ESTIMATOR_CANDIDATES:
+        if search_setting == "optuna":
+            optuna_space, optuna_trials, optuna_seed = _optuna_requirements(mule_model_config)
+            if validation_truth_scored is None:
+                raise ValueError("The Optuna search requires validation truth roles")
+
+            def train_none_trial(params: dict[str, int | float]) -> Sequence[float]:
+                trial_model, _ = train_account_model(
+                    training_matrix,
+                    training_targets,
+                    seed,
+                    int(params["n_estimators"]),
+                    **_xgb_hyperparameters(params),
+                )
+                return predict_account_days(trial_model, validation_rows_for_keys)
+
             started = time.perf_counter()
-            model, scale_pos_weight = train_account_model(
-                training_matrix, training_targets, seed, n_estimators=n_estimators
+            search_result = run_optuna_search(
+                train_none_trial,
+                validation_truth_scored,
+                optuna_space,
+                optuna_trials,
+                optuna_seed,
             )
-            training_seconds[str(n_estimators)] = time.perf_counter() - started
-            probabilities = predict_account_days(model, validation_rows_for_keys)
-            score = average_precision(probabilities, validation_targets)
-            n_estimators_scores[str(n_estimators)] = score
-            if score > best_validation_ap:
-                best_validation_ap = score
-                best_model = model
-                best_scale_pos_weight = scale_pos_weight
-                best_n_estimators = n_estimators
+            training_seconds["optuna_search"] = time.perf_counter() - started
+            started = time.perf_counter()
+            best_model, best_scale_pos_weight = train_account_model(
+                training_matrix,
+                training_targets,
+                seed,
+                int(search_result.best_params["n_estimators"]),
+                **_xgb_hyperparameters(search_result.best_params),
+            )
+            best_n_estimators = int(search_result.best_params["n_estimators"])
+            training_seconds["optuna_best"] = time.perf_counter() - started
+            probabilities = predict_account_days(best_model, validation_rows_for_keys)
+            best_validation_ap = average_precision(probabilities, validation_targets)
+        else:
+            for n_estimators in N_ESTIMATOR_CANDIDATES:
+                started = time.perf_counter()
+                model, scale_pos_weight = train_account_model(
+                    training_matrix, training_targets, seed, n_estimators=n_estimators
+                )
+                training_seconds[str(n_estimators)] = time.perf_counter() - started
+                probabilities = predict_account_days(model, validation_rows_for_keys)
+                score = average_precision(probabilities, validation_targets)
+                n_estimators_scores[str(n_estimators)] = score
+                if score > best_validation_ap:
+                    best_validation_ap = score
+                    best_model = model
+                    best_scale_pos_weight = scale_pos_weight
+                    best_n_estimators = n_estimators
     elif pu_method == "bagging":
         n_bags = mule_model_config.pu_bagging_n_bags
         if n_bags is None:
@@ -1210,57 +1426,147 @@ def run_pilot(
             raise ValueError(
                 "pu_unlabelled_per_positive_candidates is required when pu_method is 'bagging'"
             )
-        for n_estimators in N_ESTIMATOR_CANDIDATES:
-            for unlabelled_per_positive in unlabelled_candidates:
-                variant = f"{n_estimators}|{unlabelled_per_positive}"
-                started = time.perf_counter()
-                model = train_pu_bagged_model(
+        if search_setting == "optuna":
+            optuna_space, optuna_trials, optuna_seed = _optuna_requirements(mule_model_config)
+            if validation_truth_scored is None:
+                raise ValueError("The Optuna search requires validation truth roles")
+
+            def train_bagging_trial(params: dict[str, int | float]) -> Sequence[float]:
+                trial_model = train_pu_bagged_model(
                     training_matrix,
                     training_targets,
                     seed,
-                    n_estimators,
+                    int(params["n_estimators"]),
                     n_bags,
-                    unlabelled_per_positive,
+                    int(params["unlabelled_per_positive"]),
+                    **_xgb_hyperparameters(params),
                 )
-                training_seconds[variant] = time.perf_counter() - started
-                probabilities = predict_account_days(model, validation_rows_for_keys)
-                score = average_precision(probabilities, validation_targets)
-                pu_average_precision_scores[variant] = score
-                if score > best_validation_ap:
-                    best_validation_ap = score
-                    best_model = model
-                    best_n_estimators = n_estimators
-                    best_unlabelled_per_positive = unlabelled_per_positive
+                return predict_account_days(trial_model, validation_rows_for_keys)
+
+            started = time.perf_counter()
+            search_result = run_optuna_search(
+                train_bagging_trial,
+                validation_truth_scored,
+                optuna_space,
+                optuna_trials,
+                optuna_seed,
+                categorical_choices={"unlabelled_per_positive": unlabelled_candidates},
+            )
+            training_seconds["optuna_search"] = time.perf_counter() - started
+            started = time.perf_counter()
+            best_unlabelled_per_positive = int(search_result.best_params["unlabelled_per_positive"])
+            best_n_estimators = int(search_result.best_params["n_estimators"])
+            best_model = train_pu_bagged_model(
+                training_matrix,
+                training_targets,
+                seed,
+                best_n_estimators,
+                n_bags,
+                best_unlabelled_per_positive,
+                **_xgb_hyperparameters(search_result.best_params),
+            )
+            training_seconds["optuna_best"] = time.perf_counter() - started
+            probabilities = predict_account_days(best_model, validation_rows_for_keys)
+            best_validation_ap = average_precision(probabilities, validation_targets)
+        else:
+            for n_estimators in N_ESTIMATOR_CANDIDATES:
+                for unlabelled_per_positive in unlabelled_candidates:
+                    variant = f"{n_estimators}|{unlabelled_per_positive}"
+                    started = time.perf_counter()
+                    model = train_pu_bagged_model(
+                        training_matrix,
+                        training_targets,
+                        seed,
+                        n_estimators,
+                        n_bags,
+                        unlabelled_per_positive,
+                    )
+                    training_seconds[variant] = time.perf_counter() - started
+                    probabilities = predict_account_days(model, validation_rows_for_keys)
+                    score = average_precision(probabilities, validation_targets)
+                    pu_average_precision_scores[variant] = score
+                    if score > best_validation_ap:
+                        best_validation_ap = score
+                        best_model = model
+                        best_n_estimators = n_estimators
+                        best_unlabelled_per_positive = unlabelled_per_positive
     elif pu_method == "elkan_noto":
         probability_clip = mule_model_config.pu_probability_clip
         if probability_clip is None:
             raise ValueError("pu_probability_clip is required when pu_method is 'elkan_noto'")
-        for n_estimators in N_ESTIMATOR_CANDIDATES:
+        if search_setting == "optuna":
+            optuna_space, optuna_trials, optuna_seed = _optuna_requirements(mule_model_config)
+            if validation_truth_scored is None:
+                raise ValueError("The Optuna search requires validation truth roles")
+
+            def train_elkan_trial(params: dict[str, int | float]) -> Sequence[float]:
+                trial_model, _, _, _ = train_elkan_noto_model(
+                    training_matrix,
+                    training_targets,
+                    validation_matrix,
+                    validation_targets,
+                    seed,
+                    int(params["n_estimators"]),
+                    probability_clip,
+                    **_xgb_hyperparameters(params),
+                )
+                return predict_account_days(trial_model, validation_rows_for_keys)
+
             started = time.perf_counter()
-            model, c, weight_summary, clip_count = train_elkan_noto_model(
+            search_result = run_optuna_search(
+                train_elkan_trial,
+                validation_truth_scored,
+                optuna_space,
+                optuna_trials,
+                optuna_seed,
+            )
+            training_seconds["optuna_search"] = time.perf_counter() - started
+            started = time.perf_counter()
+            best_n_estimators = int(search_result.best_params["n_estimators"])
+            best_model, best_c, best_weight_summary, best_clip_count = train_elkan_noto_model(
                 training_matrix,
                 training_targets,
                 validation_matrix,
                 validation_targets,
                 seed,
-                n_estimators,
+                best_n_estimators,
                 probability_clip,
+                **_xgb_hyperparameters(search_result.best_params),
             )
-            training_seconds[str(n_estimators)] = time.perf_counter() - started
-            probabilities = predict_account_days(model, validation_rows_for_keys)
-            score = average_precision(probabilities, validation_targets)
-            n_estimators_scores[str(n_estimators)] = score
-            if score > best_validation_ap:
-                best_validation_ap = score
-                best_model = model
-                best_n_estimators = n_estimators
-                best_c = c
-                best_weight_summary = weight_summary
-                best_clip_count = clip_count
+            training_seconds["optuna_best"] = time.perf_counter() - started
+            probabilities = predict_account_days(best_model, validation_rows_for_keys)
+            best_validation_ap = average_precision(probabilities, validation_targets)
+        else:
+            for n_estimators in N_ESTIMATOR_CANDIDATES:
+                started = time.perf_counter()
+                model, c, weight_summary, clip_count = train_elkan_noto_model(
+                    training_matrix,
+                    training_targets,
+                    validation_matrix,
+                    validation_targets,
+                    seed,
+                    n_estimators,
+                    probability_clip,
+                )
+                training_seconds[str(n_estimators)] = time.perf_counter() - started
+                probabilities = predict_account_days(model, validation_rows_for_keys)
+                score = average_precision(probabilities, validation_targets)
+                n_estimators_scores[str(n_estimators)] = score
+                if score > best_validation_ap:
+                    best_validation_ap = score
+                    best_model = model
+                    best_n_estimators = n_estimators
+                    best_c = c
+                    best_weight_summary = weight_summary
+                    best_clip_count = clip_count
     else:
         raise ValueError(f"Unsupported pu_method: {pu_method!r}")
     if best_model is None:
         raise ValueError("No n_estimators candidate produced a validation score")
+    trials_path = result_dir / "optuna_trials.json"
+    if search_result is not None:
+        _, optuna_trials, optuna_seed = _optuna_requirements(mule_model_config)
+        _write_search_trials(trials_path, search_result, pu_method, optuna_trials, optuna_seed)
     _record_stage("train", stage_started, stage_seconds, peak_rss_mb)
     stage_started = time.perf_counter()
 
@@ -1420,6 +1726,20 @@ def run_pilot(
         pu_block["clip_count"] = best_clip_count
         pu_block["average_precision_scores"] = n_estimators_scores
     pu_block["chosen_n_estimators"] = best_n_estimators
+
+    if search_result is not None:
+        _, record_trials, record_seed = _optuna_requirements(mule_model_config)
+        manifest["hyperparameter_search"] = {
+            "method": "optuna",
+            "trial_count": record_trials,
+            "seed": record_seed,
+            "best_params": search_result.best_params,
+            "best_validation_truth_average_precision": search_result.best_score,
+            "trials_path": str(trials_path),
+            "trials_sha256": _sha256_of_file(trials_path),
+        }
+    else:
+        manifest["hyperparameter_search"] = {"method": "off"}
 
     manifest["pilot_account_model"] = {
         "pu_method": pu_method,

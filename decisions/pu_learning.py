@@ -232,6 +232,12 @@ def train_pu_bagged_model(
     n_estimators: int,
     n_bags: int,
     unlabelled_per_positive: int,
+    *,
+    max_depth: int = 6,
+    learning_rate: float = 0.3,
+    min_child_weight: float = 1.0,
+    subsample: float = 1.0,
+    colsample_bytree: float = 1.0,
 ) -> PUBaggedAccountModel:
     """
     WHAT: Trains a PU bagging ensemble, one member per bag.
@@ -255,6 +261,11 @@ def train_pu_bagged_model(
         n_estimators: Boosting rounds passed to every member.
         n_bags: Number of members to train.
         unlabelled_per_positive: Unlabelled rows drawn per positive row in each bag.
+        max_depth: Tree depth passed to every member; the default matches the XGBoost default.
+        learning_rate: Boosting step passed to every member.
+        min_child_weight: Minimum child weight passed to every member.
+        subsample: Row sample share passed to every member.
+        colsample_bytree: Column sample share passed to every member.
 
     Returns:
         The fitted PUBaggedAccountModel.
@@ -289,7 +300,17 @@ def train_pu_bagged_model(
         ordered_indices = positive_indices + sorted(int(index) for index in sampled)
         bag_rows = [matrix[index] for index in ordered_indices]
         bag_targets = [targets[index] for index in ordered_indices]
-        member, _ = train_account_model(bag_rows, bag_targets, member_seed, n_estimators)
+        member, _ = train_account_model(
+            bag_rows,
+            bag_targets,
+            member_seed,
+            n_estimators,
+            max_depth=max_depth,
+            learning_rate=learning_rate,
+            min_child_weight=min_child_weight,
+            subsample=subsample,
+            colsample_bytree=colsample_bytree,
+        )
         members.append(member)
         member_seeds.append(member_seed)
 
@@ -381,6 +402,12 @@ def train_elkan_noto_model(
     seed: int,
     n_estimators: int,
     probability_clip: float,
+    *,
+    max_depth: int = 6,
+    learning_rate: float = 0.3,
+    min_child_weight: float = 1.0,
+    subsample: float = 1.0,
+    colsample_bytree: float = 1.0,
 ) -> tuple[xgboost.XGBClassifier, float, dict[str, float], int]:
     """
     WHAT: Trains one account model with weighted Elkan-Noto positive-unlabelled learning.
@@ -407,6 +434,13 @@ def train_elkan_noto_model(
         seed: Random seed for g and the final model.
         n_estimators: Boosting rounds for g and the final model.
         probability_clip: Cap on g(x) so p / (1 - p) stays finite.
+        max_depth: Tree depth for g and the final model, defaulting to the XGBoost default.
+        learning_rate: Boosting step for g and the final model, defaulting to the XGBoost default.
+        min_child_weight: Minimum child weight for g and the final model, defaulting to the
+            XGBoost default.
+        subsample: Row sample share for g and the final model, defaulting to the XGBoost default.
+        colsample_bytree: Column sample share for g and the final model, defaulting to the XGBoost
+            default.
 
     Returns:
         (final model, c, weight summary with min / median / max of the unlabelled weights, clip
@@ -432,6 +466,11 @@ def train_elkan_noto_model(
         seed,
         n_estimators,
         scale_pos_weight_override=1.0,
+        max_depth=max_depth,
+        learning_rate=learning_rate,
+        min_child_weight=min_child_weight,
+        subsample=subsample,
+        colsample_bytree=colsample_bytree,
     )
     g_validation = [float(value) for value in g.predict_proba(validation_matrix)[:, 1]]
     c = _positive_probability_mean(g_validation, validation_targets)
@@ -475,6 +514,11 @@ def train_elkan_noto_model(
         n_estimators,
         sample_weight=sample_weights,
         scale_pos_weight_override=class_weight,
+        max_depth=max_depth,
+        learning_rate=learning_rate,
+        min_child_weight=min_child_weight,
+        subsample=subsample,
+        colsample_bytree=colsample_bytree,
     )
 
     weight_summary = {

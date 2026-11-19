@@ -36,6 +36,7 @@ __all__ = [
     "ALLOWED_DATA_PATHS",
     "ALLOWED_LABEL_CUTS",
     "FeatureRows",
+    "HyperparameterRange",
     "MuleModelConfig",
     "account_model_feature_names",
     "active_mule_model_config_path",
@@ -53,10 +54,26 @@ ALLOWED_DATA_PATHS: frozenset[str] = frozenset({"rows", "compact"})
 FeatureRows = list[list[float]] | numpy.ndarray
 ALLOWED_LABEL_CUTS: frozenset[str] = frozenset({"arrival_time", "label_day"})
 ALLOWED_PU_METHODS: frozenset[str] = frozenset({"none", "bagging", "elkan_noto"})
+ALLOWED_HYPERPARAMETER_SEARCHES: frozenset[str] = frozenset({"off", "optuna"})
+#: Parameters the Optuna search tunes, in the order the config lists them.
+HYPERPARAMETER_SPACE_NAMES: tuple[str, ...] = (
+    "max_depth",
+    "learning_rate",
+    "n_estimators",
+    "min_child_weight",
+    "subsample",
+    "colsample_bytree",
+)
+#: Space entries sampled as integers; the others are sampled as floats.
+INTEGER_HYPERPARAMETERS: frozenset[str] = frozenset({"max_depth", "n_estimators"})
+#: Space entries sampled on a log scale, as the architect's ranges specify.
+LOG_HYPERPARAMETERS: frozenset[str] = frozenset({"learning_rate", "min_child_weight"})
 ALLOWED_MULE_MODEL_KEYS: frozenset[str] = frozenset(
     {
         "data_path",
         "feature_fill_flag_share",
+        "hyperparameter_search",
+        "hyperparameter_space",
         "label_cut",
         "label_maturity_days",
         "use_label_network_features",
@@ -67,6 +84,8 @@ ALLOWED_MULE_MODEL_KEYS: frozenset[str] = frozenset(
         "pu_bagging_n_bags",
         "pu_unlabelled_per_positive_candidates",
         "pu_probability_clip",
+        "optuna_trials",
+        "optuna_seed",
     }
 )
 OPTIONAL_MULE_MODEL_KEYS: frozenset[str] = frozenset(
@@ -82,6 +101,24 @@ OPTIONAL_MULE_MODEL_KEYS: frozenset[str] = frozenset(
         "pu_probability_clip",
     }
 )
+
+
+@dataclass(frozen=True)
+class HyperparameterRange:
+    """
+    WHAT: One numeric range the Optuna search samples from.
+
+    Attributes:
+        minimum: Inclusive lower bound.
+        maximum: Inclusive upper bound for integer parameters, exclusive in effect for floats.
+        log: Whether the parameter is sampled on a log scale.
+        integer: Whether the parameter is sampled as an integer rather than a float.
+    """
+
+    minimum: float
+    maximum: float
+    log: bool
+    integer: bool
 
 
 @dataclass(frozen=True)
@@ -112,6 +149,13 @@ class MuleModelConfig:
             the config file does not carry the value.
         data_path: How the pilot loads the account model's rows, one of ALLOWED_DATA_PATHS, or None
             when the config file does not carry the switch.
+        hyperparameter_search: "off" for the estimator-candidate loop, "optuna" for the seeded TPE
+            search, or None when the config file does not carry the switch.
+        optuna_trials: Number of Optuna trials, or None when the config file does not carry it.
+        optuna_seed: Seed for the TPE sampler and every trial, or None when the config file does
+            not carry it.
+        hyperparameter_space: Range per searched parameter, or None when the config file does not
+            carry the block.
     """
 
     label_cut: str
@@ -126,6 +170,10 @@ class MuleModelConfig:
     pu_unlabelled_per_positive_candidates: tuple[int, ...] | None
     pu_probability_clip: float | None
     data_path: str | None
+    hyperparameter_search: str | None
+    optuna_trials: int | None
+    optuna_seed: int | None
+    hyperparameter_space: dict[str, HyperparameterRange] | None
 
 
 def _parse_feature_name_list(block: dict[str, Any], key: str, path: Path) -> tuple[str, ...]:
@@ -144,6 +192,91 @@ def _parse_feature_name_list(block: dict[str, Any], key: str, path: Path) -> tup
     if len(set(value)) != len(value):
         raise ValueError(f"Block '{key}' in {path} holds duplicate feature names")
     return tuple(value)
+
+
+def _parse_hyperparameter_space(block: dict[str, Any], path: Path) -> dict[str, HyperparameterRange]:
+    """
+    WHAT: Parses and checks the Optuna search ranges from a config block.
+
+    WHY: Every bound is a modelling decision read from config, so a missing, extra or malformed
+    entry must stop the run instead of falling back to an XGBoost default.
+
+    Args:
+        block: The hyperparameter_space block, holding a "value" mapping name -> min/max/log.
+        path: Config file, named in every error message.
+
+    Returns:
+        Parameter name -> validated range, in HYPERPARAMETER_SPACE_NAMES order.
+
+    Raises:
+        ValueError: If the mapping does not name exactly the searched parameters, an entry lacks
+            min/max/log, a log flag is wrong, a bound is not the right type, or a bound pair or
+            domain is invalid.
+    """
+    value = block.get("value")
+    if not isinstance(value, dict):
+        raise ValueError(f"hyperparameter_space in {path} must hold a mapping of parameter ranges")
+    if sorted(value) != sorted(HYPERPARAMETER_SPACE_NAMES):
+        raise ValueError(
+            f"hyperparameter_space in {path} must name exactly {list(HYPERPARAMETER_SPACE_NAMES)}; "
+            f"got {sorted(value)}"
+        )
+    ranges: dict[str, HyperparameterRange] = {}
+    for name in HYPERPARAMETER_SPACE_NAMES:
+        entry = value[name]
+        if not isinstance(entry, dict) or set(entry) != {"min", "max", "log"}:
+            raise ValueError(
+                f"hyperparameter_space entry '{name}' in {path} must hold exactly min, max and log"
+            )
+        minimum = entry["min"]
+        maximum = entry["max"]
+        log = entry["log"]
+        if not isinstance(log, bool):
+            raise ValueError(f"hyperparameter_space entry '{name}' in {path} must carry a boolean log")
+        expected_log = name in LOG_HYPERPARAMETERS
+        if log != expected_log:
+            raise ValueError(
+                f"hyperparameter_space entry '{name}' in {path} must set log to {expected_log}"
+            )
+        if name in INTEGER_HYPERPARAMETERS:
+            if (
+                not isinstance(minimum, int)
+                or isinstance(minimum, bool)
+                or not isinstance(maximum, int)
+                or isinstance(maximum, bool)
+            ):
+                raise ValueError(
+                    f"hyperparameter_space entry '{name}' in {path} must carry integer min and max"
+                )
+        elif (
+            not isinstance(minimum, (int, float))
+            or isinstance(minimum, bool)
+            or not isinstance(maximum, (int, float))
+            or isinstance(maximum, bool)
+        ):
+            raise ValueError(
+                f"hyperparameter_space entry '{name}' in {path} must carry numeric min and max"
+            )
+        if minimum >= maximum:
+            raise ValueError(
+                f"hyperparameter_space entry '{name}' in {path} needs min below max; "
+                f"got min {minimum!r} and max {maximum!r}"
+            )
+        if name in {"subsample", "colsample_bytree"} and not (0.0 < minimum and maximum <= 1.0):
+            raise ValueError(
+                f"hyperparameter_space entry '{name}' in {path} must lie inside (0.0, 1.0]"
+            )
+        if name in {"learning_rate", "min_child_weight"} and minimum <= 0.0:
+            raise ValueError(f"hyperparameter_space entry '{name}' in {path} must have a positive min")
+        if name in INTEGER_HYPERPARAMETERS and minimum < 1:
+            raise ValueError(f"hyperparameter_space entry '{name}' in {path} must start at 1 or more")
+        ranges[name] = HyperparameterRange(
+            minimum=float(minimum),
+            maximum=float(maximum),
+            log=log,
+            integer=name in INTEGER_HYPERPARAMETERS,
+        )
+    return ranges
 
 
 def _validate_network_feature_names(
@@ -389,6 +522,35 @@ def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
             )
         data_path = data_path_value
 
+    hyperparameter_search_value = parameters["hyperparameter_search"].get("value")
+    if (
+        not isinstance(hyperparameter_search_value, str)
+        or hyperparameter_search_value not in ALLOWED_HYPERPARAMETER_SEARCHES
+    ):
+        raise ValueError(
+            f"hyperparameter_search in {resolved_path} must be one of "
+            f"{sorted(ALLOWED_HYPERPARAMETER_SEARCHES)}; got {hyperparameter_search_value!r}"
+        )
+    hyperparameter_search: str = hyperparameter_search_value
+
+    optuna_trials_value = parameters["optuna_trials"].get("value")
+    if (
+        not isinstance(optuna_trials_value, int)
+        or isinstance(optuna_trials_value, bool)
+        or optuna_trials_value <= 0
+    ):
+        raise ValueError(
+            f"optuna_trials in {resolved_path} must be a positive integer; got {optuna_trials_value!r}"
+        )
+    optuna_trials: int = optuna_trials_value
+
+    optuna_seed_value = parameters["optuna_seed"].get("value")
+    if not isinstance(optuna_seed_value, int) or isinstance(optuna_seed_value, bool):
+        raise ValueError(f"optuna_seed in {resolved_path} must be an integer; got {optuna_seed_value!r}")
+    optuna_seed: int = optuna_seed_value
+
+    hyperparameter_space = _parse_hyperparameter_space(parameters["hyperparameter_space"], resolved_path)
+
     return MuleModelConfig(
         label_cut=label_cut,
         label_maturity_days=label_maturity_days,
@@ -402,6 +564,10 @@ def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
         pu_unlabelled_per_positive_candidates=pu_unlabelled_per_positive_candidates,
         pu_probability_clip=pu_probability_clip,
         data_path=data_path,
+        hyperparameter_search=hyperparameter_search,
+        optuna_trials=optuna_trials,
+        optuna_seed=optuna_seed,
+        hyperparameter_space=hyperparameter_space,
     )
 
 
@@ -657,6 +823,11 @@ def train_account_model(
     *,
     sample_weight: list[float] | None = None,
     scale_pos_weight_override: float | None = None,
+    max_depth: int = 6,
+    learning_rate: float = 0.3,
+    min_child_weight: float = 1.0,
+    subsample: float = 1.0,
+    colsample_bytree: float = 1.0,
 ) -> tuple[xgboost.XGBClassifier, float]:
     """
     WHAT: Fits the pilot account model and returns it with its positive-class weight.
@@ -676,6 +847,11 @@ def train_account_model(
             before.
         scale_pos_weight_override: Optional positive class weight replacing negatives / positives;
             None keeps negatives / positives.
+        max_depth: Tree depth, defaulting to the XGBoost default so the old call fits the same trees.
+        learning_rate: Boosting step, defaulting to the XGBoost default.
+        min_child_weight: Minimum child weight, defaulting to the XGBoost default.
+        subsample: Row sample share per tree, defaulting to the XGBoost default.
+        colsample_bytree: Column sample share per tree, defaulting to the XGBoost default.
 
     Returns:
         (model, scale_pos_weight) where scale_pos_weight is the override when given, otherwise
@@ -709,6 +885,32 @@ def train_account_model(
                 "scale_pos_weight_override must be a positive finite number; "
                 f"got {scale_pos_weight_override!r}"
             )
+    if not isinstance(max_depth, int) or isinstance(max_depth, bool) or max_depth < 1:
+        raise ValueError(f"max_depth must be a positive integer; got {max_depth!r}")
+    if (
+        not isinstance(learning_rate, (int, float))
+        or isinstance(learning_rate, bool)
+        or not math.isfinite(learning_rate)
+        or learning_rate <= 0.0
+    ):
+        raise ValueError(f"learning_rate must be a positive finite number; got {learning_rate!r}")
+    if (
+        not isinstance(min_child_weight, (int, float))
+        or isinstance(min_child_weight, bool)
+        or not math.isfinite(min_child_weight)
+        or min_child_weight < 0.0
+    ):
+        raise ValueError(
+            f"min_child_weight must be a non-negative finite number; got {min_child_weight!r}"
+        )
+    for name, share in (("subsample", subsample), ("colsample_bytree", colsample_bytree)):
+        if (
+            not isinstance(share, (int, float))
+            or isinstance(share, bool)
+            or not math.isfinite(share)
+            or not 0.0 < share <= 1.0
+        ):
+            raise ValueError(f"{name} must be a number in (0.0, 1.0]; got {share!r}")
     positives = sum(1 for target in targets if target == 1)
     negatives = sum(1 for target in targets if target == 0)
     if positives == 0:
@@ -727,6 +929,11 @@ def train_account_model(
         random_state=seed,
         scale_pos_weight=scale_pos_weight,
         n_estimators=n_estimators,
+        max_depth=max_depth,
+        learning_rate=learning_rate,
+        min_child_weight=min_child_weight,
+        subsample=subsample,
+        colsample_bytree=colsample_bytree,
     )
     if sample_weight is None:
         model.fit(rows, targets)
