@@ -89,6 +89,9 @@ ALLOWED_MULE_MODEL_KEYS: frozenset[str] = frozenset(
         "pu_probability_clip",
         "optuna_trials",
         "optuna_seed",
+        "optuna_min_trials_before_stop",
+        "optuna_stall_patience_trials",
+        "optuna_min_improvement",
     }
 )
 OPTIONAL_MULE_MODEL_KEYS: frozenset[str] = frozenset(
@@ -157,6 +160,12 @@ class MuleModelConfig:
         optuna_trials: Number of Optuna trials, or None when the config file does not carry it.
         optuna_seed: Seed for the TPE sampler and every trial, or None when the config file does
             not carry it.
+        optuna_min_trials_before_stop: Completed trials required before the stall rule may stop
+            the study.
+        optuna_stall_patience_trials: Trailing completed trials whose best score must improve on
+            the earlier best before the study may continue.
+        optuna_min_improvement: Truth average precision gain the patience window must add to the
+            earlier best for the study to keep running.
         hyperparameter_space: Range per searched parameter, or None when the config file does not
             carry the block.
     """
@@ -176,6 +185,9 @@ class MuleModelConfig:
     hyperparameter_search: str | None
     optuna_trials: int | None
     optuna_seed: int | None
+    optuna_min_trials_before_stop: int
+    optuna_stall_patience_trials: int
+    optuna_min_improvement: float
     hyperparameter_space: dict[str, HyperparameterRange] | None
 
 
@@ -552,6 +564,41 @@ def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
         raise ValueError(f"optuna_seed in {resolved_path} must be an integer; got {optuna_seed_value!r}")
     optuna_seed: int = optuna_seed_value
 
+    min_trials_value = parameters["optuna_min_trials_before_stop"].get("value")
+    if not isinstance(min_trials_value, int) or isinstance(min_trials_value, bool) or min_trials_value <= 0:
+        raise ValueError(
+            f"optuna_min_trials_before_stop in {resolved_path} must be a positive integer; "
+            f"got {min_trials_value!r}"
+        )
+    optuna_min_trials_before_stop: int = min_trials_value
+
+    patience_value = parameters["optuna_stall_patience_trials"].get("value")
+    if not isinstance(patience_value, int) or isinstance(patience_value, bool) or patience_value <= 0:
+        raise ValueError(
+            f"optuna_stall_patience_trials in {resolved_path} must be a positive integer; "
+            f"got {patience_value!r}"
+        )
+    optuna_stall_patience_trials: int = patience_value
+
+    min_improvement_value = parameters["optuna_min_improvement"].get("value")
+    if (
+        not isinstance(min_improvement_value, (int, float))
+        or isinstance(min_improvement_value, bool)
+        or not math.isfinite(min_improvement_value)
+        or min_improvement_value <= 0.0
+    ):
+        raise ValueError(
+            f"optuna_min_improvement in {resolved_path} must be a positive finite number; "
+            f"got {min_improvement_value!r}"
+        )
+    optuna_min_improvement: float = float(min_improvement_value)
+
+    if optuna_min_trials_before_stop > optuna_trials:
+        raise ValueError(
+            f"optuna_min_trials_before_stop in {resolved_path} must not exceed optuna_trials; "
+            f"got {optuna_min_trials_before_stop} and {optuna_trials}"
+        )
+
     hyperparameter_space = _parse_hyperparameter_space(parameters["hyperparameter_space"], resolved_path)
 
     return MuleModelConfig(
@@ -570,6 +617,9 @@ def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
         hyperparameter_search=hyperparameter_search,
         optuna_trials=optuna_trials,
         optuna_seed=optuna_seed,
+        optuna_min_trials_before_stop=optuna_min_trials_before_stop,
+        optuna_stall_patience_trials=optuna_stall_patience_trials,
+        optuna_min_improvement=optuna_min_improvement,
         hyperparameter_space=hyperparameter_space,
     )
 

@@ -120,6 +120,24 @@ parameters:
     derived_from: "Level 18a4 round 7 brief"
     reason: "A fixed seed makes the sampled parameter sequence and the chosen trial reproducible across runs."
 
+  optuna_min_trials_before_stop:
+    label: policy
+    value: 20
+    derived_from: "architect ruling 2026-11-19: stop when the search has stalled"
+    reason: "TPE's first 10 trials are random startup, so no stall judgement is made before 20 trials."
+
+  optuna_stall_patience_trials:
+    label: policy
+    value: 10
+    derived_from: "architect ruling 2026-11-19: stop when the search has stalled"
+    reason: "Ten trials without a meaningful gain means TPE has stopped finding better regions."
+
+  optuna_min_improvement:
+    label: policy
+    value: 0.001
+    derived_from: "architect ruling 2026-11-19: stop when the search has stalled"
+    reason: "A 0.001 truth average precision gain is below what the method choice can resolve."
+
   hyperparameter_space:
     label: policy
     value:

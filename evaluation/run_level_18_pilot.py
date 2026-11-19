@@ -388,21 +388,23 @@ def _xgb_hyperparameters(params: dict[str, int | float]) -> dict[str, Any]:
 
 def _optuna_requirements(
     config: MuleModelConfig,
-) -> tuple[dict[str, HyperparameterRange], int, int]:
+) -> tuple[dict[str, HyperparameterRange], int, int, int, int, float]:
     """
-    WHAT: Returns the validated search space, trial count and seed the optuna setting needs.
+    WHAT: Returns the validated search space, trial count, seed and stall rule the optuna setting
+    needs.
 
-    WHY: The loader makes all three required, but the dataclass types them optional; refusing a
-    missing one here names it instead of letting the search run with an invented default.
+    WHY: The loader makes the space, count and seed required but types them optional, while the
+    stall rule is typed required; refusing a missing space, count or seed here names it instead of
+    letting the search run with an invented default.
 
     Args:
         config: Loaded mule model configuration.
 
     Returns:
-        (space, trial_count, seed).
+        (space, trial_count, seed, min_trials_before_stop, stall_patience_trials, min_improvement).
 
     Raises:
-        ValueError: If any of the three is missing from the configuration.
+        ValueError: If the space, trial count or seed is missing from the configuration.
     """
     space = config.hyperparameter_space
     if space is None:
@@ -413,7 +415,14 @@ def _optuna_requirements(
     seed = config.optuna_seed
     if seed is None:
         raise ValueError("optuna_seed is required when hyperparameter_search is 'optuna'")
-    return space, trial_count, seed
+    return (
+        space,
+        trial_count,
+        seed,
+        config.optuna_min_trials_before_stop,
+        config.optuna_stall_patience_trials,
+        config.optuna_min_improvement,
+    )
 
 
 def _write_search_trials(
@@ -1376,7 +1385,14 @@ def run_pilot(
     model: xgboost.XGBClassifier | PUBaggedAccountModel
     if pu_method == "none":
         if search_setting == "optuna":
-            optuna_space, optuna_trials, optuna_seed = _optuna_requirements(mule_model_config)
+            (
+                optuna_space,
+                optuna_trials,
+                optuna_seed,
+                optuna_min_trials_before_stop,
+                optuna_stall_patience_trials,
+                optuna_min_improvement,
+            ) = _optuna_requirements(mule_model_config)
             if validation_truth_scored is None:
                 raise ValueError("The Optuna search requires validation truth roles")
 
@@ -1398,6 +1414,9 @@ def run_pilot(
                 optuna_space,
                 optuna_trials,
                 optuna_seed,
+                min_trials_before_stop=optuna_min_trials_before_stop,
+                stall_patience_trials=optuna_stall_patience_trials,
+                min_improvement=optuna_min_improvement,
             )
             training_seconds["optuna_search"] = time.perf_counter() - started
             started = time.perf_counter()
@@ -1437,7 +1456,14 @@ def run_pilot(
                 "pu_unlabelled_per_positive_candidates is required when pu_method is 'bagging'"
             )
         if search_setting == "optuna":
-            optuna_space, optuna_trials, optuna_seed = _optuna_requirements(mule_model_config)
+            (
+                optuna_space,
+                optuna_trials,
+                optuna_seed,
+                optuna_min_trials_before_stop,
+                optuna_stall_patience_trials,
+                optuna_min_improvement,
+            ) = _optuna_requirements(mule_model_config)
             if validation_truth_scored is None:
                 raise ValueError("The Optuna search requires validation truth roles")
 
@@ -1461,6 +1487,9 @@ def run_pilot(
                 optuna_space,
                 optuna_trials,
                 optuna_seed,
+                min_trials_before_stop=optuna_min_trials_before_stop,
+                stall_patience_trials=optuna_stall_patience_trials,
+                min_improvement=optuna_min_improvement,
                 categorical_choices={"unlabelled_per_positive": unlabelled_candidates},
             )
             training_seconds["optuna_search"] = time.perf_counter() - started
@@ -1506,7 +1535,14 @@ def run_pilot(
         if probability_clip is None:
             raise ValueError("pu_probability_clip is required when pu_method is 'elkan_noto'")
         if search_setting == "optuna":
-            optuna_space, optuna_trials, optuna_seed = _optuna_requirements(mule_model_config)
+            (
+                optuna_space,
+                optuna_trials,
+                optuna_seed,
+                optuna_min_trials_before_stop,
+                optuna_stall_patience_trials,
+                optuna_min_improvement,
+            ) = _optuna_requirements(mule_model_config)
             if validation_truth_scored is None:
                 raise ValueError("The Optuna search requires validation truth roles")
 
@@ -1531,6 +1567,9 @@ def run_pilot(
                 optuna_space,
                 optuna_trials,
                 optuna_seed,
+                min_trials_before_stop=optuna_min_trials_before_stop,
+                stall_patience_trials=optuna_stall_patience_trials,
+                min_improvement=optuna_min_improvement,
             )
             training_seconds["optuna_search"] = time.perf_counter() - started
             started = time.perf_counter()
@@ -1577,7 +1616,7 @@ def run_pilot(
         raise ValueError("No n_estimators candidate produced a validation score")
     trials_path = result_dir / "optuna_trials.json"
     if search_result is not None:
-        _, optuna_trials, optuna_seed = _optuna_requirements(mule_model_config)
+        _, optuna_trials, optuna_seed, _, _, _ = _optuna_requirements(mule_model_config)
         _write_search_trials(trials_path, search_result, pu_method, optuna_trials, optuna_seed)
     _record_stage("train", stage_started, stage_seconds, peak_rss_mb)
     stage_started = time.perf_counter()
@@ -1761,7 +1800,7 @@ def run_pilot(
     pu_block["chosen_n_estimators"] = best_n_estimators
 
     if search_result is not None:
-        _, record_trials, record_seed = _optuna_requirements(mule_model_config)
+        _, record_trials, record_seed, _, _, _ = _optuna_requirements(mule_model_config)
         manifest["hyperparameter_search"] = {
             "method": "optuna",
             "trial_count": record_trials,

@@ -764,7 +764,7 @@ def _train_pu_method(
         chosen = {**chosen, "search": "off"}
         return model, chosen, probabilities
 
-    space, trial_count, optuna_seed = _optuna_requirements(mule_config)
+    space, trial_count, optuna_seed, _, _, _ = _optuna_requirements(mule_config)
     categorical_choices: dict[str, Sequence[int]] | None = None
     n_bags = 0
     probability_clip = 0.0
@@ -836,6 +836,9 @@ def _train_pu_method(
         space,
         trial_count,
         optuna_seed,
+        min_trials_before_stop=mule_config.optuna_min_trials_before_stop,
+        stall_patience_trials=mule_config.optuna_stall_patience_trials,
+        min_improvement=mule_config.optuna_min_improvement,
         categorical_choices=categorical_choices,
     )
     best_params = search_result.best_params

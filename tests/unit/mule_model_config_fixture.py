@@ -53,6 +53,9 @@ def mule_model_config_text(
         + _block("hyperparameter_search", '    value: "off"\n')
         + _block("optuna_trials", "    value: 40\n")
         + _block("optuna_seed", "    value: 1717\n")
+        + _block("optuna_min_trials_before_stop", "    value: 20\n")
+        + _block("optuna_stall_patience_trials", "    value: 10\n")
+        + _block("optuna_min_improvement", "    value: 0.001\n")
         + _block(
             "hyperparameter_space",
             "    value:\n"

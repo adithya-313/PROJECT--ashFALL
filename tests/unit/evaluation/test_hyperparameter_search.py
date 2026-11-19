@@ -105,8 +105,26 @@ def test_three_trial_study_is_deterministic_with_a_fixed_seed() -> None:
         day_rows = numpy.asarray(rows, dtype=float)
         return [float(value) for value in model.predict_proba(day_rows)[:, 1]]
 
-    first = run_optuna_search(train_trial, scored, _truth_ap_space(), 3, 11)
-    second = run_optuna_search(train_trial, scored, _truth_ap_space(), 3, 11)
+    first = run_optuna_search(
+        train_trial,
+        scored,
+        _truth_ap_space(),
+        3,
+        11,
+        min_trials_before_stop=3,
+        stall_patience_trials=1,
+        min_improvement=0.001,
+    )
+    second = run_optuna_search(
+        train_trial,
+        scored,
+        _truth_ap_space(),
+        3,
+        11,
+        min_trials_before_stop=3,
+        stall_patience_trials=1,
+        min_improvement=0.001,
+    )
 
     assert len(first.trials) == 3
     assert first.trials == second.trials
@@ -117,6 +135,82 @@ def test_three_trial_study_is_deterministic_with_a_fixed_seed() -> None:
     assert 3 <= first.best_params["n_estimators"] <= 8
     assert 0.05 <= first.best_params["learning_rate"] <= 0.5
     assert 0.5 <= first.best_params["subsample"] <= 1.0
+
+
+def test_constant_score_stops_at_the_minimum_trial_count() -> None:
+    """A flat score trips the stall rule at exactly max(min_trials, patience + 1) trials."""
+    scored = _scored(["mule", "genuine"])
+
+    def train_trial(params: dict[str, int | float]) -> list[float]:
+        """Returns the same probabilities every trial, so truth AP never changes."""
+        return [0.9, 0.1]
+
+    result = run_optuna_search(
+        train_trial,
+        scored,
+        _truth_ap_space(),
+        40,
+        7,
+        min_trials_before_stop=20,
+        stall_patience_trials=10,
+        min_improvement=0.001,
+    )
+
+    assert result.trials_run == max(20, 10 + 1)
+    assert result.trials_run == 20
+    assert result.stopped_early is True
+    assert "stalled" in result.stop_reason
+    assert len(result.trials) == 20
+
+
+def test_strictly_improving_score_runs_every_trial() -> None:
+    """A score that rises in every patience window keeps the study running to the last trial."""
+    scored = _scored(["mule"] + ["genuine"] * 11)
+    call_count = 0
+
+    def train_trial(params: dict[str, int | float]) -> list[float]:
+        """Lifts the positive day one rank per call, so truth AP strictly improves each time."""
+        nonlocal call_count
+        call_count += 1
+        negatives_above = 12 - call_count
+        return [0.5] + [0.9 if index < negatives_above else 0.1 for index in range(11)]
+
+    result = run_optuna_search(
+        train_trial,
+        scored,
+        _truth_ap_space(),
+        12,
+        7,
+        min_trials_before_stop=3,
+        stall_patience_trials=2,
+        min_improvement=0.001,
+    )
+
+    assert result.trials_run == 12
+    assert result.stopped_early is False
+    assert result.stop_reason == "completed all 12 trials"
+    assert len(result.trials) == 12
+
+
+def test_minimum_trials_beyond_the_trial_count_is_refused() -> None:
+    """A minimum the run can never reach raises before any trial trains."""
+    scored = _scored(["mule", "genuine"])
+
+    def train_trial(params: dict[str, int | float]) -> list[float]:
+        """Fails if called, proving the refusal happens before training starts."""
+        raise AssertionError("train_trial must not run when the stop settings are invalid")
+
+    with pytest.raises(ValueError, match="must not exceed trial_count"):
+        run_optuna_search(
+            train_trial,
+            scored,
+            _truth_ap_space(),
+            5,
+            7,
+            min_trials_before_stop=6,
+            stall_patience_trials=2,
+            min_improvement=0.001,
+        )
 
 
 def test_default_hyperparameters_reproduce_the_untuned_model() -> None:
