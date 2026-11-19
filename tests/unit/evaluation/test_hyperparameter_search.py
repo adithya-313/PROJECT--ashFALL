@@ -92,6 +92,7 @@ def test_three_trial_study_is_deterministic_with_a_fixed_seed() -> None:
     scored = _scored(["mule" if target == 1 else "genuine" for target in targets])
 
     def train_trial(params: dict[str, int | float]) -> list[float]:
+        """Trains one tiny candidate and returns its scores on the training rows."""
         model, _ = train_account_model(
             rows,
             targets,
@@ -219,6 +220,7 @@ def test_unknown_search_setting_is_refused(tmp_path: Path) -> None:
     """A search setting other than off or optuna raises instead of silently running a grid."""
 
     def mutate(parameters: dict[str, Any]) -> None:
+        """Sets an unsupported search method so the loader must refuse it."""
         parameters["hyperparameter_search"]["value"] = "grid"
 
     path = _write_variant(tmp_path, mutate)
@@ -230,6 +232,7 @@ def test_wrong_log_flag_is_refused(tmp_path: Path) -> None:
     """A space entry that disagrees with the architect's log flags raises naming the entry."""
 
     def mutate(parameters: dict[str, Any]) -> None:
+        """Turns on the log flag of an integer parameter so the range must be refused."""
         parameters["hyperparameter_space"]["value"]["max_depth"]["log"] = True
 
     path = _write_variant(tmp_path, mutate)
@@ -241,6 +244,7 @@ def test_missing_search_range_is_refused(tmp_path: Path) -> None:
     """A space that omits one of the six searched parameters raises instead of defaulting it."""
 
     def mutate(parameters: dict[str, Any]) -> None:
+        """Removes one searched parameter so the space must be refused."""
         del parameters["hyperparameter_space"]["value"]["min_child_weight"]
 
     path = _write_variant(tmp_path, mutate)

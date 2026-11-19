@@ -1372,6 +1372,7 @@ def run_pilot(
                 raise ValueError("The Optuna search requires validation truth roles")
 
             def train_none_trial(params: dict[str, int | float]) -> Sequence[float]:
+                """Trains one supervised candidate and returns its validation probabilities."""
                 trial_model, _ = train_account_model(
                     training_matrix,
                     training_targets,
@@ -1432,6 +1433,7 @@ def run_pilot(
                 raise ValueError("The Optuna search requires validation truth roles")
 
             def train_bagging_trial(params: dict[str, int | float]) -> Sequence[float]:
+                """Trains one bagged candidate and returns its validation probabilities."""
                 trial_model = train_pu_bagged_model(
                     training_matrix,
                     training_targets,
@@ -1500,6 +1502,7 @@ def run_pilot(
                 raise ValueError("The Optuna search requires validation truth roles")
 
             def train_elkan_trial(params: dict[str, int | float]) -> Sequence[float]:
+                """Trains one Elkan-Noto candidate and returns its validation probabilities."""
                 trial_model, _, _, _ = train_elkan_noto_model(
                     training_matrix,
                     training_targets,

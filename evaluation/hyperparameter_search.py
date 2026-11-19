@@ -156,6 +156,7 @@ def run_optuna_search(
                 raise ValueError(f"Categorical parameter {name!r} holds no values")
 
     def objective(trial: optuna.Trial) -> float:
+        """Trains one trial's candidate and returns its validation truth average precision."""
         params = _suggest_parameters(trial, space, categorical_choices)
         return validation_truth_average_precision(train_trial(params), scored)
 
