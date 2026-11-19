@@ -10,11 +10,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+import yaml
 
 from decisions.mule_account_model import (
     build_training_rows,
     load_mule_model_config,
 )
+from tests.unit.mule_model_config_fixture import write_mule_model_config
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = REPO_ROOT / "config" / "mule_model.yaml"
@@ -44,16 +46,17 @@ def _label(account_id: str, moment: datetime) -> dict[str, object]:
     }
 
 
-def _write_config(path: Path, body: str) -> None:
-    """Writes a config file body verbatim."""
-    path.write_text(body, encoding="utf-8")
+def _committed_maturity_days() -> int | None:
+    """Reads the committed window straight from the config file, without the loader."""
+    raw = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    return raw["parameters"]["label_maturity_days"]["value"]
 
 
 def test_config_default_cut_is_arrival_time() -> None:
-    """The committed config selects the exact arrival-time cut and leaves maturity off."""
+    """The committed config selects the exact arrival-time cut and carries the committed window."""
     assert load_mule_model_config().label_cut == "arrival_time"
     assert load_mule_model_config(CONFIG_PATH).label_cut == "arrival_time"
-    assert load_mule_model_config().label_maturity_days is None
+    assert load_mule_model_config().label_maturity_days == _committed_maturity_days()
 
 
 def test_default_cut_drops_label_day_snapshot_after_arrival() -> None:
@@ -64,7 +67,7 @@ def test_default_cut_drops_label_day_snapshot_after_arrival() -> None:
     ]
     labels = [_label("acc_labelled", datetime(2026, 9, 2, 10, 0, tzinfo=timezone.utc))]
 
-    matrix, targets, row_keys = build_training_rows(snapshots, labels)
+    matrix, targets, row_keys = build_training_rows(snapshots, labels, label_maturity_days=0)
 
     assert len(matrix) == 1
     assert targets == [1]
@@ -79,7 +82,7 @@ def test_snapshot_exactly_at_arrival_time_is_dropped() -> None:
     ]
     labels = [_label("acc_labelled", datetime(2026, 9, 2, 10, 0, tzinfo=timezone.utc))]
 
-    matrix, targets, row_keys = build_training_rows(snapshots, labels, label_cut="arrival_time")
+    matrix, targets, row_keys = build_training_rows(snapshots, labels, label_cut="arrival_time", label_maturity_days=0)
 
     assert len(matrix) == 1
     assert targets == [1]
@@ -124,26 +127,7 @@ def test_negative_label_maturity_is_refused() -> None:
 def test_config_loader_refuses_unknown_value(tmp_path: Path) -> None:
     """A config whose label_cut is not an allowed cut is refused."""
     config_path = tmp_path / "mule_model.yaml"
-    _write_config(
-        config_path,
-        "parameters:\n"
-        "  label_cut:\n"
-        "    label: policy\n"
-        "    value: next_week\n"
-        "    derived_from: test\n"
-        "    reason: test\n"
-        "  label_maturity_days:\n"
-        "    label: policy\n"
-        "    value: null\n"
-        "    not_found: true\n"
-        "    derived_from: test\n"
-        "    reason: test\n"
-        "  feature_fill_flag_share:\n"
-        "    label: policy\n"
-        "    value: 0.999\n"
-        "    derived_from: test\n"
-        "    reason: test\n",
-    )
+    write_mule_model_config(config_path, label_cut="next_week")
 
     with pytest.raises(ValueError, match="label_cut .* must be one of"):
         load_mule_model_config(config_path)
