@@ -110,10 +110,15 @@ class CompactSplit:
     Attributes:
         rows: Training matrix, targets and key arrays, concatenated in sorted world order.
         days: Per-account-day arrays with truth columns, or None when the caller did not ask.
+        day_rows: The account-day dictionaries the arrays were built from, concatenated in
+            sorted world order, or None when the caller did not ask. Scoring, alignment and the
+            anomaly cut still need dictionaries, so retaining these once keeps the caller from
+            re-reading and re-joining the split's snapshots.
     """
 
     rows: CompactRows
     days: CompactDayRows | None
+    day_rows: list[dict[str, Any]] | None = None
 
 
 def _world_sources(dataset_dirs: Sequence[Path]) -> list[tuple[str, Path]]:
@@ -295,7 +300,8 @@ def load_compact_split(
         dataset_dirs: Dataset folders of one split, in any order.
         truth_root: Root folder holding one truth folder per run_id; required when include_days
             is true, because validation metrics need truth_role and truth_depth.
-        include_days: When true, also return every account-day with its truth role and depth.
+        include_days: When true, also return every account-day with its truth role and depth, both
+            as arrays and as the day-row dictionaries those arrays were built from.
         world_ids: Optional subset of world ids to load, for a bounded probe; None loads every
             world in the folders.
 
@@ -307,9 +313,11 @@ def load_compact_split(
             when day rows are requested, or a row lacks a required field.
 
     Complexity:
-        Time O(rows * feature_count) plus one parquet read per world. Peak memory O(largest world),
-        because each world's dictionaries are released before the next world is read; the returned
-        arrays hold O(rows * feature_count) float32 and O(rows) keys for the whole split.
+        Time O(rows * feature_count) plus one parquet read per world. Without include_days, peak
+        memory is O(largest world), because each world's dictionaries are released before the next
+        world is read; the returned arrays hold O(rows * feature_count) float32 and O(rows) keys.
+        With include_days, the split's account-day dictionaries are retained as well, one per
+        account-day rather than one per snapshot.
     """
     pairs = _world_sources(dataset_dirs)
     if world_ids is not None:
@@ -334,6 +342,7 @@ def load_compact_split(
     day_ordinals: list[numpy.ndarray] = []
     day_roles: list[numpy.ndarray] = []
     day_depths: list[numpy.ndarray] = []
+    day_rows: list[dict[str, Any]] = []
 
     for world_id, dataset_dir in pairs:
         snapshots = _read_world_table(dataset_dir, "snapshots", world_id)
@@ -354,6 +363,7 @@ def load_compact_split(
 
         if include_days:
             world_days = one_row_per_account_day(snapshot_rows)
+            day_rows.extend(world_days)
             day_features.append(_float_feature_columns(world_days, feature_names))
             day_worlds.append(_string_column(world_days, "world_id", "load_compact_split"))
             day_banks.append(_string_column(world_days, "bank_id", "load_compact_split"))
@@ -381,7 +391,7 @@ def load_compact_split(
     )
 
     if not include_days:
-        return CompactSplit(rows=rows, days=None)
+        return CompactSplit(rows=rows, days=None, day_rows=None)
     days = CompactDayRows(
         feature_names=tuple(feature_names),
         features=numpy.concatenate(day_features, axis=0),
@@ -392,4 +402,4 @@ def load_compact_split(
         roles=numpy.concatenate(day_roles, axis=0),
         depths=numpy.concatenate(day_depths, axis=0),
     )
-    return CompactSplit(rows=rows, days=days)
+    return CompactSplit(rows=rows, days=days, day_rows=day_rows)

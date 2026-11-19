@@ -25,7 +25,9 @@ import numpy
 import shap
 import xgboost
 
-from decisions.mule_account_model import train_account_model
+from decisions.mule_account_model import FeatureRows, train_account_model
+
+FeatureTargets = list[int] | numpy.ndarray
 
 __all__ = ["PUBaggedAccountModel", "train_elkan_noto_model", "train_pu_bagged_model"]
 
@@ -222,8 +224,8 @@ class PUBaggedAccountModel:
 
 
 def train_pu_bagged_model(
-    matrix: list[list[float]],
-    targets: list[int],
+    matrix: FeatureRows,
+    targets: FeatureTargets,
     seed: int,
     n_estimators: int,
     n_bags: int,
@@ -244,7 +246,8 @@ def train_pu_bagged_model(
         happens to cover every unlabelled row has exactly the full-data row order.
 
     Args:
-        matrix: Feature rows in account_model_feature_names() order.
+        matrix: Feature rows in account_model_feature_names() order; plain Python rows or a
+            float32 numpy array.
         targets: Binary labels aligned with matrix; 0 marks an unlabelled row.
         seed: Base random seed; member i uses seed + i for both sampling and fitting.
         n_estimators: Boosting rounds passed to every member.
@@ -297,7 +300,7 @@ def train_pu_bagged_model(
     )
 
 
-def _positive_probability_mean(probabilities: list[float], targets: list[int]) -> float:
+def _positive_probability_mean(probabilities: list[float], targets: FeatureTargets) -> float:
     """
     WHAT: Returns c, the mean of g's positive probability over the rows whose target is 1.
 
@@ -369,10 +372,10 @@ def _elkan_noto_weights(
 
 
 def train_elkan_noto_model(
-    train_matrix: list[list[float]],
-    train_targets: list[int],
-    validation_matrix: list[list[float]],
-    validation_targets: list[int],
+    train_matrix: FeatureRows,
+    train_targets: FeatureTargets,
+    validation_matrix: FeatureRows,
+    validation_targets: FeatureTargets,
     seed: int,
     n_estimators: int,
     probability_clip: float,
@@ -394,7 +397,8 @@ def train_elkan_noto_model(
         divided by the total positive weight.
 
     Args:
-        train_matrix: Training feature rows in account_model_feature_names() order.
+        train_matrix: Training feature rows in account_model_feature_names() order; plain Python
+            rows or a float32 numpy array.
         train_targets: Binary training labels aligned with train_matrix.
         validation_matrix: Validation feature rows used only to estimate c.
         validation_targets: Binary validation labels aligned with validation_matrix.

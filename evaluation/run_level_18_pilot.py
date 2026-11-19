@@ -17,11 +17,13 @@ plain ValueError naming the offending path.
 import argparse
 import time
 from dataclasses import replace
+from datetime import date
 from pathlib import Path
 from typing import Any, Sequence
 
 import numpy
 import orjson
+import psutil
 import shap
 import xgboost
 
@@ -30,6 +32,7 @@ from core.truth_import_check import find_truth_violations
 from decisions.anomaly_config import load_anomaly_detector_config
 from decisions.anomaly_detector import TrainedAnomalyDetector, train_anomaly_detector
 from decisions.mule_account_model import (
+    FeatureRows,
     account_model_feature_names,
     active_mule_model_config_path,
     build_training_rows,
@@ -50,6 +53,7 @@ from decisions.rules_config import (
     load_rules_config_with_labels,
     with_thresholds,
 )
+from evaluation.compact_rows import CompactRows, load_compact_split
 from evaluation.dataset_truth_join import join_truth
 from evaluation.leakage_checks import COMPLAINED_FEATURE, check_label_features_by_arrival
 from evaluation.level17_evaluation import (
@@ -63,10 +67,12 @@ from evaluation.operating_points import operating_points, rules_curve, score_cur
 from evaluation.rules_tuning import (
     AnomalyTuningResult,
     TuningConfig,
+    build_rules_day_matrix,
     load_labels_tuning_config,
     load_tuning_config,
     tune_anomaly_threshold,
     tune_rules,
+    tune_rules_matrix,
 )
 from evaluation.run_level_17 import (
     EvaluationSettings,
@@ -240,6 +246,58 @@ def _row_key(row: dict[str, Any]) -> tuple[str, str, str, object]:
     return (world_id, bank_id, account_id, moment.astimezone(IST).date())
 
 
+def _record_stage(
+    name: str,
+    started: float,
+    stage_seconds: dict[str, float],
+    peak_rss_mb: dict[str, float],
+) -> None:
+    """
+    WHAT: Records one stage's elapsed seconds and the process's resident memory at the stage's end.
+
+    WHY: The compact path exists to fit the full-scale run in 16 GB, so every stage's wall clock and
+    peak resident set must be visible in the result instead of being argued about after a crash.
+
+    Args:
+        name: Stage label, such as "load_training" or "test".
+        started: time.perf_counter() value taken when the stage began.
+        stage_seconds: Destination mapping stage label -> seconds.
+        peak_rss_mb: Destination mapping stage label -> resident memory in MiB.
+    """
+    stage_seconds[name] = time.perf_counter() - started
+    peak_rss_mb[name] = psutil.Process().memory_info().rss / (1024.0 * 1024.0)
+
+
+def _compact_row_keys(rows: CompactRows) -> list[tuple[str, str, str, date]]:
+    """
+    WHAT: Returns build_training_rows-style (world, bank, account, IST day) keys from the compact
+    key arrays.
+
+    WHY: The compact loader stores keys as parallel arrays, while _align_rows joins model rows to
+    account-day rows by the key tuple build_training_rows produces, so the arrays must become the
+    same tuples before alignment.
+
+    Args:
+        rows: Compact model rows carrying world_ids, bank_ids, account_ids and day_ordinals.
+
+    Returns:
+        One key tuple per model row, in row order.
+    """
+    keys: list[tuple[str, str, str, date]] = []
+    for world_id, bank_id, account_id, ordinal in zip(
+        rows.world_ids, rows.bank_ids, rows.account_ids, rows.day_ordinals, strict=True
+    ):
+        keys.append(
+            (
+                str(world_id),
+                str(bank_id),
+                str(account_id),
+                date.fromordinal(int(ordinal)),
+            )
+        )
+    return keys
+
+
 def _align_rows(
     day_rows: Sequence[dict[str, Any]],
     keys: Sequence[tuple[str, str, str, object]],
@@ -290,6 +348,79 @@ def _feature_matrix(day_rows: Sequence[dict[str, Any]], feature_names: Sequence[
     return matrix
 
 
+def _tune_day_rows(
+    day_rows: list[dict[str, Any]],
+    validation_names: Sequence[str],
+    base_rules_config: RulesConfig,
+    tuning: TuningConfig,
+    detector: TrainedAnomalyDetector,
+    budget_pct: float,
+    *,
+    collect_grid_points: bool,
+    matrix_tuner: bool,
+) -> tuple[TunedThresholds, list[ScoredDay], list[dict[str, Any]]]:
+    """
+    WHAT: Tunes the rules thresholds and both anomaly-style cuts on already loaded validation
+    account-days.
+
+    WHY: All four scorers must be set to the same genuine-restriction budget on validation, never on
+    test. The XGBoost cut uses the same tuner and the same rows as the detector cut, so the only
+    difference between them is the score itself.
+
+    Args:
+        day_rows: Validation account-day rows, already reduced by one_row_per_account_day.
+        validation_names: Validation dataset folder names, recorded in the tuned thresholds' reason.
+        base_rules_config: Shipped rules table supplying the untrained thresholds.
+        tuning: Candidate grid and allowed tuning splits.
+        detector: Trained anomaly detector.
+        budget_pct: Maximum share of genuine account-days either system may restrict.
+        collect_grid_points: When true, the rules result keeps every grid point so the pilot can
+            report operating points at the extra committed budgets from the same scoring pass.
+        matrix_tuner: True to run the vectorised matrix tuner over a matrix built once from the
+            day rows, False to run the row-based tuner on the day rows directly. Both choose from
+            the same grid with select_rules_grid_point and return the same result.
+
+    Returns:
+        (tuned thresholds, validation scored days with detector scores, the account-day rows
+        those scores were computed from, in score order).
+
+    Raises:
+        ValueError: If a tuner refuses its inputs.
+    """
+    if matrix_tuner:
+        rules_result = tune_rules_matrix(
+            build_rules_day_matrix(day_rows, base_rules_config),
+            base_rules_config,
+            tuning,
+            "validation",
+            budget_pct,
+            collect_grid_points=collect_grid_points,
+        )
+    else:
+        rules_result = tune_rules(
+            day_rows,
+            base_rules_config,
+            tuning,
+            "validation",
+            budget_pct,
+            collect_grid_points=collect_grid_points,
+        )
+    tuned_config = with_thresholds(
+        base_rules_config,
+        rules_result.thresholds,
+        "tuned on pilot validation datasets " + ", ".join(sorted(validation_names)),
+    )
+    scored = score_account_days(day_rows, base_rules_config, detector)
+    anomaly_result = tune_anomaly_threshold(scored, tuning, "validation", budget_pct)
+
+    tuned = TunedThresholds(
+        rules_config=tuned_config,
+        rules_result=rules_result,
+        anomaly_result=anomaly_result,
+    )
+    return tuned, scored, day_rows
+
+
 def _tune_on_validation(
     validation_dirs: Sequence[Path],
     truth_root: Path,
@@ -301,11 +432,10 @@ def _tune_on_validation(
     collect_grid_points: bool = False,
 ) -> tuple[TunedThresholds, list[ScoredDay], list[dict[str, Any]]]:
     """
-    WHAT: Tunes the rules thresholds and both anomaly-style cuts on the validation account-days.
+    WHAT: Tunes every threshold on the validation datasets of the dict-row data path.
 
-    WHY: All four scorers must be set to the same genuine-restriction budget on validation, never on
-    test. The XGBoost cut uses the same tuner and the same rows as the detector cut, so the only
-    difference between them is the score itself.
+    WHY: The rows path keeps its existing snapshot dictionaries, so this entry point loads and
+    joins the validation datasets exactly as before and hands the account-days to _tune_day_rows.
 
     Args:
         validation_dirs: Validation dataset folders.
@@ -314,8 +444,7 @@ def _tune_on_validation(
         tuning: Candidate grid and allowed tuning splits.
         detector: Trained anomaly detector.
         budget_pct: Maximum share of genuine account-days either system may restrict.
-        collect_grid_points: When true, the rules result keeps every grid point so the pilot can
-            report operating points at the extra committed budgets from the same scoring pass.
+        collect_grid_points: When true, the rules result keeps every grid point.
 
     Returns:
         (tuned thresholds, validation scored days with detector scores, the account-day rows
@@ -329,29 +458,16 @@ def _tune_on_validation(
         _, snapshots = join_truth(validation_dir, truth_root)
         snapshot_rows.extend(snapshots.to_pylist())
     day_rows = one_row_per_account_day(snapshot_rows)
-
-    rules_result = tune_rules(
+    return _tune_day_rows(
         day_rows,
+        [directory.name for directory in validation_dirs],
         base_rules_config,
         tuning,
-        "validation",
+        detector,
         budget_pct,
         collect_grid_points=collect_grid_points,
+        matrix_tuner=False,
     )
-    tuned_config = with_thresholds(
-        base_rules_config,
-        rules_result.thresholds,
-        "tuned on pilot validation datasets " + ", ".join(sorted(directory.name for directory in validation_dirs)),
-    )
-    scored = score_account_days(day_rows, base_rules_config, detector)
-    anomaly_result = tune_anomaly_threshold(scored, tuning, "validation", budget_pct)
-
-    tuned = TunedThresholds(
-        rules_config=tuned_config,
-        rules_result=rules_result,
-        anomaly_result=anomaly_result,
-    )
-    return tuned, scored, day_rows
 
 
 def _evaluate_test_worlds(
@@ -700,7 +816,7 @@ def _truth_leak_check() -> dict[str, Any]:
 
 
 def _trivial_world_check(
-    training_matrix: Sequence[Sequence[float]],
+    training_matrix: FeatureRows,
     training_targets: Sequence[int],
 ) -> dict[str, Any]:
     """
@@ -831,6 +947,10 @@ def run_pilot(
         The mule model config's rules_plus_labels_and_registry switch decides the rules table:
         true loads rules 1 to 6 and the merged tuning grid, false keeps rules 1 to 5 exactly as
         before. The manifest records which variant ran and the sha256 of each rules config file.
+        The data_path switch decides how the model rows are loaded: "rows" keeps the dictionary
+        path unchanged, while "compact" loads one world at a time into float32 arrays, loads the
+        validation split once for every later step and tunes the rules on a matrix built from that
+        one load. The test split is evaluated per world in both cases.
 
     Raises:
         ValueError: If a split is mismatched, a split leaks, a world card or truth manifest is
@@ -877,29 +997,63 @@ def run_pilot(
         print("LEAKAGE CHECK FAILED")
         return 1
 
+    data_path = mule_model_config.data_path
+    if data_path is None:
+        raise ValueError("data_path is missing from the mule model configuration")
+
+    stage_seconds: dict[str, float] = {}
+    peak_rss_mb: dict[str, float] = {}
+
+    stage_started = time.perf_counter()
     training_snapshot_rows = [
         row for dataset in training_datasets for row in dataset.snapshots.to_pylist()
     ]
     training_label_rows = [
         row for dataset in training_datasets for row in dataset.labels.to_pylist()
     ]
-    training_matrix, training_targets, _ = build_training_rows(
-        training_snapshot_rows, training_label_rows
-    )
+    training_matrix: FeatureRows
+    training_targets: list[int]
+    if data_path == "compact":
+        training_split = load_compact_split(training_dirs)
+        training_matrix = training_split.rows.matrix
+        training_targets = [int(target) for target in training_split.rows.targets]
+    elif data_path == "rows":
+        training_matrix, training_targets, _ = build_training_rows(
+            training_snapshot_rows, training_label_rows
+        )
+    else:
+        raise ValueError(f"Unsupported data_path: {data_path!r}")
     training_positive_count = sum(training_targets)
+    _record_stage("load_training", stage_started, stage_seconds, peak_rss_mb)
 
     seed = anomaly_config.random_state
     validation_snapshot_rows: list[dict[str, Any]] = []
     validation_label_rows: list[dict[str, Any]] = []
-    for validation_dir, dataset in zip(validation_dirs, validation_datasets, strict=True):
-        _, snapshots = join_truth(validation_dir, truth_root)
-        validation_snapshot_rows.extend(snapshots.to_pylist())
-        validation_label_rows.extend(dataset.labels.to_pylist())
-    validation_matrix, validation_targets, validation_keys = build_training_rows(
-        validation_snapshot_rows, validation_label_rows
-    )
-    validation_day_rows = _day_rows_by_world(validation_snapshot_rows)
+    validation_matrix: FeatureRows
+    validation_targets: list[int]
+    validation_keys: list[tuple[str, str, str, date]]
+    validation_day_rows: list[dict[str, Any]]
+    stage_started = time.perf_counter()
+    if data_path == "compact":
+        validation_split = load_compact_split(validation_dirs, truth_root, include_days=True)
+        if validation_split.day_rows is None:
+            raise ValueError("compact validation load did not return account-day rows")
+        validation_matrix = validation_split.rows.matrix
+        validation_targets = [int(target) for target in validation_split.rows.targets]
+        validation_keys = _compact_row_keys(validation_split.rows)
+        validation_day_rows = validation_split.day_rows
+    else:
+        for validation_dir, dataset in zip(validation_dirs, validation_datasets, strict=True):
+            _, snapshots = join_truth(validation_dir, truth_root)
+            validation_snapshot_rows.extend(snapshots.to_pylist())
+            validation_label_rows.extend(dataset.labels.to_pylist())
+        validation_matrix, validation_targets, validation_keys = build_training_rows(
+            validation_snapshot_rows, validation_label_rows
+        )
+        validation_day_rows = _day_rows_by_world(validation_snapshot_rows)
     validation_rows_for_keys = _align_rows(validation_day_rows, validation_keys)
+    _record_stage("load_validation", stage_started, stage_seconds, peak_rss_mb)
+    stage_started = time.perf_counter()
 
     pu_method = mule_model_config.pu_method
     if pu_method is None:
@@ -993,20 +1147,34 @@ def run_pilot(
         raise ValueError(f"Unsupported pu_method: {pu_method!r}")
     if best_model is None:
         raise ValueError("No n_estimators candidate produced a validation score")
+    _record_stage("train", stage_started, stage_seconds, peak_rss_mb)
+    stage_started = time.perf_counter()
 
     world_starts = world_start_by_world(training_snapshot_rows)
     detector = train_anomaly_detector(
         training_snapshot_rows, "training", world_starts, anomaly_config
     )
-    tuned, validation_scored, validation_scored_rows = _tune_on_validation(
-        validation_dirs,
-        truth_root,
-        base_rules_config,
-        tuning,
-        detector,
-        settings.genuine_restriction_budget_pct,
-        collect_grid_points=True,
-    )
+    if data_path == "compact":
+        tuned, validation_scored, validation_scored_rows = _tune_day_rows(
+            validation_day_rows,
+            [directory.name for directory in validation_dirs],
+            base_rules_config,
+            tuning,
+            detector,
+            settings.genuine_restriction_budget_pct,
+            collect_grid_points=True,
+            matrix_tuner=True,
+        )
+    else:
+        tuned, validation_scored, validation_scored_rows = _tune_on_validation(
+            validation_dirs,
+            truth_root,
+            base_rules_config,
+            tuning,
+            detector,
+            settings.genuine_restriction_budget_pct,
+            collect_grid_points=True,
+        )
     validation_probabilities = predict_account_days(best_model, validation_scored_rows)
     validation_xgboost_scored = [
         replace(scored_day, anomaly_score=probability)
@@ -1024,6 +1192,8 @@ def run_pilot(
         xgboost_scored=validation_xgboost_scored,
         run_manifest_id=key,
     )
+    _record_stage("tune", stage_started, stage_seconds, peak_rss_mb)
+    stage_started = time.perf_counter()
 
     test_pairs = list(zip(test_dirs, test_datasets, strict=True))
     per_world, test_day_rows = _evaluate_test_worlds(
@@ -1055,6 +1225,7 @@ def run_pilot(
         by_budget["test"][main_budget_label]["across_worlds"],
         main_budget_pct,
     )
+    _record_stage("test", stage_started, stage_seconds, peak_rss_mb)
 
     training_dataset_ids = sorted(directory.name for directory in training_dirs)
     if isinstance(best_model, PUBaggedAccountModel):
@@ -1108,6 +1279,11 @@ def run_pilot(
         "rules_plus_labels_and_registry": mule_model_config.rules_plus_labels_and_registry,
         "label_cut": mule_model_config.label_cut,
         "label_maturity_days": mule_model_config.label_maturity_days,
+        "data_path": data_path,
+    }
+    manifest["stage_profile"] = {
+        "seconds": stage_seconds,
+        "peak_rss_mb": peak_rss_mb,
     }
     rules_config_files: list[dict[str, str]] = []
     for relative_path in rules_config_paths:
@@ -1188,6 +1364,11 @@ def run_pilot(
     truth_leak = _truth_leak_check()
     trivial_world = _trivial_world_check(training_matrix, training_targets)
     if COMPLAINED_FEATURE in account_model_feature_names():
+        if data_path == "compact":
+            # The compact path never materialised the joined validation snapshots; check 7 needs
+            # raw snapshot and label rows only, so it reads the already loaded dataset tables.
+            validation_snapshot_rows = [row for dataset in validation_datasets for row in dataset.snapshots.to_pylist()]
+            validation_label_rows = [row for dataset in validation_datasets for row in dataset.labels.to_pylist()]
         check_7_training = check_label_features_by_arrival(training_snapshot_rows, training_label_rows)
         check_7_validation = check_label_features_by_arrival(validation_snapshot_rows, validation_label_rows)
         check_7_status = "fail" if "fail" in {check_7_training["status"], check_7_validation["status"]} else "pass"
