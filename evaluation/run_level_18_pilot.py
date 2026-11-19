@@ -53,9 +53,14 @@ from decisions.rules_config import (
     load_rules_config_with_labels,
     with_thresholds,
 )
-from evaluation.compact_rows import CompactDayRows, CompactRows, load_compact_split
+from evaluation.compact_rows import CompactDayRows, CompactRows, iter_world_tables, load_compact_split
 from evaluation.dataset_truth_join import join_truth
-from evaluation.leakage_checks import COMPLAINED_FEATURE, check_label_features_by_arrival
+from evaluation.leakage_checks import (
+    COMPLAINED_FEATURE,
+    check_label_features_by_arrival,
+    combine_label_feature_checks,
+    feedback_distinct_values,
+)
 from evaluation.level17_evaluation import (
     evaluate_world,
     first_illicit_credit,
@@ -197,6 +202,32 @@ def _not_run_checks(reason: str) -> dict[str, Any]:
         "trivial_world": {"status": "not run", "reason": reason},
         "section_23_checks_4_to_7": {"status": "not run", "reason": reason, "checks": [4, 5, 6, 7]},
     }
+
+
+def _check_7_by_world(dataset_dirs: Sequence[Path]) -> dict[str, Any]:
+    """
+    WHAT: Runs Section 23 check 7 over one split's dataset folders, one world at a time.
+
+    WHY: With the label network on, the check used to materialise every snapshot and label
+    dictionary of the split. Reading, checking and releasing one world at a time keeps the check's
+    published numbers while capping memory at a single world.
+
+    Args:
+        dataset_dirs: The split's dataset folders.
+
+    Returns:
+        The combined split block, carrying the split's world count.
+
+    Raises:
+        ValueError: If a dataset folder is unusable or a checked field is malformed.
+    """
+    blocks: list[dict[str, Any]] = []
+    distinct_value_sets: list[dict[str, set[Any]]] = []
+    for _world_id, snapshot_rows, label_rows in iter_world_tables(dataset_dirs):
+        blocks.append(check_label_features_by_arrival(snapshot_rows, label_rows))
+        distinct_value_sets.append(feedback_distinct_values(snapshot_rows))
+        del snapshot_rows, label_rows
+    return combine_label_feature_checks(blocks, distinct_value_sets, len(blocks))
 
 
 def _day_rows_by_world(snapshot_rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1445,13 +1476,8 @@ def run_pilot(
     truth_leak = _truth_leak_check()
     trivial_world = _trivial_world_check(training_matrix, training_targets)
     if COMPLAINED_FEATURE in account_model_feature_names():
-        if data_path == "compact":
-            # The compact path never materialised the joined validation snapshots; check 7 needs
-            # raw snapshot and label rows only, so it reads the already loaded dataset tables.
-            validation_snapshot_rows = [row for dataset in validation_datasets for row in dataset.snapshots.to_pylist()]
-            validation_label_rows = [row for dataset in validation_datasets for row in dataset.labels.to_pylist()]
-        check_7_training = check_label_features_by_arrival(training_snapshot_rows, training_label_rows)
-        check_7_validation = check_label_features_by_arrival(validation_snapshot_rows, validation_label_rows)
+        check_7_training = _check_7_by_world(training_dirs)
+        check_7_validation = _check_7_by_world(validation_dirs)
         check_7_status = "fail" if "fail" in {check_7_training["status"], check_7_validation["status"]} else "pass"
         check_7 = {
             "status": check_7_status,

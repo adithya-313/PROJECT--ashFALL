@@ -28,7 +28,7 @@ import json
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Iterator, Sequence
 
 import numpy
 import pyarrow as pa
@@ -47,6 +47,7 @@ __all__ = [
     "CompactDayRows",
     "CompactRows",
     "CompactSplit",
+    "iter_world_tables",
     "load_compact_split",
 ]
 
@@ -190,6 +191,32 @@ def _read_world_table(
         The world's rows.
     """
     return pq.read_table(dataset_dir / f"{table_name}.parquet", filters=[("world_id", "=", world_id)])
+
+
+def iter_world_tables(
+    dataset_dirs: Sequence[Path],
+) -> Iterator[tuple[str, list[dict[str, Any]], list[dict[str, Any]]]]:
+    """
+    WHAT: Yields one world's snapshot and label rows at a time from dataset folders.
+
+    WHY: A caller that only inspects rows, such as the per-world leakage check 7, must not hold a
+    whole split. Each world is read with a parquet filter, handed to the caller, and only then is
+    the next world read, so memory follows one world rather than the split.
+
+    Args:
+        dataset_dirs: Dataset folders written by write_dataset.
+
+    Yields:
+        (world_id, snapshot rows, label rows) for every world, in sorted world_id order.
+
+    Raises:
+        ValueError: If a folder has no usable manifest, a world repeats across folders, or a
+            dataset is marked superseded.
+    """
+    for world_id, dataset_dir in _world_sources(dataset_dirs):
+        snapshot_rows = _read_world_table(dataset_dir, "snapshots", world_id).to_pylist()
+        label_rows = _read_world_table(dataset_dir, "labels", world_id).to_pylist()
+        yield world_id, snapshot_rows, label_rows
 
 
 def _with_truth(

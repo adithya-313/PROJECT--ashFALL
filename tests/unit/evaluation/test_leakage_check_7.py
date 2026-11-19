@@ -8,7 +8,11 @@ wrong kind, and must not report zero feedback values as covered.
 
 from datetime import datetime, timezone
 
-from evaluation.leakage_checks import check_label_features_by_arrival
+from evaluation.leakage_checks import (
+    check_label_features_by_arrival,
+    combine_label_feature_checks,
+    feedback_distinct_values,
+)
 
 SNAPSHOT_AT = datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc)
 ARRIVAL_AT = datetime(2026, 9, 2, 10, 0, tzinfo=timezone.utc)
@@ -141,3 +145,68 @@ def test_a_varied_feedback_feature_fails_the_check() -> None:
     assert result["feedback_features"]["non_null_snapshot_counts"]["hops_to_confirmed_label"] == 2
     assert result["feedback_features"]["distinct_value_counts"]["hops_to_confirmed_label"] == 2
     assert result["complained"]["violations"] == 0
+
+
+def test_per_world_blocks_combine_to_the_whole_split_block() -> None:
+    """Combining world blocks, constants and violations included, equals one whole-split call."""
+    world_0 = [
+        _snapshot("world-0", "acc_0", SNAPSHOT_AT),
+        _snapshot("world-0", "acc_1", SNAPSHOT_AT),
+        _snapshot("world-0", "acc_2", SNAPSHOT_AT),
+        _snapshot("world-0", "acc_3", SNAPSHOT_AT),
+    ]
+    world_1 = [
+        _snapshot("world-1", "acc_0", SNAPSHOT_AT),
+        _snapshot("world-1", "acc_1", SNAPSHOT_AT),
+        _snapshot("world-1", "acc_2", SNAPSHOT_AT),
+    ]
+    # Every row stores the same constant zero, so the split-wide distinct count must stay one even
+    # though each world alone also sees one; only a union of the per-world value sets proves that.
+    for row in [*world_0, *world_1]:
+        row["shared_counterparties_with_flagged_7d"] = 0
+    labels = [
+        _label("world-0", "acc_0", ARRIVAL_AT),
+        _label("world-1", "acc_0", ARRIVAL_AT),
+    ]
+
+    blocks = [
+        check_label_features_by_arrival(world_0, labels),
+        check_label_features_by_arrival(world_1, labels),
+    ]
+    value_sets = [feedback_distinct_values(world_0), feedback_distinct_values(world_1)]
+
+    combined = combine_label_feature_checks(blocks, value_sets, 2)
+
+    whole = check_label_features_by_arrival([*world_0, *world_1], labels)
+    assert combined == {**whole, "world_count": 2}
+    assert combined["status"] == "fail"
+    assert combined["feedback_features"]["status"] == "no source data"
+    assert combined["complained"]["violations"] == 5
+    assert combined["complained"]["snapshots_checked"] == 7
+    assert len(combined["complained"]["examples"]) == 5
+    assert (
+        combined["feedback_features"]["distinct_value_counts"]["shared_counterparties_with_flagged_7d"]
+        == 1
+    )
+
+
+def test_feedback_values_that_differ_between_worlds_fail_the_split() -> None:
+    """Each world constant but different from the other is still a value change across the split."""
+    world_0 = [_snapshot("world-0", "acc_1", SNAPSHOT_AT, hops_complained=1, shared_flagged=0)]
+    world_1 = [_snapshot("world-1", "acc_1", SNAPSHOT_AT, hops_complained=1, shared_flagged=1)]
+
+    combined = combine_label_feature_checks(
+        [
+            check_label_features_by_arrival(world_0, []),
+            check_label_features_by_arrival(world_1, []),
+        ],
+        [feedback_distinct_values(world_0), feedback_distinct_values(world_1)],
+        2,
+    )
+
+    assert combined["status"] == "fail"
+    assert combined["feedback_features"]["status"] == "fail"
+    assert (
+        combined["feedback_features"]["distinct_value_counts"]["shared_counterparties_with_flagged_7d"]
+        == 2
+    )
