@@ -92,6 +92,7 @@ from evaluation.run_level_17 import (
     _sha256_of_file,
     _world_inflation_factor,
     build_result_manifest,
+    json_safe_result,
     load_evaluation_settings,
     load_split_datasets,
     read_world_base_rate,
@@ -1187,6 +1188,7 @@ def run_pilot(
     truth_root: Path,
     world_cards_root: Path,
     out_root: Path,
+    stress_dirs: Sequence[Path] = (),
 ) -> int:
     """
     WHAT: Runs the complete Level 18 pilot and writes its three output files.
@@ -1201,6 +1203,8 @@ def run_pilot(
         truth_root: Root folder holding one truth folder per run_id.
         world_cards_root: Root folder holding one world card per run_id.
         out_root: Root folder for the pilot result.
+        stress_dirs: Optional stress dataset folders, scored one world at a time after test with the
+            same frozen choices and written to their own stress block.
 
     Returns:
         Process exit code: 0 when every run leakage check passes, 1 otherwise.
@@ -1649,6 +1653,27 @@ def run_pilot(
     )
     _record_stage("test", stage_started, stage_seconds, peak_rss_mb)
 
+    stress_per_world: dict[str, dict[str, Any]] = {}
+    stress_across: dict[str, Any] | None = None
+    if stress_dirs:
+        stress_started = time.perf_counter()
+        stress_datasets = load_split_datasets("stress", stress_dirs)
+        stress_per_world, _ = _evaluate_test_worlds(
+            list(zip(stress_dirs, stress_datasets, strict=True)),
+            truth_root,
+            world_cards_root,
+            tuned,
+            detector,
+            best_model,
+            xgboost_tuning.threshold,
+            settings,
+        )
+        stress_per_world = {
+            world_id: {**block, "split": "stress"} for world_id, block in stress_per_world.items()
+        }
+        stress_across = _summarise_pilot(stress_per_world, settings.min_test_worlds)["stress"]
+        _record_stage("stress", stress_started, stage_seconds, peak_rss_mb)
+
     training_dataset_ids = sorted(directory.name for directory in training_dirs)
     if isinstance(best_model, PUBaggedAccountModel):
         model_path = result_dir / "account_model_bags"
@@ -1793,6 +1818,12 @@ def run_pilot(
     )
     payload = orjson.loads(result_path.read_bytes())
     payload["pilot"] = True
+    if stress_across is not None:
+        payload["stress"] = {
+            "world_count": len(stress_per_world),
+            "per_world": json_safe_result(stress_per_world),
+            "across_worlds": stress_across,
+        }
     result_path.write_bytes(
         orjson.dumps(payload, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2) + b"\n"
     )

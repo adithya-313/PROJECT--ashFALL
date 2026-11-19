@@ -201,6 +201,7 @@ def _inputs_fingerprint(
     training_dataset_ids: Sequence[str],
     validation_dataset_ids: Sequence[str],
     test_dataset_ids: Sequence[str],
+    stress_dataset_ids: Sequence[str],
     training_world_counts: Sequence[int],
 ) -> dict[str, Any]:
     """
@@ -214,6 +215,7 @@ def _inputs_fingerprint(
         training_dataset_ids: Training dataset folder names, in flag order.
         validation_dataset_ids: Validation dataset folder names, in flag order.
         test_dataset_ids: Test dataset folder names, in flag order.
+        stress_dataset_ids: Stress dataset folder names, in flag order; empty when none is passed.
         training_world_counts: World counts the learning curve will try.
 
     Returns:
@@ -225,6 +227,7 @@ def _inputs_fingerprint(
         "training_dataset_ids": list(training_dataset_ids),
         "validation_dataset_ids": list(validation_dataset_ids),
         "test_dataset_ids": list(test_dataset_ids),
+        "stress_dataset_ids": list(stress_dataset_ids),
         "training_world_counts": list(training_world_counts),
     }
 
@@ -1055,13 +1058,15 @@ def _final_validation_and_test(
     out_root: Path,
     config_path: Path,
     all_dataset_ids: Sequence[str],
+    stress_dirs: Sequence[Path],
 ) -> dict[str, Any]:
     """
     WHAT: Runs the existing pilot pipeline on the chosen PU method and records its result location.
 
     WHY: Stage 5 is the only stage allowed to read test, so it must run the same frozen pipeline the
     pilot uses; reusing run_pilot keeps the score-cut tuning, operating points, 2x2 comparison and
-    success criterion identical to a pilot run.
+    success criterion identical to a pilot run. Stress worlds are scored by the same pipeline after
+    test and land in their own block.
 
     Args:
         chosen_method: PU method stage 4 chose.
@@ -1073,9 +1078,10 @@ def _final_validation_and_test(
         out_root: Driver output root; the pilot result lands under its final/ folder.
         config_path: Active config the driver started from, already carrying the chosen window.
         all_dataset_ids: Training, validation and test dataset folder names.
+        stress_dirs: Optional stress dataset folders, scored after test.
 
     Returns:
-        The pilot's exit code, result path, config copy hash and success criterion.
+        The pilot's exit code, result path, config copy hash, success criterion and stress summary.
 
     Raises:
         ValueError: If the pilot reports failed leakage checks or writes no result file.
@@ -1093,6 +1099,7 @@ def _final_validation_and_test(
             truth_root,
             world_cards_root,
             final_root,
+            stress_dirs,
         )
     finally:
         set_mule_model_config_path(previous_config)
@@ -1105,6 +1112,12 @@ def _final_validation_and_test(
     manifest = payload.get("manifest")
     if not isinstance(manifest, dict):
         raise ValueError(f"Pilot result {result_path} holds no manifest mapping")
+    stress_block = payload.get("stress")
+    stress_world_count = 0
+    if stress_block is not None:
+        if not isinstance(stress_block, dict):
+            raise ValueError(f"Pilot result {result_path} holds a malformed stress block")
+        stress_world_count = int(stress_block["world_count"])
     return {
         "pu_method": chosen_method,
         "exit_code": exit_code,
@@ -1112,6 +1125,7 @@ def _final_validation_and_test(
         "mule_model_config_path": str(final_config),
         "mule_model_config_sha256": _sha256_of_file(final_config),
         "success_criterion": manifest.get("success_criterion"),
+        "stress_world_count": stress_world_count,
     }
 
 
@@ -1123,12 +1137,14 @@ def run_full(
     world_cards_root: Path,
     out_root: Path,
     training_world_counts: Sequence[int],
+    stress_dirs: Sequence[Path] = (),
 ) -> int:
     """
     WHAT: Runs the five stages in order, resuming every stage whose fingerprint matches.
 
     WHY: One entry point fixes the order maturity window -> world count -> method tuning -> method
-    choice -> test, and the fingerprint check makes a resume safe after a crash or a code change.
+    choice -> test and stress, and the fingerprint check makes a resume safe after a crash or a code
+    change.
 
     Args:
         training_dirs: Training dataset folders.
@@ -1138,6 +1154,7 @@ def run_full(
         world_cards_root: Root folder holding one world card per run_id.
         out_root: Root folder for the stage files and the final pilot result.
         training_world_counts: Ascending world counts the learning curve tries.
+        stress_dirs: Optional stress dataset folders, scored after test in stage 5 only.
 
     Returns:
         Process exit code, 0 when every stage completes.
@@ -1166,9 +1183,12 @@ def run_full(
     training_dataset_ids = _dataset_ids(training_dirs)
     validation_dataset_ids = _dataset_ids(validation_dirs)
     test_dataset_ids = _dataset_ids(test_dirs)
+    stress_dataset_ids = _dataset_ids(stress_dirs)
     training_world_ids = _split_world_ids("training", training_dirs)
     _split_world_ids("validation", validation_dirs)
     _split_world_ids("test", test_dirs)
+    if stress_dirs:
+        _split_world_ids("stress", stress_dirs)
 
     config_path = active_mule_model_config_path().resolve()
     fingerprint = _inputs_fingerprint(
@@ -1176,6 +1196,7 @@ def run_full(
         training_dataset_ids,
         validation_dataset_ids,
         test_dataset_ids,
+        stress_dataset_ids,
         counts,
     )
     stages_dir = out_root / "stages"
@@ -1257,6 +1278,7 @@ def run_full(
                     *validation_dataset_ids,
                     *test_dataset_ids,
                 ],
+                stress_dirs,
             ),
         )
     finally:
@@ -1302,6 +1324,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="comma-separated ascending world counts, for example 40,80,160",
     )
     parser.add_argument(
+        "--stress",
+        type=Path,
+        action="append",
+        default=[],
+        help="stress dataset folder, scored after test in the final stage; repeatable",
+    )
+    parser.add_argument(
         "--mule-model-config",
         type=Path,
         default=None,
@@ -1319,6 +1348,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.world_cards_root,
             args.out_root,
             _parse_training_world_counts(args.training_world_counts),
+            tuple(args.stress),
         )
     finally:
         set_mule_model_config_path(None)
