@@ -147,5 +147,17 @@ parameters:
         min: 0.5
         max: 1.0
         log: false
-    derived_from: "architect search ranges, set before any full-scale result"
-    reason: "The ranges bracket the XGBoost defaults without searching implausibly deep trees or extreme learning rates."
+      gamma:
+        min: 0.0
+        max: 5.0
+        log: false
+      reg_alpha:
+        min: 0.001
+        max: 10.0
+        log: true
+      reg_lambda:
+        min: 0.1
+        max: 10.0
+        log: true
+    derived_from: "architect search ranges, widened 2026-11-19 before any full-scale result"
+    reason: "The ranges bracket the XGBoost defaults, and the additive regularisation strengths are now searched instead of fixed, without searching implausibly deep trees or extreme learning rates."

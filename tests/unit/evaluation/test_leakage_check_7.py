@@ -118,6 +118,9 @@ def _config_without_maturity(tmp_path: Path) -> Path:
         "      min_child_weight: {min: 1, max: 20, log: true}\n"
         "      subsample: {min: 0.5, max: 1.0, log: false}\n"
         "      colsample_bytree: {min: 0.5, max: 1.0, log: false}\n"
+        "      gamma: {min: 0.0, max: 5.0, log: false}\n"
+        "      reg_alpha: {min: 0.001, max: 10.0, log: true}\n"
+        "      reg_lambda: {min: 0.1, max: 10.0, log: true}\n"
         "    derived_from: test\n"
         "    reason: test\n",
         encoding="utf-8",

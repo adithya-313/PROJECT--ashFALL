@@ -368,10 +368,11 @@ def _xgb_hyperparameters(params: dict[str, int | float]) -> dict[str, Any]:
     here keeps the sampled integers integers and the sampled floats floats before any model is fit.
 
     Args:
-        params: Sampled values holding at least the five non-count hyperparameters.
+        params: Sampled values holding at least the eight non-count hyperparameters.
 
     Returns:
-        max_depth, learning_rate, min_child_weight, subsample and colsample_bytree, in trainer form.
+        max_depth, learning_rate, min_child_weight, subsample, colsample_bytree, gamma, reg_alpha
+        and reg_lambda, in trainer form.
     """
     return {
         "max_depth": int(params["max_depth"]),
@@ -379,6 +380,9 @@ def _xgb_hyperparameters(params: dict[str, int | float]) -> dict[str, Any]:
         "min_child_weight": float(params["min_child_weight"]),
         "subsample": float(params["subsample"]),
         "colsample_bytree": float(params["colsample_bytree"]),
+        "gamma": float(params["gamma"]),
+        "reg_alpha": float(params["reg_alpha"]),
+        "reg_lambda": float(params["reg_lambda"]),
     }
 
 

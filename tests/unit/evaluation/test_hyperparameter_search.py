@@ -142,6 +142,27 @@ def test_default_hyperparameters_reproduce_the_untuned_model() -> None:
     assert (default_probabilities == explicit_probabilities).all()
 
 
+def test_regularisation_defaults_reproduce_the_untuned_model() -> None:
+    """The new regularisation defaults fit exactly the model an old call fitted on random data."""
+    generator = numpy.random.default_rng(20261119)
+    rows = generator.normal(size=(30, 4))
+    targets = [1 if index % 6 == 0 else 0 for index in range(30)]
+
+    default_model, default_weight = train_account_model(rows, targets, 23, n_estimators=12)
+    explicit_model, explicit_weight = train_account_model(
+        rows,
+        targets,
+        23,
+        n_estimators=12,
+        gamma=0.0,
+        reg_alpha=0.0,
+        reg_lambda=1.0,
+    )
+
+    assert default_weight == explicit_weight
+    assert (default_model.predict_proba(rows) == explicit_model.predict_proba(rows)).all()
+
+
 def test_pu_trainers_default_to_the_same_models() -> None:
     """Both PU trainers' new keyword defaults fit exactly the models the old calls fitted."""
     rows, targets = _training_set()
@@ -186,7 +207,7 @@ def test_pu_trainers_default_to_the_same_models() -> None:
 
 
 def test_committed_config_parses_the_search_settings() -> None:
-    """The committed config turns the search off and carries the six architect ranges."""
+    """The committed config turns the search off and carries the nine architect ranges."""
     config = load_mule_model_config(COMMITTED_CONFIG)
 
     assert config.hyperparameter_search == "off"
@@ -200,11 +221,14 @@ def test_committed_config_parses_the_search_settings() -> None:
         "min_child_weight",
         "subsample",
         "colsample_bytree",
+        "gamma",
+        "reg_alpha",
+        "reg_lambda",
     ]
     integer_names = {name for name, bounds in config.hyperparameter_space.items() if bounds.integer}
     log_names = {name for name, bounds in config.hyperparameter_space.items() if bounds.log}
     assert integer_names == {"max_depth", "n_estimators"}
-    assert log_names == {"learning_rate", "min_child_weight"}
+    assert log_names == {"learning_rate", "min_child_weight", "reg_alpha", "reg_lambda"}
 
 
 def _write_variant(directory: Path, mutate: Any) -> Path:

@@ -61,7 +61,10 @@ def mule_model_config_text(
             "      n_estimators: {min: 100, max: 800, log: false}\n"
             "      min_child_weight: {min: 1, max: 20, log: true}\n"
             "      subsample: {min: 0.5, max: 1.0, log: false}\n"
-            "      colsample_bytree: {min: 0.5, max: 1.0, log: false}\n",
+            "      colsample_bytree: {min: 0.5, max: 1.0, log: false}\n"
+            "      gamma: {min: 0.0, max: 5.0, log: false}\n"
+            "      reg_alpha: {min: 0.001, max: 10.0, log: true}\n"
+            "      reg_lambda: {min: 0.1, max: 10.0, log: true}\n",
         )
     )
 

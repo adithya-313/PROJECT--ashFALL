@@ -238,6 +238,9 @@ def train_pu_bagged_model(
     min_child_weight: float = 1.0,
     subsample: float = 1.0,
     colsample_bytree: float = 1.0,
+    gamma: float = 0.0,
+    reg_alpha: float = 0.0,
+    reg_lambda: float = 1.0,
 ) -> PUBaggedAccountModel:
     """
     WHAT: Trains a PU bagging ensemble, one member per bag.
@@ -266,13 +269,20 @@ def train_pu_bagged_model(
         min_child_weight: Minimum child weight passed to every member.
         subsample: Row sample share passed to every member.
         colsample_bytree: Column sample share passed to every member.
+        gamma: Minimum split loss reduction passed to every member; the default matches the
+            XGBoost default.
+        reg_alpha: L1 weight penalty passed to every member; the default matches the XGBoost
+            default.
+        reg_lambda: L2 weight penalty passed to every member; the default matches the XGBoost
+            default.
 
     Returns:
         The fitted PUBaggedAccountModel.
 
     Raises:
         ValueError: If matrix and targets differ in length, n_bags or unlabelled_per_positive is
-            not positive, or there is no positive or no unlabelled row to sample from.
+            not positive, there is no positive or no unlabelled row to sample from, or a model
+            hyperparameter fails the member trainer's validation.
     """
     if len(matrix) != len(targets):
         raise ValueError(f"matrix length {len(matrix)} does not match targets length {len(targets)}")
@@ -310,6 +320,9 @@ def train_pu_bagged_model(
             min_child_weight=min_child_weight,
             subsample=subsample,
             colsample_bytree=colsample_bytree,
+            gamma=gamma,
+            reg_alpha=reg_alpha,
+            reg_lambda=reg_lambda,
         )
         members.append(member)
         member_seeds.append(member_seed)
@@ -408,6 +421,9 @@ def train_elkan_noto_model(
     min_child_weight: float = 1.0,
     subsample: float = 1.0,
     colsample_bytree: float = 1.0,
+    gamma: float = 0.0,
+    reg_alpha: float = 0.0,
+    reg_lambda: float = 1.0,
 ) -> tuple[xgboost.XGBClassifier, float, dict[str, float], int]:
     """
     WHAT: Trains one account model with weighted Elkan-Noto positive-unlabelled learning.
@@ -441,6 +457,10 @@ def train_elkan_noto_model(
         subsample: Row sample share for g and the final model, defaulting to the XGBoost default.
         colsample_bytree: Column sample share for g and the final model, defaulting to the XGBoost
             default.
+        gamma: Minimum split loss reduction for g and the final model, defaulting to the XGBoost
+            default.
+        reg_alpha: L1 weight penalty for g and the final model, defaulting to the XGBoost default.
+        reg_lambda: L2 weight penalty for g and the final model, defaulting to the XGBoost default.
 
     Returns:
         (final model, c, weight summary with min / median / max of the unlabelled weights, clip
@@ -448,8 +468,9 @@ def train_elkan_noto_model(
 
     Raises:
         ValueError: If a matrix and its targets differ in length, there is no positive validation
-            row, g gives c zero, the weight totals would make the class weight invalid, or
-            probability_clip is outside (0, 1).
+            row, g gives c zero, the weight totals would make the class weight invalid,
+            probability_clip is outside (0, 1), or a model hyperparameter fails the trainer's
+            validation.
     """
     if len(train_matrix) != len(train_targets):
         raise ValueError(f"train_matrix length {len(train_matrix)} does not match targets length {len(train_targets)}")
@@ -471,6 +492,9 @@ def train_elkan_noto_model(
         min_child_weight=min_child_weight,
         subsample=subsample,
         colsample_bytree=colsample_bytree,
+        gamma=gamma,
+        reg_alpha=reg_alpha,
+        reg_lambda=reg_lambda,
     )
     g_validation = [float(value) for value in g.predict_proba(validation_matrix)[:, 1]]
     c = _positive_probability_mean(g_validation, validation_targets)
@@ -519,6 +543,9 @@ def train_elkan_noto_model(
         min_child_weight=min_child_weight,
         subsample=subsample,
         colsample_bytree=colsample_bytree,
+        gamma=gamma,
+        reg_alpha=reg_alpha,
+        reg_lambda=reg_lambda,
     )
 
     weight_summary = {
