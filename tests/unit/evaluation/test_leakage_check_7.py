@@ -7,7 +7,9 @@ wrong kind, and must not report zero feedback values as covered.
 """
 
 from datetime import datetime, timezone
+from pathlib import Path
 
+from decisions.mule_account_model import set_mule_model_config_path
 from evaluation.leakage_checks import (
     check_label_features_by_arrival,
     combine_label_feature_checks,
@@ -59,6 +61,70 @@ def _label(
     }
 
 
+def _config_without_maturity(tmp_path: Path) -> Path:
+    """Writes a schema-complete model config whose maturity window drops nothing."""
+    path = tmp_path / "mule_model.yaml"
+    path.write_text(
+        "parameters:\n"
+        "  label_cut:\n"
+        "    label: policy\n"
+        "    value: arrival_time\n"
+        "    derived_from: test\n"
+        "    reason: test\n"
+        "  label_maturity_days:\n"
+        "    label: policy\n"
+        "    value: 0\n"
+        "    derived_from: test\n"
+        "    reason: test\n"
+        "  feature_fill_flag_share:\n"
+        "    label: policy\n"
+        "    value: 0.999\n"
+        "    derived_from: test\n"
+        "    reason: test\n"
+        "  use_label_network_features:\n"
+        "    label: policy\n"
+        "    value: true\n"
+        "    derived_from: test\n"
+        "    reason: test\n"
+        "  label_network_features:\n"
+        "    label: policy\n"
+        "    value:\n"
+        "      - hops_to_complained_account\n"
+        "      - registry_match_count\n"
+        "      - registry_match_age_days\n"
+        "    derived_from: test\n"
+        "    reason: test\n"
+        "  hyperparameter_search:\n"
+        "    label: policy\n"
+        '    value: "off"\n'
+        "    derived_from: test\n"
+        "    reason: test\n"
+        "  optuna_trials:\n"
+        "    label: policy\n"
+        "    value: 40\n"
+        "    derived_from: test\n"
+        "    reason: test\n"
+        "  optuna_seed:\n"
+        "    label: policy\n"
+        "    value: 1717\n"
+        "    derived_from: test\n"
+        "    reason: test\n"
+        "  hyperparameter_space:\n"
+        "    label: policy\n"
+        "    value:\n"
+        "      max_depth: {min: 3, max: 10, log: false}\n"
+        "      learning_rate: {min: 0.02, max: 0.3, log: true}\n"
+        "      n_estimators: {min: 100, max: 800, log: false}\n"
+        "      min_child_weight: {min: 1, max: 20, log: true}\n"
+        "      subsample: {min: 0.5, max: 1.0, log: false}\n"
+        "      colsample_bytree: {min: 0.5, max: 1.0, log: false}\n"
+        "    derived_from: test\n"
+        "    reason: test\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def test_zero_hops_after_the_complaint_arrived_passes() -> None:
     """A complaint that arrived before the snapshot justifies the zero hop."""
     snapshots = [_snapshot("world-0", "acc_1", SNAPSHOT_AT)]
@@ -72,12 +138,16 @@ def test_zero_hops_after_the_complaint_arrived_passes() -> None:
     assert result["feedback_features"]["status"] == "no source data"
 
 
-def test_zero_hops_one_second_before_arrival_fails_with_the_example() -> None:
+def test_zero_hops_one_second_before_arrival_fails_with_the_example(tmp_path: Path) -> None:
     """A complaint arriving one second later must not support the zero hop."""
     snapshots = [_snapshot("world-0", "acc_1", datetime(2026, 9, 2, 9, 59, 59, tzinfo=timezone.utc))]
     labels = [_label("world-0", "acc_1", ARRIVAL_AT)]
 
-    result = check_label_features_by_arrival(snapshots, labels)
+    set_mule_model_config_path(_config_without_maturity(tmp_path))
+    try:
+        result = check_label_features_by_arrival(snapshots, labels)
+    finally:
+        set_mule_model_config_path(None)
 
     assert result["status"] == "fail"
     assert result["complained"]["violations"] == 1
