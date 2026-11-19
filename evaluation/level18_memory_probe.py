@@ -1,4 +1,4 @@
-# File: scripts/level18_memory_probe.py
+# File: evaluation/level18_memory_probe.py
 # Purpose: Measures the compact data path's resident memory and stage timings on a bounded number
 #          of full-scale worlds, without scoring any test world and without writing result files.
 """
