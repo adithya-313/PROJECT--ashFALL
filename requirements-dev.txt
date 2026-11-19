@@ -10,7 +10,8 @@
 # level-showcase job runs make show LEVEL=18 here). Same pins as requirements-ml.txt; keep
 # them in step. Not in requirements.txt: serving uses Triton (Level 19), not these packages.
 xgboost==3.2.0
-shap==0.49.1
+# shap 0.51 reads xgboost 3.x models (0.49.1 cannot parse the new base_score format); needs numpy>=2, which this file does not pin
+shap==0.51.0
 
 # pydantic: core/config.py imports it directly. It was only installed as a dependency of pydantic-settings and
 # fastapi, so it is declared here with the range those packages already require.

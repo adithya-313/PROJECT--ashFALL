@@ -15,6 +15,7 @@ plain ValueError naming the offending path.
 """
 
 import argparse
+import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Sequence
@@ -37,6 +38,11 @@ from decisions.mule_account_model import (
     save_model,
     set_mule_model_config_path,
     train_account_model,
+)
+from decisions.pu_learning import (
+    PUBaggedAccountModel,
+    train_elkan_noto_model,
+    train_pu_bagged_model,
 )
 from decisions.rules_config import (
     RulesConfig,
@@ -354,7 +360,7 @@ def _evaluate_test_worlds(
     world_cards_root: Path,
     tuned: TunedThresholds,
     detector: TrainedAnomalyDetector,
-    xgboost_model: xgboost.XGBClassifier,
+    xgboost_model: xgboost.XGBClassifier | PUBaggedAccountModel,
     xgboost_threshold: float,
     settings: EvaluationSettings,
 ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
@@ -372,7 +378,7 @@ def _evaluate_test_worlds(
         world_cards_root: Root folder holding one world card per run_id.
         tuned: Rules config, rules tuning result and detector cut chosen on validation.
         detector: Trained anomaly detector.
-        xgboost_model: Fitted XGBoost account model.
+        xgboost_model: Fitted XGBoost account model or PU bagging ensemble.
         xgboost_threshold: XGBoost cut chosen on validation.
         settings: Capacity, persona weights and world-count policy.
 
@@ -599,7 +605,7 @@ def _by_budget_test_results(
     tuned: TunedThresholds,
     validation_operating_points: dict[str, Any],
     detector: TrainedAnomalyDetector,
-    best_model: xgboost.XGBClassifier,
+    best_model: xgboost.XGBClassifier | PUBaggedAccountModel,
     settings: EvaluationSettings,
 ) -> dict[str, Any]:
     """
@@ -616,7 +622,7 @@ def _by_budget_test_results(
         tuned: main-budget tuning results, reused for per-rule standalone data.
         validation_operating_points: operating_points block with one entry per budget.
         detector: Trained anomaly detector.
-        best_model: Fitted XGBoost account model.
+        best_model: Fitted XGBoost account model or PU bagging ensemble.
         settings: Capacity, persona weights and world-count policy.
 
     Returns:
@@ -733,7 +739,7 @@ def _trivial_world_check(
 
 def _write_shap(
     path: Path,
-    model: xgboost.XGBClassifier,
+    model: xgboost.XGBClassifier | PUBaggedAccountModel,
     feature_names: Sequence[str],
     day_rows: Sequence[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -742,10 +748,11 @@ def _write_shap(
 
     WHY: The pilot needs to show which features drive the account model, without plots. A SHAP
     runtime failure is recorded verbatim and does not stop the evaluation, as the architect ruled.
+    A PU bagging ensemble explains itself with the mean of its members' margin-space SHAP values.
 
     Args:
         path: Destination shap_top_features.json.
-        model: Fitted XGBoost account model.
+        model: Fitted XGBoost account model or PUBaggedAccountModel ensemble.
         feature_names: Canonical model feature order.
         day_rows: Test account-day rows that were scored.
 
@@ -758,12 +765,15 @@ def _write_shap(
     payload: dict[str, Any]
     try:
         matrix = _feature_matrix(day_rows, feature_names)
-        explainer = shap.TreeExplainer(model)
-        shap_values = explainer.shap_values(matrix)
-        if isinstance(shap_values, list):
-            values = shap_values[1] if len(shap_values) > 1 else shap_values[0]
+        if isinstance(model, PUBaggedAccountModel):
+            values = model.shap_values(matrix)
         else:
-            values = shap_values
+            explainer = shap.TreeExplainer(model)
+            shap_values = explainer.shap_values(matrix)
+            if isinstance(shap_values, list):
+                values = shap_values[1] if len(shap_values) > 1 else shap_values[0]
+            else:
+                values = shap_values
         array = numpy.asarray(values)
         if array.ndim == 3:
             array = array[:, :, 1]
@@ -891,23 +901,96 @@ def run_pilot(
     validation_day_rows = _day_rows_by_world(validation_snapshot_rows)
     validation_rows_for_keys = _align_rows(validation_day_rows, validation_keys)
 
+    pu_method = mule_model_config.pu_method
+    if pu_method is None:
+        raise ValueError("pu_method is missing from the mule model configuration")
+
     n_estimators_scores: dict[str, float] = {}
-    best_model: xgboost.XGBClassifier | None = None
-    best_scale_pos_weight = 0.0
+    pu_average_precision_scores: dict[str, float] = {}
+    training_seconds: dict[str, float] = {}
+    best_model: xgboost.XGBClassifier | PUBaggedAccountModel | None = None
+    best_scale_pos_weight: float | None = None
     best_n_estimators = 0
     best_validation_ap = -1.0
-    for n_estimators in N_ESTIMATOR_CANDIDATES:
-        model, scale_pos_weight = train_account_model(
-            training_matrix, training_targets, seed, n_estimators=n_estimators
-        )
-        probabilities = predict_account_days(model, validation_rows_for_keys)
-        score = average_precision(probabilities, validation_targets)
-        n_estimators_scores[str(n_estimators)] = score
-        if score > best_validation_ap:
-            best_validation_ap = score
-            best_model = model
-            best_scale_pos_weight = scale_pos_weight
-            best_n_estimators = n_estimators
+    best_unlabelled_per_positive: int | None = None
+    best_c: float | None = None
+    best_weight_summary: dict[str, float] | None = None
+    best_clip_count: int | None = None
+
+    model: xgboost.XGBClassifier | PUBaggedAccountModel
+    if pu_method == "none":
+        for n_estimators in N_ESTIMATOR_CANDIDATES:
+            started = time.perf_counter()
+            model, scale_pos_weight = train_account_model(
+                training_matrix, training_targets, seed, n_estimators=n_estimators
+            )
+            training_seconds[str(n_estimators)] = time.perf_counter() - started
+            probabilities = predict_account_days(model, validation_rows_for_keys)
+            score = average_precision(probabilities, validation_targets)
+            n_estimators_scores[str(n_estimators)] = score
+            if score > best_validation_ap:
+                best_validation_ap = score
+                best_model = model
+                best_scale_pos_weight = scale_pos_weight
+                best_n_estimators = n_estimators
+    elif pu_method == "bagging":
+        n_bags = mule_model_config.pu_bagging_n_bags
+        if n_bags is None:
+            raise ValueError("pu_bagging_n_bags is required when pu_method is 'bagging'")
+        unlabelled_candidates = mule_model_config.pu_unlabelled_per_positive_candidates
+        if unlabelled_candidates is None:
+            raise ValueError(
+                "pu_unlabelled_per_positive_candidates is required when pu_method is 'bagging'"
+            )
+        for n_estimators in N_ESTIMATOR_CANDIDATES:
+            for unlabelled_per_positive in unlabelled_candidates:
+                variant = f"{n_estimators}|{unlabelled_per_positive}"
+                started = time.perf_counter()
+                model = train_pu_bagged_model(
+                    training_matrix,
+                    training_targets,
+                    seed,
+                    n_estimators,
+                    n_bags,
+                    unlabelled_per_positive,
+                )
+                training_seconds[variant] = time.perf_counter() - started
+                probabilities = predict_account_days(model, validation_rows_for_keys)
+                score = average_precision(probabilities, validation_targets)
+                pu_average_precision_scores[variant] = score
+                if score > best_validation_ap:
+                    best_validation_ap = score
+                    best_model = model
+                    best_n_estimators = n_estimators
+                    best_unlabelled_per_positive = unlabelled_per_positive
+    elif pu_method == "elkan_noto":
+        probability_clip = mule_model_config.pu_probability_clip
+        if probability_clip is None:
+            raise ValueError("pu_probability_clip is required when pu_method is 'elkan_noto'")
+        for n_estimators in N_ESTIMATOR_CANDIDATES:
+            started = time.perf_counter()
+            model, c, weight_summary, clip_count = train_elkan_noto_model(
+                training_matrix,
+                training_targets,
+                validation_matrix,
+                validation_targets,
+                seed,
+                n_estimators,
+                probability_clip,
+            )
+            training_seconds[str(n_estimators)] = time.perf_counter() - started
+            probabilities = predict_account_days(model, validation_rows_for_keys)
+            score = average_precision(probabilities, validation_targets)
+            n_estimators_scores[str(n_estimators)] = score
+            if score > best_validation_ap:
+                best_validation_ap = score
+                best_model = model
+                best_n_estimators = n_estimators
+                best_c = c
+                best_weight_summary = weight_summary
+                best_clip_count = clip_count
+    else:
+        raise ValueError(f"Unsupported pu_method: {pu_method!r}")
     if best_model is None:
         raise ValueError("No n_estimators candidate produced a validation score")
 
@@ -973,17 +1056,25 @@ def run_pilot(
         main_budget_pct,
     )
 
-    model_path = result_dir / "account_model.ubj"
-    save_model(
-        best_model,
-        model_path,
-        {
-            "seed": seed,
-            "scale_pos_weight": best_scale_pos_weight,
-            "training_dataset_ids": sorted(directory.name for directory in training_dirs),
-        },
-    )
-    sidecar_path = Path(str(model_path) + ".json")
+    training_dataset_ids = sorted(directory.name for directory in training_dirs)
+    if isinstance(best_model, PUBaggedAccountModel):
+        model_path = result_dir / "account_model_bags"
+        best_model.save(model_path, {"training_dataset_ids": training_dataset_ids})
+        sidecar_path = model_path / "ensemble.json"
+        model_sha256 = _sha256_of_file(sidecar_path)
+    else:
+        model_path = result_dir / "account_model.ubj"
+        save_model(
+            best_model,
+            model_path,
+            {
+                "seed": seed,
+                "scale_pos_weight": best_scale_pos_weight,
+                "training_dataset_ids": training_dataset_ids,
+            },
+        )
+        sidecar_path = Path(str(model_path) + ".json")
+        model_sha256 = _sha256_of_file(model_path)
 
     run_ids = sorted({str(world["run_id"]) for world in per_world.values()})
     truth_manifests = {
@@ -1025,7 +1116,26 @@ def run_pilot(
         )
     manifest["rules_variant"] = rules_variant
     manifest["rules_config_files"] = rules_config_files
+    pu_block: dict[str, Any] = {
+        "method": pu_method,
+        "n_estimators_candidates": list(N_ESTIMATOR_CANDIDATES),
+        "training_seconds": training_seconds,
+    }
+    if isinstance(best_model, PUBaggedAccountModel):
+        pu_block["n_bags"] = best_model.n_bags
+        pu_block["member_seeds"] = list(best_model.member_seeds)
+        pu_block["chosen_unlabelled_per_positive"] = best_unlabelled_per_positive
+        pu_block["average_precision_scores"] = pu_average_precision_scores
+    elif pu_method == "elkan_noto":
+        pu_block["c"] = best_c
+        pu_block["weight_summary"] = best_weight_summary
+        pu_block["clip_count"] = best_clip_count
+        pu_block["average_precision_scores"] = n_estimators_scores
+    pu_block["chosen_n_estimators"] = best_n_estimators
+
     manifest["pilot_account_model"] = {
+        "pu_method": pu_method,
+        "pu": pu_block,
         "n_estimators_scores": n_estimators_scores,
         "chosen_n_estimators": best_n_estimators,
         "chosen_validation_average_precision": best_validation_ap,
@@ -1035,7 +1145,7 @@ def run_pilot(
         "seed": seed,
         "feature_count": len(account_model_feature_names()),
         "model_path": str(model_path),
-        "model_sha256": _sha256_of_file(model_path),
+        "model_sha256": model_sha256,
         "model_sidecar_path": str(sidecar_path),
         "model_sidecar_sha256": _sha256_of_file(sidecar_path),
         "xgboost_threshold": xgboost_tuning.threshold,

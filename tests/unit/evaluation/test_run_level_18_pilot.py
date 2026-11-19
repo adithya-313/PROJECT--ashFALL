@@ -287,3 +287,97 @@ def test_switch_off_records_rules_1_to_5_without_rule_6(tmp_path: Path) -> None:
     assert [entry["path"] for entry in recorded_files] == ["config/rules_baseline.yaml"]
     baseline_path = REPO_ROOT / "config" / "rules_baseline.yaml"
     assert recorded_files[0]["sha256"] == hashlib.sha256(baseline_path.read_bytes()).hexdigest()
+
+
+def _write_pu_config(tmp_path: Path, method: str, n_bags: int | None = None) -> Path:
+    """Copies the committed mule model config with the PU method and optional bag count set."""
+    raw = yaml.safe_load((REPO_ROOT / "config" / "mule_model.yaml").read_text(encoding="utf-8"))
+    raw["parameters"]["pu_method"]["value"] = method
+    if n_bags is not None:
+        raw["parameters"]["pu_bagging_n_bags"]["value"] = n_bags
+    config_path = tmp_path / f"mule_model_{method}.yaml"
+    config_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    return config_path
+
+
+def test_none_method_records_pu_method_none_and_the_previous_keys(tmp_path: Path) -> None:
+    """The default method records pu_method none beside every key the supervised manifest had."""
+    exit_code = run_pilot(
+        [TRAINING],
+        [VALIDATION],
+        [TEST],
+        TRUTH_ROOT,
+        WORLD_CARDS_ROOT,
+        tmp_path,
+    )
+
+    assert exit_code == 0
+    result = json.loads((_single_result_dir(tmp_path) / "result.json").read_text(encoding="utf-8"))
+    pilot = result["manifest"]["pilot_account_model"]
+    assert pilot["pu_method"] == "none"
+    assert pilot["pu"]["method"] == "none"
+    assert set(pilot["n_estimators_scores"]) == {"100", "200", "400"}
+    for key in (
+        "chosen_n_estimators",
+        "chosen_validation_average_precision",
+        "scale_pos_weight",
+        "training_row_count",
+        "training_positive_count",
+        "seed",
+        "feature_count",
+        "model_path",
+        "model_sha256",
+        "model_sidecar_path",
+        "model_sidecar_sha256",
+        "xgboost_threshold",
+        "xgboost_validation_rate_pct",
+        "xgboost_validation_recall",
+        "xgboost_meets_budget",
+    ):
+        assert key in pilot
+
+
+def test_bagging_method_records_the_candidate_table_and_member_seeds(tmp_path: Path) -> None:
+    """A bagging run scores every candidate, saves the members and records their seeds."""
+    config_path = _write_pu_config(tmp_path, "bagging", n_bags=2)
+
+    exit_code = _run_main_with_mule_config(tmp_path, config_path)
+
+    assert exit_code == 0
+    result_dir = _single_result_dir(tmp_path)
+    result = json.loads((result_dir / "result.json").read_text(encoding="utf-8"))
+    pilot = result["manifest"]["pilot_account_model"]
+    pu = pilot["pu"]
+    assert pilot["pu_method"] == "bagging"
+    assert pu["n_bags"] == 2
+    assert len(pu["member_seeds"]) == 2
+    assert pu["chosen_unlabelled_per_positive"] in (1, 5, 20)
+    assert pu["chosen_n_estimators"] in (100, 200, 400)
+    assert len(pu["average_precision_scores"]) == 9
+    assert len(pu["training_seconds"]) == 9
+    ensemble_path = result_dir / "account_model_bags" / "ensemble.json"
+    assert ensemble_path.is_file()
+    sidecar = json.loads(ensemble_path.read_text(encoding="utf-8"))
+    assert sidecar["n_bags"] == 2
+    assert len(sidecar["member_seeds"]) == 2
+
+
+def test_elkan_noto_method_records_c_weights_and_clip_count(tmp_path: Path) -> None:
+    """An Elkan-Noto run records c, the weight summary and the clip count for the chosen model."""
+    config_path = _write_pu_config(tmp_path, "elkan_noto")
+
+    exit_code = _run_main_with_mule_config(tmp_path, config_path)
+
+    assert exit_code == 0
+    result = json.loads((_single_result_dir(tmp_path) / "result.json").read_text(encoding="utf-8"))
+    pilot = result["manifest"]["pilot_account_model"]
+    pu = pilot["pu"]
+    assert pilot["pu_method"] == "elkan_noto"
+    assert pu["chosen_n_estimators"] in (100, 200, 400)
+    assert pu["c"] is not None
+    assert 0.0 < pu["c"] <= 1.0
+    assert set(pu["weight_summary"]) == {"min", "median", "max"}
+    assert 0.0 <= pu["weight_summary"]["min"] <= pu["weight_summary"]["max"] <= 1.0
+    assert isinstance(pu["clip_count"], int)
+    assert len(pu["average_precision_scores"]) == 3
+    assert len(pu["training_seconds"]) == 3

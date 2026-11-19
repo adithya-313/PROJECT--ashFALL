@@ -15,10 +15,14 @@ there is no silent fallback.
 """
 
 import json
+import math
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from decisions.pu_learning import PUBaggedAccountModel
 
 import xgboost
 import yaml
@@ -42,6 +46,7 @@ __all__ = [
 ]
 
 ALLOWED_LABEL_CUTS: frozenset[str] = frozenset({"arrival_time", "label_day"})
+ALLOWED_PU_METHODS: frozenset[str] = frozenset({"none", "bagging", "elkan_noto"})
 ALLOWED_MULE_MODEL_KEYS: frozenset[str] = frozenset(
     {
         "feature_fill_flag_share",
@@ -51,6 +56,10 @@ ALLOWED_MULE_MODEL_KEYS: frozenset[str] = frozenset(
         "label_network_features",
         "feedback_network_features_not_used",
         "rules_plus_labels_and_registry",
+        "pu_method",
+        "pu_bagging_n_bags",
+        "pu_unlabelled_per_positive_candidates",
+        "pu_probability_clip",
     }
 )
 OPTIONAL_MULE_MODEL_KEYS: frozenset[str] = frozenset(
@@ -59,6 +68,10 @@ OPTIONAL_MULE_MODEL_KEYS: frozenset[str] = frozenset(
         "label_network_features",
         "feedback_network_features_not_used",
         "rules_plus_labels_and_registry",
+        "pu_method",
+        "pu_bagging_n_bags",
+        "pu_unlabelled_per_positive_candidates",
+        "pu_probability_clip",
     }
 )
 
@@ -82,6 +95,13 @@ class MuleModelConfig:
             which no built world writes; recorded so the omission is explicit.
         rules_plus_labels_and_registry: Whether the rules table also carries rule_6, the label-based
             OR rule, or None when the config file does not carry the switch.
+        pu_method: One of ALLOWED_PU_METHODS, or None when the config file does not carry the switch.
+        pu_bagging_n_bags: Number of bagged models the PU bagging method trains, or None when the
+            config file does not carry the value.
+        pu_unlabelled_per_positive_candidates: Unlabelled rows drawn per positive row for each
+            bagging candidate, or None when the config file does not carry the value.
+        pu_probability_clip: Cap below 1 on g(x) so the Elkan-Noto weight stays finite, or None when
+            the config file does not carry the value.
     """
 
     label_cut: str
@@ -91,6 +111,10 @@ class MuleModelConfig:
     label_network_features: tuple[str, ...]
     feedback_network_features_not_used: tuple[str, ...]
     rules_plus_labels_and_registry: bool | None
+    pu_method: str | None
+    pu_bagging_n_bags: int | None
+    pu_unlabelled_per_positive_candidates: tuple[int, ...] | None
+    pu_probability_clip: float | None
 
 
 def _parse_feature_name_list(block: dict[str, Any], key: str, path: Path) -> tuple[str, ...]:
@@ -300,6 +324,51 @@ def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
             )
         rules_plus_labels_and_registry = rules_switch_value
 
+    pu_method: str | None = None
+    if "pu_method" in parameters:
+        pu_method_value = parameters["pu_method"].get("value")
+        if not isinstance(pu_method_value, str) or pu_method_value not in ALLOWED_PU_METHODS:
+            raise ValueError(
+                f"pu_method in {resolved_path} must be one of {sorted(ALLOWED_PU_METHODS)}; got {pu_method_value!r}"
+            )
+        pu_method = pu_method_value
+
+    pu_bagging_n_bags: int | None = None
+    if "pu_bagging_n_bags" in parameters:
+        n_bags_value = parameters["pu_bagging_n_bags"].get("value")
+        if not isinstance(n_bags_value, int) or isinstance(n_bags_value, bool) or n_bags_value <= 0:
+            raise ValueError(f"pu_bagging_n_bags in {resolved_path} must be a positive integer; got {n_bags_value!r}")
+        pu_bagging_n_bags = n_bags_value
+
+    pu_unlabelled_per_positive_candidates: tuple[int, ...] | None = None
+    if "pu_unlabelled_per_positive_candidates" in parameters:
+        candidates_value = parameters["pu_unlabelled_per_positive_candidates"].get("value")
+        if not isinstance(candidates_value, list) or not candidates_value:
+            raise ValueError(
+                f"pu_unlabelled_per_positive_candidates in {resolved_path} "
+                "must be a non-empty list of positive integers"
+            )
+        for candidate in candidates_value:
+            if not isinstance(candidate, int) or isinstance(candidate, bool) or candidate <= 0:
+                raise ValueError(
+                    f"pu_unlabelled_per_positive_candidates in {resolved_path} must hold positive integers only; "
+                    f"got {candidate!r}"
+                )
+        pu_unlabelled_per_positive_candidates = tuple(candidates_value)
+
+    pu_probability_clip: float | None = None
+    if "pu_probability_clip" in parameters:
+        clip_value = parameters["pu_probability_clip"].get("value")
+        if (
+            not isinstance(clip_value, (int, float))
+            or isinstance(clip_value, bool)
+            or not 0.0 < clip_value < 1.0
+        ):
+            raise ValueError(
+                f"pu_probability_clip in {resolved_path} must be a number in (0.0, 1.0); got {clip_value!r}"
+            )
+        pu_probability_clip = float(clip_value)
+
     return MuleModelConfig(
         label_cut=label_cut,
         label_maturity_days=label_maturity_days,
@@ -308,6 +377,10 @@ def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
         label_network_features=label_network_features,
         feedback_network_features_not_used=feedback_network_features_not_used,
         rules_plus_labels_and_registry=rules_plus_labels_and_registry,
+        pu_method=pu_method,
+        pu_bagging_n_bags=pu_bagging_n_bags,
+        pu_unlabelled_per_positive_candidates=pu_unlabelled_per_positive_candidates,
+        pu_probability_clip=pu_probability_clip,
     )
 
 
@@ -560,34 +633,71 @@ def train_account_model(
     targets: list[int],
     seed: int,
     n_estimators: int = 100,
+    *,
+    sample_weight: list[float] | None = None,
+    scale_pos_weight_override: float | None = None,
 ) -> tuple[xgboost.XGBClassifier, float]:
     """
     WHAT: Fits the pilot account model and returns it with its positive-class weight.
 
     WHY: Fraud accounts are rare, so scale_pos_weight balances the two classes. Every other
     hyperparameter stays at the XGBoost default; n_estimators is chosen on validation by the runner.
+    The weighted Elkan-Noto path needs its own per-row weights and its own class weight, so both can
+    be supplied without changing the default supervised call.
 
     Args:
         rows: Feature rows in account_model_feature_names() order.
         targets: Binary labels aligned with rows.
         seed: Random seed recorded in the model sidecar.
         n_estimators: Number of boosting rounds; chosen on validation, never on test.
+        sample_weight: Optional non-negative weight per row; None fits without weights exactly as
+            before.
+        scale_pos_weight_override: Optional positive class weight replacing negatives / positives;
+            None keeps negatives / positives.
 
     Returns:
-        (model, scale_pos_weight) where scale_pos_weight is negatives / positives.
+        (model, scale_pos_weight) where scale_pos_weight is the override when given, otherwise
+        negatives / positives.
 
     Raises:
-        ValueError: If rows and targets differ in length, or there are no positives or no negatives.
+        ValueError: If rows and targets differ in length, there are no positives or no negatives,
+            the sample weights do not align with the rows or include a non-finite or negative
+            value, or the override is not a positive finite number.
     """
     if len(rows) != len(targets):
         raise ValueError(f"rows length {len(rows)} does not match targets length {len(targets)}")
+    if sample_weight is not None:
+        if len(sample_weight) != len(rows):
+            raise ValueError(
+                f"sample_weight length {len(sample_weight)} does not match rows length {len(rows)}"
+            )
+        for weight in sample_weight:
+            if not isinstance(weight, (int, float)) or isinstance(weight, bool):
+                raise ValueError(f"sample_weight values must be numbers; got {weight!r}")
+            if not math.isfinite(weight) or weight < 0.0:
+                raise ValueError(f"sample_weight values must be non-negative and finite; got {weight!r}")
+    if scale_pos_weight_override is not None:
+        if (
+            not isinstance(scale_pos_weight_override, (int, float))
+            or isinstance(scale_pos_weight_override, bool)
+            or not math.isfinite(scale_pos_weight_override)
+            or scale_pos_weight_override <= 0.0
+        ):
+            raise ValueError(
+                "scale_pos_weight_override must be a positive finite number; "
+                f"got {scale_pos_weight_override!r}"
+            )
     positives = sum(1 for target in targets if target == 1)
     negatives = sum(1 for target in targets if target == 0)
     if positives == 0:
         raise ValueError("train_account_model requires at least one positive account-day")
     if negatives == 0:
         raise ValueError("train_account_model requires at least one negative account-day")
-    scale_pos_weight = negatives / positives
+    scale_pos_weight = (
+        float(scale_pos_weight_override)
+        if scale_pos_weight_override is not None
+        else negatives / positives
+    )
 
     model = xgboost.XGBClassifier(
         objective="binary:logistic",
@@ -596,19 +706,26 @@ def train_account_model(
         scale_pos_weight=scale_pos_weight,
         n_estimators=n_estimators,
     )
-    model.fit(rows, targets)
+    if sample_weight is None:
+        model.fit(rows, targets)
+    else:
+        model.fit(rows, targets, sample_weight=sample_weight)
     return model, scale_pos_weight
 
 
-def predict_account_days(model: xgboost.XGBClassifier, day_rows: list[dict[str, Any]]) -> list[float]:
+def predict_account_days(
+    model: "xgboost.XGBClassifier | PUBaggedAccountModel",
+    day_rows: list[dict[str, Any]],
+) -> list[float]:
     """
     WHAT: Returns the model's fraud probability for every supplied account-day row, in row order.
 
     WHY: Evaluation keeps the same row order as one_row_per_account_day, so callers can attach a
-    probability to each ScoredDay without a separate join key.
+    probability to each ScoredDay without a separate join key. A PU bagging ensemble is scored as
+    the logistic probability of its mean margin, so both model types answer the same question.
 
     Args:
-        model: Fitted XGBoost account model.
+        model: Fitted XGBoost account model or PUBaggedAccountModel ensemble.
         day_rows: Account-day rows carrying the canonical features.
 
     Returns:
@@ -621,6 +738,13 @@ def predict_account_days(model: xgboost.XGBClassifier, day_rows: list[dict[str, 
     matrix = [[_feature_value(row.get(name), name) for name in feature_names] for row in day_rows]
     if not matrix:
         raise ValueError("predict_account_days requires at least one account-day row")
+
+    # Imported here because pu_learning imports train_account_model from this module; a module-level
+    # import would make the two modules import each other during start-up.
+    from decisions.pu_learning import PUBaggedAccountModel as BaggedModel
+
+    if isinstance(model, BaggedModel):
+        return model.predict_probabilities(matrix)
     probabilities = model.predict_proba(matrix)[:, 1]
     return [float(probability) for probability in probabilities]
 
