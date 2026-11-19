@@ -454,7 +454,7 @@ def _validation_scored_in_model_row_order(
     validation_rows_for_keys: list[dict[str, Any]] | numpy.ndarray,
     validation_keys: Sequence[tuple[str, str, str, date]],
     base_rules_config: RulesConfig,
-    detector: TrainedAnomalyDetector,
+    detector: TrainedAnomalyDetector | None,
 ) -> list[ScoredDay]:
     """
     WHAT: Returns one validation ScoredDay per account model row, in that row's order.
@@ -470,7 +470,8 @@ def _validation_scored_in_model_row_order(
         validation_rows_for_keys: The rows or aligned feature matrix the model predicts on.
         validation_keys: (world, bank, account, IST day) key of every model row, in row order.
         base_rules_config: Rules table used to score the rows path's account-days.
-        detector: Trained anomaly detector, scored with the rules so the days carry full records.
+        detector: Trained anomaly detector, scored with the rules so the days carry full records;
+            None leaves the anomaly score empty, which is enough for truth roles.
 
     Returns:
         ScoredDays aligned with the model rows, same length as validation_keys.
