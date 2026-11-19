@@ -17,6 +17,7 @@ Every function is pure apart from load_tuning_config, which reads one YAML file.
 malformed data raises a plain ValueError instead of being guessed.
 """
 
+import numbers
 from bisect import bisect_left
 from dataclasses import dataclass
 from datetime import date
@@ -24,26 +25,30 @@ from itertools import product
 from pathlib import Path
 from typing import Any, Sequence
 
+import numpy
+
 from core.config_validator import load_yaml
-from decisions.rules_config import RulesConfig, load_rules_config, load_rules_config_with_labels, with_thresholds
+from core.event_clock import IST
+from decisions.rules_config import Rule, RulesConfig, load_rules_config, load_rules_config_with_labels
 from evaluation.level17_scoring import (
     GENUINE_ROLES,
     MULE_ROLES,
     ScoredDay,
+    feature_values_only,
     genuine_restricted_days,
     ground_sets,
     one_row_per_account_day,
-    rules_restricted_days,
-    score_account_days,
 )
 
 __all__ = [
     "AnomalyScoreCut",
     "AnomalyTuningResult",
     "RuleStandalone",
+    "RulesDayMatrix",
     "RulesGridPoint",
     "RulesTuningResult",
     "TuningConfig",
+    "build_rules_day_matrix",
     "load_labels_tuning_config",
     "load_tuning_config",
     "score_cut_curve",
@@ -51,6 +56,7 @@ __all__ = [
     "select_rules_grid_point",
     "tune_anomaly_threshold",
     "tune_rules",
+    "tune_rules_matrix",
 ]
 
 
@@ -168,6 +174,29 @@ class AnomalyTuningResult:
     validation_rate_pct: float
     validation_recall: float
     meets_budget: bool
+
+
+@dataclass(frozen=True)
+class RulesDayMatrix:
+    """
+    WHAT: Account-day features and truth roles in flat numpy arrays, the tuner's vectorised input.
+
+    WHY: Evaluating a 2,916-point grid must not rebuild a rule decision for every row and point.
+    One column per feature the rules read, plus one role string per account-day, is all the grid
+    needs.
+
+    Attributes:
+        features: Rule-referenced feature name -> (row_count,) float64 array; NaN means the snapshot
+            carried None for that feature.
+        account_ids: (row_count,) object array of account_id strings, per account-day.
+        day_ordinals: (row_count,) int64 date.toordinal() of each account-day's IST date.
+        roles: (row_count,) object array of truth_role strings.
+    """
+
+    features: dict[str, numpy.ndarray]
+    account_ids: numpy.ndarray
+    day_ordinals: numpy.ndarray
+    roles: numpy.ndarray
 
 
 def _require_non_empty_string(raw: dict[str, Any], key: str, path: Path) -> str:
@@ -450,32 +479,481 @@ def _validation_metrics(
     return validation_rate_pct, validation_recall
 
 
-def _per_rule_standalone(scored: list[ScoredDay], config: RulesConfig) -> tuple[RuleStandalone, ...]:
+@dataclass(frozen=True)
+class _MatrixIndex:
     """
-    WHAT: Measures each rule on its own at the chosen thresholds.
+    WHAT: Row-to-pair and row-to-account identity of a RulesDayMatrix, built once per tuner call.
+
+    WHY: Every grid point restricts the same account-days and differs only in which rows are
+    restricted, so how a row maps to its account and to its (account, IST day) pair never changes.
+    Building that mapping once turns each point's rate and recall into two counting passes.
+
+    Attributes:
+        row_count: Number of account-day rows.
+        pair_index: (row_count,) index of the (account, IST day) pair each row belongs to.
+        pair_count: Number of distinct (account, IST day) pairs.
+        pair_roles: (pair_count,) role of the pair's last row, matching ground_sets' last-wins map
+            from (account, day) to role.
+        pair_genuine: (pair_count,) True when the pair's last-wins role is genuine or victim.
+        pair_mule: (pair_count,) True when the pair's last-wins role is a mule role.
+        pair_account_index: (pair_count,) account index of each pair.
+        account_count: Number of distinct accounts.
+        genuine_total: Accounts with a genuine or victim day, the rate's denominator.
+        mule_total: Accounts with a mule, collector or cash_out day, the recall's denominator.
+    """
+
+    row_count: int
+    pair_index: numpy.ndarray
+    pair_count: int
+    pair_roles: tuple[str, ...]
+    pair_genuine: numpy.ndarray
+    pair_mule: numpy.ndarray
+    pair_account_index: numpy.ndarray
+    account_count: int
+    genuine_total: int
+    mule_total: int
+
+
+def _rule_feature_names(config: RulesConfig) -> tuple[str, ...]:
+    """
+    WHAT: Returns every feature the rules read, in rule-table order, without duplicates.
 
     Args:
-        scored: Account-days already scored with the chosen thresholds.
-        config: Chosen rules config, whose rule order defines the result order.
+        config: Rules table to scan.
 
     Returns:
-        One RuleStandalone per rule in table order.
+        Feature names in first-reference order.
     """
-    results: list[RuleStandalone] = []
+    names: list[str] = []
+    seen: set[str] = set()
     for rule in config.rules:
-        restricted: dict[str, set[date]] = {}
-        for scored_day in scored:
-            if rule.reason_code in scored_day.rules_fired:
-                restricted.setdefault(scored_day.account_id, set()).add(scored_day.day)
-        rate_pct, recall = _validation_metrics(scored, restricted)
-        results.append(
+        for condition in rule.conditions:
+            if condition.feature not in seen:
+                seen.add(condition.feature)
+                names.append(condition.feature)
+    return tuple(names)
+
+
+def _matrix_index(matrix: RulesDayMatrix) -> _MatrixIndex:
+    """
+    WHAT: Builds the row-to-pair and row-to-account index of a rules day matrix.
+
+    WHY: The old tuner recomputed ground_sets and the last-wins role map for every grid point.
+    Both are properties of the data, not of the thresholds, so they are computed once here with
+    exactly the definitions level17_scoring uses: pair roles are last-wins in row order, the mule
+    and genuine account sets use every row's role, and each pair belongs to one account.
+
+    Args:
+        matrix: Account-day features and roles.
+
+    Returns:
+        The precomputed index.
+
+    Raises:
+        ValueError: If a role or account id is not a string.
+
+    Complexity:
+        O(rows) time and O(rows) memory, with one Python pass over the rows.
+    """
+    row_count = int(matrix.account_ids.shape[0])
+    row_roles: list[str] = []
+    account_lookup: dict[str, int] = {}
+    account_index_by_row = numpy.empty(row_count, dtype=numpy.int64)
+    pair_lookup: dict[tuple[str, int], int] = {}
+    pair_index = numpy.empty(row_count, dtype=numpy.int64)
+
+    for row_index in range(row_count):
+        account_value = matrix.account_ids[row_index]
+        if not isinstance(account_value, str):
+            raise ValueError("RulesDayMatrix account_ids must be strings")
+        account_index = account_lookup.get(account_value)
+        if account_index is None:
+            account_index = len(account_lookup)
+            account_lookup[account_value] = account_index
+        account_index_by_row[row_index] = account_index
+
+        day_ordinal = int(matrix.day_ordinals[row_index])
+        pair_key = (account_value, day_ordinal)
+        pair = pair_lookup.get(pair_key)
+        if pair is None:
+            pair = len(pair_lookup)
+            pair_lookup[pair_key] = pair
+        pair_index[row_index] = pair
+
+        role_value = matrix.roles[row_index]
+        if not isinstance(role_value, str):
+            raise ValueError("RulesDayMatrix roles must be strings")
+        row_roles.append(role_value)
+
+    account_count = len(account_lookup)
+    pair_count = len(pair_lookup)
+    pair_roles = [""] * pair_count
+    pair_account_index = numpy.empty(pair_count, dtype=numpy.int64)
+    for row_index in range(row_count):
+        pair = int(pair_index[row_index])
+        pair_roles[pair] = row_roles[row_index]
+        pair_account_index[pair] = account_index_by_row[row_index]
+
+    genuine_flags = numpy.zeros(account_count, dtype=bool)
+    mule_flags = numpy.zeros(account_count, dtype=bool)
+    for row_index, role in enumerate(row_roles):
+        account_index = int(account_index_by_row[row_index])
+        if role in GENUINE_ROLES:
+            genuine_flags[account_index] = True
+        if role in MULE_ROLES:
+            mule_flags[account_index] = True
+
+    pair_genuine = numpy.array([role in GENUINE_ROLES for role in pair_roles], dtype=bool)
+    pair_mule = numpy.array([role in MULE_ROLES for role in pair_roles], dtype=bool)
+
+    return _MatrixIndex(
+        row_count=row_count,
+        pair_index=pair_index,
+        pair_count=pair_count,
+        pair_roles=tuple(pair_roles),
+        pair_genuine=pair_genuine,
+        pair_mule=pair_mule,
+        pair_account_index=pair_account_index,
+        account_count=account_count,
+        genuine_total=int(numpy.count_nonzero(genuine_flags)),
+        mule_total=int(numpy.count_nonzero(mule_flags)),
+    )
+
+
+@dataclass(frozen=True)
+class _RuleFiredGrid:
+    """
+    WHAT: One rule's fired account-day arrays for every combination of its referenced thresholds.
+
+    WHY: A rule's conditions read only the thresholds named in its own conditions, so its fired
+    array for a grid point depends on that small subset. Precomputing one array per subset value
+    keeps the full grid a set of OR operations instead of a rule evaluation per point.
+
+    Attributes:
+        reason_code: Reason code recorded when the rule fires.
+        positions: Positions in the full threshold-key list that this rule depends on.
+        combo_lookup: Candidate-index tuple over positions -> index into fired_arrays.
+        fired_arrays: Boolean (row_count,) arrays in combo_lookup order; True where the rule fires.
+    """
+
+    reason_code: str
+    positions: tuple[int, ...]
+    combo_lookup: dict[tuple[int, ...], int]
+    fired_arrays: tuple[numpy.ndarray, ...]
+
+
+def _rule_fired_grid(
+    rule: Rule,
+    threshold_keys: list[str],
+    candidate_values: dict[str, tuple[int | float, ...]],
+    features: dict[str, numpy.ndarray],
+) -> _RuleFiredGrid:
+    """
+    WHAT: Precomputes one rule's fired array for every combination of its referenced candidates.
+
+    WHY: evaluate_rules fires an 'all' rule only when every condition's comparison passes and an
+    'any' rule when at least one present condition passes; a missing feature never passes. With
+    NaN standing in for a missing feature, a NaN comparison is False, so AND over the condition
+    comparisons reproduces 'all' (missing -> not evaluable -> not fired) and OR reproduces 'any'
+    (missing -> skipped, all missing -> not fired) without a separate presence test.
+
+    Args:
+        rule: Rule from the tuned baseline config.
+        threshold_keys: Every threshold key in grid order.
+        candidate_values: Candidate values per threshold key.
+        features: Rule-referenced feature columns, NaN for a missing value.
+
+    Returns:
+        The rule's precomputed arrays and their lookup.
+
+    Raises:
+        ValueError: If a condition operator or match mode is unsupported.
+
+    Complexity:
+        O(rule_combinations * rows) time and the same in memory, where rule_combinations is the
+        product of the candidate counts of this rule's own thresholds.
+    """
+    referenced_keys = [
+        key for key in threshold_keys if any(condition.threshold_key == key for condition in rule.conditions)
+    ]
+    positions = tuple(threshold_keys.index(key) for key in referenced_keys)
+    value_lists = [candidate_values[key] for key in referenced_keys]
+    combos = list(product(*[range(len(values)) for values in value_lists]))
+
+    fired_arrays: list[numpy.ndarray] = []
+    for combo in combos:
+        passed_conditions: list[numpy.ndarray] = []
+        for condition in rule.conditions:
+            column = features[condition.feature]
+            if condition.threshold_key is None:
+                threshold: int | float = condition.threshold_value
+            else:
+                referenced_position = referenced_keys.index(condition.threshold_key)
+                threshold = value_lists[referenced_position][combo[referenced_position]]
+            if condition.op == ">=":
+                passed = column >= threshold
+            elif condition.op == "<=":
+                passed = column <= threshold
+            elif condition.op == "==":
+                passed = column == threshold
+            else:
+                raise ValueError(f"Unsupported comparison operator '{condition.op}' in rule '{rule.id}'")
+            passed_conditions.append(passed)
+        if rule.match == "all":
+            fired = numpy.logical_and.reduce(passed_conditions)
+        elif rule.match == "any":
+            fired = numpy.logical_or.reduce(passed_conditions)
+        else:
+            raise ValueError(f"Unsupported match value '{rule.match}' in rule '{rule.id}'")
+        fired_arrays.append(fired)
+
+    return _RuleFiredGrid(
+        reason_code=rule.reason_code,
+        positions=positions,
+        combo_lookup={combo: index for index, combo in enumerate(combos)},
+        fired_arrays=tuple(fired_arrays),
+    )
+
+
+def _measure_restricted_rows(restricted_rows: numpy.ndarray, index: _MatrixIndex) -> tuple[float, float]:
+    """
+    WHAT: Computes the validation rate and recall of one boolean account-day restriction array.
+
+    WHY: Both metrics only ask whether an account was restricted on at least one day of a role, so
+    they reduce to counting restricted pairs and then restricted accounts. The arithmetic is the
+    same expression _validation_metrics uses, keeping the floats bit-identical.
+
+    Args:
+        restricted_rows: (row_count,) True where the point restricts that account-day.
+        index: Precomputed row, pair and account identity.
+
+    Returns:
+        (validation_rate_pct, validation_recall): restricted genuine accounts over all genuinely
+        active accounts, and detected mule accounts over all mule accounts (0.0 without mules).
+
+    Raises:
+        ValueError: If there are no genuinely active accounts.
+
+    Complexity:
+        O(rows) time with two bincount passes; memory O(rows + pairs + accounts).
+    """
+    if index.genuine_total == 0:
+        raise ValueError("Cannot measure a genuine-restriction rate without genuine accounts")
+
+    pair_counts = numpy.bincount(
+        index.pair_index,
+        weights=restricted_rows.astype(numpy.float64),
+        minlength=index.pair_count,
+    )
+    restricted_pairs = pair_counts > 0.0
+
+    genuine_account_hits = numpy.bincount(
+        index.pair_account_index,
+        weights=(restricted_pairs & index.pair_genuine).astype(numpy.float64),
+        minlength=index.account_count,
+    )
+    genuine_restricted = int(numpy.count_nonzero(genuine_account_hits > 0.0))
+    validation_rate_pct = 100.0 * genuine_restricted / index.genuine_total
+
+    mule_account_hits = numpy.bincount(
+        index.pair_account_index,
+        weights=(restricted_pairs & index.pair_mule).astype(numpy.float64),
+        minlength=index.account_count,
+    )
+    detected = int(numpy.count_nonzero(mule_account_hits > 0.0))
+    validation_recall = detected / index.mule_total if index.mule_total else 0.0
+    return validation_rate_pct, validation_recall
+
+
+def _combine_and_measure(
+    fired_arrays_by_rule: Sequence[Sequence[numpy.ndarray]],
+    combo_indices: Sequence[int],
+    index: _MatrixIndex,
+) -> tuple[float, float]:
+    """
+    WHAT: ORs every rule's precomputed fired array for one grid point and measures the result.
+
+    WHY: rules_restricted_days restricts an account-day exactly when at least one rule fired, so
+    the point's restriction array is the OR of the rules' fired arrays; nothing else in the
+    restriction depends on the thresholds.
+
+    Args:
+        fired_arrays_by_rule: Per rule, its fired arrays indexed by the rule's combo index.
+        combo_indices: Per rule, the combo index this grid point selects.
+        index: Precomputed row, pair and account identity.
+
+    Returns:
+        The point's (validation_rate_pct, validation_recall).
+    """
+    restricted_rows = numpy.zeros(index.row_count, dtype=bool)
+    for fired_arrays, combo_index in zip(fired_arrays_by_rule, combo_indices, strict=True):
+        numpy.logical_or(restricted_rows, fired_arrays[combo_index], out=restricted_rows)
+    return _measure_restricted_rows(restricted_rows, index)
+
+
+def build_rules_day_matrix(rows: list[dict[str, Any]], config: RulesConfig) -> RulesDayMatrix:
+    """
+    WHAT: Converts validation snapshot rows into the flat feature and role arrays the tuner reads.
+
+    WHY: Scoring 2,916 threshold points must not re-deduplicate rows or rebuild feature mappings
+    for every point. The rows are deduplicated exactly once with one_row_per_account_day, and only
+    the features the rules actually read are kept.
+
+    Args:
+        rows: Validation snapshot rows, possibly with several snapshots per account-day.
+        config: Rules table whose conditions name the features to keep.
+
+    Returns:
+        RulesDayMatrix whose rows are in one_row_per_account_day order.
+
+    Raises:
+        ValueError: If a snapshot is malformed (raised by one_row_per_account_day), a rule feature
+            is neither a number nor None, truth_role is missing, truth_depth has the wrong type, or
+            a mule day carries no truth_depth. The messages match score_account_days and
+            ground_sets, whose validations these rows would otherwise reach later.
+
+    Complexity:
+        O(rows * rule features) time and O(rows * rule features) memory; the snapshot dicts are
+        not retained.
+    """
+    day_rows = one_row_per_account_day(rows)
+    feature_names = _rule_feature_names(config)
+    features = {name: numpy.empty(len(day_rows), dtype=numpy.float64) for name in feature_names}
+    account_ids = numpy.empty(len(day_rows), dtype=object)
+    day_ordinals = numpy.empty(len(day_rows), dtype=numpy.int64)
+    roles = numpy.empty(len(day_rows), dtype=object)
+
+    for row_index, row in enumerate(day_rows):
+        feature_values = feature_values_only(row)
+        for name, column in features.items():
+            value = feature_values.get(name)
+            if value is None:
+                column[row_index] = numpy.nan
+            elif isinstance(value, numbers.Real):
+                column[row_index] = float(value)
+            else:
+                raise ValueError(f"Rule feature '{name}' must be a number or None; got {value!r}")
+
+        account_ids[row_index] = row["account_id"]
+        day_ordinals[row_index] = row["snapshot_time"].astimezone(IST).date().toordinal()
+
+        role = row.get("truth_role")
+        if not isinstance(role, str) or not role:
+            raise ValueError("score_account_days requires a non-empty string 'truth_role' on every row")
+        roles[row_index] = role
+
+        depth = row.get("truth_depth")
+        if depth is not None and (not isinstance(depth, int) or isinstance(depth, bool)):
+            raise ValueError(f"truth_depth must be an int or None; got {depth!r}")
+        if role == "mule" and depth is None:
+            raise ValueError(f"Mule account {account_ids[row_index]} has no truth_depth")
+
+    return RulesDayMatrix(
+        features=features,
+        account_ids=account_ids,
+        day_ordinals=day_ordinals,
+        roles=roles,
+    )
+
+
+def tune_rules_matrix(
+    matrix: RulesDayMatrix,
+    config: RulesConfig,
+    tuning: TuningConfig,
+    split: str,
+    budget_pct: float,
+    *,
+    collect_grid_points: bool = False,
+) -> RulesTuningResult:
+    """
+    WHAT: Searches the whole threshold grid on a prebuilt day matrix.
+
+    WHY: The pilot loads and deduplicates its validation worlds once; this entry point lets every
+    later tuning pass reuse those arrays instead of rebuilding them from snapshot dicts.
+
+    Args:
+        matrix: Account-day features and roles, as built by build_rules_day_matrix.
+        config: Baseline rules config supplying the untuned_start values.
+        tuning: Candidate grid and allowed splits.
+        split: Dataset split; must be allowed for tuning.
+        budget_pct: Maximum percentage of genuinely active accounts that may be restricted.
+        collect_grid_points: When true, keep every evaluated point on the result.
+
+    Returns:
+        RulesTuningResult for the selected point, chosen with select_rules_grid_point exactly as
+        the row-based tuner chooses it.
+
+    Key logic:
+        For every combination of candidate values, each rule's fired array for that point is ORed
+        into one restriction array, and the rate and recall are counted from that array. The
+        chosen point's per-rule numbers come from the same arrays.
+
+    Raises:
+        ValueError: If the split is not allowed, the budget is invalid, or the matrix has no
+            genuinely active account.
+
+    Complexity:
+        O(grid_points * (rules * rows + rows)) time after the one-time per-rule arrays; memory is
+        O(rows * sum of per-rule combinations) plus the collected grid points.
+    """
+    _check_split(tuning, split)
+    _check_budget(budget_pct)
+
+    index = _matrix_index(matrix)
+    threshold_keys = list(config.thresholds)
+    candidate_values = {key: tuning.candidates[key] for key in threshold_keys}
+    rule_grids = [_rule_fired_grid(rule, threshold_keys, candidate_values, matrix.features) for rule in config.rules]
+
+    points: list[RulesGridPoint] = []
+    chosen_rule_indices: list[tuple[int, ...]] = []
+    for grid_index, combination in enumerate(product(*[range(len(candidate_values[key])) for key in threshold_keys])):
+        rule_indices = tuple(
+            rule_grid.combo_lookup[tuple(combination[position] for position in rule_grid.positions)]
+            for rule_grid in rule_grids
+        )
+        validation_rate_pct, validation_recall = _combine_and_measure(
+            [rule_grid.fired_arrays for rule_grid in rule_grids],
+            rule_indices,
+            index,
+        )
+        new_values: dict[str, int | float] = {
+            key: candidate_values[key][combination[position]] for position, key in enumerate(threshold_keys)
+        }
+        changed = sum(1 for key in threshold_keys if new_values[key] != config.thresholds[key].value)
+        points.append(
+            RulesGridPoint(
+                thresholds=new_values,
+                validation_rate_pct=validation_rate_pct,
+                validation_recall=validation_recall,
+                changed_count=changed,
+                grid_index=grid_index,
+            )
+        )
+        chosen_rule_indices.append(rule_indices)
+
+    chosen = select_rules_grid_point(points, budget_pct)
+    standalone: list[RuleStandalone] = []
+    for rule, rule_grid, rule_index in zip(
+        config.rules, rule_grids, chosen_rule_indices[chosen.grid_index], strict=True
+    ):
+        rate_pct, recall = _measure_restricted_rows(rule_grid.fired_arrays[rule_index], index)
+        standalone.append(
             RuleStandalone(
                 reason_code=rule.reason_code,
                 validation_rate_pct=rate_pct,
                 validation_recall=recall,
             )
         )
-    return tuple(results)
+
+    return RulesTuningResult(
+        thresholds=dict(chosen.thresholds),
+        validation_rate_pct=chosen.validation_rate_pct,
+        validation_recall=chosen.validation_recall,
+        meets_budget=chosen.validation_rate_pct <= budget_pct,
+        combinations_evaluated=len(points),
+        per_rule_standalone=tuple(standalone),
+        grid_points=tuple(points) if collect_grid_points else (),
+    )
 
 
 def select_rules_grid_point(points: Sequence[RulesGridPoint], budget_pct: float) -> RulesGridPoint:
@@ -551,8 +1029,9 @@ def tune_rules(
         point is returned with meets_budget False.
 
     Key logic:
-        Every combination of candidate values is evaluated in declared order, and the choice is
-        delegated to select_rules_grid_point so multi-budget reporting uses the same ordering.
+        The rows are reduced to a RulesDayMatrix once, then tune_rules_matrix evaluates every
+        combination of candidate values in declared order and delegates the choice to
+        select_rules_grid_point, so multi-budget reporting uses the same ordering.
 
     Raises:
         ValueError: If the split is not allowed, the budget is invalid, or the rows lack genuine
@@ -560,41 +1039,14 @@ def tune_rules(
     """
     _check_split(tuning, split)
     _check_budget(budget_pct)
-
-    day_rows = one_row_per_account_day(rows)
-    threshold_keys = list(config.thresholds)
-    candidate_lists = [tuning.candidates[key] for key in threshold_keys]
-
-    points: list[RulesGridPoint] = []
-    for index, combination in enumerate(product(*candidate_lists)):
-        new_values: dict[str, int | float] = dict(zip(threshold_keys, combination, strict=True))
-        tuned_config = with_thresholds(config, new_values, tuning.derived_from)
-        scored = score_account_days(day_rows, tuned_config, None)
-        restricted = rules_restricted_days(scored)
-        validation_rate_pct, validation_recall = _validation_metrics(scored, restricted)
-        changed = sum(1 for key in threshold_keys if new_values[key] != config.thresholds[key].value)
-        points.append(
-            RulesGridPoint(
-                thresholds=new_values,
-                validation_rate_pct=validation_rate_pct,
-                validation_recall=validation_recall,
-                changed_count=changed,
-                grid_index=index,
-            )
-        )
-
-    chosen = select_rules_grid_point(points, budget_pct)
-    chosen_config = with_thresholds(config, chosen.thresholds, tuning.derived_from)
-    chosen_scored = score_account_days(day_rows, chosen_config, None)
-
-    return RulesTuningResult(
-        thresholds=dict(chosen.thresholds),
-        validation_rate_pct=chosen.validation_rate_pct,
-        validation_recall=chosen.validation_recall,
-        meets_budget=chosen.validation_rate_pct <= budget_pct,
-        combinations_evaluated=len(points),
-        per_rule_standalone=_per_rule_standalone(chosen_scored, chosen_config),
-        grid_points=tuple(points) if collect_grid_points else (),
+    matrix = build_rules_day_matrix(rows, config)
+    return tune_rules_matrix(
+        matrix,
+        config,
+        tuning,
+        split,
+        budget_pct,
+        collect_grid_points=collect_grid_points,
     )
 
 
