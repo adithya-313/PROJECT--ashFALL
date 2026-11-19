@@ -30,10 +30,9 @@ parameters:
 
   label_maturity_days:
     label: policy
-    value: null
-    not_found: true
-    derived_from: "Level 18a4 Round 1 brief"
-    reason: "Off until the label delay has been measured on the full training worlds; null means no trailing window is dropped."
+    value: 28
+    derived_from: "evaluation/measure_label_delay.py on the 160 full training worlds, pooled p90, runs/full/label_delay_r7.json sha256 7886a2f6a357d7f5e7964ae086ae5e1547f851552abef02254e0fb553c27d824"
+    reason: "Dropping the final 28 days of every training world removes rows whose labels had not arrived yet at the pooled p90 delay of 27.6 days."
 
   feature_fill_flag_share:
     label: policy
