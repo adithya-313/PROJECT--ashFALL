@@ -5,9 +5,10 @@
 WHAT:
     Runs the compact data path on the first N worlds of each split, in sorted world order: load the
     training worlds into float32 arrays, load the validation worlds with their truth columns and
-    account-day rows, train one supervised account model with 100 boosting rounds, tune the rules
-    grid on the validation account-days and load the test worlds, sampling the process's resident
-    memory at the end of every stage.
+    account-day results, train one supervised account model with 100 boosting rounds, tune the
+    rules grid on the validation account-days, then load the test worlds one at a time and release
+    each one, sampling the process's resident memory at the end of every stage. The machine's total
+    physical, free physical and free commit memory are recorded before and after the run.
 
 WHY:
     The full-scale pilot must fit a 16 GB laptop. The pilot itself prints nothing about memory and
@@ -21,6 +22,7 @@ folder and config file it reads is required; a missing or malformed input raises
 """
 
 import argparse
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, Sequence
@@ -30,10 +32,10 @@ import psutil
 
 from decisions.anomaly_config import load_anomaly_detector_config
 from decisions.mule_account_model import load_mule_model_config, train_account_model
-from decisions.rules_config import load_rules_config, load_rules_config_with_labels
+from decisions.rules_config import RulesConfig, load_rules_config, load_rules_config_with_labels
 from evaluation.compact_rows import _world_sources, load_compact_split
 from evaluation.rules_tuning import (
-    build_rules_day_matrix,
+    TuningConfig,
     load_labels_tuning_config,
     load_tuning_config,
     tune_rules_matrix,
@@ -44,6 +46,12 @@ __all__ = ["run_probe"]
 
 #: Boosting rounds for the probe's single training stage, as the round brief fixes them.
 PROBE_N_ESTIMATORS = 100
+
+#: WMI query naming the three Win32_OperatingSystem memory fields the round brief asks for, in KB.
+_OS_MEMORY_QUERY = (
+    "Get-CimInstance Win32_OperatingSystem | Select-Object "
+    "TotalVisibleMemorySize,FreePhysicalMemory,FreeVirtualMemory | ConvertTo-Json -Compress"
+)
 
 
 def _record_stage(
@@ -66,6 +74,40 @@ def _record_stage(
     """
     stage_seconds[name] = time.perf_counter() - started
     stage_peak_rss_mb[name] = psutil.Process().memory_info().rss / (1024.0 * 1024.0)
+
+
+def _memory_snapshot() -> dict[str, float]:
+    """
+    WHAT: Reads the machine's total physical, free physical and free commit memory in MiB.
+
+    WHY: The probe's resident memory only says whether the run fits when it can be read against
+    the machine's own headroom. The brief names the Win32_OperatingSystem fields, which report
+    kilobytes; the query runs twice, before and after the run, so it never distorts stage timings.
+
+    Returns:
+        {"total_physical_mb", "free_physical_mb", "free_commit_mb"}.
+
+    Raises:
+        ValueError: If the WMI query fails or a requested field is missing.
+    """
+    completed = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", _OS_MEMORY_QUERY],
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        raise ValueError(f"Win32_OperatingSystem memory query failed: {completed.stderr.strip()}")
+    raw = orjson.loads(completed.stdout)
+    missing = [
+        field for field in ("TotalVisibleMemorySize", "FreePhysicalMemory", "FreeVirtualMemory") if field not in raw
+    ]
+    if missing:
+        raise ValueError(f"Win32_OperatingSystem memory query omitted {missing}")
+    return {
+        "total_physical_mb": float(raw["TotalVisibleMemorySize"]) / 1024.0,
+        "free_physical_mb": float(raw["FreePhysicalMemory"]) / 1024.0,
+        "free_commit_mb": float(raw["FreeVirtualMemory"]) / 1024.0,
+    }
 
 
 def _first_worlds(dataset_dirs: Sequence[Path], count: int) -> list[str]:
@@ -121,11 +163,17 @@ def run_probe(
         Stage order matches the pilot: load_training, load_validation, train, tune, load_test. The
         rules table and tuning grid follow the committed mule model config's rules switch, and the
         budget is the committed evaluation setting, so the tuning stage measures the real grid.
+        The validation load is given the rules config but no anomaly detector, because the probe
+        measures memory and never scores; the resulting ScoredDays carry a None anomaly score by
+        score_account_days' own definition. Test worlds are loaded one at a time and released, so
+        the load_test stage records the highest resident memory over the worlds, never their sum.
 
     Raises:
         ValueError: If a config, dataset or truth input is missing or malformed.
     """
     mule_model_config = load_mule_model_config()
+    rules_config: RulesConfig
+    tuning: TuningConfig
     if mule_model_config.rules_plus_labels_and_registry is True:
         rules_config = load_rules_config_with_labels()
         tuning = load_labels_tuning_config()
@@ -137,6 +185,7 @@ def run_probe(
 
     stage_seconds: dict[str, float] = {}
     stage_peak_rss_mb: dict[str, float] = {}
+    machine_memory_at_start = _memory_snapshot()
     probe_started = time.perf_counter()
 
     started = time.perf_counter()
@@ -146,9 +195,15 @@ def run_probe(
 
     started = time.perf_counter()
     validation_worlds = _first_worlds(validation_dirs, worlds_per_split)
-    validation_split = load_compact_split(validation_dirs, truth_root, include_days=True, world_ids=validation_worlds)
-    if validation_split.day_rows is None:
-        raise ValueError("compact validation load did not return account-day rows")
+    validation_split = load_compact_split(
+        validation_dirs,
+        truth_root,
+        include_days=True,
+        world_ids=validation_worlds,
+        rules_config=rules_config,
+    )
+    if validation_split.days is None:
+        raise ValueError("compact validation load did not return account-day arrays")
     _record_stage("load_validation", started, stage_seconds, stage_peak_rss_mb)
 
     started = time.perf_counter()
@@ -161,9 +216,8 @@ def run_probe(
     _record_stage("train", started, stage_seconds, stage_peak_rss_mb)
 
     started = time.perf_counter()
-    rules_matrix = build_rules_day_matrix(validation_split.day_rows, rules_config)
     rules_result = tune_rules_matrix(
-        rules_matrix,
+        validation_split.days.rules_matrix,
         rules_config,
         tuning,
         "validation",
@@ -174,8 +228,24 @@ def run_probe(
 
     started = time.perf_counter()
     test_worlds = _first_worlds(test_dirs, worlds_per_split)
-    load_compact_split(test_dirs, truth_root, include_days=True, world_ids=test_worlds)
-    _record_stage("load_test", started, stage_seconds, stage_peak_rss_mb)
+    test_peak_rss_mb = 0.0
+    for world_id in test_worlds:
+        # One test world at a time, released before the next read, so the split is never resident.
+        test_split = load_compact_split(
+            test_dirs,
+            truth_root,
+            include_days=True,
+            world_ids=[world_id],
+            rules_config=rules_config,
+        )
+        if test_split.days is None:
+            raise ValueError("compact test load did not return account-day arrays")
+        resident_mb = psutil.Process().memory_info().rss / (1024.0 * 1024.0)
+        test_peak_rss_mb = max(test_peak_rss_mb, resident_mb)
+        del test_split
+    stage_seconds["load_test"] = time.perf_counter() - started
+    stage_peak_rss_mb["load_test"] = test_peak_rss_mb
+    machine_memory_at_end = _memory_snapshot()
 
     payload: dict[str, Any] = {
         "simulated": True,
@@ -186,12 +256,13 @@ def run_probe(
             "test": len(test_worlds),
         },
         "training_rows": int(len(training_split.rows.targets)),
-        "validation_days": int(len(validation_split.day_rows)),
+        "validation_days": int(len(validation_split.days.scored)),
         "rules_combinations_evaluated": rules_result.combinations_evaluated,
         "stage_seconds": stage_seconds,
         "stage_peak_rss_mb": stage_peak_rss_mb,
         "peak_rss_mb": max(stage_peak_rss_mb.values()),
         "total_seconds": time.perf_counter() - probe_started,
+        "machine_memory_mb": {"start": machine_memory_at_start, "end": machine_memory_at_end},
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_text = orjson.dumps(payload, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2).decode("utf-8")

@@ -59,7 +59,7 @@ class PUBaggedAccountModel:
     n_estimators: int
     unlabelled_per_positive: int
 
-    def predict_margins(self, matrix: list[list[float]]) -> list[float]:
+    def predict_margins(self, matrix: list[list[float]] | numpy.ndarray) -> list[float]:
         """
         WHAT: Returns the mean raw margin over the members for every row of matrix.
 
@@ -67,7 +67,8 @@ class PUBaggedAccountModel:
         additive margin explanation is an additive explanation of the mean margin.
 
         Args:
-            matrix: Feature rows in the order the members were trained on.
+            matrix: Feature rows in the order the members were trained on, or an already built
+                matrix whose columns follow that order.
 
         Returns:
             One mean margin per input row, in row order.
@@ -83,7 +84,7 @@ class PUBaggedAccountModel:
         mean_margins = numpy.mean(numpy.vstack(member_margins), axis=0)
         return [float(margin) for margin in mean_margins]
 
-    def predict_probabilities(self, matrix: list[list[float]]) -> list[float]:
+    def predict_probabilities(self, matrix: list[list[float]] | numpy.ndarray) -> list[float]:
         """
         WHAT: Returns the logistic probability of the mean margin for every row of matrix.
 
@@ -91,7 +92,8 @@ class PUBaggedAccountModel:
         probability, while the ensemble itself averages in margin space.
 
         Args:
-            matrix: Feature rows in the order the members were trained on.
+            matrix: Feature rows in the order the members were trained on, or an already built
+                matrix whose columns follow that order.
 
         Returns:
             One probability per input row, in row order.

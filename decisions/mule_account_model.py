@@ -737,7 +737,7 @@ def train_account_model(
 
 def predict_account_days(
     model: "xgboost.XGBClassifier | PUBaggedAccountModel",
-    day_rows: list[dict[str, Any]],
+    day_rows: list[dict[str, Any]] | numpy.ndarray,
 ) -> list[float]:
     """
     WHAT: Returns the model's fraud probability for every supplied account-day row, in row order.
@@ -748,17 +748,29 @@ def predict_account_days(
 
     Args:
         model: Fitted XGBoost account model or PUBaggedAccountModel ensemble.
-        day_rows: Account-day rows carrying the canonical features.
+        day_rows: Account-day rows carrying the canonical features, or an already built matrix in
+            account_model_feature_names() order with a missing value stored as NaN. The compact data
+            path passes the matrix so it never rebuilds row dictionaries; XGBoost converts both
+            inputs to float32, so the probabilities are the same.
 
     Returns:
         One probability per input row, in the same order.
 
     Raises:
-        ValueError: If a feature value is not numeric, or the rows cannot be scored.
+        ValueError: If a feature value is not numeric, the matrix has the wrong shape, or the rows
+            cannot be scored.
     """
     feature_names = account_model_feature_names()
-    matrix = [[_feature_value(row.get(name), name) for name in feature_names] for row in day_rows]
-    if not matrix:
+    matrix: list[list[float]] | numpy.ndarray
+    if isinstance(day_rows, numpy.ndarray):
+        if day_rows.ndim != 2 or day_rows.shape[1] != len(feature_names):
+            raise ValueError(
+                f"predict_account_days needs a 2-D matrix with {len(feature_names)} columns; got shape {day_rows.shape}"
+            )
+        matrix = day_rows
+    else:
+        matrix = [[_feature_value(row.get(name), name) for name in feature_names] for row in day_rows]
+    if len(matrix) == 0:
         raise ValueError("predict_account_days requires at least one account-day row")
 
     # Imported here because pu_learning imports train_account_model from this module; a module-level

@@ -16,9 +16,11 @@ import pyarrow.parquet as pq
 
 from core.event_clock import IST
 from decisions.mule_account_model import account_model_feature_names, build_training_rows
+from decisions.rules_config import load_rules_config
 from evaluation.compact_rows import load_compact_split
 from evaluation.dataset_truth_join import join_truth
-from evaluation.level17_scoring import one_row_per_account_day
+from evaluation.level17_scoring import one_row_per_account_day, score_account_days
+from evaluation.rules_tuning import build_rules_day_matrix
 from showcase.level_17_checks import TEST_DATASET, TRAINING_DATASET, VALIDATION_DATASET
 
 TRUTH_ROOT = Path(__file__).resolve().parents[3] / "showcase" / "fixtures" / "level_17" / "truth"
@@ -78,12 +80,19 @@ def test_compact_training_rows_match_the_single_call_matrix() -> None:
 
 
 def test_compact_validation_days_equal_one_row_per_account_day_with_truth() -> None:
-    """The joined validation account-days match the existing dedupe on features, roles and depths."""
+    """The joined validation account-days match the existing dedupe on features, roles and depths,
+    and the precomputed ScoredDays, rules matrix and aligned features match the existing producers."""
     old_matrix, old_targets, old_keys, snapshot_rows = _old_training(VALIDATION_DATASET, TRUTH_ROOT)
     day_rows = one_row_per_account_day(snapshot_rows)
     feature_names = account_model_feature_names()
+    rules_config = load_rules_config()
 
-    split = load_compact_split([VALIDATION_DATASET], TRUTH_ROOT, include_days=True)
+    split = load_compact_split(
+        [VALIDATION_DATASET],
+        TRUTH_ROOT,
+        include_days=True,
+        rules_config=rules_config,
+    )
 
     numpy.testing.assert_array_equal(
         split.rows.matrix,
@@ -99,6 +108,7 @@ def test_compact_validation_days_equal_one_row_per_account_day_with_truth() -> N
     )
 
     assert split.days is not None
+    assert not hasattr(split, "day_rows")
     expected_features = numpy.asarray(
         [[row.get(name) for name in feature_names] for row in day_rows],
         dtype=numpy.float64,
@@ -116,6 +126,31 @@ def test_compact_validation_days_equal_one_row_per_account_day_with_truth() -> N
     )
     assert list(split.days.roles) == [row["truth_role"] for row in day_rows]
     assert list(split.days.depths) == [row["truth_depth"] for row in day_rows]
+
+    assert list(split.days.scored) == score_account_days(day_rows, rules_config, None)
+
+    expected_rules = build_rules_day_matrix(day_rows, rules_config)
+    assert tuple(split.days.rules_matrix.features) == tuple(expected_rules.features)
+    for name, column in expected_rules.features.items():
+        numpy.testing.assert_array_equal(split.days.rules_matrix.features[name], column)
+    assert list(split.days.rules_matrix.account_ids) == list(expected_rules.account_ids)
+    assert list(split.days.rules_matrix.day_ordinals) == list(expected_rules.day_ordinals)
+    assert list(split.days.rules_matrix.roles) == list(expected_rules.roles)
+
+    rows_by_key: dict[tuple[str, str, str, date], dict[str, object]] = {}
+    for row in day_rows:
+        row_key = (
+            str(row["world_id"]),
+            str(row["bank_id"]),
+            str(row["account_id"]),
+            row["snapshot_time"].astimezone(IST).date(),
+        )
+        rows_by_key[row_key] = row
+    expected_aligned = numpy.asarray(
+        [[rows_by_key[key].get(name) for name in feature_names] for key in old_keys],
+        dtype=numpy.float32,
+    )
+    numpy.testing.assert_array_equal(split.days.aligned_features, expected_aligned)
 
 
 def test_world_subset_loads_only_the_requested_world() -> None:

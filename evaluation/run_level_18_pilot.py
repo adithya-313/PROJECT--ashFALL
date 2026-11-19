@@ -53,7 +53,7 @@ from decisions.rules_config import (
     load_rules_config_with_labels,
     with_thresholds,
 )
-from evaluation.compact_rows import CompactRows, load_compact_split
+from evaluation.compact_rows import CompactDayRows, CompactRows, load_compact_split
 from evaluation.dataset_truth_join import join_truth
 from evaluation.leakage_checks import COMPLAINED_FEATURE, check_label_features_by_arrival
 from evaluation.level17_evaluation import (
@@ -66,8 +66,8 @@ from evaluation.level18_sanity import load_escalation_repeat_policy
 from evaluation.operating_points import operating_points, rules_curve, score_curve
 from evaluation.rules_tuning import (
     AnomalyTuningResult,
+    RulesTuningResult,
     TuningConfig,
-    build_rules_day_matrix,
     load_labels_tuning_config,
     load_tuning_config,
     tune_anomaly_threshold,
@@ -348,6 +348,44 @@ def _feature_matrix(day_rows: Sequence[dict[str, Any]], feature_names: Sequence[
     return matrix
 
 
+def _tuned_thresholds_from_rules_result(
+    rules_result: RulesTuningResult,
+    scored: list[ScoredDay],
+    validation_names: Sequence[str],
+    base_rules_config: RulesConfig,
+    tuning: TuningConfig,
+    budget_pct: float,
+) -> TunedThresholds:
+    """
+    WHAT: Combines a chosen rules grid point and precomputed validation scores into TunedThresholds.
+
+    WHY: Both data paths tune on validation with the same two scorers and must set the same
+    genuine-restriction budget, so the assembly steps live in one place.
+
+    Args:
+        rules_result: Rules tuning result, however the rules grid was searched.
+        scored: Validation account-days scored with the base rules table and the detector.
+        validation_names: Validation dataset folder names, recorded in the tuned thresholds' reason.
+        base_rules_config: Shipped rules table supplying the untrained thresholds.
+        tuning: Candidate grid and allowed tuning splits.
+        budget_pct: Maximum share of genuine account-days the anomaly cut may restrict.
+
+    Returns:
+        The tuned rules table, the rules result and the anomaly tuning result.
+    """
+    tuned_config = with_thresholds(
+        base_rules_config,
+        rules_result.thresholds,
+        "tuned on pilot validation datasets " + ", ".join(sorted(validation_names)),
+    )
+    anomaly_result = tune_anomaly_threshold(scored, tuning, "validation", budget_pct)
+    return TunedThresholds(
+        rules_config=tuned_config,
+        rules_result=rules_result,
+        anomaly_result=anomaly_result,
+    )
+
+
 def _tune_day_rows(
     day_rows: list[dict[str, Any]],
     validation_names: Sequence[str],
@@ -357,13 +395,12 @@ def _tune_day_rows(
     budget_pct: float,
     *,
     collect_grid_points: bool,
-    matrix_tuner: bool,
 ) -> tuple[TunedThresholds, list[ScoredDay], list[dict[str, Any]]]:
     """
-    WHAT: Tunes the rules thresholds and both anomaly-style cuts on already loaded validation
-    account-days.
+    WHAT: Tunes the rules thresholds and the anomaly-style cuts on loaded validation account-days
+    of the dict-row data path.
 
-    WHY: All four scorers must be set to the same genuine-restriction budget on validation, never on
+    WHY: All scorers must be set to the same genuine-restriction budget on validation, never on
     test. The XGBoost cut uses the same tuner and the same rows as the detector cut, so the only
     difference between them is the score itself.
 
@@ -376,9 +413,6 @@ def _tune_day_rows(
         budget_pct: Maximum share of genuine account-days either system may restrict.
         collect_grid_points: When true, the rules result keeps every grid point so the pilot can
             report operating points at the extra committed budgets from the same scoring pass.
-        matrix_tuner: True to run the vectorised matrix tuner over a matrix built once from the
-            day rows, False to run the row-based tuner on the day rows directly. Both choose from
-            the same grid with select_rules_grid_point and return the same result.
 
     Returns:
         (tuned thresholds, validation scored days with detector scores, the account-day rows
@@ -387,38 +421,73 @@ def _tune_day_rows(
     Raises:
         ValueError: If a tuner refuses its inputs.
     """
-    if matrix_tuner:
-        rules_result = tune_rules_matrix(
-            build_rules_day_matrix(day_rows, base_rules_config),
-            base_rules_config,
-            tuning,
-            "validation",
-            budget_pct,
-            collect_grid_points=collect_grid_points,
-        )
-    else:
-        rules_result = tune_rules(
-            day_rows,
-            base_rules_config,
-            tuning,
-            "validation",
-            budget_pct,
-            collect_grid_points=collect_grid_points,
-        )
-    tuned_config = with_thresholds(
+    rules_result = tune_rules(
+        day_rows,
         base_rules_config,
-        rules_result.thresholds,
-        "tuned on pilot validation datasets " + ", ".join(sorted(validation_names)),
+        tuning,
+        "validation",
+        budget_pct,
+        collect_grid_points=collect_grid_points,
     )
     scored = score_account_days(day_rows, base_rules_config, detector)
-    anomaly_result = tune_anomaly_threshold(scored, tuning, "validation", budget_pct)
-
-    tuned = TunedThresholds(
-        rules_config=tuned_config,
-        rules_result=rules_result,
-        anomaly_result=anomaly_result,
+    tuned = _tuned_thresholds_from_rules_result(
+        rules_result,
+        scored,
+        validation_names,
+        base_rules_config,
+        tuning,
+        budget_pct,
     )
     return tuned, scored, day_rows
+
+
+def _tune_compact_days(
+    days: CompactDayRows,
+    validation_names: Sequence[str],
+    base_rules_config: RulesConfig,
+    tuning: TuningConfig,
+    budget_pct: float,
+) -> tuple[TunedThresholds, list[ScoredDay]]:
+    """
+    WHAT: Tunes the rules thresholds and the anomaly cut on the compact path's precomputed
+    validation arrays.
+
+    WHY: The compact loader already scored every account-day and built the flat rules matrix, so
+    tuning must read those results instead of rebuilding dictionaries; the grid, the budget rule
+    and the assembly are the ones the rows path uses.
+
+    Args:
+        days: Compact validation account-day arrays, ScoredDays and rules matrix.
+        validation_names: Validation dataset folder names, recorded in the tuned thresholds' reason.
+        base_rules_config: Shipped rules table supplying the untrained thresholds.
+        tuning: Candidate grid and allowed tuning splits.
+        budget_pct: Maximum share of genuine account-days either system may restrict.
+
+    Returns:
+        (tuned thresholds, validation scored days with detector scores, in score order).
+
+    Raises:
+        ValueError: If the split is not allowed, the budget is invalid, or the matrix has no
+            genuinely active account.
+    """
+    rules_result = tune_rules_matrix(
+        days.rules_matrix,
+        base_rules_config,
+        tuning,
+        "validation",
+        budget_pct,
+        collect_grid_points=True,
+    )
+    scored = list(days.scored)
+    tuned = _tuned_thresholds_from_rules_result(
+        rules_result,
+        scored,
+        validation_names,
+        base_rules_config,
+        tuning,
+        budget_pct,
+    )
+    return tuned, scored
 
 
 def _tune_on_validation(
@@ -466,7 +535,6 @@ def _tune_on_validation(
         detector,
         budget_pct,
         collect_grid_points=collect_grid_points,
-        matrix_tuner=False,
     )
 
 
@@ -948,9 +1016,11 @@ def run_pilot(
         true loads rules 1 to 6 and the merged tuning grid, false keeps rules 1 to 5 exactly as
         before. The manifest records which variant ran and the sha256 of each rules config file.
         The data_path switch decides how the model rows are loaded: "rows" keeps the dictionary
-        path unchanged, while "compact" loads one world at a time into float32 arrays, loads the
-        validation split once for every later step and tunes the rules on a matrix built from that
-        one load. The test split is evaluated per world in both cases.
+        path unchanged, while "compact" loads one world at a time into float32 arrays, computes the
+        validation account-day results once while that split is read and keeps only arrays and
+        ScoredDay records. The detector is trained from training rows before validation is loaded,
+        in both paths, because the compact validation load scores its account-days with it. The
+        test split is evaluated per world in both cases.
 
     Raises:
         ValueError: If a split is mismatched, a split leaks, a world card or truth manifest is
@@ -1027,21 +1097,34 @@ def run_pilot(
     _record_stage("load_training", stage_started, stage_seconds, peak_rss_mb)
 
     seed = anomaly_config.random_state
+    detector_started = time.perf_counter()
+    world_starts = world_start_by_world(training_snapshot_rows)
+    detector = train_anomaly_detector(training_snapshot_rows, "training", world_starts, anomaly_config)
+    _record_stage("detector", detector_started, stage_seconds, peak_rss_mb)
+
     validation_snapshot_rows: list[dict[str, Any]] = []
     validation_label_rows: list[dict[str, Any]] = []
     validation_matrix: FeatureRows
     validation_targets: list[int]
     validation_keys: list[tuple[str, str, str, date]]
-    validation_day_rows: list[dict[str, Any]]
+    validation_rows_for_keys: list[dict[str, Any]] | numpy.ndarray
+    validation_days: CompactDayRows | None = None
     stage_started = time.perf_counter()
     if data_path == "compact":
-        validation_split = load_compact_split(validation_dirs, truth_root, include_days=True)
-        if validation_split.day_rows is None:
-            raise ValueError("compact validation load did not return account-day rows")
+        validation_split = load_compact_split(
+            validation_dirs,
+            truth_root,
+            include_days=True,
+            rules_config=base_rules_config,
+            detector=detector,
+        )
+        if validation_split.days is None:
+            raise ValueError("compact validation load did not return account-day arrays")
+        validation_days = validation_split.days
         validation_matrix = validation_split.rows.matrix
         validation_targets = [int(target) for target in validation_split.rows.targets]
         validation_keys = _compact_row_keys(validation_split.rows)
-        validation_day_rows = validation_split.day_rows
+        validation_rows_for_keys = validation_days.aligned_features
     else:
         for validation_dir, dataset in zip(validation_dirs, validation_datasets, strict=True):
             _, snapshots = join_truth(validation_dir, truth_root)
@@ -1051,7 +1134,7 @@ def run_pilot(
             validation_snapshot_rows, validation_label_rows
         )
         validation_day_rows = _day_rows_by_world(validation_snapshot_rows)
-    validation_rows_for_keys = _align_rows(validation_day_rows, validation_keys)
+        validation_rows_for_keys = _align_rows(validation_day_rows, validation_keys)
     _record_stage("load_validation", stage_started, stage_seconds, peak_rss_mb)
     stage_started = time.perf_counter()
 
@@ -1150,21 +1233,19 @@ def run_pilot(
     _record_stage("train", stage_started, stage_seconds, peak_rss_mb)
     stage_started = time.perf_counter()
 
-    world_starts = world_start_by_world(training_snapshot_rows)
-    detector = train_anomaly_detector(
-        training_snapshot_rows, "training", world_starts, anomaly_config
-    )
+    validation_names = [directory.name for directory in validation_dirs]
+    validation_probabilities: list[float]
     if data_path == "compact":
-        tuned, validation_scored, validation_scored_rows = _tune_day_rows(
-            validation_day_rows,
-            [directory.name for directory in validation_dirs],
+        if validation_days is None:
+            raise ValueError("compact validation load did not return account-day arrays")
+        tuned, validation_scored = _tune_compact_days(
+            validation_days,
+            validation_names,
             base_rules_config,
             tuning,
-            detector,
             settings.genuine_restriction_budget_pct,
-            collect_grid_points=True,
-            matrix_tuner=True,
         )
+        validation_probabilities = predict_account_days(best_model, validation_days.features)
     else:
         tuned, validation_scored, validation_scored_rows = _tune_on_validation(
             validation_dirs,
@@ -1175,7 +1256,7 @@ def run_pilot(
             settings.genuine_restriction_budget_pct,
             collect_grid_points=True,
         )
-    validation_probabilities = predict_account_days(best_model, validation_scored_rows)
+        validation_probabilities = predict_account_days(best_model, validation_scored_rows)
     validation_xgboost_scored = [
         replace(scored_day, anomaly_score=probability)
         for scored_day, probability in zip(validation_scored, validation_probabilities, strict=True)

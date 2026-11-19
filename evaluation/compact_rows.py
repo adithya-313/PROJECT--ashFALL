@@ -5,8 +5,9 @@
 WHAT:
     Loads dataset folders one world at a time, reuses the existing training-row builder and the
     existing one-row-per-account-day selector, and returns numpy arrays: a float32 feature matrix
-    with integer targets and key arrays for the model, and optionally per-account-day feature,
-    role and key arrays for validation scoring and tuning.
+    with integer targets and key arrays for the model, and optionally every account-day as flat
+    arrays, precomputed ScoredDay records, a rules-tuning matrix and the feature matrix the model
+    scores at the training-row keys.
 
 WHY:
     Materialising every snapshot as a Python dictionary costs about 3,000 bytes per row, so the
@@ -34,9 +35,12 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from core.event_clock import IST
+from decisions.anomaly_detector import TrainedAnomalyDetector
 from decisions.mule_account_model import account_model_feature_names, build_training_rows
+from decisions.rules_config import RulesConfig
 from evaluation.dataset_truth_join import _join_table, _world_entries
-from evaluation.level17_scoring import one_row_per_account_day
+from evaluation.level17_scoring import ScoredDay, one_row_per_account_day, score_account_days
+from evaluation.rules_tuning import RulesDayMatrix, build_rules_day_matrix
 from evaluation.truth import TruthStore, load_truth
 
 __all__ = [
@@ -74,12 +78,14 @@ class CompactRows:
 @dataclass(frozen=True)
 class CompactDayRows:
     """
-    WHAT: Every account-day of a split (not cut at the first label), with truth role and depth.
+    WHAT: Every account-day of a split (not cut at the first label), with truth role and depth,
+    plus the results later steps need from those rows.
 
     Why separate from CompactRows:
         Validation scoring and tuning need every account-day with its hidden role, while the model
         training matrix keeps only the days a bank could see. Both are derived from the same
-        per-world snapshot load, so a caller asks for both in one pass.
+        per-world snapshot load, so a caller asks for both in one pass, and the day dictionaries
+        themselves are released as soon as these arrays exist.
 
     Attributes:
         feature_names: Model feature order, exactly account_model_feature_names().
@@ -90,6 +96,11 @@ class CompactDayRows:
         day_ordinals: (row_count,) int64 date.toordinal() of each row's IST day.
         roles: (row_count,) object array of truth_role strings.
         depths: (row_count,) object array of truth_depth integers or None.
+        scored: One ScoredDay per account-day, in row order, built by score_account_days with the
+            supplied rules config and detector.
+        rules_matrix: The same account-days as the flat arrays the vectorised rules tuner reads.
+        aligned_features: (model_row_count, feature_count) float32 feature values for the model
+            training-row keys, in build_training_rows key order.
     """
 
     feature_names: tuple[str, ...]
@@ -100,6 +111,9 @@ class CompactDayRows:
     day_ordinals: numpy.ndarray
     roles: numpy.ndarray
     depths: numpy.ndarray
+    scored: tuple[ScoredDay, ...]
+    rules_matrix: RulesDayMatrix
+    aligned_features: numpy.ndarray
 
 
 @dataclass(frozen=True)
@@ -109,16 +123,12 @@ class CompactSplit:
 
     Attributes:
         rows: Training matrix, targets and key arrays, concatenated in sorted world order.
-        days: Per-account-day arrays with truth columns, or None when the caller did not ask.
-        day_rows: The account-day dictionaries the arrays were built from, concatenated in
-            sorted world order, or None when the caller did not ask. Scoring, alignment and the
-            anomaly cut still need dictionaries, so retaining these once keeps the caller from
-            re-reading and re-joining the split's snapshots.
+        days: Per-account-day arrays and their precomputed results, or None when the caller did
+            not ask. No day dictionaries are retained, so memory follows the arrays, not the rows.
     """
 
     rows: CompactRows
     days: CompactDayRows | None
-    day_rows: list[dict[str, Any]] | None = None
 
 
 def _world_sources(dataset_dirs: Sequence[Path]) -> list[tuple[str, Path]]:
@@ -282,12 +292,106 @@ def _day_ordinals(rows: Sequence[dict[str, Any]], caller: str) -> numpy.ndarray:
     return numpy.asarray(ordinals, dtype=numpy.int64)
 
 
+def _day_key(row: dict[str, Any]) -> tuple[str, str, str, date]:
+    """
+    WHAT: Returns the (world, bank, account, IST day) key of one account-day row.
+
+    WHY: build_training_rows reports its rows as key tuples only, so matching them back to the
+    deduplicated account-day arrays needs the same tuple shape.
+
+    Raises:
+        ValueError: If a required identifier or snapshot time is missing or malformed.
+    """
+    world_id = row.get("world_id")
+    bank_id = row.get("bank_id")
+    account_id = row.get("account_id")
+    moment = row.get("snapshot_time")
+    if not isinstance(world_id, str) or not world_id:
+        raise ValueError("load_compact_split requires a non-empty string 'world_id' on every row")
+    if not isinstance(bank_id, str) or not bank_id:
+        raise ValueError("load_compact_split requires a non-empty string 'bank_id' on every row")
+    if not isinstance(account_id, str) or not account_id:
+        raise ValueError("load_compact_split requires a non-empty string 'account_id' on every row")
+    if not isinstance(moment, datetime) or moment.tzinfo is None:
+        raise ValueError("load_compact_split requires a timezone-aware 'snapshot_time' on every row")
+    return (world_id, bank_id, account_id, moment.astimezone(IST).date())
+
+
+def _aligned_day_features(
+    world_features: numpy.ndarray,
+    world_days: Sequence[dict[str, Any]],
+    world_keys: Sequence[tuple[str, str, str, date]],
+) -> numpy.ndarray:
+    """
+    WHAT: Returns one world's account-day features in the order of that world's training-row keys.
+
+    WHY: The pilot scores the model on the account-day rows behind each training-row key, in key
+    order. Those rows are the same deduplicated rows one_row_per_account_day produced, so their
+    feature columns can be selected instead of rebuilding dictionaries.
+
+    Args:
+        world_features: (day_count, feature_count) float64 features of one world's account-days.
+        world_days: The same world's account-day rows, in array order, used for their keys.
+        world_keys: build_training_rows keys of that world, in key order.
+
+    Returns:
+        (len(world_keys), feature_count) float32 features in key order; the model consumes float32
+        anyway, so storing the converted values changes no prediction.
+
+    Raises:
+        ValueError: If a key has no matching account-day row.
+    """
+    if not world_keys:
+        return numpy.empty((0, world_features.shape[1]), dtype=numpy.float32)
+    index_by_key = {_day_key(row): index for index, row in enumerate(world_days)}
+    indices: list[int] = []
+    for key in world_keys:
+        index = index_by_key.get(key)
+        if index is None:
+            raise ValueError(f"Training row key {key!r} has no matching account-day snapshot")
+        indices.append(index)
+    return numpy.asarray(world_features[indices], dtype=numpy.float32)
+
+
+def _concat_rule_matrices(pieces: Sequence[RulesDayMatrix]) -> RulesDayMatrix:
+    """
+    WHAT: Concatenates per-world rules-tuning matrices into one matrix, world by world.
+
+    WHY: tune_rules_matrix needs one split-wide matrix, while the loader only ever holds a single
+    world's rows. Concatenating the per-world arrays in sorted world order reproduces the matrix a
+    single build_rules_day_matrix call over the whole split would build.
+
+    Args:
+        pieces: Non-empty per-world rules matrices, in sorted world order.
+
+    Returns:
+        One RulesDayMatrix whose rows follow the concatenation order.
+
+    Raises:
+        ValueError: If no piece was supplied.
+    """
+    if not pieces:
+        raise ValueError("_concat_rule_matrices requires at least one per-world matrix")
+    feature_names = tuple(pieces[0].features)
+    features: dict[str, numpy.ndarray] = {}
+    for name in feature_names:
+        features[name] = numpy.concatenate([piece.features[name] for piece in pieces])
+    return RulesDayMatrix(
+        features=features,
+        account_ids=numpy.concatenate([piece.account_ids for piece in pieces]),
+        day_ordinals=numpy.concatenate([piece.day_ordinals for piece in pieces]),
+        roles=numpy.concatenate([piece.roles for piece in pieces]),
+    )
+
+
 def load_compact_split(
     dataset_dirs: Sequence[Path],
     truth_root: Path | None = None,
     *,
     include_days: bool = False,
     world_ids: Sequence[str] | None = None,
+    rules_config: RulesConfig | None = None,
+    detector: TrainedAnomalyDetector | None = None,
 ) -> CompactSplit:
     """
     WHAT: Builds one split's compact arrays by loading and releasing one world at a time.
@@ -300,24 +404,32 @@ def load_compact_split(
         dataset_dirs: Dataset folders of one split, in any order.
         truth_root: Root folder holding one truth folder per run_id; required when include_days
             is true, because validation metrics need truth_role and truth_depth.
-        include_days: When true, also return every account-day with its truth role and depth, both
-            as arrays and as the day-row dictionaries those arrays were built from.
+        include_days: When true, also return every account-day as arrays, its ScoredDay records,
+            the rules-tuning matrix and the aligned model feature matrix. The day dictionaries are
+            released world by world and are never part of the result.
         world_ids: Optional subset of world ids to load, for a bounded probe; None loads every
             world in the folders.
+        rules_config: Rules table scored into the ScoredDay records and the rules matrix; required
+            when include_days is true.
+        detector: Trained anomaly detector scored into every ScoredDay. When None the anomaly
+            score is None, exactly as score_account_days defines it; the probe uses that form
+            because it measures memory and never scores.
 
     Returns:
         A CompactSplit whose rows equal build_training_rows over the whole split, first row first.
 
     Raises:
-        ValueError: If a folder or manifest is missing, a world repeats, the truth root is absent
-            when day rows are requested, or a row lacks a required field.
+        ValueError: If a folder or manifest is missing, a world repeats, the truth root or rules
+            config is absent when account-days are requested, or a row lacks a required field.
 
     Complexity:
         Time O(rows * feature_count) plus one parquet read per world. Without include_days, peak
         memory is O(largest world), because each world's dictionaries are released before the next
         world is read; the returned arrays hold O(rows * feature_count) float32 and O(rows) keys.
-        With include_days, the split's account-day dictionaries are retained as well, one per
-        account-day rather than one per snapshot.
+        With include_days, the result additionally holds O(account_days) float64 feature values,
+        one ScoredDay per account-day, O(account_days * rule features) tuning arrays and
+        O(model_rows * feature_count) float32 aligned features; the snapshot dictionaries are
+        released after each world.
     """
     pairs = _world_sources(dataset_dirs)
     if world_ids is not None:
@@ -329,6 +441,8 @@ def load_compact_split(
         pairs = [pair for pair in pairs if pair[0] in wanted]
     if include_days and truth_root is None:
         raise ValueError("include_days requires truth_root so account-days carry truth_role")
+    if include_days and rules_config is None:
+        raise ValueError("include_days requires rules_config so account-days carry rules scores")
 
     feature_names = account_model_feature_names()
     stores: dict[str, TruthStore] = {}
@@ -342,7 +456,9 @@ def load_compact_split(
     day_ordinals: list[numpy.ndarray] = []
     day_roles: list[numpy.ndarray] = []
     day_depths: list[numpy.ndarray] = []
-    day_rows: list[dict[str, Any]] = []
+    scored_days: list[ScoredDay] = []
+    rule_matrices: list[RulesDayMatrix] = []
+    aligned_features: list[numpy.ndarray] = []
 
     for world_id, dataset_dir in pairs:
         snapshots = _read_world_table(dataset_dir, "snapshots", world_id)
@@ -363,14 +479,17 @@ def load_compact_split(
 
         if include_days:
             world_days = one_row_per_account_day(snapshot_rows)
-            day_rows.extend(world_days)
-            day_features.append(_float_feature_columns(world_days, feature_names))
+            world_features = _float_feature_columns(world_days, feature_names)
+            day_features.append(world_features)
             day_worlds.append(_string_column(world_days, "world_id", "load_compact_split"))
             day_banks.append(_string_column(world_days, "bank_id", "load_compact_split"))
             day_accounts.append(_string_column(world_days, "account_id", "load_compact_split"))
             day_ordinals.append(_day_ordinals(world_days, "load_compact_split"))
             day_roles.append(_string_column(world_days, "truth_role", "load_compact_split"))
             day_depths.append(numpy.asarray([row.get("truth_depth") for row in world_days], dtype=object))
+            scored_days.extend(score_account_days(world_days, rules_config, detector))
+            rule_matrices.append(build_rules_day_matrix(world_days, rules_config))
+            aligned_features.append(_aligned_day_features(world_features, world_days, world_keys))
 
         del snapshot_rows, label_rows, snapshots, labels
 
@@ -391,7 +510,7 @@ def load_compact_split(
     )
 
     if not include_days:
-        return CompactSplit(rows=rows, days=None, day_rows=None)
+        return CompactSplit(rows=rows, days=None)
     days = CompactDayRows(
         feature_names=tuple(feature_names),
         features=numpy.concatenate(day_features, axis=0),
@@ -401,5 +520,8 @@ def load_compact_split(
         day_ordinals=numpy.concatenate(day_ordinals, axis=0),
         roles=numpy.concatenate(day_roles, axis=0),
         depths=numpy.concatenate(day_depths, axis=0),
+        scored=tuple(scored_days),
+        rules_matrix=_concat_rule_matrices(rule_matrices),
+        aligned_features=numpy.concatenate(aligned_features, axis=0),
     )
-    return CompactSplit(rows=rows, days=days, day_rows=day_rows)
+    return CompactSplit(rows=rows, days=days)
