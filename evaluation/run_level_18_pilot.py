@@ -17,13 +17,15 @@ plain ValueError naming the offending path.
 import argparse
 import time
 from dataclasses import replace
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
 import numpy
 import orjson
 import psutil
+import pyarrow
+import pyarrow.compute as pyarrow_compute
 import shap
 import xgboost
 
@@ -284,35 +286,112 @@ def _row_key(row: dict[str, Any]) -> tuple[str, str, str, object]:
     return (world_id, bank_id, account_id, moment.astimezone(IST).date())
 
 
-def _detector_snapshot_rows(
-    datasets: Sequence[Dataset], anomaly_config: AnomalyDetectorConfig
-) -> list[dict[str, Any]]:
-    """
-    WHAT: Returns every training snapshot row, in dataset order then row order, holding only the
-    columns the anomaly detector and the world-start lookup read.
+MICROSECONDS_PER_DAY = 24 * 60 * 60 * 1_000_000
+UNIX_EPOCH_UTC = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
-    WHY: Converting all snapshot columns to Python dicts held many gigabytes at full scale and
-    crashed stage 5; the detector needs only world_id, snapshot_time and its input features.
+
+def _utc_microsecond_snapshot_table(snapshots: pyarrow.Table, needed_columns: list[str]) -> pyarrow.Table:
+    """
+    WHAT: Selects the needed columns and checks them, returning a table whose snapshot_time is a
+    UTC microsecond timestamp.
+
+    WHY: The detector compares instants, so every dataset's times are put on one unit and zone
+    before any comparison, and bad input fails here with a plain message, not as a wrong filter.
+
+    Raises:
+        ValueError: If a needed column is missing, world_id is not a string column or has a null or
+            empty value, or snapshot_time is not a timezone-aware timestamp column or has a null.
+    """
+    missing_columns = [name for name in needed_columns if name not in snapshots.column_names]
+    if missing_columns:
+        raise ValueError(f"snapshots table is missing required columns: {missing_columns}")
+    narrow = snapshots.select(needed_columns)
+
+    world_ids = narrow.column("world_id")
+    if not (pyarrow.types.is_string(world_ids.type) or pyarrow.types.is_large_string(world_ids.type)):
+        raise ValueError(f"world_id must be a string column; got {world_ids.type}")
+    if world_ids.null_count > 0:
+        raise ValueError("Snapshot rows require a non-empty string 'world_id'; found null values")
+    if pyarrow_compute.any(pyarrow_compute.equal(world_ids, "")).as_py() is True:
+        raise ValueError("Snapshot rows require a non-empty string 'world_id'; found empty values")
+
+    times = narrow.column("snapshot_time")
+    if not pyarrow.types.is_timestamp(times.type):
+        raise ValueError(f"snapshot_time must be a timestamp column; got {times.type}")
+    if times.type.tz is None:
+        raise ValueError("snapshot_time must be timezone-aware")
+    if times.null_count > 0:
+        raise ValueError("Snapshot rows require a datetime 'snapshot_time'; found null values")
+    utc_times = times.cast(pyarrow.timestamp("us", tz="UTC"))
+    time_index = narrow.schema.get_field_index("snapshot_time")
+    return narrow.set_column(time_index, "snapshot_time", utc_times)
+
+
+def _earliest_time_by_world(table: pyarrow.Table) -> tuple[list[str], numpy.ndarray]:
+    """
+    WHAT: Returns each world's earliest snapshot_time as UTC epoch microseconds.
+
+    WHY: world_start_by_world does the same one row at a time in Python; the Arrow group-by does it
+    without building a dict per row.
+
+    Returns:
+        The world ids and, in the same order, their earliest times.
+    """
+    grouped = table.select(["world_id", "snapshot_time"]).group_by("world_id").aggregate(
+        [("snapshot_time", "min")]
+    )
+    world_ids = grouped.column("world_id").to_pylist()
+    earliest = grouped.column("snapshot_time_min").cast(pyarrow.int64()).to_numpy()
+    return world_ids, earliest
+
+
+def _early_window_detector_rows(
+    datasets: Sequence[Dataset], anomaly_config: AnomalyDetectorConfig
+) -> tuple[list[dict[str, Any]], dict[str, datetime]]:
+    """
+    WHAT: Returns the training snapshot rows the anomaly detector will keep, as dicts holding only the
+    columns it reads, together with each world's start time.
+
+    WHY: The detector throws away every row at or after its world's start plus early_window_days, so
+    converting all rows to dicts only to discard most of them held many gigabytes at 320 worlds and
+    crashed stage 5. The same cut is made here on Arrow columns, one dataset at a time, and only the
+    kept rows become dicts. The cut matches train_anomaly_detector exactly: a strict "<" on UTC instants
+    against the world's earliest snapshot_time plus early_window_days.
 
     Args:
         datasets: Training datasets whose snapshots table is read.
-        anomaly_config: The same config later passed to train_anomaly_detector, so the columns kept
-            always match the features the detector reads.
+        anomaly_config: The same config later passed to train_anomaly_detector, so the columns kept and
+            the window length always match what the detector reads.
 
     Returns:
-        One dict per snapshot row with exactly the needed columns.
+        (kept_rows, world_starts): kept rows in dataset order then row order, and world_id -> earliest
+        snapshot_time as a timezone-aware UTC datetime.
 
     Raises:
-        ValueError: If a dataset's snapshots table lacks a needed column.
+        ValueError: If a column is missing or invalid (see _utc_microsecond_snapshot_table), or a world_id
+            appears in more than one dataset.
     """
     needed_columns = ["world_id", "snapshot_time", *input_feature_names(anomaly_config)]
-    rows: list[dict[str, Any]] = []
+    window_microseconds = anomaly_config.early_window_days * MICROSECONDS_PER_DAY
+    kept_rows: list[dict[str, Any]] = []
+    world_starts: dict[str, datetime] = {}
     for dataset in datasets:
-        missing_columns = [name for name in needed_columns if name not in dataset.snapshots.column_names]
-        if missing_columns:
-            raise ValueError(f"snapshots table is missing required columns: {missing_columns}")
-        rows.extend(dataset.snapshots.select(needed_columns).to_pylist())
-    return rows
+        table = _utc_microsecond_snapshot_table(dataset.snapshots, needed_columns)
+        world_ids, earliest = _earliest_time_by_world(table)
+        for world_id in world_ids:
+            if world_id in world_starts:
+                raise ValueError(f"world_id {world_id!r} appears in more than one training dataset")
+
+        # Map every row to its world's earliest time, then keep rows strictly inside the window.
+        row_world_positions = pyarrow_compute.index_in(table.column("world_id"), value_set=pyarrow.array(world_ids))
+        row_world_start = earliest[row_world_positions.to_numpy()]
+        row_time = table.column("snapshot_time").cast(pyarrow.int64()).to_numpy()
+        keep_mask = row_time < row_world_start + window_microseconds
+        kept_rows.extend(table.filter(pyarrow.array(keep_mask)).to_pylist())
+
+        for world_id, start_microseconds in zip(world_ids, earliest, strict=True):
+            world_starts[world_id] = UNIX_EPOCH_UTC + timedelta(microseconds=int(start_microseconds))
+    return kept_rows, world_starts
 
 
 def _record_stage(
@@ -1341,12 +1420,13 @@ def run_pilot(
 
     seed = anomaly_config.random_state
     detector_started = time.perf_counter()
-    # Only the compact path (built for memory) uses the narrow rows; the rows path reuses its full rows.
+    # Only the compact path (built for memory) cuts to the early window before making dicts; the rows
+    # path reuses its full rows exactly as before.
     if data_path == "compact":
-        detector_rows = _detector_snapshot_rows(training_datasets, anomaly_config)
+        detector_rows, world_starts = _early_window_detector_rows(training_datasets, anomaly_config)
     else:
         detector_rows = full_snapshot_rows
-    world_starts = world_start_by_world(detector_rows)
+        world_starts = world_start_by_world(detector_rows)
     detector = train_anomaly_detector(detector_rows, "training", world_starts, anomaly_config)
     del detector_rows
     _record_stage("detector", detector_started, stage_seconds, peak_rss_mb)
