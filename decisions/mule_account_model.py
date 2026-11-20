@@ -16,6 +16,7 @@ there is no silent fallback.
 
 import json
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -931,7 +932,7 @@ def train_account_model(
     seed: int,
     n_estimators: int = 100,
     *,
-    sample_weight: list[float] | None = None,
+    sample_weight: Sequence[float] | numpy.ndarray | None = None,
     scale_pos_weight_override: float | None = None,
     max_depth: int = 6,
     learning_rate: float = 0.3,
@@ -956,10 +957,11 @@ def train_account_model(
         targets: Binary labels aligned with rows.
         seed: Random seed recorded in the model sidecar.
         n_estimators: Number of boosting rounds; chosen on validation, never on test.
-        sample_weight: Optional non-negative weight per row; None fits without weights exactly as
-            before.
-        scale_pos_weight_override: Optional positive class weight replacing negatives / positives;
-            None keeps negatives / positives.
+        sample_weight: Optional non-negative weight per row, as a list or a numpy array; None fits
+            without weights exactly as before.
+        scale_pos_weight_override: Optional positive class weight replacing the default; None keeps
+            the default, which is negatives / positives by count without sample weights and the
+            summed weight of the target-0 rows over the summed weight of the target-1 rows with them.
         max_depth: Tree depth, defaulting to the XGBoost default so the old call fits the same trees.
         learning_rate: Boosting step, defaulting to the XGBoost default.
         min_child_weight: Minimum child weight, defaulting to the XGBoost default.
@@ -971,13 +973,14 @@ def train_account_model(
 
     Returns:
         (model, scale_pos_weight) where scale_pos_weight is the override when given, otherwise
-        negatives / positives.
+        negatives / positives, or the weighted ratio when sample weights are given.
 
     Raises:
         ValueError: If rows and targets differ in length, there are no positives or no negatives,
             the sample weights do not align with the rows or include a non-finite or negative
-            value, the override is not a positive finite number, or a regularisation parameter is
-            not a non-negative finite number.
+            value, the weights of one class sum to zero when the weighted ratio is needed, the
+            override is not a positive finite number, or a regularisation parameter is not a
+            non-negative finite number.
     """
     if len(rows) != len(targets):
         raise ValueError(f"rows length {len(rows)} does not match targets length {len(targets)}")
@@ -986,11 +989,18 @@ def train_account_model(
             raise ValueError(
                 f"sample_weight length {len(sample_weight)} does not match rows length {len(rows)}"
             )
-        for weight in sample_weight:
-            if not isinstance(weight, (int, float)) or isinstance(weight, bool):
-                raise ValueError(f"sample_weight values must be numbers; got {weight!r}")
-            if not math.isfinite(weight) or weight < 0.0:
-                raise ValueError(f"sample_weight values must be non-negative and finite; got {weight!r}")
+        if isinstance(sample_weight, numpy.ndarray):
+            # An array is checked in one pass so millions of weights do not become Python objects.
+            if sample_weight.dtype.kind not in "iuf":
+                raise ValueError(f"sample_weight array must be numeric; got dtype {sample_weight.dtype}")
+            if not numpy.all(numpy.isfinite(sample_weight)) or numpy.any(sample_weight < 0.0):
+                raise ValueError("sample_weight values must be non-negative and finite")
+        else:
+            for weight in sample_weight:
+                if not isinstance(weight, (int, float)) or isinstance(weight, bool):
+                    raise ValueError(f"sample_weight values must be numbers; got {weight!r}")
+                if not math.isfinite(weight) or weight < 0.0:
+                    raise ValueError(f"sample_weight values must be non-negative and finite; got {weight!r}")
     if scale_pos_weight_override is not None:
         if (
             not isinstance(scale_pos_weight_override, (int, float))
@@ -1042,11 +1052,12 @@ def train_account_model(
         raise ValueError("train_account_model requires at least one positive account-day")
     if negatives == 0:
         raise ValueError("train_account_model requires at least one negative account-day")
-    scale_pos_weight = (
-        float(scale_pos_weight_override)
-        if scale_pos_weight_override is not None
-        else negatives / positives
-    )
+    if scale_pos_weight_override is not None:
+        scale_pos_weight = float(scale_pos_weight_override)
+    elif sample_weight is None:
+        scale_pos_weight = negatives / positives
+    else:
+        scale_pos_weight = _weighted_class_ratio(targets, sample_weight)
 
     model = xgboost.XGBClassifier(
         objective="binary:logistic",
@@ -1068,6 +1079,31 @@ def train_account_model(
     else:
         model.fit(rows, targets, sample_weight=sample_weight)
     return model, scale_pos_weight
+
+
+def _weighted_class_ratio(
+    targets: list[int] | numpy.ndarray,
+    sample_weight: Sequence[float] | numpy.ndarray,
+) -> float:
+    """
+    WHAT: Returns the summed weight of the target-0 rows divided by the summed weight of the target-1 rows.
+
+    WHY: With trust weights the positives still weigh 1.0 but the negatives weigh less, so balancing
+    the classes by row count would overstate the negatives; the weighted ratio keeps the same balance
+    the weighted loss sees.
+
+    Raises:
+        ValueError: If either class has a zero total weight.
+    """
+    target_array = numpy.asarray(targets)
+    weight_array = numpy.asarray(sample_weight, dtype=numpy.float64)
+    negative_total = float(weight_array[target_array == 0].sum())
+    positive_total = float(weight_array[target_array == 1].sum())
+    if negative_total <= 0.0:
+        raise ValueError("The target-0 rows have a zero total sample weight")
+    if positive_total <= 0.0:
+        raise ValueError("The target-1 rows have a zero total sample weight")
+    return negative_total / positive_total
 
 
 def predict_account_days(

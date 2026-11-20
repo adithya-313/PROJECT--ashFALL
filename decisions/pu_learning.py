@@ -17,6 +17,7 @@ guessed and no failure is swallowed.
 """
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -233,6 +234,7 @@ def train_pu_bagged_model(
     n_bags: int,
     unlabelled_per_positive: int,
     *,
+    sample_weight: Sequence[float] | numpy.ndarray | None = None,
     max_depth: int = 6,
     learning_rate: float = 0.3,
     min_child_weight: float = 1.0,
@@ -264,6 +266,8 @@ def train_pu_bagged_model(
         n_estimators: Boosting rounds passed to every member.
         n_bags: Number of members to train.
         unlabelled_per_positive: Unlabelled rows drawn per positive row in each bag.
+        sample_weight: Optional trust weight per row aligned with matrix. Each member receives the
+            weights of exactly its own rows; sampling stays uniform. None trains as before.
         max_depth: Tree depth passed to every member; the default matches the XGBoost default.
         learning_rate: Boosting step passed to every member.
         min_child_weight: Minimum child weight passed to every member.
@@ -280,12 +284,18 @@ def train_pu_bagged_model(
         The fitted PUBaggedAccountModel.
 
     Raises:
-        ValueError: If matrix and targets differ in length, n_bags or unlabelled_per_positive is
-            not positive, there is no positive or no unlabelled row to sample from, or a model
-            hyperparameter fails the member trainer's validation.
+        ValueError: If matrix and targets differ in length, sample_weight does not align with them,
+            n_bags or unlabelled_per_positive is not positive, there is no positive or no
+            unlabelled row to sample from, or a model hyperparameter fails the member trainer's
+            validation.
     """
     if len(matrix) != len(targets):
         raise ValueError(f"matrix length {len(matrix)} does not match targets length {len(targets)}")
+    weight_array: numpy.ndarray | None = None
+    if sample_weight is not None:
+        if len(sample_weight) != len(matrix):
+            raise ValueError(f"sample_weight length {len(sample_weight)} does not match matrix length {len(matrix)}")
+        weight_array = numpy.asarray(sample_weight)
     if n_bags <= 0:
         raise ValueError(f"n_bags must be positive; got {n_bags}")
     if unlabelled_per_positive <= 0:
@@ -310,11 +320,13 @@ def train_pu_bagged_model(
         ordered_indices = positive_indices + sorted(int(index) for index in sampled)
         bag_rows = [matrix[index] for index in ordered_indices]
         bag_targets = [targets[index] for index in ordered_indices]
+        bag_weights = weight_array[ordered_indices] if weight_array is not None else None
         member, _ = train_account_model(
             bag_rows,
             bag_targets,
             member_seed,
             n_estimators,
+            sample_weight=bag_weights,
             max_depth=max_depth,
             learning_rate=learning_rate,
             min_child_weight=min_child_weight,
@@ -416,6 +428,7 @@ def train_elkan_noto_model(
     n_estimators: int,
     probability_clip: float,
     *,
+    sample_weight: Sequence[float] | numpy.ndarray | None = None,
     max_depth: int = 6,
     learning_rate: float = 0.3,
     min_child_weight: float = 1.0,
@@ -450,6 +463,10 @@ def train_elkan_noto_model(
         seed: Random seed for g and the final model.
         n_estimators: Boosting rounds for g and the final model.
         probability_clip: Cap on g(x) so p / (1 - p) stays finite.
+        sample_weight: Optional trust weight per training row aligned with train_matrix. g trains
+            with them, and both copies of every unlabelled row in the final model are multiplied by
+            that row's trust. Positives stay 1.0 and validation is never weighted. None trains as
+            before.
         max_depth: Tree depth for g and the final model, defaulting to the XGBoost default.
         learning_rate: Boosting step for g and the final model, defaulting to the XGBoost default.
         min_child_weight: Minimum child weight for g and the final model, defaulting to the
@@ -467,8 +484,9 @@ def train_elkan_noto_model(
         count) where clip_count is the number of weights the upper clip reduced.
 
     Raises:
-        ValueError: If a matrix and its targets differ in length, there is no positive validation
-            row, g gives c zero, the weight totals would make the class weight invalid,
+        ValueError: If a matrix and its targets differ in length, sample_weight does not align with
+            train_matrix, there is no positive validation row, g gives c zero, the weight totals would
+            make the class weight invalid,
             probability_clip is outside (0, 1), or a model hyperparameter fails the trainer's
             validation.
     """
@@ -478,6 +496,10 @@ def train_elkan_noto_model(
         raise ValueError(
             f"validation_matrix length {len(validation_matrix)} does not match targets length {len(validation_targets)}"
         )
+    if sample_weight is not None and len(sample_weight) != len(train_matrix):
+        raise ValueError(
+            f"sample_weight length {len(sample_weight)} does not match train_matrix length {len(train_matrix)}"
+        )
     if not 0.0 < probability_clip < 1.0:
         raise ValueError(f"probability_clip must be in (0.0, 1.0); got {probability_clip}")
 
@@ -486,6 +508,7 @@ def train_elkan_noto_model(
         train_targets,
         seed,
         n_estimators,
+        sample_weight=sample_weight,
         scale_pos_weight_override=1.0,
         max_depth=max_depth,
         learning_rate=learning_rate,
@@ -506,17 +529,23 @@ def train_elkan_noto_model(
         probability for probability, target in zip(g_train, train_targets, strict=True) if target == 0
     ]
     unlabelled_weights, clip_count = _elkan_noto_weights(unlabelled_probabilities, c, probability_clip)
+    if sample_weight is None:
+        unlabelled_trust = [1.0] * len(unlabelled_rows)
+    else:
+        unlabelled_trust = [
+            float(trust) for trust, target in zip(sample_weight, train_targets, strict=True) if target == 0
+        ]
 
     expanded_rows = list(positive_rows)
     expanded_targets = [1] * len(positive_rows)
     sample_weights = [1.0] * len(positive_rows)
-    for row, weight in zip(unlabelled_rows, unlabelled_weights, strict=True):
+    for row, weight, trust in zip(unlabelled_rows, unlabelled_weights, unlabelled_trust, strict=True):
         expanded_rows.append(row)
         expanded_targets.append(1)
-        sample_weights.append(weight)
+        sample_weights.append(weight * trust)
         expanded_rows.append(row)
         expanded_targets.append(0)
-        sample_weights.append(1.0 - weight)
+        sample_weights.append((1.0 - weight) * trust)
 
     positive_weight_total = sum(
         weight for weight, target in zip(sample_weights, expanded_targets, strict=True) if target == 1

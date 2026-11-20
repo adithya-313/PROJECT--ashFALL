@@ -466,7 +466,9 @@ def _maturity_check(
         finally:
             set_mule_model_config_path(previous_config)
         targets = [int(target) for target in training.rows.targets]
-        model, _ = train_account_model(training.rows.matrix, targets, seed, LEARNING_CURVE_N_ESTIMATORS)
+        model, _ = train_account_model(
+            training.rows.matrix, targets, seed, LEARNING_CURVE_N_ESTIMATORS, sample_weight=training.rows.sample_weights
+        )
         probabilities = predict_account_days(model, validation.days.aligned_features)
         average_precision_truth = validation_truth_average_precision(probabilities, truth_scored)
         variants.append(
@@ -594,7 +596,9 @@ def _learning_curve(
         training = load_compact_split(training_dirs, world_ids=training_world_ids[:count])
         matrix = training.rows.matrix
         targets = [int(target) for target in training.rows.targets]
-        model, _ = train_account_model(matrix, targets, seed, LEARNING_CURVE_N_ESTIMATORS)
+        model, _ = train_account_model(
+            matrix, targets, seed, LEARNING_CURVE_N_ESTIMATORS, sample_weight=training.rows.sample_weights
+        )
         probabilities = predict_account_days(model, validation.days.aligned_features)
         average_precision_truth = validation_truth_average_precision(probabilities, truth_scored)
         points.append(
@@ -619,6 +623,7 @@ def _select_by_label_average_precision(
     method: str,
     training_matrix: numpy.ndarray,
     training_targets: list[int],
+    training_weights: numpy.ndarray | None,
     validation_matrix: numpy.ndarray,
     validation_targets: list[int],
     validation_rows_for_keys: numpy.ndarray,
@@ -635,6 +640,7 @@ def _select_by_label_average_precision(
         method: One of PU_METHODS.
         training_matrix: Training feature rows.
         training_targets: Binary training labels.
+        training_weights: Label trust weight per training row, or None for unweighted training.
         validation_matrix: Validation feature rows, needed by Elkan-Noto to estimate c.
         validation_targets: Binary validation labels.
         validation_rows_for_keys: Validation rows or matrix the model predicts on.
@@ -654,7 +660,13 @@ def _select_by_label_average_precision(
     model: xgboost.XGBClassifier | PUBaggedAccountModel
     if method == "none":
         for n_estimators in N_ESTIMATOR_CANDIDATES:
-            model, _ = train_account_model(training_matrix, training_targets, seed, n_estimators=n_estimators)
+            model, _ = train_account_model(
+                training_matrix,
+                training_targets,
+                seed,
+                n_estimators=n_estimators,
+                sample_weight=training_weights,
+            )
             score = average_precision(predict_account_days(model, validation_rows_for_keys), validation_targets)
             if score > best_ap:
                 best_ap = score
@@ -676,6 +688,7 @@ def _select_by_label_average_precision(
                     n_estimators,
                     n_bags,
                     unlabelled_per_positive,
+                    sample_weight=training_weights,
                 )
                 score = average_precision(predict_account_days(model, validation_rows_for_keys), validation_targets)
                 if score > best_ap:
@@ -698,6 +711,7 @@ def _select_by_label_average_precision(
                 seed,
                 n_estimators,
                 probability_clip,
+                sample_weight=training_weights,
             )
             score = average_precision(predict_account_days(model, validation_rows_for_keys), validation_targets)
             if score > best_ap:
@@ -715,6 +729,7 @@ def _train_pu_method(
     method: str,
     training_matrix: numpy.ndarray,
     training_targets: list[int],
+    training_weights: numpy.ndarray | None,
     validation_rows: CompactRows,
     validation_days: CompactDayRows,
     truth_scored: Sequence[ScoredDay],
@@ -739,6 +754,7 @@ def _train_pu_method(
         method: One of PU_METHODS.
         training_matrix: Training feature rows of the chosen world count.
         training_targets: Binary training labels.
+        training_weights: Label trust weight per training row, or None for unweighted training.
         validation_rows: Compact model rows carrying the bank-visible validation labels.
         validation_days: Compact account-day arrays aligned with the model rows.
         truth_scored: Validation account-days in model-row order, carrying the hidden truth roles.
@@ -762,6 +778,7 @@ def _train_pu_method(
             method,
             training_matrix,
             training_targets,
+            training_weights,
             validation_matrix,
             validation_targets,
             rows_for_keys,
@@ -785,6 +802,7 @@ def _train_pu_method(
                 training_targets,
                 seed,
                 int(params["n_estimators"]),
+                sample_weight=training_weights,
                 **_xgb_hyperparameters(params),
             )
             return predict_account_days(model, rows_for_keys)
@@ -809,6 +827,7 @@ def _train_pu_method(
                 int(params["n_estimators"]),
                 n_bags,
                 int(params["unlabelled_per_positive"]),
+                sample_weight=training_weights,
                 **_xgb_hyperparameters(params),
             )
             return predict_account_days(model, rows_for_keys)
@@ -830,6 +849,7 @@ def _train_pu_method(
                 seed,
                 int(params["n_estimators"]),
                 probability_clip,
+                sample_weight=training_weights,
                 **_xgb_hyperparameters(params),
             )
             return predict_account_days(model, rows_for_keys)
@@ -856,6 +876,7 @@ def _train_pu_method(
             training_targets,
             seed,
             int(best_params["n_estimators"]),
+            sample_weight=training_weights,
             **_xgb_hyperparameters(best_params),
         )
     elif method == "bagging":
@@ -866,6 +887,7 @@ def _train_pu_method(
             int(best_params["n_estimators"]),
             n_bags,
             int(best_params["unlabelled_per_positive"]),
+            sample_weight=training_weights,
             **_xgb_hyperparameters(best_params),
         )
     else:
@@ -877,6 +899,7 @@ def _train_pu_method(
             seed,
             int(best_params["n_estimators"]),
             probability_clip,
+            sample_weight=training_weights,
             **_xgb_hyperparameters(best_params),
         )
     chosen = {**best_params, "search": "optuna"}
@@ -937,6 +960,7 @@ def _tune_each_pu_method(
     training = load_compact_split(training_dirs, world_ids=training_world_ids[:chosen_training_world_count])
     training_matrix = training.rows.matrix
     training_targets = [int(target) for target in training.rows.targets]
+    training_weights = training.rows.sample_weights
     validation = load_compact_split(
         validation_dirs,
         truth_root,
@@ -961,6 +985,7 @@ def _tune_each_pu_method(
             method,
             training_matrix,
             training_targets,
+            training_weights,
             validation.rows,
             validation.days,
             truth_scored,

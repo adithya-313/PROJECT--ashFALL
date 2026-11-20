@@ -1296,10 +1296,13 @@ def run_pilot(
     ]
     training_matrix: FeatureRows
     training_targets: list[int]
+    # Only the compact path can carry label trust weights; the rows path refuses the switch above.
+    training_weights: numpy.ndarray | None = None
     if data_path == "compact":
         training_split = load_compact_split(training_dirs)
         training_matrix = training_split.rows.matrix
         training_targets = [int(target) for target in training_split.rows.targets]
+        training_weights = training_split.rows.sample_weights
     elif data_path == "rows":
         training_matrix, training_targets, _ = build_training_rows(
             training_snapshot_rows, training_label_rows
@@ -1405,6 +1408,7 @@ def run_pilot(
                     training_targets,
                     seed,
                     int(params["n_estimators"]),
+                    sample_weight=training_weights,
                     **_xgb_hyperparameters(params),
                 )
                 return predict_account_days(trial_model, validation_rows_for_keys)
@@ -1427,6 +1431,7 @@ def run_pilot(
                 training_targets,
                 seed,
                 int(search_result.best_params["n_estimators"]),
+                sample_weight=training_weights,
                 **_xgb_hyperparameters(search_result.best_params),
             )
             best_n_estimators = int(search_result.best_params["n_estimators"])
@@ -1437,7 +1442,11 @@ def run_pilot(
             for n_estimators in N_ESTIMATOR_CANDIDATES:
                 started = time.perf_counter()
                 model, scale_pos_weight = train_account_model(
-                    training_matrix, training_targets, seed, n_estimators=n_estimators
+                    training_matrix,
+                    training_targets,
+                    seed,
+                    n_estimators=n_estimators,
+                    sample_weight=training_weights,
                 )
                 training_seconds[str(n_estimators)] = time.perf_counter() - started
                 probabilities = predict_account_days(model, validation_rows_for_keys)
@@ -1478,6 +1487,7 @@ def run_pilot(
                     int(params["n_estimators"]),
                     n_bags,
                     int(params["unlabelled_per_positive"]),
+                    sample_weight=training_weights,
                     **_xgb_hyperparameters(params),
                 )
                 return predict_account_days(trial_model, validation_rows_for_keys)
@@ -1505,6 +1515,7 @@ def run_pilot(
                 best_n_estimators,
                 n_bags,
                 best_unlabelled_per_positive,
+                sample_weight=training_weights,
                 **_xgb_hyperparameters(search_result.best_params),
             )
             training_seconds["optuna_best"] = time.perf_counter() - started
@@ -1522,6 +1533,7 @@ def run_pilot(
                         n_estimators,
                         n_bags,
                         unlabelled_per_positive,
+                        sample_weight=training_weights,
                     )
                     training_seconds[variant] = time.perf_counter() - started
                     probabilities = predict_account_days(model, validation_rows_for_keys)
@@ -1558,6 +1570,7 @@ def run_pilot(
                     seed,
                     int(params["n_estimators"]),
                     probability_clip,
+                    sample_weight=training_weights,
                     **_xgb_hyperparameters(params),
                 )
                 return predict_account_days(trial_model, validation_rows_for_keys)
@@ -1584,6 +1597,7 @@ def run_pilot(
                 seed,
                 best_n_estimators,
                 probability_clip,
+                sample_weight=training_weights,
                 **_xgb_hyperparameters(search_result.best_params),
             )
             training_seconds["optuna_best"] = time.perf_counter() - started
@@ -1600,6 +1614,7 @@ def run_pilot(
                     seed,
                     n_estimators,
                     probability_clip,
+                    sample_weight=training_weights,
                 )
                 training_seconds[str(n_estimators)] = time.perf_counter() - started
                 probabilities = predict_account_days(model, validation_rows_for_keys)
