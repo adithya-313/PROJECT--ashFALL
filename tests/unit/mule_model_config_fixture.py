@@ -43,9 +43,9 @@ def label_trust_blocks_text(*, label_trust_weighting: bool = False) -> str:
     )
 
 
-def xgboost_device_block_text(device: str = "cpu") -> str:
-    """Returns the xgboost_device parameter block a schema-complete config must carry."""
-    return _block("xgboost_device", f'    value: "{device}"\n')
+def gpu_policy_blocks_text(device: str = "cpu") -> str:
+    """Returns the xgboost_device and parity_ap_tolerance blocks a schema-complete config must carry."""
+    return _block("xgboost_device", f'    value: "{device}"\n') + _block("parity_ap_tolerance", "    value: 0.005\n")
 
 
 def mule_model_config_text(
@@ -67,7 +67,7 @@ def mule_model_config_text(
         + _block("label_cut", f"    value: {label_cut}\n")
         + _block("label_maturity_days", maturity)
         + label_trust_blocks_text()
-        + xgboost_device_block_text()
+        + gpu_policy_blocks_text()
         + _block("feature_fill_flag_share", f"    value: {feature_fill_flag_share}\n")
         + _block("use_label_network_features", "    value: true\n")
         + _block("label_network_features", _name_list(label_features))

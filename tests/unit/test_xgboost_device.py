@@ -126,3 +126,36 @@ def test_both_elkan_noto_models_receive_the_device(monkeypatch: pytest.MonkeyPat
     train_elkan_noto_model(matrix, targets, matrix, targets, SEED, 2, 0.95, device="cuda")
 
     assert devices == ["cuda", "cuda"]
+
+
+def test_committed_config_carries_the_parity_tolerance() -> None:
+    assert load_mule_model_config(COMMITTED_CONFIG).parity_ap_tolerance == 0.005
+
+
+@pytest.mark.parametrize("bad_tolerance", [0, -0.1, float("inf"), "x"])
+def test_parity_tolerance_must_be_positive_and_finite(tmp_path: Path, bad_tolerance: object) -> None:
+    raw = yaml.safe_load(COMMITTED_CONFIG.read_text(encoding="utf-8"))
+    raw["parameters"]["parity_ap_tolerance"]["value"] = bad_tolerance
+    path = tmp_path / "mule_model_parity.yaml"
+    path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="parity_ap_tolerance"):
+        load_mule_model_config(path)
+
+
+def test_parity_verdict_passes_only_when_ap_is_close_and_cuda_repeats() -> None:
+    from evaluation.xgboost_device_parity import judge_parity
+
+    cpu = [0.1, 0.9, 0.5]
+    cuda = [0.1, 0.9001, 0.5]
+
+    passed = judge_parity(cpu, cuda, list(cuda), cpu_ap=0.80, cuda_ap=0.803, tolerance=0.005)
+    too_far = judge_parity(cpu, cuda, list(cuda), cpu_ap=0.80, cuda_ap=0.81, tolerance=0.005)
+    not_repeatable = judge_parity(cpu, cuda, [0.1, 0.9002, 0.5], cpu_ap=0.80, cuda_ap=0.803, tolerance=0.005)
+
+    assert passed["passed"] is True
+    assert passed["cuda_runs_bit_identical"] is True
+    assert passed["max_probability_difference_cpu_vs_cuda"] == pytest.approx(0.0001)
+    assert too_far["passed"] is False
+    assert not_repeatable["cuda_runs_bit_identical"] is False
+    assert not_repeatable["passed"] is False

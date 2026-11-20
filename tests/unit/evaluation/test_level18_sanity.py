@@ -22,7 +22,7 @@ from evaluation.level18_sanity import (
     main,
     oracle_report,
 )
-from tests.unit.mule_model_config_fixture import label_trust_blocks_text, xgboost_device_block_text
+from tests.unit.mule_model_config_fixture import label_trust_blocks_text, gpu_policy_blocks_text
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FIXTURES = REPO_ROOT / "showcase" / "fixtures" / "level_17"
@@ -51,7 +51,7 @@ def _config_body(flag_share: float) -> str:
         "    derived_from: test\n"
         "    reason: test\n"
         + label_trust_blocks_text()
-        + xgboost_device_block_text()
+        + gpu_policy_blocks_text()
         + "  feature_fill_flag_share:\n"
         "    label: policy\n"
         f"    value: {flag_share}\n"

@@ -89,6 +89,7 @@ ALLOWED_MULE_MODEL_KEYS: frozenset[str] = frozenset(
         "label_trust_weighting",
         "maturity_tie_tolerance",
         "xgboost_device",
+        "parity_ap_tolerance",
         "use_label_network_features",
         "label_network_features",
         "feedback_network_features_not_used",
@@ -153,6 +154,8 @@ class MuleModelConfig:
         label_trust_weighting: Whether training rows carry the trust weights from label_trust_curve.
         maturity_tie_tolerance: Validation truth AP difference below which stage 1 treats variants as tied.
         xgboost_device: Device every account model trains on, "cpu" or "cuda".
+        parity_ap_tolerance: Largest validation truth AP gap between a cpu and a cuda fit that
+            evaluation/xgboost_device_parity.py accepts.
         feature_fill_flag_share: Share of rows at or above which a feature's most common value makes
             the feature unable to separate anything, so the sanity report flags it.
         use_label_network_features: Whether the account model may use the configured label-based
@@ -192,6 +195,7 @@ class MuleModelConfig:
     label_trust_weighting: bool
     maturity_tie_tolerance: float
     xgboost_device: str
+    parity_ap_tolerance: float
     feature_fill_flag_share: float
     use_label_network_features: bool | None
     label_network_features: tuple[str, ...]
@@ -503,6 +507,17 @@ def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
             f"got {device_value!r}"
         )
 
+    parity_value = parameters["parity_ap_tolerance"].get("value")
+    if (
+        not isinstance(parity_value, (int, float))
+        or isinstance(parity_value, bool)
+        or not math.isfinite(parity_value)
+        or parity_value <= 0.0
+    ):
+        raise ValueError(
+            f"parity_ap_tolerance in {resolved_path} must be a positive finite number; got {parity_value!r}"
+        )
+
     fill_share_block = parameters["feature_fill_flag_share"]
     fill_share_value = fill_share_block.get("value")
     if (
@@ -675,6 +690,7 @@ def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
         label_trust_weighting=trust_switch_value,
         maturity_tie_tolerance=float(tolerance_value),
         xgboost_device=device_value,
+        parity_ap_tolerance=float(parity_value),
         feature_fill_flag_share=float(fill_share_value),
         use_label_network_features=use_label_network_features,
         label_network_features=label_network_features,
