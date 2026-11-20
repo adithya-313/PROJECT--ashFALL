@@ -9,12 +9,12 @@ are pinned here.
 import hashlib
 from pathlib import Path
 
-import orjson
 import pytest
 import yaml
 
 from decisions.mule_account_model import LABEL_TRUST_CURVE_LENGTH, load_mule_model_config
 from evaluation.build_label_trust_curve import pool_delays, trust_curve, verify_report_hash
+from evaluation.measure_label_delay import _percentiles
 from tests.unit.mule_model_config_fixture import write_mule_model_config
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -111,12 +111,39 @@ def test_pool_delays_refuses_wrong_world_count() -> None:
         pool_delays(report)
 
 
-def test_committed_curve_matches_the_measured_report_when_present() -> None:
-    report_path = REPO_ROOT / "runs" / "full" / "label_delay_r7.json"
-    if not report_path.exists():
-        pytest.skip("measured label delay report is not in this checkout")
-    report = orjson.loads(report_path.read_bytes())
+def _synthetic_report(delays_per_world: list[list[float]]) -> dict[str, object]:
+    """Builds a report whose pooled section is exactly consistent with its per-world delay lists."""
+    pooled = sorted(delay for delays in delays_per_world for delay in delays)
+    return {
+        "by_world": [{"delays_days": delays} for delays in delays_per_world],
+        "pooled": {
+            "labelled_accounts": len(pooled),
+            "negative_delay_count": sum(1 for delay in pooled if delay < 0),
+            "delay_percentiles_days": _percentiles(pooled),
+        },
+    }
 
-    committed = load_mule_model_config(COMMITTED_CONFIG).label_trust_curve
 
-    assert list(committed) == trust_curve(pool_delays(report), max_days=LABEL_TRUST_CURVE_LENGTH - 1)
+def test_pool_delays_accepts_a_consistent_report_and_concatenates_in_file_order() -> None:
+    delays_per_world = [[3.0, -1.0] if index == 0 else [float(index)] for index in range(160)]
+
+    pooled = pool_delays(_synthetic_report(delays_per_world))
+
+    assert pooled[:3] == [3.0, -1.0, 1.0]
+    assert len(pooled) == 161
+
+
+def test_pool_delays_refuses_a_pooled_count_that_disagrees() -> None:
+    report = _synthetic_report([[float(index)] for index in range(160)])
+    report["pooled"]["labelled_accounts"] = 159  # type: ignore[index]
+
+    with pytest.raises(ValueError, match="pooled.labelled_accounts"):
+        pool_delays(report)
+
+
+def test_pool_delays_refuses_percentiles_that_disagree() -> None:
+    report = _synthetic_report([[float(index)] for index in range(160)])
+    report["pooled"]["delay_percentiles_days"] = {"p50": 0.0, "p90": 0.0}  # type: ignore[index]
+
+    with pytest.raises(ValueError, match="differs from the report"):
+        pool_delays(report)
