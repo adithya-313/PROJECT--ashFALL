@@ -36,7 +36,7 @@ import pyarrow.parquet as pq
 
 from core.event_clock import IST
 from decisions.anomaly_detector import TrainedAnomalyDetector
-from decisions.mule_account_model import account_model_feature_names, build_training_rows
+from decisions.mule_account_model import account_model_feature_names, build_training_rows, load_mule_model_config
 from decisions.rules_config import RulesConfig
 from evaluation.dataset_truth_join import _join_table, _world_entries
 from evaluation.level17_scoring import ScoredDay, one_row_per_account_day, score_account_days
@@ -48,6 +48,7 @@ __all__ = [
     "CompactRows",
     "CompactSplit",
     "iter_world_tables",
+    "label_trust_weights",
     "load_compact_split",
 ]
 
@@ -65,6 +66,8 @@ class CompactRows:
         bank_ids: (row_count,) object array of bank_id strings.
         account_ids: (row_count,) object array of account_id strings.
         day_ordinals: (row_count,) int64 date.toordinal() of each row's IST day.
+        sample_weights: (row_count,) float32 label trust weights when label_trust_weighting is on,
+            otherwise None, which every trainer reads as "all rows weigh the same".
     """
 
     feature_names: tuple[str, ...]
@@ -74,6 +77,7 @@ class CompactRows:
     bank_ids: numpy.ndarray
     account_ids: numpy.ndarray
     day_ordinals: numpy.ndarray
+    sample_weights: numpy.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -411,6 +415,67 @@ def _concat_rule_matrices(pieces: Sequence[RulesDayMatrix]) -> RulesDayMatrix:
     )
 
 
+def label_trust_weights(
+    targets: numpy.ndarray,
+    world_ids: numpy.ndarray,
+    day_ordinals: numpy.ndarray,
+    curve: Sequence[float],
+) -> numpy.ndarray:
+    """
+    WHAT: Returns one trust weight per training row: 1.0 for a positive, curve[days_left] for a negative.
+
+    WHY: A negative row close to the end of its world may belong to an account whose bank label has
+    not arrived yet, so it is trusted as a negative only with the share of labels that arrive within
+    the days left. Positives are confirmed labels and always weigh 1.0.
+
+    Args:
+        targets: (row_count,) binary labels, 1 for a positive row.
+        world_ids: (row_count,) world id of each row.
+        day_ordinals: (row_count,) integer IST day ordinal of each row.
+        curve: Trust share for 0, 1, 2, ... days left in the world.
+
+    Returns:
+        (row_count,) float32 weights.
+
+    Raises:
+        ValueError: If the arrays differ in length, a target is not 0 or 1, the curve is empty, or a
+            negative row has more days left than the curve covers (never clamped silently).
+
+    Details:
+        days_left = (latest day among the given rows of the same world) - (the row's own day). The
+        latest day is taken over the rows passed in, which are the rows being trained on.
+    """
+    row_count = len(targets)
+    if len(world_ids) != row_count or len(day_ordinals) != row_count:
+        raise ValueError("targets, world_ids and day_ordinals must have the same length")
+    if len(curve) == 0:
+        raise ValueError("The label trust curve must not be empty")
+    if row_count == 0:
+        return numpy.empty(0, dtype=numpy.float32)
+    is_positive = targets == 1
+    is_negative = targets == 0
+    if not numpy.all(is_positive | is_negative):
+        raise ValueError("targets must hold only 0 and 1")
+
+    _, world_index = numpy.unique(world_ids, return_inverse=True)
+    last_day_per_world = numpy.zeros(world_index.max() + 1, dtype=numpy.int64)
+    # Days are ordinals far above zero, so starting the running maximum at 0 never wins.
+    numpy.maximum.at(last_day_per_world, world_index, day_ordinals)
+    days_left = last_day_per_world[world_index] - day_ordinals
+
+    longest_negative_wait = int(days_left[is_negative].max()) if is_negative.any() else 0
+    if longest_negative_wait > len(curve) - 1:
+        raise ValueError(
+            f"A negative row has {longest_negative_wait} days left in its world, "
+            f"beyond the trust curve's last day {len(curve) - 1}"
+        )
+
+    curve_array = numpy.asarray(curve, dtype=numpy.float32)
+    weights = numpy.ones(row_count, dtype=numpy.float32)
+    weights[is_negative] = curve_array[days_left[is_negative]]
+    return weights
+
+
 def load_compact_split(
     dataset_dirs: Sequence[Path],
     truth_root: Path | None = None,
@@ -447,7 +512,13 @@ def load_compact_split(
 
     Raises:
         ValueError: If a folder or manifest is missing, a world repeats, the truth root or rules
-            config is absent when account-days are requested, or a row lacks a required field.
+            config is absent when account-days are requested, a row lacks a required field, or
+            label_trust_weighting is on while label_maturity_days is above 0 (the variants are
+            exclusive by design).
+
+    Side effects:
+        Reads the active mule model config for the trust switch and curve; with the switch on, the
+        returned rows carry sample_weights from label_trust_weights.
 
     Complexity:
         Time O(rows * feature_count) plus one parquet read per world. Without include_days, peak
@@ -470,6 +541,13 @@ def load_compact_split(
         raise ValueError("include_days requires truth_root so account-days carry truth_role")
     if include_days and rules_config is None:
         raise ValueError("include_days requires rules_config so account-days carry rules scores")
+
+    mule_config = load_mule_model_config()
+    if mule_config.label_trust_weighting and mule_config.label_maturity_days:
+        raise ValueError(
+            "label_trust_weighting and label_maturity_days above 0 are exclusive variants; "
+            f"got label_maturity_days {mule_config.label_maturity_days}"
+        )
 
     feature_names = account_model_feature_names()
     stores: dict[str, TruthStore] = {}
@@ -526,14 +604,21 @@ def load_compact_split(
         matrix_array = matrix_array.reshape((len(targets), feature_count))
     else:
         matrix_array = numpy.empty((0, len(feature_names)), dtype=numpy.float32)
+    target_array = numpy.asarray(targets, dtype=numpy.int64)
+    world_array = numpy.asarray([key[0] for key in keys], dtype=object)
+    ordinal_array = numpy.asarray([key[3].toordinal() for key in keys], dtype=numpy.int64)
+    sample_weights: numpy.ndarray | None = None
+    if mule_config.label_trust_weighting:
+        sample_weights = label_trust_weights(target_array, world_array, ordinal_array, mule_config.label_trust_curve)
     rows = CompactRows(
         feature_names=tuple(feature_names),
         matrix=matrix_array,
-        targets=numpy.asarray(targets, dtype=numpy.int64),
-        world_ids=numpy.asarray([key[0] for key in keys], dtype=object),
+        targets=target_array,
+        world_ids=world_array,
         bank_ids=numpy.asarray([key[1] for key in keys], dtype=object),
         account_ids=numpy.asarray([key[2] for key in keys], dtype=object),
-        day_ordinals=numpy.asarray([key[3].toordinal() for key in keys], dtype=numpy.int64),
+        day_ordinals=ordinal_array,
+        sample_weights=sample_weights,
     )
 
     if not include_days:

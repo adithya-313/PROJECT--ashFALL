@@ -16,6 +16,7 @@ there is no silent fallback.
 
 import json
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -71,6 +72,9 @@ HYPERPARAMETER_SPACE_NAMES: tuple[str, ...] = (
 INTEGER_HYPERPARAMETERS: frozenset[str] = frozenset({"max_depth", "n_estimators"})
 #: Space entries sampled on a log scale, as the architect's ranges specify.
 LOG_HYPERPARAMETERS: frozenset[str] = frozenset({"learning_rate", "min_child_weight", "reg_alpha", "reg_lambda"})
+#: Length of the label trust curve: one share per day 0..90, as evaluation/build_label_trust_curve.py
+#: writes it with --max-days 90.
+LABEL_TRUST_CURVE_LENGTH: int = 91
 ALLOWED_MULE_MODEL_KEYS: frozenset[str] = frozenset(
     {
         "data_path",
@@ -79,6 +83,9 @@ ALLOWED_MULE_MODEL_KEYS: frozenset[str] = frozenset(
         "hyperparameter_space",
         "label_cut",
         "label_maturity_days",
+        "label_trust_curve",
+        "label_trust_weighting",
+        "maturity_tie_tolerance",
         "use_label_network_features",
         "label_network_features",
         "feedback_network_features_not_used",
@@ -137,6 +144,11 @@ class MuleModelConfig:
             ALLOWED_LABEL_CUTS.
         label_maturity_days: Number of trailing IST days dropped at the end of every world, or None
             when the maturity window is off because the label delay has not been measured yet.
+        label_trust_curve: Share of bank labels that had arrived k days after the first illicit credit,
+            for k = 0..90; an unlabelled row with k days left in its world is trusted as a negative with
+            this weight when label_trust_weighting is on.
+        label_trust_weighting: Whether training rows carry the trust weights from label_trust_curve.
+        maturity_tie_tolerance: Validation truth AP difference below which stage 1 treats variants as tied.
         feature_fill_flag_share: Share of rows at or above which a feature's most common value makes
             the feature unable to separate anything, so the sanity report flags it.
         use_label_network_features: Whether the account model may use the configured label-based
@@ -172,6 +184,9 @@ class MuleModelConfig:
 
     label_cut: str
     label_maturity_days: int | None
+    label_trust_curve: tuple[float, ...]
+    label_trust_weighting: bool
+    maturity_tie_tolerance: float
     feature_fill_flag_share: float
     use_label_network_features: bool | None
     label_network_features: tuple[str, ...]
@@ -189,6 +204,29 @@ class MuleModelConfig:
     optuna_stall_patience_trials: int
     optuna_min_improvement: float
     hyperparameter_space: dict[str, HyperparameterRange] | None
+
+
+def _parse_label_trust_curve(block: dict[str, Any], path: Path) -> tuple[float, ...]:
+    """
+    WHAT: Returns the validated label trust curve from its config block.
+
+    Raises:
+        ValueError: If the value is not LABEL_TRUST_CURVE_LENGTH finite numbers in [0, 1] that never decrease.
+    """
+    value = block.get("value")
+    if not isinstance(value, list) or len(value) != LABEL_TRUST_CURVE_LENGTH:
+        raise ValueError(f"label_trust_curve in {path} must be a list of {LABEL_TRUST_CURVE_LENGTH} numbers")
+    shares: list[float] = []
+    for share in value:
+        if not isinstance(share, (int, float)) or isinstance(share, bool) or not math.isfinite(share):
+            raise ValueError(f"label_trust_curve in {path} holds a value that is not a finite number: {share!r}")
+        if not 0.0 <= share <= 1.0:
+            raise ValueError(f"label_trust_curve in {path} holds a value outside [0, 1]: {share!r}")
+        shares.append(float(share))
+    for index in range(1, len(shares)):
+        if shares[index] < shares[index - 1]:
+            raise ValueError(f"label_trust_curve in {path} decreases at day {index}")
+    return tuple(shares)
 
 
 def _parse_feature_name_list(block: dict[str, Any], key: str, path: Path) -> tuple[str, ...]:
@@ -436,6 +474,23 @@ def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
             f"label_maturity_days in {resolved_path} must be null or a non-negative integer; got {maturity_value!r}"
         )
 
+    label_trust_curve = _parse_label_trust_curve(parameters["label_trust_curve"], resolved_path)
+
+    trust_switch_value = parameters["label_trust_weighting"].get("value")
+    if not isinstance(trust_switch_value, bool):
+        raise ValueError(f"label_trust_weighting in {resolved_path} must be a boolean; got {trust_switch_value!r}")
+
+    tolerance_value = parameters["maturity_tie_tolerance"].get("value")
+    if (
+        not isinstance(tolerance_value, (int, float))
+        or isinstance(tolerance_value, bool)
+        or not math.isfinite(tolerance_value)
+        or tolerance_value <= 0.0
+    ):
+        raise ValueError(
+            f"maturity_tie_tolerance in {resolved_path} must be a positive finite number; got {tolerance_value!r}"
+        )
+
     fill_share_block = parameters["feature_fill_flag_share"]
     fill_share_value = fill_share_block.get("value")
     if (
@@ -604,6 +659,9 @@ def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
     return MuleModelConfig(
         label_cut=label_cut,
         label_maturity_days=label_maturity_days,
+        label_trust_curve=label_trust_curve,
+        label_trust_weighting=trust_switch_value,
+        maturity_tie_tolerance=float(tolerance_value),
         feature_fill_flag_share=float(fill_share_value),
         use_label_network_features=use_label_network_features,
         label_network_features=label_network_features,
@@ -874,7 +932,7 @@ def train_account_model(
     seed: int,
     n_estimators: int = 100,
     *,
-    sample_weight: list[float] | None = None,
+    sample_weight: Sequence[float] | numpy.ndarray | None = None,
     scale_pos_weight_override: float | None = None,
     max_depth: int = 6,
     learning_rate: float = 0.3,
@@ -899,10 +957,11 @@ def train_account_model(
         targets: Binary labels aligned with rows.
         seed: Random seed recorded in the model sidecar.
         n_estimators: Number of boosting rounds; chosen on validation, never on test.
-        sample_weight: Optional non-negative weight per row; None fits without weights exactly as
-            before.
-        scale_pos_weight_override: Optional positive class weight replacing negatives / positives;
-            None keeps negatives / positives.
+        sample_weight: Optional non-negative weight per row, as a list or a numpy array; None fits
+            without weights exactly as before.
+        scale_pos_weight_override: Optional positive class weight replacing the default; None keeps
+            the default, which is negatives / positives by count without sample weights and the
+            summed weight of the target-0 rows over the summed weight of the target-1 rows with them.
         max_depth: Tree depth, defaulting to the XGBoost default so the old call fits the same trees.
         learning_rate: Boosting step, defaulting to the XGBoost default.
         min_child_weight: Minimum child weight, defaulting to the XGBoost default.
@@ -914,13 +973,14 @@ def train_account_model(
 
     Returns:
         (model, scale_pos_weight) where scale_pos_weight is the override when given, otherwise
-        negatives / positives.
+        negatives / positives, or the weighted ratio when sample weights are given.
 
     Raises:
         ValueError: If rows and targets differ in length, there are no positives or no negatives,
             the sample weights do not align with the rows or include a non-finite or negative
-            value, the override is not a positive finite number, or a regularisation parameter is
-            not a non-negative finite number.
+            value, the weights of one class sum to zero when the weighted ratio is needed, the
+            override is not a positive finite number, or a regularisation parameter is not a
+            non-negative finite number.
     """
     if len(rows) != len(targets):
         raise ValueError(f"rows length {len(rows)} does not match targets length {len(targets)}")
@@ -929,11 +989,18 @@ def train_account_model(
             raise ValueError(
                 f"sample_weight length {len(sample_weight)} does not match rows length {len(rows)}"
             )
-        for weight in sample_weight:
-            if not isinstance(weight, (int, float)) or isinstance(weight, bool):
-                raise ValueError(f"sample_weight values must be numbers; got {weight!r}")
-            if not math.isfinite(weight) or weight < 0.0:
-                raise ValueError(f"sample_weight values must be non-negative and finite; got {weight!r}")
+        if isinstance(sample_weight, numpy.ndarray):
+            # An array is checked in one pass so millions of weights do not become Python objects.
+            if sample_weight.dtype.kind not in "iuf":
+                raise ValueError(f"sample_weight array must be numeric; got dtype {sample_weight.dtype}")
+            if not numpy.all(numpy.isfinite(sample_weight)) or numpy.any(sample_weight < 0.0):
+                raise ValueError("sample_weight values must be non-negative and finite")
+        else:
+            for weight in sample_weight:
+                if not isinstance(weight, (int, float)) or isinstance(weight, bool):
+                    raise ValueError(f"sample_weight values must be numbers; got {weight!r}")
+                if not math.isfinite(weight) or weight < 0.0:
+                    raise ValueError(f"sample_weight values must be non-negative and finite; got {weight!r}")
     if scale_pos_weight_override is not None:
         if (
             not isinstance(scale_pos_weight_override, (int, float))
@@ -985,11 +1052,12 @@ def train_account_model(
         raise ValueError("train_account_model requires at least one positive account-day")
     if negatives == 0:
         raise ValueError("train_account_model requires at least one negative account-day")
-    scale_pos_weight = (
-        float(scale_pos_weight_override)
-        if scale_pos_weight_override is not None
-        else negatives / positives
-    )
+    if scale_pos_weight_override is not None:
+        scale_pos_weight = float(scale_pos_weight_override)
+    elif sample_weight is None:
+        scale_pos_weight = negatives / positives
+    else:
+        scale_pos_weight = _weighted_class_ratio(targets, sample_weight)
 
     model = xgboost.XGBClassifier(
         objective="binary:logistic",
@@ -1011,6 +1079,31 @@ def train_account_model(
     else:
         model.fit(rows, targets, sample_weight=sample_weight)
     return model, scale_pos_weight
+
+
+def _weighted_class_ratio(
+    targets: list[int] | numpy.ndarray,
+    sample_weight: Sequence[float] | numpy.ndarray,
+) -> float:
+    """
+    WHAT: Returns the summed weight of the target-0 rows divided by the summed weight of the target-1 rows.
+
+    WHY: With trust weights the positives still weigh 1.0 but the negatives weigh less, so balancing
+    the classes by row count would overstate the negatives; the weighted ratio keeps the same balance
+    the weighted loss sees.
+
+    Raises:
+        ValueError: If either class has a zero total weight.
+    """
+    target_array = numpy.asarray(targets)
+    weight_array = numpy.asarray(sample_weight, dtype=numpy.float64)
+    negative_total = float(weight_array[target_array == 0].sum())
+    positive_total = float(weight_array[target_array == 1].sum())
+    if negative_total <= 0.0:
+        raise ValueError("The target-0 rows have a zero total sample weight")
+    if positive_total <= 0.0:
+        raise ValueError("The target-1 rows have a zero total sample weight")
+    return negative_total / positive_total
 
 
 def predict_account_days(

@@ -381,3 +381,33 @@ def test_elkan_noto_method_records_c_weights_and_clip_count(tmp_path: Path) -> N
     assert isinstance(pu["clip_count"], int)
     assert len(pu["average_precision_scores"]) == 3
     assert len(pu["training_seconds"]) == 3
+
+
+def test_rows_data_path_refuses_label_trust_weighting(tmp_path: Path) -> None:
+    """The dictionary rows path carries no sample weights, so the trust switch must be refused there."""
+    raw = yaml.safe_load((REPO_ROOT / "config" / "mule_model.yaml").read_text(encoding="utf-8"))
+    raw["parameters"]["data_path"]["value"] = "rows"
+    raw["parameters"]["label_trust_weighting"]["value"] = True
+    raw["parameters"]["label_maturity_days"]["value"] = 0
+    config_path = tmp_path / "mule_model_rows_trust.yaml"
+    config_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="only supported with data_path 'compact'"):
+        main(
+            [
+                "--training",
+                str(TRAINING),
+                "--validation",
+                str(VALIDATION),
+                "--test",
+                str(TEST),
+                "--truth-root",
+                str(TRUTH_ROOT),
+                "--world-cards-root",
+                str(WORLD_CARDS_ROOT),
+                "--out-root",
+                str(tmp_path),
+                "--mule-model-config",
+                str(config_path),
+            ]
+        )

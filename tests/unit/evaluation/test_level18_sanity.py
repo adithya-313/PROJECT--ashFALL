@@ -22,6 +22,7 @@ from evaluation.level18_sanity import (
     main,
     oracle_report,
 )
+from tests.unit.mule_model_config_fixture import label_trust_blocks_text
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FIXTURES = REPO_ROOT / "showcase" / "fixtures" / "level_17"
@@ -49,7 +50,8 @@ def _config_body(flag_share: float) -> str:
         "    not_found: true\n"
         "    derived_from: test\n"
         "    reason: test\n"
-        "  feature_fill_flag_share:\n"
+        + label_trust_blocks_text()
+        + "  feature_fill_flag_share:\n"
         "    label: policy\n"
         f"    value: {flag_share}\n"
         "    derived_from: test\n"
