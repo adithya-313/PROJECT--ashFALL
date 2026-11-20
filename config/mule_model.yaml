@@ -52,6 +52,18 @@ parameters:
     derived_from: "architect ruling 2026-11-20, set before any full-scale result"
     reason: "Validation truth AP differences below this are treated as noise; ties go to the simpler variant that keeps more data."
 
+  xgboost_device:
+    label: policy
+    value: "cpu"
+    derived_from: "architect ruling 2026-11-20"
+    reason: "CPU by default; cuda only after evaluation/xgboost_device_parity.py passes on this laptop."
+
+  parity_ap_tolerance:
+    label: policy
+    value: 0.005
+    derived_from: "architect ruling 2026-11-20"
+    reason: "GPU sums in a different order; a larger gap could change model choices"
+
   feature_fill_flag_share:
     label: policy
     value: 0.999

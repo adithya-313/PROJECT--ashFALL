@@ -543,7 +543,12 @@ def _maturity_check(
             set_mule_model_config_path(previous_config)
         targets = [int(target) for target in training.rows.targets]
         model, _ = train_account_model(
-            training.rows.matrix, targets, seed, LEARNING_CURVE_N_ESTIMATORS, sample_weight=training.rows.sample_weights
+            training.rows.matrix,
+            targets,
+            seed,
+            LEARNING_CURVE_N_ESTIMATORS,
+            sample_weight=training.rows.sample_weights,
+            device=mule_config.xgboost_device,
         )
         probabilities = predict_account_days(model, validation.days.aligned_features)
         average_precision_truth = validation_truth_average_precision(probabilities, truth_scored)
@@ -628,6 +633,7 @@ def _learning_curve(
     base_rules_config: RulesConfig,
     seed: int,
     training_world_counts: Sequence[int],
+    mule_config: MuleModelConfig,
 ) -> dict[str, Any]:
     """
     WHAT: Trains the fixed probe model on each training-world count and scores it on validation
@@ -644,6 +650,7 @@ def _learning_curve(
         base_rules_config: Rules table the compact loader needs to build ScoredDays.
         seed: Model random seed.
         training_world_counts: Ascending counts to try.
+        mule_config: Loaded model config; its xgboost_device is the device the probe trains on.
 
     Returns:
         Points, doubling improvements, the chosen count and the more-worlds flag.
@@ -678,7 +685,12 @@ def _learning_curve(
         matrix = training.rows.matrix
         targets = [int(target) for target in training.rows.targets]
         model, _ = train_account_model(
-            matrix, targets, seed, LEARNING_CURVE_N_ESTIMATORS, sample_weight=training.rows.sample_weights
+            matrix,
+            targets,
+            seed,
+            LEARNING_CURVE_N_ESTIMATORS,
+            sample_weight=training.rows.sample_weights,
+            device=mule_config.xgboost_device,
         )
         probabilities = predict_account_days(model, validation.days.aligned_features)
         average_precision_truth = validation_truth_average_precision(probabilities, truth_scored)
@@ -747,6 +759,7 @@ def _select_by_label_average_precision(
                 seed,
                 n_estimators=n_estimators,
                 sample_weight=training_weights,
+                device=mule_config.xgboost_device,
             )
             score = average_precision(predict_account_days(model, validation_rows_for_keys), validation_targets)
             if score > best_ap:
@@ -770,6 +783,7 @@ def _select_by_label_average_precision(
                     n_bags,
                     unlabelled_per_positive,
                     sample_weight=training_weights,
+                    device=mule_config.xgboost_device,
                 )
                 score = average_precision(predict_account_days(model, validation_rows_for_keys), validation_targets)
                 if score > best_ap:
@@ -793,6 +807,7 @@ def _select_by_label_average_precision(
                 n_estimators,
                 probability_clip,
                 sample_weight=training_weights,
+                device=mule_config.xgboost_device,
             )
             score = average_precision(predict_account_days(model, validation_rows_for_keys), validation_targets)
             if score > best_ap:
@@ -884,6 +899,7 @@ def _train_pu_method(
                 seed,
                 int(params["n_estimators"]),
                 sample_weight=training_weights,
+                device=mule_config.xgboost_device,
                 **_xgb_hyperparameters(params),
             )
             return predict_account_days(model, rows_for_keys)
@@ -909,6 +925,7 @@ def _train_pu_method(
                 n_bags,
                 int(params["unlabelled_per_positive"]),
                 sample_weight=training_weights,
+                device=mule_config.xgboost_device,
                 **_xgb_hyperparameters(params),
             )
             return predict_account_days(model, rows_for_keys)
@@ -931,6 +948,7 @@ def _train_pu_method(
                 int(params["n_estimators"]),
                 probability_clip,
                 sample_weight=training_weights,
+                device=mule_config.xgboost_device,
                 **_xgb_hyperparameters(params),
             )
             return predict_account_days(model, rows_for_keys)
@@ -958,6 +976,7 @@ def _train_pu_method(
             seed,
             int(best_params["n_estimators"]),
             sample_weight=training_weights,
+            device=mule_config.xgboost_device,
             **_xgb_hyperparameters(best_params),
         )
     elif method == "bagging":
@@ -969,6 +988,7 @@ def _train_pu_method(
             n_bags,
             int(best_params["unlabelled_per_positive"]),
             sample_weight=training_weights,
+            device=mule_config.xgboost_device,
             **_xgb_hyperparameters(best_params),
         )
     else:
@@ -981,6 +1001,7 @@ def _train_pu_method(
             int(best_params["n_estimators"]),
             probability_clip,
             sample_weight=training_weights,
+            device=mule_config.xgboost_device,
             **_xgb_hyperparameters(best_params),
         )
     chosen = {**best_params, "search": "optuna"}
@@ -1007,13 +1028,17 @@ def _tune_each_pu_method(
     main_budget_pct: float,
     mule_config: MuleModelConfig,
     seed: int,
+    fingerprint: dict[str, Any],
+    stages_dir: Path,
 ) -> dict[str, Any]:
     """
     WHAT: Trains and scores every PU method on the chosen training-world count and the main budget.
 
     WHY: The method choice must compare truth AP and truth recall at the same genuine-restriction
     budget the pilot reports, so each method's cut is tuned on validation exactly as the pilot's
-    XGBoost cut is.
+    XGBoost cut is. Each method takes hours, so its record is written to its own checkpoint file the
+    moment it finishes; a crash in a later method or in the combined stage file then costs only the
+    unfinished work.
 
     Args:
         training_dirs: Training dataset folders.
@@ -1026,12 +1051,19 @@ def _tune_each_pu_method(
         main_budget_pct: Main genuine-restriction budget the recall is measured at.
         mule_config: Loaded model config.
         seed: Model random seed.
+        fingerprint: Stage fingerprint; a checkpoint written under different inputs is refused.
+        stages_dir: Folder holding the stage files and the per-method checkpoints.
 
     Returns:
         One method record per PU method, in PU_METHODS order.
 
     Raises:
-        ValueError: If a split cannot be loaded or the chosen count exceeds the available worlds.
+        ValueError: If a split cannot be loaded, the chosen count exceeds the available worlds, or a
+            checkpoint's fingerprint differs from the current one.
+
+    Side effects:
+        Writes stages/tune_method_<method>.json after each trained method and prints a SKIP or DONE
+        line per method.
     """
     if chosen_training_world_count > len(training_world_ids):
         raise ValueError(
@@ -1061,6 +1093,13 @@ def _tune_each_pu_method(
     search_on = mule_config.hyperparameter_search == "optuna"
     records: list[dict[str, Any]] = []
     for method in PU_METHODS:
+        checkpoint_name = f"tune_method_{method}"
+        checkpoint_path = stages_dir / f"{checkpoint_name}.json"
+        checkpoint = _read_matching_stage(checkpoint_path, checkpoint_name, fingerprint)
+        if checkpoint is not None:
+            print(f"SKIP method {method}: fingerprint matches {checkpoint_path}")
+            records.append(checkpoint)
+            continue
         started = time.perf_counter()
         model, chosen, probabilities, search_record = _train_pu_method(
             method,
@@ -1081,18 +1120,19 @@ def _tune_each_pu_method(
             for day, probability in zip(truth_scored, probabilities, strict=True)
         ]
         method_tuning = tune_anomaly_threshold(method_scored, tuning, "validation", main_budget_pct)
-        records.append(
-            {
-                "pu_method": method,
-                "chosen_params": chosen,
-                "validation_truth_average_precision": float(truth_ap),
-                "validation_rate_pct": float(method_tuning.validation_rate_pct),
-                "validation_recall": float(method_tuning.validation_recall),
-                "meets_budget": bool(method_tuning.meets_budget),
-                "training_seconds": seconds,
-                **search_record,
-            }
-        )
+        record = {
+            "pu_method": method,
+            "chosen_params": chosen,
+            "validation_truth_average_precision": float(truth_ap),
+            "validation_rate_pct": float(method_tuning.validation_rate_pct),
+            "validation_recall": float(method_tuning.validation_recall),
+            "meets_budget": bool(method_tuning.meets_budget),
+            "training_seconds": seconds,
+            **search_record,
+        }
+        _write_stage(checkpoint_path, checkpoint_name, fingerprint, record, started)
+        print(f"DONE method {method}: {seconds:.1f} s -> {checkpoint_path}")
+        records.append(record)
         del model, probabilities
     return {"training_world_count": chosen_training_world_count, "methods": records}
 
@@ -1361,6 +1401,7 @@ def run_full(
                 base_rules_config,
                 seed,
                 counts,
+                mule_config,
             ),
         )
         chosen_count = learning_curve["chosen_training_world_count"]
@@ -1379,6 +1420,8 @@ def run_full(
                 main_budget_pct,
                 mule_config,
                 seed,
+                fingerprint,
+                stages_dir,
             ),
         )
         method_choice = _run_stage(

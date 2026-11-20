@@ -6,18 +6,24 @@ WHY: These four rules decide how much data is trained on, which model variant is
 one reaches test, so each must be proven on hand numbers before the driver runs at full scale.
 """
 
+from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+import evaluation.run_level_18_full as run_level_18_full
 from decisions.mule_account_model import load_mule_model_config
+from evaluation.level17_scoring import ScoredDay
 from evaluation.run_level_18_full import (
+    PU_METHODS,
     _choose_pu_method,
     _learning_curve_choice,
     _maturity_decision,
     _read_matching_stage,
     _run_stage,
+    _tune_each_pu_method,
     _write_chosen_config,
 )
 
@@ -292,3 +298,102 @@ def test_maturity_decision_gap_of_exactly_the_tolerance_is_a_tie() -> None:
 
     assert exact_choice == "all_days"
     assert larger_choice == "drop_28"
+
+
+class _FakeTuningHarness:
+    """Replaces everything heavy in _tune_each_pu_method and counts the per-method trainings."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.trained_methods: list[str] = []
+        scored_day = ScoredDay(
+            bank_id="bank_0",
+            account_id="acc_0",
+            day=date(2026, 1, 1),
+            rules_score=0,
+            rules_fired=(),
+            anomaly_score=None,
+            role="mule",
+            depth=None,
+        )
+        split = SimpleNamespace(
+            rows=SimpleNamespace(matrix=[[0.0]], targets=[1], sample_weights=None),
+            days=SimpleNamespace(aligned_features=[[0.0]]),
+        )
+        monkeypatch.setattr(run_level_18_full, "load_compact_split", lambda *args, **kwargs: split)
+        monkeypatch.setattr(run_level_18_full, "_validation_scored_in_model_row_order", lambda *args: [scored_day])
+        monkeypatch.setattr(run_level_18_full, "_compact_row_keys", lambda rows: [])
+        monkeypatch.setattr(run_level_18_full, "_train_pu_method", self._train_pu_method)
+        monkeypatch.setattr(run_level_18_full, "validation_truth_average_precision", lambda *args: 0.5)
+        monkeypatch.setattr(
+            run_level_18_full,
+            "tune_anomaly_threshold",
+            lambda *args: SimpleNamespace(validation_rate_pct=1.0, validation_recall=0.25, meets_budget=True),
+        )
+
+    def _train_pu_method(self, method: str, *args: object) -> tuple[None, dict[str, Any], list[float], dict[str, Any]]:
+        """Counts the call and returns one fixed probability with an empty search record."""
+        self.trained_methods.append(method)
+        return None, {"max_depth": 3}, [0.9], {"search": "off"}
+
+    def run(self, stages_dir: Path, fingerprint: dict[str, Any]) -> dict[str, Any]:
+        """Calls the real _tune_each_pu_method with placeholder arguments the fakes ignore."""
+        unused: Any = None  # the faked collaborators never read these arguments
+        return _tune_each_pu_method(
+            [],
+            ["world_0"],
+            1,
+            [],
+            Path("truth"),
+            unused,
+            unused,
+            1.0,
+            SimpleNamespace(hyperparameter_search="off"),  # type: ignore[arg-type]
+            7,
+            fingerprint,
+            stages_dir,
+        )
+
+
+def test_each_pu_method_is_checkpointed_and_a_second_call_trains_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The first call trains and checkpoints every method; the second reuses all three records."""
+    harness = _FakeTuningHarness(monkeypatch)
+
+    first = harness.run(tmp_path, FINGERPRINT)
+    first_output = capsys.readouterr().out
+    second = harness.run(tmp_path, FINGERPRINT)
+    second_output = capsys.readouterr().out
+
+    assert harness.trained_methods == list(PU_METHODS)
+    for method in PU_METHODS:
+        assert (tmp_path / f"tune_method_{method}.json").is_file()
+        assert f"DONE method {method}" in first_output
+        assert f"SKIP method {method}: fingerprint matches" in second_output
+    assert [record["pu_method"] for record in first["methods"]] == list(PU_METHODS)
+    assert second == first
+
+
+def test_deleting_one_checkpoint_retrains_only_that_method(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A missing checkpoint costs one method's training and nothing else."""
+    harness = _FakeTuningHarness(monkeypatch)
+    harness.run(tmp_path, FINGERPRINT)
+    harness.trained_methods.clear()
+    (tmp_path / f"tune_method_{PU_METHODS[1]}.json").unlink()
+
+    harness.run(tmp_path, FINGERPRINT)
+
+    assert harness.trained_methods == [PU_METHODS[1]]
+
+
+def test_a_checkpoint_with_a_different_fingerprint_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A checkpoint written for other inputs raises instead of being reused or retrained over."""
+    harness = _FakeTuningHarness(monkeypatch)
+    harness.run(tmp_path, FINGERPRINT)
+    harness.trained_methods.clear()
+    changed = {**FINGERPRINT, "mule_model_config_sha256": "11" * 32}
+
+    with pytest.raises(ValueError, match="mule_model_config_sha256"):
+        harness.run(tmp_path, changed)
+
+    assert harness.trained_methods == []

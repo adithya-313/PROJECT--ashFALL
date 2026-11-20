@@ -261,10 +261,13 @@ def run_optuna_search(
             "so no setting can explain any difference"
         )
     else:
-        param_importances = optuna.importance.get_param_importances(
+        # Optuna returns numpy.float64 values, which the stage files' JSON writer cannot serialise,
+        # so each importance becomes a plain float here, at the source, in Optuna's returned order.
+        raw_importances = optuna.importance.get_param_importances(
             study,
             evaluator=optuna.importance.FanovaImportanceEvaluator(seed=seed),
         )
+        param_importances = {str(name): float(value) for name, value in raw_importances.items()}
     stopped_early = stop_reason is not None and len(records) < trial_count
     best = study.best_trial
     if best.value is None:

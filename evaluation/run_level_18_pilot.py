@@ -1409,6 +1409,7 @@ def run_pilot(
                     seed,
                     int(params["n_estimators"]),
                     sample_weight=training_weights,
+                    device=mule_model_config.xgboost_device,
                     **_xgb_hyperparameters(params),
                 )
                 return predict_account_days(trial_model, validation_rows_for_keys)
@@ -1432,6 +1433,7 @@ def run_pilot(
                 seed,
                 int(search_result.best_params["n_estimators"]),
                 sample_weight=training_weights,
+                device=mule_model_config.xgboost_device,
                 **_xgb_hyperparameters(search_result.best_params),
             )
             best_n_estimators = int(search_result.best_params["n_estimators"])
@@ -1447,6 +1449,7 @@ def run_pilot(
                     seed,
                     n_estimators=n_estimators,
                     sample_weight=training_weights,
+                    device=mule_model_config.xgboost_device,
                 )
                 training_seconds[str(n_estimators)] = time.perf_counter() - started
                 probabilities = predict_account_days(model, validation_rows_for_keys)
@@ -1488,6 +1491,7 @@ def run_pilot(
                     n_bags,
                     int(params["unlabelled_per_positive"]),
                     sample_weight=training_weights,
+                    device=mule_model_config.xgboost_device,
                     **_xgb_hyperparameters(params),
                 )
                 return predict_account_days(trial_model, validation_rows_for_keys)
@@ -1516,6 +1520,7 @@ def run_pilot(
                 n_bags,
                 best_unlabelled_per_positive,
                 sample_weight=training_weights,
+                device=mule_model_config.xgboost_device,
                 **_xgb_hyperparameters(search_result.best_params),
             )
             training_seconds["optuna_best"] = time.perf_counter() - started
@@ -1534,6 +1539,7 @@ def run_pilot(
                         n_bags,
                         unlabelled_per_positive,
                         sample_weight=training_weights,
+                        device=mule_model_config.xgboost_device,
                     )
                     training_seconds[variant] = time.perf_counter() - started
                     probabilities = predict_account_days(model, validation_rows_for_keys)
@@ -1571,6 +1577,7 @@ def run_pilot(
                     int(params["n_estimators"]),
                     probability_clip,
                     sample_weight=training_weights,
+                    device=mule_model_config.xgboost_device,
                     **_xgb_hyperparameters(params),
                 )
                 return predict_account_days(trial_model, validation_rows_for_keys)
@@ -1598,6 +1605,7 @@ def run_pilot(
                 best_n_estimators,
                 probability_clip,
                 sample_weight=training_weights,
+                device=mule_model_config.xgboost_device,
                 **_xgb_hyperparameters(search_result.best_params),
             )
             training_seconds["optuna_best"] = time.perf_counter() - started
@@ -1615,6 +1623,7 @@ def run_pilot(
                     n_estimators,
                     probability_clip,
                     sample_weight=training_weights,
+                    device=mule_model_config.xgboost_device,
                 )
                 training_seconds[str(n_estimators)] = time.perf_counter() - started
                 probabilities = predict_account_days(model, validation_rows_for_keys)

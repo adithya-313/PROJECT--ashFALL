@@ -235,6 +235,7 @@ def train_pu_bagged_model(
     unlabelled_per_positive: int,
     *,
     sample_weight: Sequence[float] | numpy.ndarray | None = None,
+    device: str = "cpu",
     max_depth: int = 6,
     learning_rate: float = 0.3,
     min_child_weight: float = 1.0,
@@ -268,6 +269,7 @@ def train_pu_bagged_model(
         unlabelled_per_positive: Unlabelled rows drawn per positive row in each bag.
         sample_weight: Optional trust weight per row aligned with matrix. Each member receives the
             weights of exactly its own rows; sampling stays uniform. None trains as before.
+        device: "cpu" or "cuda", passed to every member.
         max_depth: Tree depth passed to every member; the default matches the XGBoost default.
         learning_rate: Boosting step passed to every member.
         min_child_weight: Minimum child weight passed to every member.
@@ -327,6 +329,7 @@ def train_pu_bagged_model(
             member_seed,
             n_estimators,
             sample_weight=bag_weights,
+            device=device,
             max_depth=max_depth,
             learning_rate=learning_rate,
             min_child_weight=min_child_weight,
@@ -429,6 +432,7 @@ def train_elkan_noto_model(
     probability_clip: float,
     *,
     sample_weight: Sequence[float] | numpy.ndarray | None = None,
+    device: str = "cpu",
     max_depth: int = 6,
     learning_rate: float = 0.3,
     min_child_weight: float = 1.0,
@@ -467,6 +471,7 @@ def train_elkan_noto_model(
             with them, and both copies of every unlabelled row in the final model are multiplied by
             that row's trust. Positives stay 1.0 and validation is never weighted. None trains as
             before.
+        device: "cpu" or "cuda", used for g and the final model.
         max_depth: Tree depth for g and the final model, defaulting to the XGBoost default.
         learning_rate: Boosting step for g and the final model, defaulting to the XGBoost default.
         min_child_weight: Minimum child weight for g and the final model, defaulting to the
@@ -510,6 +515,7 @@ def train_elkan_noto_model(
         n_estimators,
         sample_weight=sample_weight,
         scale_pos_weight_override=1.0,
+        device=device,
         max_depth=max_depth,
         learning_rate=learning_rate,
         min_child_weight=min_child_weight,
@@ -567,6 +573,7 @@ def train_elkan_noto_model(
         n_estimators,
         sample_weight=sample_weights,
         scale_pos_weight_override=class_weight,
+        device=device,
         max_depth=max_depth,
         learning_rate=learning_rate,
         min_child_weight=min_child_weight,
