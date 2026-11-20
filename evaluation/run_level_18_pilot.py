@@ -1281,6 +1281,8 @@ def run_pilot(
     data_path = mule_model_config.data_path
     if data_path is None:
         raise ValueError("data_path is missing from the mule model configuration")
+    if data_path == "rows" and mule_model_config.label_trust_weighting:
+        raise ValueError("label_trust_weighting is only supported with data_path 'compact', not 'rows'")
 
     stage_seconds: dict[str, float] = {}
     peak_rss_mb: dict[str, float] = {}

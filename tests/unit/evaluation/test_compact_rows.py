@@ -13,16 +13,23 @@ from pathlib import Path
 
 import numpy
 import pyarrow.parquet as pq
+import pytest
+import yaml
 
 from core.event_clock import IST
-from decisions.mule_account_model import account_model_feature_names, build_training_rows
+from decisions.mule_account_model import (
+    account_model_feature_names,
+    build_training_rows,
+    set_mule_model_config_path,
+)
 from decisions.rules_config import load_rules_config
-from evaluation.compact_rows import load_compact_split
+from evaluation.compact_rows import label_trust_weights, load_compact_split
 from evaluation.dataset_truth_join import join_truth
 from evaluation.level17_scoring import one_row_per_account_day, score_account_days
 from evaluation.rules_tuning import build_rules_day_matrix
 from showcase.level_17_checks import TEST_DATASET, TRAINING_DATASET, VALIDATION_DATASET
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
 TRUTH_ROOT = Path(__file__).resolve().parents[3] / "showcase" / "fixtures" / "level_17" / "truth"
 
 
@@ -166,3 +173,77 @@ def test_world_subset_loads_only_the_requested_world() -> None:
     numpy.testing.assert_array_equal(subset.rows.matrix, full.rows.matrix[keep])
     list_targets = list(subset.rows.targets)
     assert list_targets == list(full.rows.targets[keep])
+
+
+def _trust_config(tmp_path: Path, *, weighting: bool, maturity_days: int) -> Path:
+    """Writes a copy of the committed config with the trust switch and maturity window set."""
+    raw = yaml.safe_load((REPO_ROOT / "config" / "mule_model.yaml").read_text(encoding="utf-8"))
+    raw["parameters"]["label_trust_weighting"]["value"] = weighting
+    raw["parameters"]["label_maturity_days"]["value"] = maturity_days
+    path = tmp_path / "mule_model_trust.yaml"
+    path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    return path
+
+
+def test_label_trust_weights_hand_example() -> None:
+    """Two worlds with known days left and a 4-value curve give the exact expected weights."""
+    # World a ends on day 103: days left 3, 2, 1, 0. World b ends on day 202: days left 2, 0.
+    targets = numpy.asarray([0, 0, 0, 1, 0, 0], dtype=numpy.int64)
+    world_ids = numpy.asarray(["a", "a", "a", "a", "b", "b"], dtype=object)
+    day_ordinals = numpy.asarray([100, 101, 102, 103, 200, 202], dtype=numpy.int64)
+    curve = [0.1, 0.4, 0.7, 0.9]
+
+    weights = label_trust_weights(targets, world_ids, day_ordinals, curve)
+
+    assert weights.dtype == numpy.float32
+    expected = numpy.asarray([0.9, 0.7, 0.4, 1.0, 0.7, 0.1], dtype=numpy.float32)
+    numpy.testing.assert_array_equal(weights, expected)
+
+
+def test_a_positive_row_always_weighs_one_even_at_the_start_of_the_world() -> None:
+    """A positive 3 days before the end of its world would map to 0.9, yet it stays 1.0."""
+    targets = numpy.asarray([1, 0], dtype=numpy.int64)
+    world_ids = numpy.asarray(["a", "a"], dtype=object)
+    day_ordinals = numpy.asarray([100, 103], dtype=numpy.int64)
+
+    weights = label_trust_weights(targets, world_ids, day_ordinals, [0.1, 0.4, 0.7, 0.9])
+
+    assert weights[0] == 1.0
+    assert weights[1] == numpy.float32(0.1)
+
+
+def test_days_left_past_the_curve_raises_instead_of_clamping() -> None:
+    targets = numpy.asarray([0, 0], dtype=numpy.int64)
+    world_ids = numpy.asarray(["a", "a"], dtype=object)
+    day_ordinals = numpy.asarray([100, 104], dtype=numpy.int64)
+
+    with pytest.raises(ValueError, match="4 days left"):
+        label_trust_weights(targets, world_ids, day_ordinals, [0.1, 0.4, 0.7, 0.9])
+
+
+def test_switch_off_leaves_sample_weights_none() -> None:
+    split = load_compact_split([TRAINING_DATASET])
+
+    assert split.rows.sample_weights is None
+
+
+def test_switch_on_fills_weights_for_every_row(tmp_path: Path) -> None:
+    set_mule_model_config_path(_trust_config(tmp_path, weighting=True, maturity_days=0))
+    try:
+        split = load_compact_split([TRAINING_DATASET])
+    finally:
+        set_mule_model_config_path(None)
+
+    assert split.rows.sample_weights is not None
+    assert split.rows.sample_weights.shape == split.rows.targets.shape
+    assert split.rows.sample_weights.dtype == numpy.float32
+    assert numpy.all(split.rows.sample_weights[split.rows.targets == 1] == 1.0)
+
+
+def test_switch_on_with_a_maturity_window_is_refused(tmp_path: Path) -> None:
+    set_mule_model_config_path(_trust_config(tmp_path, weighting=True, maturity_days=28))
+    try:
+        with pytest.raises(ValueError, match="exclusive variants"):
+            load_compact_split([TRAINING_DATASET])
+    finally:
+        set_mule_model_config_path(None)
