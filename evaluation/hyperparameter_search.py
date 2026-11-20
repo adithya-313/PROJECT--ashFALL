@@ -35,6 +35,9 @@ class OptunaSearchResult:
         trials_run: Completed trials, which is below the requested count when the stall rule fired.
         stopped_early: Whether the stall rule stopped the study before every requested trial.
         stop_reason: Why the study ended: the stall rule's numbers, or that all trials ran.
+        param_importances: fANOVA importance per searched parameter when the study completed at
+            least two trials with differing scores, otherwise a reason the importance was not
+            computed.
     """
 
     best_params: dict[str, int | float]
@@ -43,6 +46,7 @@ class OptunaSearchResult:
     trials_run: int
     stopped_early: bool
     stop_reason: str
+    param_importances: dict[str, float] | str
 
 
 def validation_truth_average_precision(
@@ -148,7 +152,8 @@ def run_optuna_search(
 
     Returns:
         The best trial's parameters and score, every completed trial's record, how many trials ran,
-        whether the stall rule stopped the study, and the reason the study ended.
+        whether the stall rule stopped the study, why the study ended, and each parameter's fANOVA
+        importance or the reason it was not computed.
 
     Raises:
         ValueError: If the trial count, minimum trial count or patience is not a positive integer,
@@ -245,6 +250,22 @@ def run_optuna_search(
                 "score": float(trial.value),
             }
         )
+    if len(records) < 2:
+        param_importances: dict[str, float] | str = (
+            f"not run: the study completed {len(records)} trial(s); "
+            "parameter importance needs at least 2"
+        )
+    elif all(record["score"] == records[0]["score"] for record in records):
+        param_importances = (
+            f"not run: every completed trial scored identically ({records[0]['score']:.6f}), "
+            "so no setting can explain any difference"
+        )
+    else:
+        param_importances = optuna.importance.get_param_importances(
+            study,
+            evaluator=optuna.importance.FanovaImportanceEvaluator(seed=seed),
+        )
+    stopped_early = stop_reason is not None and len(records) < trial_count
     best = study.best_trial
     if best.value is None:
         raise ValueError(f"Optuna best trial {best.number} completed without a score")
@@ -253,8 +274,9 @@ def run_optuna_search(
         best_score=float(best.value),
         trials=tuple(records),
         trials_run=len(records),
-        stopped_early=stop_reason is not None,
+        stopped_early=stopped_early,
         stop_reason=(
-            stop_reason if stop_reason is not None else f"completed all {trial_count} trials"
+            stop_reason if stopped_early and stop_reason is not None else f"completed all {trial_count} trials"
         ),
+        param_importances=param_importances,
     )

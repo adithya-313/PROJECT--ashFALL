@@ -721,13 +721,19 @@ def _train_pu_method(
     mule_config: MuleModelConfig,
     seed: int,
     search_on: bool,
-) -> tuple[xgboost.XGBClassifier | PUBaggedAccountModel, dict[str, Any], list[float]]:
+) -> tuple[
+    xgboost.XGBClassifier | PUBaggedAccountModel,
+    dict[str, Any],
+    list[float],
+    dict[str, Any],
+]:
     """
-    WHAT: Fits one PU method with the search control on or off and returns its model, parameters and
-    validation probabilities.
+    WHAT: Fits one PU method with the search control on or off and returns its model, parameters,
+    validation probabilities and search record.
 
     WHY: Stage 2 must compare the three methods under the same rule, so each method is tuned by the
-    seeded truth-AP search when it is on, and by today's label-AP candidate loop when it is off.
+    seeded truth-AP search when it is on, and by today's label-AP candidate loop when it is off; the
+    search record carries every trial and the importance numbers into the stage file.
 
     Args:
         method: One of PU_METHODS.
@@ -741,7 +747,9 @@ def _train_pu_method(
         search_on: Whether hyperparameter_search is optuna.
 
     Returns:
-        (fitted model, chosen parameter record, validation probabilities in model-row order).
+        (fitted model, chosen parameter record, validation probabilities in model-row order,
+        search record). The search record is empty when the search is off; when it is on it holds
+        the trials, trials_run, stopped_early, stop_reason, param_importances and best_score.
 
     Raises:
         ValueError: If the method is unknown or its settings are missing.
@@ -762,7 +770,7 @@ def _train_pu_method(
         )
         probabilities = predict_account_days(model, rows_for_keys)
         chosen = {**chosen, "search": "off"}
-        return model, chosen, probabilities
+        return model, chosen, probabilities, {}
 
     space, trial_count, optuna_seed, _, _, _ = _optuna_requirements(mule_config)
     categorical_choices: dict[str, Sequence[int]] | None = None
@@ -873,7 +881,15 @@ def _train_pu_method(
         )
     chosen = {**best_params, "search": "optuna"}
     probabilities = predict_account_days(model, rows_for_keys)
-    return model, chosen, probabilities
+    search_record = {
+        "trials": list(search_result.trials),
+        "trials_run": search_result.trials_run,
+        "stopped_early": search_result.stopped_early,
+        "stop_reason": search_result.stop_reason,
+        "param_importances": search_result.param_importances,
+        "best_score": search_result.best_score,
+    }
+    return model, chosen, probabilities, search_record
 
 
 def _tune_each_pu_method(
@@ -941,7 +957,7 @@ def _tune_each_pu_method(
     records: list[dict[str, Any]] = []
     for method in PU_METHODS:
         started = time.perf_counter()
-        model, chosen, probabilities = _train_pu_method(
+        model, chosen, probabilities, search_record = _train_pu_method(
             method,
             training_matrix,
             training_targets,
@@ -968,6 +984,7 @@ def _tune_each_pu_method(
                 "validation_recall": float(method_tuning.validation_recall),
                 "meets_budget": bool(method_tuning.meets_budget),
                 "training_seconds": seconds,
+                **search_record,
             }
         )
         del model, probabilities

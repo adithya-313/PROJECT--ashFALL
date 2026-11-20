@@ -213,6 +213,57 @@ def test_minimum_trials_beyond_the_trial_count_is_refused() -> None:
         )
 
 
+def test_identical_scores_record_importance_as_not_run() -> None:
+    """A stalled study whose every trial scored the same reports why importance was not run."""
+    scored = _scored(["mule", "genuine"])
+
+    def train_trial(params: dict[str, int | float]) -> list[float]:
+        """Returns the same probabilities every trial, so truth AP never changes."""
+        return [0.9, 0.1]
+
+    result = run_optuna_search(
+        train_trial,
+        scored,
+        _truth_ap_space(),
+        40,
+        7,
+        min_trials_before_stop=20,
+        stall_patience_trials=10,
+        min_improvement=0.001,
+    )
+
+    assert result.stopped_early is True
+    assert result.param_importances == (
+        "not run: every completed trial scored identically (1.000000), "
+        "so no setting can explain any difference"
+    )
+
+
+def test_one_parameter_drives_the_importances() -> None:
+    """When only max_depth moves the truth AP, fANOVA ranks max_depth as the most important."""
+    scored = _scored(["mule"] + ["genuine"] * 11)
+
+    def train_trial(params: dict[str, int | float]) -> list[float]:
+        """Returns probabilities whose truth AP rises with max_depth alone."""
+        positive = 0.1 * int(params["max_depth"])
+        return [positive] + [0.05 * rank for rank in range(1, 12)]
+
+    result = run_optuna_search(
+        train_trial,
+        scored,
+        _truth_ap_space(),
+        30,
+        7,
+        min_trials_before_stop=30,
+        stall_patience_trials=1,
+        min_improvement=0.001,
+    )
+
+    importances = result.param_importances
+    assert isinstance(importances, dict)
+    assert max(importances, key=importances.__getitem__) == "max_depth"
+
+
 def test_default_hyperparameters_reproduce_the_untuned_model() -> None:
     """train_account_model's new keyword defaults fit exactly the model the old call fitted."""
     rows, targets = _training_set()
