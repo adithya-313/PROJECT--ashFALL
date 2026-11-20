@@ -20,7 +20,7 @@ import argparse
 import time
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import numpy
 import orjson
@@ -76,8 +76,11 @@ LEARNING_CURVE_N_ESTIMATORS = 100
 LEARNING_CURVE_FLAT_IMPROVEMENT = 0.01
 #: PU methods scored in stage 2, in the order stage 3 prefers them on an exact tie.
 PU_METHODS: tuple[str, ...] = ("none", "elkan_noto", "bagging")
-#: The maturity window is switched off when doing so gains at least this much validation truth AP.
-MATURITY_SWITCH_IMPROVEMENT = 0.01
+#: Stage 1 variants in the order a tie prefers them: keep every day, keep every day with trust
+#: weights, then drop the committed window. The tie tolerance itself lives in the model config.
+MATURITY_VARIANT_PREFERENCE: tuple[str, ...] = ("all_days", "all_days_trust_weighted", "drop_28")
+#: Order stage 1 trains the variants in; the committed variant first, as the two-way check did.
+MATURITY_VARIANT_TRAINING_ORDER: tuple[str, ...] = ("drop_28", "all_days", "all_days_trust_weighted")
 
 STAGE_NAMES: tuple[str, ...] = (
     "maturity_check",
@@ -341,20 +344,29 @@ def _run_stage(
     return result
 
 
-def _write_maturity_config(source: Path, destination: Path, maturity_days: int) -> None:
+def _write_maturity_config(
+    source: Path,
+    destination: Path,
+    maturity_days: int,
+    label_trust_weighting: bool,
+) -> None:
     """
-    WHAT: Writes a copy of the model config whose label_maturity_days value is the given day count.
+    WHAT: Writes a copy of the model config whose label_maturity_days and label_trust_weighting
+    values are the given ones.
 
-    WHY: The compact loader reads the maturity window from the process-wide config, so the check must
-    hand it one file per candidate value instead of editing the committed config.
+    WHY: The compact loader reads both switches from the process-wide config, so the check must
+    hand it one file per variant instead of editing the committed config, and the chosen variant's
+    file must carry both values so every later stage trains under that variant.
 
     Args:
         source: Active config file the run started from.
         destination: Copy to write, inside the stage folder.
         maturity_days: Day count to store; 0 drops nothing.
+        label_trust_weighting: Trust weighting switch to store.
 
     Raises:
-        ValueError: If the config is not a mapping or holds no label_maturity_days block.
+        ValueError: If the config is not a mapping or lacks the label_maturity_days or
+            label_trust_weighting block.
     """
     raw = yaml.safe_load(source.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
@@ -362,40 +374,97 @@ def _write_maturity_config(source: Path, destination: Path, maturity_days: int) 
     parameters = raw.get("parameters")
     if not isinstance(parameters, dict):
         raise ValueError(f"Model config {source} must hold a parameters mapping")
-    block = parameters.get("label_maturity_days")
-    if not isinstance(block, dict):
+    maturity_block = parameters.get("label_maturity_days")
+    if not isinstance(maturity_block, dict):
         raise ValueError(f"Model config {source} must hold a label_maturity_days block")
-    block["value"] = maturity_days
-    block.pop("not_found", None)
+    weighting_block = parameters.get("label_trust_weighting")
+    if not isinstance(weighting_block, dict):
+        raise ValueError(f"Model config {source} must hold a label_trust_weighting block")
+    maturity_block["value"] = maturity_days
+    maturity_block.pop("not_found", None)
+    weighting_block["value"] = label_trust_weighting
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
 
 
-def _maturity_decision(committed_days: int, committed_ap: float, off_ap: float) -> tuple[int, str]:
+def _maturity_decision(variant_scores: Mapping[str, float], tolerance: float) -> tuple[str, str]:
     """
-    WHAT: Applies the pre-registered maturity rule to the two measured validation truth APs.
+    WHAT: Applies the pre-registered three-way rule to the variants' validation truth APs.
 
-    WHY: The committed p90 is a lower bound because most first-credit accounts are censored, so the
-    window is kept only while disabling it does not gain at least the fixed improvement on validation.
+    WHY: Dropping the final days of every world discards many rows, so the simpler variants that keep
+    that data win unless the drop is clearly better: every variant within the tolerance of the best AP
+    is tied, and a tie goes to the first variant in MATURITY_VARIANT_PREFERENCE.
 
     Args:
-        committed_days: Window length read from the committed config.
-        committed_ap: Validation truth AP with that window.
-        off_ap: Validation truth AP with the window off (0 days).
+        variant_scores: Validation truth AP by variant name; must hold exactly the preference names.
+        tolerance: Largest AP gap treated as noise.
 
     Returns:
-        (chosen day count, one-sentence reason).
+        (chosen variant name, one-sentence reason).
+
+    Raises:
+        ValueError: If the names differ from the preference list or the tolerance is not positive.
     """
-    improvement = off_ap - committed_ap
-    if improvement >= MATURITY_SWITCH_IMPROVEMENT:
-        return 0, (
-            f"Window off: validation truth AP rose by {improvement:.4f} (>= {MATURITY_SWITCH_IMPROVEMENT}) "
-            f"when the {committed_days}-day window was removed."
+    if set(variant_scores) != set(MATURITY_VARIANT_PREFERENCE):
+        raise ValueError(
+            f"Variant scores must cover exactly {list(MATURITY_VARIANT_PREFERENCE)}; got {sorted(variant_scores)}"
         )
-    return committed_days, (
-        f"Window kept at {committed_days} days: removing it changed validation truth AP by "
-        f"{improvement:.4f}, less than the {MATURITY_SWITCH_IMPROVEMENT} needed to switch it off."
+    if tolerance <= 0.0:
+        raise ValueError(f"The tie tolerance must be positive; got {tolerance}")
+    best_name = max(variant_scores, key=lambda name: variant_scores[name])
+    best_ap = variant_scores[best_name]
+    tied_names = [name for name in MATURITY_VARIANT_PREFERENCE if variant_scores[name] >= best_ap - tolerance]
+    chosen = tied_names[0]
+    return chosen, (
+        f"{chosen} chosen with validation truth AP {variant_scores[chosen]:.4f}: the best AP was "
+        f"{best_ap:.4f} ({best_name}), and {len(tied_names)} variant(s) were within the tie tolerance "
+        f"of {tolerance} of it, resolved by preferring {' > '.join(MATURITY_VARIANT_PREFERENCE)}."
     )
+
+
+def _variant_settings(variant_name: str, committed_days: int) -> tuple[int, bool]:
+    """
+    WHAT: Returns (label_maturity_days, label_trust_weighting) for one named maturity variant.
+
+    Raises:
+        ValueError: If the name is not one of MATURITY_VARIANT_PREFERENCE.
+    """
+    if variant_name == "drop_28":
+        return committed_days, False
+    if variant_name == "all_days":
+        return 0, False
+    if variant_name == "all_days_trust_weighted":
+        return 0, True
+    raise ValueError(f"Unknown maturity variant: {variant_name!r}")
+
+
+def _write_chosen_config(source: Path, destination: Path, maturity: Mapping[str, Any]) -> None:
+    """
+    WHAT: Writes the config copy every later stage trains under, carrying the chosen variant's
+    label_maturity_days and label_trust_weighting.
+
+    WHY: The two values come from the chosen variant's own record, so the copy can never hold one
+    variant's window with another variant's weighting.
+
+    Args:
+        source: Active config file the run started from.
+        destination: Chosen config copy to write.
+        maturity: The maturity_check stage record.
+
+    Raises:
+        ValueError: If the record's chosen_variant has no entry in its variants list.
+    """
+    chosen_name = maturity["chosen_variant"]
+    for variant in maturity["variants"]:
+        if variant["name"] == chosen_name:
+            _write_maturity_config(
+                source,
+                destination,
+                int(variant["label_maturity_days"]),
+                bool(variant["label_trust_weighting"]),
+            )
+            return
+    raise ValueError(f"The maturity record has no variant named {chosen_name!r}")
 
 
 def _maturity_check(
@@ -409,11 +478,12 @@ def _maturity_check(
     out_root: Path,
 ) -> dict[str, Any]:
     """
-    WHAT: Trains the fixed probe model with the committed maturity window and with it off, and picks
-    the window on validation truth.
+    WHAT: Trains the fixed probe model under each of the three label-handling variants and picks one
+    on validation truth.
 
-    WHY: The measured p90 is a lower bound because most first-credit accounts are censored, so the
-    window must be shown not to hurt validation before every later stage trains under it.
+    WHY: The measured p90 is a lower bound because most first-credit accounts are censored, and the
+    28-day cut removes a large share of the training rows, so the cut must be shown to beat keeping
+    every day, with or without trust weighting, before every later stage trains under a variant.
 
     Args:
         training_dirs: Training dataset folders.
@@ -422,11 +492,14 @@ def _maturity_check(
         truth_root: Root folder holding one truth folder per run_id.
         base_rules_config: Rules table the compact loader needs to build ScoredDays.
         seed: Model random seed.
-        mule_config: Loaded model config holding the committed window.
-        out_root: Driver output root; the per-candidate config copies land under its stages folder.
+        mule_config: Loaded model config holding the committed window and the tie tolerance.
+        out_root: Driver output root; the per-variant config copies land under its stages folder.
 
     Returns:
-        The two candidate records, the chosen day count and the reason.
+        The variant records (name, label_maturity_days, label_trust_weighting, training_row_count,
+        training_positive_count, training_weight_sum and validation_truth_average_precision), the
+        chosen_variant, the reason and the tolerance. training_weight_sum is the row count when the
+        variant is unweighted.
 
     Raises:
         ValueError: If the committed window is null, a split cannot be loaded, or a variant has no
@@ -457,9 +530,10 @@ def _maturity_check(
     source_config = active_mule_model_config_path().resolve()
     previous_config = active_mule_model_config_path()
     variants: list[dict[str, Any]] = []
-    for maturity_days in (committed_days, 0):
-        candidate_config = out_root / "stages" / f"maturity_days_{maturity_days}.yaml"
-        _write_maturity_config(source_config, candidate_config, maturity_days)
+    for variant_name in MATURITY_VARIANT_TRAINING_ORDER:
+        maturity_days, trust_weighting = _variant_settings(variant_name, committed_days)
+        candidate_config = out_root / "stages" / f"maturity_variant_{variant_name}.yaml"
+        _write_maturity_config(source_config, candidate_config, maturity_days, trust_weighting)
         set_mule_model_config_path(candidate_config)
         try:
             training = load_compact_split(training_dirs, world_ids=training_world_ids)
@@ -471,28 +545,33 @@ def _maturity_check(
         )
         probabilities = predict_account_days(model, validation.days.aligned_features)
         average_precision_truth = validation_truth_average_precision(probabilities, truth_scored)
+        row_count = int(training.rows.matrix.shape[0])
+        if training.rows.sample_weights is None:
+            weight_sum = float(row_count)
+        else:
+            weight_sum = float(training.rows.sample_weights.sum(dtype=numpy.float64))
         variants.append(
             {
+                "name": variant_name,
                 "label_maturity_days": maturity_days,
-                "training_row_count": int(training.rows.matrix.shape[0]),
+                "label_trust_weighting": trust_weighting,
+                "training_row_count": row_count,
                 "training_positive_count": sum(targets),
+                "training_weight_sum": weight_sum,
                 "validation_truth_average_precision": float(average_precision_truth),
             }
         )
         del training, targets, model, probabilities
-    committed_variant = variants[0]
-    off_variant = variants[1] if variants[1]["label_maturity_days"] != committed_days else variants[0]
-    chosen_days, reason = _maturity_decision(
-        int(committed_variant["label_maturity_days"]),
-        float(committed_variant["validation_truth_average_precision"]),
-        float(off_variant["validation_truth_average_precision"]),
+    chosen_variant, reason = _maturity_decision(
+        {variant["name"]: float(variant["validation_truth_average_precision"]) for variant in variants},
+        mule_config.maturity_tie_tolerance,
     )
     return {
         "committed_label_maturity_days": committed_days,
         "variants": variants,
-        "chosen_label_maturity_days": chosen_days,
+        "chosen_variant": chosen_variant,
         "reason": reason,
-        "switch_improvement_threshold": MATURITY_SWITCH_IMPROVEMENT,
+        "tolerance": mule_config.maturity_tie_tolerance,
     }
 
 
@@ -1263,9 +1342,8 @@ def run_full(
             out_root,
         ),
     )
-    chosen_maturity_days = int(maturity["chosen_label_maturity_days"])
     chosen_config = stages_dir / "chosen_mule_model.yaml"
-    _write_maturity_config(config_path, chosen_config, chosen_maturity_days)
+    _write_chosen_config(config_path, chosen_config, maturity)
     previous_config = active_mule_model_config_path()
     set_mule_model_config_path(chosen_config)
     try:

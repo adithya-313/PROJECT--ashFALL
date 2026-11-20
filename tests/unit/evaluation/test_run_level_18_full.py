@@ -11,12 +11,14 @@ from typing import Any
 
 import pytest
 
+from decisions.mule_account_model import load_mule_model_config
 from evaluation.run_level_18_full import (
     _choose_pu_method,
     _learning_curve_choice,
     _maturity_decision,
     _read_matching_stage,
     _run_stage,
+    _write_chosen_config,
 )
 
 FINGERPRINT: dict[str, Any] = {
@@ -61,20 +63,89 @@ def test_changed_fingerprint_is_refused(tmp_path: Path) -> None:
         _run_stage("tune_each_pu_method", tmp_path, changed, lambda: {"value": 8})
 
 
-def test_maturity_window_is_kept_below_the_switch_threshold() -> None:
-    """Removing the window must gain at least 0.01 truth AP before the committed value is dropped."""
-    chosen, reason = _maturity_decision(28, committed_ap=0.40, off_ap=0.4099)
-
-    assert chosen == 28
-    assert "Window kept at 28 days" in reason
+TOLERANCE = 0.002
 
 
-def test_maturity_window_is_switched_off_at_the_threshold() -> None:
-    """A gain of exactly 0.01 switches the window off."""
-    chosen, reason = _maturity_decision(28, committed_ap=0.50, off_ap=0.51)
+def test_maturity_decision_clear_winner_is_chosen_whichever_variant_it_is() -> None:
+    """A gap far above the tolerance decides the contest for each variant in turn."""
+    for winner in ("drop_28", "all_days", "all_days_trust_weighted"):
+        scores = {"drop_28": 0.40, "all_days": 0.40, "all_days_trust_weighted": 0.40}
+        scores[winner] = 0.45
 
-    assert chosen == 0
-    assert "Window off" in reason
+        chosen, reason = _maturity_decision(scores, TOLERANCE)
+
+        assert chosen == winner
+        assert winner in reason
+
+
+def test_maturity_decision_tie_within_tolerance_follows_the_preference_order() -> None:
+    """All three within 0.002 of the best: the preferred all_days wins although it scored lowest."""
+    scores = {"drop_28": 0.5010, "all_days": 0.5000, "all_days_trust_weighted": 0.5015}
+
+    chosen, _ = _maturity_decision(scores, TOLERANCE)
+
+    assert chosen == "all_days"
+
+
+def test_maturity_decision_prefers_weighted_over_drop_when_only_those_two_tie() -> None:
+    """drop_28 leads by 0.0015, inside the tolerance of weighted but far above all_days."""
+    scores = {"drop_28": 0.5075, "all_days": 0.5000, "all_days_trust_weighted": 0.5060}
+
+    chosen, _ = _maturity_decision(scores, TOLERANCE)
+
+    assert chosen == "all_days_trust_weighted"
+
+
+def test_maturity_decision_drop_28_wins_only_when_it_clears_both_others_by_the_tolerance() -> None:
+    """Gaps of 0.004 and 0.005 exceed the tolerance, so the data-dropping variant is chosen."""
+    scores = {"drop_28": 0.510, "all_days": 0.505, "all_days_trust_weighted": 0.506}
+
+    chosen, _ = _maturity_decision(scores, TOLERANCE)
+
+    assert chosen == "drop_28"
+
+
+def test_maturity_decision_refuses_missing_variants_and_a_bad_tolerance() -> None:
+    with pytest.raises(ValueError, match="must cover exactly"):
+        _maturity_decision({"drop_28": 0.5, "all_days": 0.5}, TOLERANCE)
+    with pytest.raises(ValueError, match="must be positive"):
+        _maturity_decision({"drop_28": 0.5, "all_days": 0.5, "all_days_trust_weighted": 0.5}, 0.0)
+
+
+def _maturity_record(chosen_variant: str) -> dict[str, Any]:
+    """Returns a stage-1 record whose variants carry the three real window and weighting settings."""
+    return {
+        "chosen_variant": chosen_variant,
+        "variants": [
+            {"name": "drop_28", "label_maturity_days": 28, "label_trust_weighting": False},
+            {"name": "all_days", "label_maturity_days": 0, "label_trust_weighting": False},
+            {"name": "all_days_trust_weighted", "label_maturity_days": 0, "label_trust_weighting": True},
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    ("chosen_variant", "expected_days", "expected_weighting"),
+    [("drop_28", 28, False), ("all_days", 0, False), ("all_days_trust_weighted", 0, True)],
+)
+def test_chosen_config_copy_carries_both_values_of_the_chosen_variant(
+    tmp_path: Path, chosen_variant: str, expected_days: int, expected_weighting: bool
+) -> None:
+    source = Path(__file__).resolve().parents[3] / "config" / "mule_model.yaml"
+    destination = tmp_path / "chosen_mule_model.yaml"
+
+    _write_chosen_config(source, destination, _maturity_record(chosen_variant))
+
+    chosen = load_mule_model_config(destination)
+    assert chosen.label_maturity_days == expected_days
+    assert chosen.label_trust_weighting is expected_weighting
+
+
+def test_chosen_config_refuses_a_variant_missing_from_the_record(tmp_path: Path) -> None:
+    source = Path(__file__).resolve().parents[3] / "config" / "mule_model.yaml"
+
+    with pytest.raises(ValueError, match="no variant named"):
+        _write_chosen_config(source, tmp_path / "chosen.yaml", _maturity_record("nonsense"))
 
 
 def test_learning_curve_flattens_at_80() -> None:
