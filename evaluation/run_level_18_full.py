@@ -1007,13 +1007,17 @@ def _tune_each_pu_method(
     main_budget_pct: float,
     mule_config: MuleModelConfig,
     seed: int,
+    fingerprint: dict[str, Any],
+    stages_dir: Path,
 ) -> dict[str, Any]:
     """
     WHAT: Trains and scores every PU method on the chosen training-world count and the main budget.
 
     WHY: The method choice must compare truth AP and truth recall at the same genuine-restriction
     budget the pilot reports, so each method's cut is tuned on validation exactly as the pilot's
-    XGBoost cut is.
+    XGBoost cut is. Each method takes hours, so its record is written to its own checkpoint file the
+    moment it finishes; a crash in a later method or in the combined stage file then costs only the
+    unfinished work.
 
     Args:
         training_dirs: Training dataset folders.
@@ -1026,12 +1030,19 @@ def _tune_each_pu_method(
         main_budget_pct: Main genuine-restriction budget the recall is measured at.
         mule_config: Loaded model config.
         seed: Model random seed.
+        fingerprint: Stage fingerprint; a checkpoint written under different inputs is refused.
+        stages_dir: Folder holding the stage files and the per-method checkpoints.
 
     Returns:
         One method record per PU method, in PU_METHODS order.
 
     Raises:
-        ValueError: If a split cannot be loaded or the chosen count exceeds the available worlds.
+        ValueError: If a split cannot be loaded, the chosen count exceeds the available worlds, or a
+            checkpoint's fingerprint differs from the current one.
+
+    Side effects:
+        Writes stages/tune_method_<method>.json after each trained method and prints a SKIP or DONE
+        line per method.
     """
     if chosen_training_world_count > len(training_world_ids):
         raise ValueError(
@@ -1061,6 +1072,13 @@ def _tune_each_pu_method(
     search_on = mule_config.hyperparameter_search == "optuna"
     records: list[dict[str, Any]] = []
     for method in PU_METHODS:
+        checkpoint_name = f"tune_method_{method}"
+        checkpoint_path = stages_dir / f"{checkpoint_name}.json"
+        checkpoint = _read_matching_stage(checkpoint_path, checkpoint_name, fingerprint)
+        if checkpoint is not None:
+            print(f"SKIP method {method}: fingerprint matches {checkpoint_path}")
+            records.append(checkpoint)
+            continue
         started = time.perf_counter()
         model, chosen, probabilities, search_record = _train_pu_method(
             method,
@@ -1081,18 +1099,19 @@ def _tune_each_pu_method(
             for day, probability in zip(truth_scored, probabilities, strict=True)
         ]
         method_tuning = tune_anomaly_threshold(method_scored, tuning, "validation", main_budget_pct)
-        records.append(
-            {
-                "pu_method": method,
-                "chosen_params": chosen,
-                "validation_truth_average_precision": float(truth_ap),
-                "validation_rate_pct": float(method_tuning.validation_rate_pct),
-                "validation_recall": float(method_tuning.validation_recall),
-                "meets_budget": bool(method_tuning.meets_budget),
-                "training_seconds": seconds,
-                **search_record,
-            }
-        )
+        record = {
+            "pu_method": method,
+            "chosen_params": chosen,
+            "validation_truth_average_precision": float(truth_ap),
+            "validation_rate_pct": float(method_tuning.validation_rate_pct),
+            "validation_recall": float(method_tuning.validation_recall),
+            "meets_budget": bool(method_tuning.meets_budget),
+            "training_seconds": seconds,
+            **search_record,
+        }
+        _write_stage(checkpoint_path, checkpoint_name, fingerprint, record, started)
+        print(f"DONE method {method}: {seconds:.1f} s -> {checkpoint_path}")
+        records.append(record)
         del model, probabilities
     return {"training_world_count": chosen_training_world_count, "methods": records}
 
@@ -1379,6 +1398,8 @@ def run_full(
                 main_budget_pct,
                 mule_config,
                 seed,
+                fingerprint,
+                stages_dir,
             ),
         )
         method_choice = _run_stage(
