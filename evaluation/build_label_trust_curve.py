@@ -9,7 +9,7 @@ TERM: label delay: days from an account's first illicit credit to the arrival of
 TERM: trust curve: share_k = (number of delays <= k days) / (number of delays), for k = 0..max_days.
 
 Usage:
-    py -3.12 scripts/build_label_trust_curve.py --report runs/full/label_delay_r7.json \
+    py -3.12 -m evaluation.build_label_trust_curve --report runs/full/label_delay_r7.json \
         --expected-sha256 <hex> --max-days 90
 
 Prints only the YAML list block holding the curve values. Every guard failure raises and prints
@@ -24,10 +24,7 @@ from typing import Any
 
 import orjson
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT))
-
-from evaluation.measure_label_delay import _percentiles  # noqa: E402
+from evaluation.measure_label_delay import _percentiles
 
 EXPECTED_WORLD_COUNT = 160
 PERCENTILE_TOLERANCE = 1e-9
@@ -122,7 +119,7 @@ def format_yaml_block(curve: list[float], expected_sha256: str) -> str:
     values_text = ", ".join(str(share) for share in curve)
     short_hash = f"{expected_sha256[:8]}...{expected_sha256[-4:]}"
     derived_from = (
-        "scripts/build_label_trust_curve.py over runs/full/label_delay_r7.json "
+        "evaluation/build_label_trust_curve.py over runs/full/label_delay_r7.json "
         f"sha256 {short_hash} (pooled from the 160 by_world delays_days lists, 160 training worlds)"
     )
     reason = (

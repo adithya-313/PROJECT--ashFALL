@@ -96,8 +96,8 @@ def test_maturity_decision_prefers_weighted_over_drop_when_only_those_two_tie() 
     assert chosen == "all_days_trust_weighted"
 
 
-def test_maturity_decision_drop_28_wins_only_when_it_clears_both_others_by_the_tolerance() -> None:
-    """Gaps of 0.004 and 0.005 exceed the tolerance, so the data-dropping variant is chosen."""
+def test_maturity_decision_drop_28_wins_only_when_it_leads_both_others_by_more_than_the_tolerance() -> None:
+    """Gaps of 0.004 and 0.005 are more than the tolerance, so the data-dropping variant is chosen."""
     scores = {"drop_28": 0.510, "all_days": 0.505, "all_days_trust_weighted": 0.506}
 
     chosen, _ = _maturity_decision(scores, TOLERANCE)
@@ -280,3 +280,15 @@ def test_pu_choice_rejects_empty_records() -> None:
     """A choice without any measured method is refused rather than guessed."""
     with pytest.raises(ValueError, match="at least one method record"):
         _choose_pu_method([])
+
+
+def test_maturity_decision_gap_of_exactly_the_tolerance_is_a_tie() -> None:
+    """Binary-exact values: a lead of exactly the tolerance ties, a lead of more than it wins."""
+    exact_gap = {"drop_28": 0.75, "all_days": 0.5, "all_days_trust_weighted": 0.5}
+    larger_gap = {"drop_28": 0.8125, "all_days": 0.5, "all_days_trust_weighted": 0.5}
+
+    exact_choice, _ = _maturity_decision(exact_gap, 0.25)
+    larger_choice, _ = _maturity_decision(larger_gap, 0.25)
+
+    assert exact_choice == "all_days"
+    assert larger_choice == "drop_28"

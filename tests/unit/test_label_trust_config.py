@@ -14,7 +14,7 @@ import pytest
 import yaml
 
 from decisions.mule_account_model import LABEL_TRUST_CURVE_LENGTH, load_mule_model_config
-from scripts.build_label_trust_curve import pool_delays, trust_curve, verify_report_hash
+from evaluation.build_label_trust_curve import pool_delays, trust_curve, verify_report_hash
 from tests.unit.mule_model_config_fixture import write_mule_model_config
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

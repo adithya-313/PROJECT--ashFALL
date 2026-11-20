@@ -37,7 +37,7 @@ parameters:
   label_trust_curve:
     label: measured
     value: [0.017804, 0.200297, 0.25816, 0.307122, 0.34273, 0.381306, 0.419881, 0.462908, 0.529674, 0.578635, 0.620178, 0.652819, 0.698813, 0.744807, 0.778932, 0.817507, 0.836795, 0.853116, 0.862018, 0.87092, 0.878338, 0.882789, 0.882789, 0.885757, 0.888724, 0.891691, 0.894659, 0.894659, 0.902077, 0.903561, 0.906528, 0.908012, 0.909496, 0.913947, 0.916914, 0.922849, 0.924332, 0.925816, 0.930267, 0.930267, 0.933234, 0.936202, 0.940653, 0.945104, 0.951039, 0.958457, 0.965875, 0.97181, 0.974777, 0.980712, 0.980712, 0.986647, 0.991098, 0.994065, 0.995549, 0.995549, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-    derived_from: "scripts/build_label_trust_curve.py over runs/full/label_delay_r7.json sha256 7886a2f6...d824 (pooled from the 160 by_world delays_days lists, 160 training worlds)"
+    derived_from: "evaluation/build_label_trust_curve.py over runs/full/label_delay_r7.json sha256 7886a2f6...d824 (pooled from the 160 by_world delays_days lists, 160 training worlds)"
     reason: "Share of bank labels that had arrived k days after the first illicit credit; an unlabelled training row with k days left in its world is trusted as a negative with this weight. Labelled delays only (censored accounts are missing), so the curve is optimistic - recorded as a limitation."
 
   label_trust_weighting:

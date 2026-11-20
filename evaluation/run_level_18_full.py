@@ -392,8 +392,10 @@ def _maturity_decision(variant_scores: Mapping[str, float], tolerance: float) ->
     WHAT: Applies the pre-registered three-way rule to the variants' validation truth APs.
 
     WHY: Dropping the final days of every world discards many rows, so the simpler variants that keep
-    that data win unless the drop is clearly better: every variant within the tolerance of the best AP
-    is tied, and a tie goes to the first variant in MATURITY_VARIANT_PREFERENCE.
+    that data win unless the drop is clearly better: every variant whose AP is at least the best AP
+    minus the tolerance is tied (a gap of exactly the tolerance is a tie, so a variant must lead by
+    MORE than the tolerance to beat the others outright), and a tie goes to the first variant in
+    MATURITY_VARIANT_PREFERENCE.
 
     Args:
         variant_scores: Validation truth AP by variant name; must hold exactly the preference names.

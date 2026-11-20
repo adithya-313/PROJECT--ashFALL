@@ -72,7 +72,7 @@ HYPERPARAMETER_SPACE_NAMES: tuple[str, ...] = (
 INTEGER_HYPERPARAMETERS: frozenset[str] = frozenset({"max_depth", "n_estimators"})
 #: Space entries sampled on a log scale, as the architect's ranges specify.
 LOG_HYPERPARAMETERS: frozenset[str] = frozenset({"learning_rate", "min_child_weight", "reg_alpha", "reg_lambda"})
-#: Length of the label trust curve: one share per day 0..90, as scripts/build_label_trust_curve.py
+#: Length of the label trust curve: one share per day 0..90, as evaluation/build_label_trust_curve.py
 #: writes it with --max-days 90.
 LABEL_TRUST_CURVE_LENGTH: int = 91
 ALLOWED_MULE_MODEL_KEYS: frozenset[str] = frozenset(
