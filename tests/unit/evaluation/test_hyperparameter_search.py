@@ -7,11 +7,13 @@ study, the "off" path's unchanged defaults and the config ranges must all be pro
 before a single full-scale model is trained.
 """
 
+import dataclasses
 from datetime import date
 from pathlib import Path
 from typing import Any
 
 import numpy
+import orjson
 import pytest
 import yaml
 
@@ -419,3 +421,37 @@ def test_missing_search_range_is_refused(tmp_path: Path) -> None:
     path = _write_variant(tmp_path, mutate)
     with pytest.raises(ValueError, match="hyperparameter_space"):
         load_mule_model_config(path)
+
+
+def test_param_importances_are_plain_floats_that_orjson_can_write() -> None:
+    """The real fANOVA importances come back as plain floats, so the stage file writer accepts them."""
+    scored = _scored(["mule", "genuine", "genuine", "genuine", "genuine", "genuine", "mule", "genuine"])
+    space = {
+        "first_mule_score": HyperparameterRange(minimum=0.0, maximum=1.0, log=False, integer=False),
+        "second_mule_score": HyperparameterRange(minimum=0.0, maximum=1.0, log=False, integer=False),
+    }
+
+    def train_trial(params: dict[str, int | float]) -> list[float]:
+        """Scores the two mule days with the sampled values and every other day at 0.5."""
+        probabilities = [0.5] * len(scored)
+        probabilities[0] = float(params["first_mule_score"])
+        probabilities[6] = float(params["second_mule_score"])
+        return probabilities
+
+    result = run_optuna_search(
+        train_trial,
+        scored,
+        space,
+        4,
+        3,
+        min_trials_before_stop=4,
+        stall_patience_trials=1,
+        min_improvement=0.5,
+    )
+
+    assert isinstance(result.param_importances, dict)
+    assert set(result.param_importances) == set(space)
+    for importance in result.param_importances.values():
+        assert type(importance) is float
+    # The same options the stage writer uses; a numpy.float64 value would raise TypeError here.
+    orjson.dumps(dataclasses.asdict(result), option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2)
