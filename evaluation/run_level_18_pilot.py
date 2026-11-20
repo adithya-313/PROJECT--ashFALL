@@ -29,7 +29,7 @@ import xgboost
 
 from core.event_clock import IST
 from core.truth_import_check import find_truth_violations
-from decisions.anomaly_config import load_anomaly_detector_config
+from decisions.anomaly_config import AnomalyDetectorConfig, input_feature_names, load_anomaly_detector_config
 from decisions.anomaly_detector import TrainedAnomalyDetector, train_anomaly_detector
 from decisions.mule_account_model import (
     FeatureRows,
@@ -282,6 +282,37 @@ def _row_key(row: dict[str, Any]) -> tuple[str, str, str, object]:
     if not hasattr(moment, "astimezone"):
         raise ValueError("Snapshot rows require a timezone-aware 'snapshot_time'")
     return (world_id, bank_id, account_id, moment.astimezone(IST).date())
+
+
+def _detector_snapshot_rows(
+    datasets: Sequence[Dataset], anomaly_config: AnomalyDetectorConfig
+) -> list[dict[str, Any]]:
+    """
+    WHAT: Returns every training snapshot row, in dataset order then row order, holding only the
+    columns the anomaly detector and the world-start lookup read.
+
+    WHY: Converting all snapshot columns to Python dicts held many gigabytes at full scale and
+    crashed stage 5; the detector needs only world_id, snapshot_time and its input features.
+
+    Args:
+        datasets: Training datasets whose snapshots table is read.
+        anomaly_config: The same config later passed to train_anomaly_detector, so the columns kept
+            always match the features the detector reads.
+
+    Returns:
+        One dict per snapshot row with exactly the needed columns.
+
+    Raises:
+        ValueError: If a dataset's snapshots table lacks a needed column.
+    """
+    needed_columns = ["world_id", "snapshot_time", *input_feature_names(anomaly_config)]
+    rows: list[dict[str, Any]] = []
+    for dataset in datasets:
+        missing_columns = [name for name in needed_columns if name not in dataset.snapshots.column_names]
+        if missing_columns:
+            raise ValueError(f"snapshots table is missing required columns: {missing_columns}")
+        rows.extend(dataset.snapshots.select(needed_columns).to_pylist())
+    return rows
 
 
 def _record_stage(
@@ -1288,12 +1319,7 @@ def run_pilot(
     peak_rss_mb: dict[str, float] = {}
 
     stage_started = time.perf_counter()
-    training_snapshot_rows = [
-        row for dataset in training_datasets for row in dataset.snapshots.to_pylist()
-    ]
-    training_label_rows = [
-        row for dataset in training_datasets for row in dataset.labels.to_pylist()
-    ]
+    full_snapshot_rows: list[dict[str, Any]] = []
     training_matrix: FeatureRows
     training_targets: list[int]
     # Only the compact path can carry label trust weights; the rows path refuses the switch above.
@@ -1304,9 +1330,10 @@ def run_pilot(
         training_targets = [int(target) for target in training_split.rows.targets]
         training_weights = training_split.rows.sample_weights
     elif data_path == "rows":
-        training_matrix, training_targets, _ = build_training_rows(
-            training_snapshot_rows, training_label_rows
-        )
+        # The rows path keeps today's behaviour: every column, for the matrix and the detector.
+        full_snapshot_rows = [row for dataset in training_datasets for row in dataset.snapshots.to_pylist()]
+        training_label_rows = [row for dataset in training_datasets for row in dataset.labels.to_pylist()]
+        training_matrix, training_targets, _ = build_training_rows(full_snapshot_rows, training_label_rows)
     else:
         raise ValueError(f"Unsupported data_path: {data_path!r}")
     training_positive_count = sum(training_targets)
@@ -1314,8 +1341,14 @@ def run_pilot(
 
     seed = anomaly_config.random_state
     detector_started = time.perf_counter()
-    world_starts = world_start_by_world(training_snapshot_rows)
-    detector = train_anomaly_detector(training_snapshot_rows, "training", world_starts, anomaly_config)
+    # Only the compact path (built for memory) uses the narrow rows; the rows path reuses its full rows.
+    if data_path == "compact":
+        detector_rows = _detector_snapshot_rows(training_datasets, anomaly_config)
+    else:
+        detector_rows = full_snapshot_rows
+    world_starts = world_start_by_world(detector_rows)
+    detector = train_anomaly_detector(detector_rows, "training", world_starts, anomaly_config)
+    del detector_rows
     _record_stage("detector", detector_started, stage_seconds, peak_rss_mb)
 
     validation_snapshot_rows: list[dict[str, Any]] = []
