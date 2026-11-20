@@ -130,8 +130,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     WHAT: Loads the splits, runs the cpu, cuda and cuda-again fits and writes the parity JSON.
 
     Raises:
-        ValueError: If the config is not on the compact path, xgboost has no CUDA build, or a split
-            cannot be loaded.
+        ValueError: If xgboost has no CUDA build or a split cannot be loaded.
     """
     parser = argparse.ArgumentParser(description="Check that GPU training matches CPU training")
     parser.add_argument("--training", type=Path, action="append", required=True)
@@ -141,8 +140,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     mule_config = load_mule_model_config()
-    if mule_config.data_path != "compact":
-        raise ValueError(f"The parity script requires data_path 'compact'; the config sets {mule_config.data_path!r}")
     base_rules_config = (
         load_rules_config_with_labels() if mule_config.rules_plus_labels_and_registry is True else load_rules_config()
     )
