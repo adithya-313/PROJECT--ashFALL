@@ -593,3 +593,17 @@ No model code exists yet (models start in Level 18; `world/` is simulator code).
 | Why | The 28-day cut removes about 45% of the training rows, including the rows of late-starting mules. Trusting an unlabelled row as a negative in proportion to the share of labels that had arrived by then keeps those rows without treating immature negatives as certain. |
 | Disclosure | Chosen before any full-scale validation or test result. The curve uses labelled delays only; censored accounts are missing, so it is optimistic. The switch is off by default and `maturity_check` decides on validation truth average precision. |
 | Results exist? | No |
+
+## A-049
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-20 |
+| Issue IDs | None |
+| Issue IDs v2 | None |
+| Files | `docs/research/amendments.md` |
+| What changed | Level 18 training worlds are extended from 160 to 320 (blocks 0-7). Night3 built blocks 4-7 on the lab at code version `d61a65e-dirty`: dataset `training-20261031T1830-fb7561164f4f`, 160 worlds (`training-b04-0000` to `training-b07-0039`), seeds 1000160 to 1000319, split `training`. Preset and sampler seed are not recorded in the manifest; consistency was checked via world cards, seed continuity and row counts. None of its 160 run_ids or seeds appears in any existing training, validation, test or stress dataset. |
+| Why | Run A's learning curve, scored on validation only, reported `more_training_worlds_needed` = true at 160 training worlds. |
+| Stopping rule | 320 is the final Level 18 training size whatever the next learning curve reports. If it flags again, that is recorded as a limitation, not answered with more data. |
+| Disclosure | No test or stress world had been scored by any Level 18 full run when this was decided: Run A died in stage 5 while loading validation. The crashed run folders are kept for the record. |
+| Results exist? | No |
