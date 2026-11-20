@@ -8,6 +8,7 @@ model that ships is the one that finds mules rather than the one that best repro
 was trained on.
 """
 
+import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -31,11 +32,21 @@ class OptunaSearchResult:
         best_score: Validation truth average precision of that trial.
         trials: One record per completed trial, in trial order; each holds "number", "params" and
             "score" so the run can write every candidate it tried.
+        trials_run: Completed trials, which is below the requested count when the stall rule fired.
+        stopped_early: Whether the stall rule stopped the study before every requested trial.
+        stop_reason: Why the study ended: the stall rule's numbers, or that all trials ran.
+        param_importances: fANOVA importance per searched parameter when the study completed at
+            least two trials with differing scores, otherwise a reason the importance was not
+            computed.
     """
 
     best_params: dict[str, int | float]
     best_score: float
     trials: tuple[dict[str, Any], ...]
+    trials_run: int
+    stopped_early: bool
+    stop_reason: str
+    param_importances: dict[str, float] | str
 
 
 def validation_truth_average_precision(
@@ -110,6 +121,9 @@ def run_optuna_search(
     trial_count: int,
     seed: int,
     *,
+    min_trials_before_stop: int,
+    stall_patience_trials: int,
+    min_improvement: float,
     categorical_choices: Mapping[str, Sequence[int | float]] | None = None,
 ) -> OptunaSearchResult:
     """
@@ -117,33 +131,70 @@ def run_optuna_search(
 
     WHY: A tree-structured Parzen estimator concentrates later trials around the parameter regions
     that scored well, so 40 trials cover the configured ranges far better than a grid; a fixed
-    sampler seed keeps the sampled sequence and the winning trial reproducible across runs.
+    sampler seed keeps the sampled sequence and the winning trial reproducible across runs. The
+    stall rule stops a study that has stopped learning, so a full-scale run does not spend its
+    remaining budget on trials the architect's ruling says cannot help.
 
     Args:
         train_trial: Callback that trains the model with the sampled parameters and returns one
             validation probability per scored account-day. It is called once per trial.
         scored: Validation account-days the returned probabilities belong to.
         space: Parameter name -> validated sampling range, read from the model config.
-        trial_count: Number of trials to run.
+        trial_count: Number of trials to run before stopping normally.
         seed: Seed for the TPE sampler and, through the caller's callback, for the trained models.
+        min_trials_before_stop: Completed trials required before the stall rule may stop the study.
+        stall_patience_trials: Trailing completed trials whose best score is compared with the
+            earlier best; reaching this many trials without the configured gain stops the study.
+        min_improvement: Truth average precision the patience window must add to the earlier best
+            for the study to keep running.
         categorical_choices: Optional parameter name -> allowed values sampled as a category, such
             as bagging's unlabelled rows per positive.
 
     Returns:
-        The best trial's parameters and score, plus every completed trial's record.
+        The best trial's parameters and score, every completed trial's record, how many trials ran,
+        whether the stall rule stopped the study, why the study ended, and each parameter's fANOVA
+        importance or the reason it was not computed.
 
     Raises:
-        ValueError: If the trial count is not a positive integer, the ranges or scored days are
-            empty, a category holds no values or reuses a range name, or a trial ends without a
-            score because the callback raised.
+        ValueError: If the trial count, minimum trial count or patience is not a positive integer,
+            the improvement is not a positive finite number, the minimum trial count exceeds the
+            trial count, the ranges or scored days are empty, a category holds no values or reuses
+            a range name, or a trial ends without a score because the callback raised.
 
     Side effects:
-        Calls train_trial trial_count times and writes Optuna's own trial log lines to stderr.
+        Calls train_trial up to trial_count times and writes Optuna's own trial log lines to stderr.
     """
     if not isinstance(trial_count, int) or isinstance(trial_count, bool) or trial_count <= 0:
         raise ValueError(f"trial_count must be a positive integer; got {trial_count!r}")
     if not isinstance(seed, int) or isinstance(seed, bool):
         raise ValueError(f"seed must be an integer; got {seed!r}")
+    if (
+        not isinstance(min_trials_before_stop, int)
+        or isinstance(min_trials_before_stop, bool)
+        or min_trials_before_stop <= 0
+    ):
+        raise ValueError(
+            f"min_trials_before_stop must be a positive integer; got {min_trials_before_stop!r}"
+        )
+    if min_trials_before_stop > trial_count:
+        raise ValueError(
+            f"min_trials_before_stop {min_trials_before_stop} must not exceed trial_count {trial_count}"
+        )
+    if (
+        not isinstance(stall_patience_trials, int)
+        or isinstance(stall_patience_trials, bool)
+        or stall_patience_trials <= 0
+    ):
+        raise ValueError(
+            f"stall_patience_trials must be a positive integer; got {stall_patience_trials!r}"
+        )
+    if (
+        not isinstance(min_improvement, (int, float))
+        or isinstance(min_improvement, bool)
+        or not math.isfinite(min_improvement)
+        or min_improvement <= 0.0
+    ):
+        raise ValueError(f"min_improvement must be a positive finite number; got {min_improvement!r}")
     if not space:
         raise ValueError("The Optuna search space must hold at least one parameter range")
     if not scored:
@@ -155,13 +206,36 @@ def run_optuna_search(
             if not values:
                 raise ValueError(f"Categorical parameter {name!r} holds no values")
 
+    scores: list[float] = []
+    stop_reason: str | None = None
+
     def objective(trial: optuna.Trial) -> float:
         """Trains one trial's candidate and returns its validation truth average precision."""
         params = _suggest_parameters(trial, space, categorical_choices)
-        return validation_truth_average_precision(train_trial(params), scored)
+        score = validation_truth_average_precision(train_trial(params), scored)
+        scores.append(score)
+        return score
+
+    def stop_when_stalled(study: optuna.Study, trial: optuna.trial.FrozenTrial) -> None:
+        """Stops the study once the patience window stops improving the earlier best score."""
+        nonlocal stop_reason
+        completed_count = len(scores)
+        if completed_count < min_trials_before_stop:
+            return
+        if completed_count < stall_patience_trials + 1:
+            return
+        best_before = max(scores[:-stall_patience_trials])
+        best_window = max(scores[-stall_patience_trials:])
+        gain = best_window - best_before
+        if gain < min_improvement:
+            stop_reason = (
+                f"stalled after {completed_count} trials: the last {stall_patience_trials} trials "
+                f"gained {gain} truth AP over the earlier best, below {min_improvement}"
+            )
+            study.stop()
 
     study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=seed))
-    study.optimize(objective, n_trials=trial_count)
+    study.optimize(objective, n_trials=trial_count, callbacks=[stop_when_stalled])
 
     records: list[dict[str, Any]] = []
     for trial in study.trials:
@@ -176,6 +250,22 @@ def run_optuna_search(
                 "score": float(trial.value),
             }
         )
+    if len(records) < 2:
+        param_importances: dict[str, float] | str = (
+            f"not run: the study completed {len(records)} trial(s); "
+            "parameter importance needs at least 2"
+        )
+    elif all(record["score"] == records[0]["score"] for record in records):
+        param_importances = (
+            f"not run: every completed trial scored identically ({records[0]['score']:.6f}), "
+            "so no setting can explain any difference"
+        )
+    else:
+        param_importances = optuna.importance.get_param_importances(
+            study,
+            evaluator=optuna.importance.FanovaImportanceEvaluator(seed=seed),
+        )
+    stopped_early = stop_reason is not None and len(records) < trial_count
     best = study.best_trial
     if best.value is None:
         raise ValueError(f"Optuna best trial {best.number} completed without a score")
@@ -183,4 +273,10 @@ def run_optuna_search(
         best_params=dict(best.params),
         best_score=float(best.value),
         trials=tuple(records),
+        trials_run=len(records),
+        stopped_early=stopped_early,
+        stop_reason=(
+            stop_reason if stopped_early and stop_reason is not None else f"completed all {trial_count} trials"
+        ),
+        param_importances=param_importances,
     )

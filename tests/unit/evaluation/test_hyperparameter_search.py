@@ -105,8 +105,26 @@ def test_three_trial_study_is_deterministic_with_a_fixed_seed() -> None:
         day_rows = numpy.asarray(rows, dtype=float)
         return [float(value) for value in model.predict_proba(day_rows)[:, 1]]
 
-    first = run_optuna_search(train_trial, scored, _truth_ap_space(), 3, 11)
-    second = run_optuna_search(train_trial, scored, _truth_ap_space(), 3, 11)
+    first = run_optuna_search(
+        train_trial,
+        scored,
+        _truth_ap_space(),
+        3,
+        11,
+        min_trials_before_stop=3,
+        stall_patience_trials=1,
+        min_improvement=0.001,
+    )
+    second = run_optuna_search(
+        train_trial,
+        scored,
+        _truth_ap_space(),
+        3,
+        11,
+        min_trials_before_stop=3,
+        stall_patience_trials=1,
+        min_improvement=0.001,
+    )
 
     assert len(first.trials) == 3
     assert first.trials == second.trials
@@ -117,6 +135,133 @@ def test_three_trial_study_is_deterministic_with_a_fixed_seed() -> None:
     assert 3 <= first.best_params["n_estimators"] <= 8
     assert 0.05 <= first.best_params["learning_rate"] <= 0.5
     assert 0.5 <= first.best_params["subsample"] <= 1.0
+
+
+def test_constant_score_stops_at_the_minimum_trial_count() -> None:
+    """A flat score trips the stall rule at exactly max(min_trials, patience + 1) trials."""
+    scored = _scored(["mule", "genuine"])
+
+    def train_trial(params: dict[str, int | float]) -> list[float]:
+        """Returns the same probabilities every trial, so truth AP never changes."""
+        return [0.9, 0.1]
+
+    result = run_optuna_search(
+        train_trial,
+        scored,
+        _truth_ap_space(),
+        40,
+        7,
+        min_trials_before_stop=20,
+        stall_patience_trials=10,
+        min_improvement=0.001,
+    )
+
+    assert result.trials_run == max(20, 10 + 1)
+    assert result.trials_run == 20
+    assert result.stopped_early is True
+    assert "stalled" in result.stop_reason
+    assert len(result.trials) == 20
+
+
+def test_strictly_improving_score_runs_every_trial() -> None:
+    """A score that rises in every patience window keeps the study running to the last trial."""
+    scored = _scored(["mule"] + ["genuine"] * 11)
+    call_count = 0
+
+    def train_trial(params: dict[str, int | float]) -> list[float]:
+        """Lifts the positive day one rank per call, so truth AP strictly improves each time."""
+        nonlocal call_count
+        call_count += 1
+        negatives_above = 12 - call_count
+        return [0.5] + [0.9 if index < negatives_above else 0.1 for index in range(11)]
+
+    result = run_optuna_search(
+        train_trial,
+        scored,
+        _truth_ap_space(),
+        12,
+        7,
+        min_trials_before_stop=3,
+        stall_patience_trials=2,
+        min_improvement=0.001,
+    )
+
+    assert result.trials_run == 12
+    assert result.stopped_early is False
+    assert result.stop_reason == "completed all 12 trials"
+    assert len(result.trials) == 12
+
+
+def test_minimum_trials_beyond_the_trial_count_is_refused() -> None:
+    """A minimum the run can never reach raises before any trial trains."""
+    scored = _scored(["mule", "genuine"])
+
+    def train_trial(params: dict[str, int | float]) -> list[float]:
+        """Fails if called, proving the refusal happens before training starts."""
+        raise AssertionError("train_trial must not run when the stop settings are invalid")
+
+    with pytest.raises(ValueError, match="must not exceed trial_count"):
+        run_optuna_search(
+            train_trial,
+            scored,
+            _truth_ap_space(),
+            5,
+            7,
+            min_trials_before_stop=6,
+            stall_patience_trials=2,
+            min_improvement=0.001,
+        )
+
+
+def test_identical_scores_record_importance_as_not_run() -> None:
+    """A stalled study whose every trial scored the same reports why importance was not run."""
+    scored = _scored(["mule", "genuine"])
+
+    def train_trial(params: dict[str, int | float]) -> list[float]:
+        """Returns the same probabilities every trial, so truth AP never changes."""
+        return [0.9, 0.1]
+
+    result = run_optuna_search(
+        train_trial,
+        scored,
+        _truth_ap_space(),
+        40,
+        7,
+        min_trials_before_stop=20,
+        stall_patience_trials=10,
+        min_improvement=0.001,
+    )
+
+    assert result.stopped_early is True
+    assert result.param_importances == (
+        "not run: every completed trial scored identically (1.000000), "
+        "so no setting can explain any difference"
+    )
+
+
+def test_one_parameter_drives_the_importances() -> None:
+    """When only max_depth moves the truth AP, fANOVA ranks max_depth as the most important."""
+    scored = _scored(["mule"] + ["genuine"] * 11)
+
+    def train_trial(params: dict[str, int | float]) -> list[float]:
+        """Returns probabilities whose truth AP rises with max_depth alone."""
+        positive = 0.1 * int(params["max_depth"])
+        return [positive] + [0.05 * rank for rank in range(1, 12)]
+
+    result = run_optuna_search(
+        train_trial,
+        scored,
+        _truth_ap_space(),
+        30,
+        7,
+        min_trials_before_stop=30,
+        stall_patience_trials=1,
+        min_improvement=0.001,
+    )
+
+    importances = result.param_importances
+    assert isinstance(importances, dict)
+    assert max(importances, key=importances.__getitem__) == "max_depth"
 
 
 def test_default_hyperparameters_reproduce_the_untuned_model() -> None:
@@ -140,6 +285,27 @@ def test_default_hyperparameters_reproduce_the_untuned_model() -> None:
     explicit_probabilities = explicit_model.predict_proba(numpy.asarray(rows, dtype=float))[:, 1]
     assert default_weight == explicit_weight
     assert (default_probabilities == explicit_probabilities).all()
+
+
+def test_regularisation_defaults_reproduce_the_untuned_model() -> None:
+    """The new regularisation defaults fit exactly the model an old call fitted on random data."""
+    generator = numpy.random.default_rng(20261119)
+    rows = generator.normal(size=(30, 4))
+    targets = [1 if index % 6 == 0 else 0 for index in range(30)]
+
+    default_model, default_weight = train_account_model(rows, targets, 23, n_estimators=12)
+    explicit_model, explicit_weight = train_account_model(
+        rows,
+        targets,
+        23,
+        n_estimators=12,
+        gamma=0.0,
+        reg_alpha=0.0,
+        reg_lambda=1.0,
+    )
+
+    assert default_weight == explicit_weight
+    assert (default_model.predict_proba(rows) == explicit_model.predict_proba(rows)).all()
 
 
 def test_pu_trainers_default_to_the_same_models() -> None:
@@ -186,7 +352,7 @@ def test_pu_trainers_default_to_the_same_models() -> None:
 
 
 def test_committed_config_parses_the_search_settings() -> None:
-    """The committed config turns the search off and carries the six architect ranges."""
+    """The committed config turns the search off and carries the nine architect ranges."""
     config = load_mule_model_config(COMMITTED_CONFIG)
 
     assert config.hyperparameter_search == "off"
@@ -200,11 +366,14 @@ def test_committed_config_parses_the_search_settings() -> None:
         "min_child_weight",
         "subsample",
         "colsample_bytree",
+        "gamma",
+        "reg_alpha",
+        "reg_lambda",
     ]
     integer_names = {name for name, bounds in config.hyperparameter_space.items() if bounds.integer}
     log_names = {name for name, bounds in config.hyperparameter_space.items() if bounds.log}
     assert integer_names == {"max_depth", "n_estimators"}
-    assert log_names == {"learning_rate", "min_child_weight"}
+    assert log_names == {"learning_rate", "min_child_weight", "reg_alpha", "reg_lambda"}
 
 
 def _write_variant(directory: Path, mutate: Any) -> Path:

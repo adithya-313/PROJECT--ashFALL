@@ -83,6 +83,9 @@ def test_each_bag_has_all_positives_and_the_formula_sample_size(
         min_child_weight: float = 1.0,
         subsample: float = 1.0,
         colsample_bytree: float = 1.0,
+        gamma: float = 0.0,
+        reg_alpha: float = 0.0,
+        reg_lambda: float = 1.0,
     ) -> tuple[object, float]:
         """Records each bag's rows, targets and seed and returns a stand-in model."""
         captured.append((bag_rows, bag_targets, seed))
@@ -103,6 +106,52 @@ def test_each_bag_has_all_positives_and_the_formula_sample_size(
         assert len(set(map(tuple, bag_rows[3:]))) == expected_sample_size
         for sampled_row in bag_rows[3:]:
             assert sampled_row in rows[3:]
+
+
+def test_every_bag_receives_the_regularisation_parameters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every bag member is trained with the regularisation strengths the caller passed."""
+    rows, targets = _matrix_and_targets()
+    captured: list[tuple[float, float, float]] = []
+
+    def fake_train(
+        bag_rows: list[list[float]],
+        bag_targets: list[int],
+        seed: int,
+        n_estimators: int = 100,
+        *,
+        sample_weight: list[float] | None = None,
+        scale_pos_weight_override: float | None = None,
+        max_depth: int = 6,
+        learning_rate: float = 0.3,
+        min_child_weight: float = 1.0,
+        subsample: float = 1.0,
+        colsample_bytree: float = 1.0,
+        gamma: float = 0.0,
+        reg_alpha: float = 0.0,
+        reg_lambda: float = 1.0,
+    ) -> tuple[object, float]:
+        """Records each bag's regularisation strengths and returns a stand-in model."""
+        captured.append((gamma, reg_alpha, reg_lambda))
+        return object(), 1.0
+
+    monkeypatch.setattr(pu_learning, "train_account_model", fake_train)
+
+    train_pu_bagged_model(
+        rows,
+        targets,
+        seed=5,
+        n_estimators=10,
+        n_bags=4,
+        unlabelled_per_positive=2,
+        gamma=0.7,
+        reg_alpha=0.05,
+        reg_lambda=3.0,
+    )
+
+    assert len(captured) == 4
+    assert all(record == (0.7, 0.05, 3.0) for record in captured)
 
 
 def test_same_seed_reproduces_and_a_different_seed_changes_the_ensemble() -> None:
