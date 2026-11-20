@@ -71,6 +71,9 @@ HYPERPARAMETER_SPACE_NAMES: tuple[str, ...] = (
 INTEGER_HYPERPARAMETERS: frozenset[str] = frozenset({"max_depth", "n_estimators"})
 #: Space entries sampled on a log scale, as the architect's ranges specify.
 LOG_HYPERPARAMETERS: frozenset[str] = frozenset({"learning_rate", "min_child_weight", "reg_alpha", "reg_lambda"})
+#: Length of the label trust curve: one share per day 0..90, as scripts/build_label_trust_curve.py
+#: writes it with --max-days 90.
+LABEL_TRUST_CURVE_LENGTH: int = 91
 ALLOWED_MULE_MODEL_KEYS: frozenset[str] = frozenset(
     {
         "data_path",
@@ -79,6 +82,9 @@ ALLOWED_MULE_MODEL_KEYS: frozenset[str] = frozenset(
         "hyperparameter_space",
         "label_cut",
         "label_maturity_days",
+        "label_trust_curve",
+        "label_trust_weighting",
+        "maturity_tie_tolerance",
         "use_label_network_features",
         "label_network_features",
         "feedback_network_features_not_used",
@@ -137,6 +143,11 @@ class MuleModelConfig:
             ALLOWED_LABEL_CUTS.
         label_maturity_days: Number of trailing IST days dropped at the end of every world, or None
             when the maturity window is off because the label delay has not been measured yet.
+        label_trust_curve: Share of bank labels that had arrived k days after the first illicit credit,
+            for k = 0..90; an unlabelled row with k days left in its world is trusted as a negative with
+            this weight when label_trust_weighting is on.
+        label_trust_weighting: Whether training rows carry the trust weights from label_trust_curve.
+        maturity_tie_tolerance: Validation truth AP difference below which stage 1 treats variants as tied.
         feature_fill_flag_share: Share of rows at or above which a feature's most common value makes
             the feature unable to separate anything, so the sanity report flags it.
         use_label_network_features: Whether the account model may use the configured label-based
@@ -172,6 +183,9 @@ class MuleModelConfig:
 
     label_cut: str
     label_maturity_days: int | None
+    label_trust_curve: tuple[float, ...]
+    label_trust_weighting: bool
+    maturity_tie_tolerance: float
     feature_fill_flag_share: float
     use_label_network_features: bool | None
     label_network_features: tuple[str, ...]
@@ -189,6 +203,29 @@ class MuleModelConfig:
     optuna_stall_patience_trials: int
     optuna_min_improvement: float
     hyperparameter_space: dict[str, HyperparameterRange] | None
+
+
+def _parse_label_trust_curve(block: dict[str, Any], path: Path) -> tuple[float, ...]:
+    """
+    WHAT: Returns the validated label trust curve from its config block.
+
+    Raises:
+        ValueError: If the value is not LABEL_TRUST_CURVE_LENGTH finite numbers in [0, 1] that never decrease.
+    """
+    value = block.get("value")
+    if not isinstance(value, list) or len(value) != LABEL_TRUST_CURVE_LENGTH:
+        raise ValueError(f"label_trust_curve in {path} must be a list of {LABEL_TRUST_CURVE_LENGTH} numbers")
+    shares: list[float] = []
+    for share in value:
+        if not isinstance(share, (int, float)) or isinstance(share, bool) or not math.isfinite(share):
+            raise ValueError(f"label_trust_curve in {path} holds a value that is not a finite number: {share!r}")
+        if not 0.0 <= share <= 1.0:
+            raise ValueError(f"label_trust_curve in {path} holds a value outside [0, 1]: {share!r}")
+        shares.append(float(share))
+    for index in range(1, len(shares)):
+        if shares[index] < shares[index - 1]:
+            raise ValueError(f"label_trust_curve in {path} decreases at day {index}")
+    return tuple(shares)
 
 
 def _parse_feature_name_list(block: dict[str, Any], key: str, path: Path) -> tuple[str, ...]:
@@ -436,6 +473,23 @@ def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
             f"label_maturity_days in {resolved_path} must be null or a non-negative integer; got {maturity_value!r}"
         )
 
+    label_trust_curve = _parse_label_trust_curve(parameters["label_trust_curve"], resolved_path)
+
+    trust_switch_value = parameters["label_trust_weighting"].get("value")
+    if not isinstance(trust_switch_value, bool):
+        raise ValueError(f"label_trust_weighting in {resolved_path} must be a boolean; got {trust_switch_value!r}")
+
+    tolerance_value = parameters["maturity_tie_tolerance"].get("value")
+    if (
+        not isinstance(tolerance_value, (int, float))
+        or isinstance(tolerance_value, bool)
+        or not math.isfinite(tolerance_value)
+        or tolerance_value <= 0.0
+    ):
+        raise ValueError(
+            f"maturity_tie_tolerance in {resolved_path} must be a positive finite number; got {tolerance_value!r}"
+        )
+
     fill_share_block = parameters["feature_fill_flag_share"]
     fill_share_value = fill_share_block.get("value")
     if (
@@ -604,6 +658,9 @@ def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
     return MuleModelConfig(
         label_cut=label_cut,
         label_maturity_days=label_maturity_days,
+        label_trust_curve=label_trust_curve,
+        label_trust_weighting=trust_switch_value,
+        maturity_tie_tolerance=float(tolerance_value),
         feature_fill_flag_share=float(fill_share_value),
         use_label_network_features=use_label_network_features,
         label_network_features=label_network_features,

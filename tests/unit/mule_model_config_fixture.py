@@ -28,6 +28,21 @@ def _name_list(names: tuple[str, ...]) -> str:
     return "    value:\n" + "".join(f"      - {name}\n" for name in names)
 
 
+def label_trust_blocks_text(*, label_trust_weighting: bool = False) -> str:
+    """
+    Returns the three label-trust parameter blocks a schema-complete config must carry.
+
+    The curve is a valid non-decreasing ramp of 91 shares from 0.0 to 1.0, so tests exercise
+    parsing rather than the measured values.
+    """
+    curve_values = ", ".join(str(round(day / 90, 6)) for day in range(91))
+    return (
+        _block("label_trust_curve", f"    value: [{curve_values}]\n")
+        + _block("label_trust_weighting", f"    value: {str(label_trust_weighting).lower()}\n")
+        + _block("maturity_tie_tolerance", "    value: 0.002\n")
+    )
+
+
 def mule_model_config_text(
     *,
     label_cut: str = "arrival_time",
@@ -46,6 +61,7 @@ def mule_model_config_text(
         "parameters:\n"
         + _block("label_cut", f"    value: {label_cut}\n")
         + _block("label_maturity_days", maturity)
+        + label_trust_blocks_text()
         + _block("feature_fill_flag_share", f"    value: {feature_fill_flag_share}\n")
         + _block("use_label_network_features", "    value: true\n")
         + _block("label_network_features", _name_list(label_features))

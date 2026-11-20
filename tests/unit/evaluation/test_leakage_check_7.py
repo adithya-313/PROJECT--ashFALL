@@ -15,6 +15,7 @@ from evaluation.leakage_checks import (
     combine_label_feature_checks,
     feedback_distinct_values,
 )
+from tests.unit.mule_model_config_fixture import label_trust_blocks_text
 
 SNAPSHOT_AT = datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc)
 ARRIVAL_AT = datetime(2026, 9, 2, 10, 0, tzinfo=timezone.utc)
@@ -76,7 +77,8 @@ def _config_without_maturity(tmp_path: Path) -> Path:
         "    value: 0\n"
         "    derived_from: test\n"
         "    reason: test\n"
-        "  feature_fill_flag_share:\n"
+        + label_trust_blocks_text()
+        + "  feature_fill_flag_share:\n"
         "    label: policy\n"
         "    value: 0.999\n"
         "    derived_from: test\n"
