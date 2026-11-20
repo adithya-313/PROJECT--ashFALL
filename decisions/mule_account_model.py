@@ -75,6 +75,8 @@ LOG_HYPERPARAMETERS: frozenset[str] = frozenset({"learning_rate", "min_child_wei
 #: Length of the label trust curve: one share per day 0..90, as evaluation/build_label_trust_curve.py
 #: writes it with --max-days 90.
 LABEL_TRUST_CURVE_LENGTH: int = 91
+#: Devices XGBoost may train on; "cuda" is accepted only on a CUDA build of XGBoost.
+ALLOWED_XGBOOST_DEVICES: frozenset[str] = frozenset({"cpu", "cuda"})
 ALLOWED_MULE_MODEL_KEYS: frozenset[str] = frozenset(
     {
         "data_path",
@@ -86,6 +88,7 @@ ALLOWED_MULE_MODEL_KEYS: frozenset[str] = frozenset(
         "label_trust_curve",
         "label_trust_weighting",
         "maturity_tie_tolerance",
+        "xgboost_device",
         "use_label_network_features",
         "label_network_features",
         "feedback_network_features_not_used",
@@ -149,6 +152,7 @@ class MuleModelConfig:
             this weight when label_trust_weighting is on.
         label_trust_weighting: Whether training rows carry the trust weights from label_trust_curve.
         maturity_tie_tolerance: Validation truth AP difference below which stage 1 treats variants as tied.
+        xgboost_device: Device every account model trains on, "cpu" or "cuda".
         feature_fill_flag_share: Share of rows at or above which a feature's most common value makes
             the feature unable to separate anything, so the sanity report flags it.
         use_label_network_features: Whether the account model may use the configured label-based
@@ -187,6 +191,7 @@ class MuleModelConfig:
     label_trust_curve: tuple[float, ...]
     label_trust_weighting: bool
     maturity_tie_tolerance: float
+    xgboost_device: str
     feature_fill_flag_share: float
     use_label_network_features: bool | None
     label_network_features: tuple[str, ...]
@@ -491,6 +496,13 @@ def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
             f"maturity_tie_tolerance in {resolved_path} must be a positive finite number; got {tolerance_value!r}"
         )
 
+    device_value = parameters["xgboost_device"].get("value")
+    if not isinstance(device_value, str) or device_value not in ALLOWED_XGBOOST_DEVICES:
+        raise ValueError(
+            f"xgboost_device in {resolved_path} must be one of {sorted(ALLOWED_XGBOOST_DEVICES)}; "
+            f"got {device_value!r}"
+        )
+
     fill_share_block = parameters["feature_fill_flag_share"]
     fill_share_value = fill_share_block.get("value")
     if (
@@ -662,6 +674,7 @@ def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
         label_trust_curve=label_trust_curve,
         label_trust_weighting=trust_switch_value,
         maturity_tie_tolerance=float(tolerance_value),
+        xgboost_device=device_value,
         feature_fill_flag_share=float(fill_share_value),
         use_label_network_features=use_label_network_features,
         label_network_features=label_network_features,
@@ -934,6 +947,7 @@ def train_account_model(
     *,
     sample_weight: Sequence[float] | numpy.ndarray | None = None,
     scale_pos_weight_override: float | None = None,
+    device: str = "cpu",
     max_depth: int = 6,
     learning_rate: float = 0.3,
     min_child_weight: float = 1.0,
@@ -962,6 +976,7 @@ def train_account_model(
         scale_pos_weight_override: Optional positive class weight replacing the default; None keeps
             the default, which is negatives / positives by count without sample weights and the
             summed weight of the target-0 rows over the summed weight of the target-1 rows with them.
+        device: "cpu" or "cuda"; "cuda" needs a CUDA build of XGBoost and never falls back to cpu.
         max_depth: Tree depth, defaulting to the XGBoost default so the old call fits the same trees.
         learning_rate: Boosting step, defaulting to the XGBoost default.
         min_child_weight: Minimum child weight, defaulting to the XGBoost default.
@@ -979,9 +994,14 @@ def train_account_model(
         ValueError: If rows and targets differ in length, there are no positives or no negatives,
             the sample weights do not align with the rows or include a non-finite or negative
             value, the weights of one class sum to zero when the weighted ratio is needed, the
-            override is not a positive finite number, or a regularisation parameter is not a
-            non-negative finite number.
+            override is not a positive finite number, the device is not "cpu" or "cuda", the
+            device is "cuda" on an XGBoost build without CUDA, or a regularisation parameter is
+            not a non-negative finite number.
     """
+    if device not in ALLOWED_XGBOOST_DEVICES:
+        raise ValueError(f"device must be one of {sorted(ALLOWED_XGBOOST_DEVICES)}; got {device!r}")
+    if device == "cuda":
+        require_cuda_build()
     if len(rows) != len(targets):
         raise ValueError(f"rows length {len(rows)} does not match targets length {len(targets)}")
     if sample_weight is not None:
@@ -1062,6 +1082,7 @@ def train_account_model(
     model = xgboost.XGBClassifier(
         objective="binary:logistic",
         tree_method="hist",
+        device=device,
         random_state=seed,
         scale_pos_weight=scale_pos_weight,
         n_estimators=n_estimators,
@@ -1079,6 +1100,23 @@ def train_account_model(
     else:
         model.fit(rows, targets, sample_weight=sample_weight)
     return model, scale_pos_weight
+
+
+def require_cuda_build() -> None:
+    """
+    WHAT: Raises unless the installed XGBoost was built with CUDA support.
+
+    WHY: A run that records device "cuda" must really have trained on a GPU, so the build is checked
+    up front and refused rather than relying on whatever a CPU-only build would do with the request.
+
+    Raises:
+        ValueError: If xgboost.build_info() does not report USE_CUDA as true.
+    """
+    if xgboost.build_info().get("USE_CUDA") is not True:
+        raise ValueError(
+            'device="cuda" needs an XGBoost build with CUDA support, but xgboost.build_info() '
+            "does not report USE_CUDA as true; use device 'cpu'"
+        )
 
 
 def _weighted_class_ratio(

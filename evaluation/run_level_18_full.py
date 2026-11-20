@@ -543,7 +543,12 @@ def _maturity_check(
             set_mule_model_config_path(previous_config)
         targets = [int(target) for target in training.rows.targets]
         model, _ = train_account_model(
-            training.rows.matrix, targets, seed, LEARNING_CURVE_N_ESTIMATORS, sample_weight=training.rows.sample_weights
+            training.rows.matrix,
+            targets,
+            seed,
+            LEARNING_CURVE_N_ESTIMATORS,
+            sample_weight=training.rows.sample_weights,
+            device=mule_config.xgboost_device,
         )
         probabilities = predict_account_days(model, validation.days.aligned_features)
         average_precision_truth = validation_truth_average_precision(probabilities, truth_scored)
@@ -628,6 +633,7 @@ def _learning_curve(
     base_rules_config: RulesConfig,
     seed: int,
     training_world_counts: Sequence[int],
+    mule_config: MuleModelConfig,
 ) -> dict[str, Any]:
     """
     WHAT: Trains the fixed probe model on each training-world count and scores it on validation
@@ -644,6 +650,7 @@ def _learning_curve(
         base_rules_config: Rules table the compact loader needs to build ScoredDays.
         seed: Model random seed.
         training_world_counts: Ascending counts to try.
+        mule_config: Loaded model config; its xgboost_device is the device the probe trains on.
 
     Returns:
         Points, doubling improvements, the chosen count and the more-worlds flag.
@@ -678,7 +685,12 @@ def _learning_curve(
         matrix = training.rows.matrix
         targets = [int(target) for target in training.rows.targets]
         model, _ = train_account_model(
-            matrix, targets, seed, LEARNING_CURVE_N_ESTIMATORS, sample_weight=training.rows.sample_weights
+            matrix,
+            targets,
+            seed,
+            LEARNING_CURVE_N_ESTIMATORS,
+            sample_weight=training.rows.sample_weights,
+            device=mule_config.xgboost_device,
         )
         probabilities = predict_account_days(model, validation.days.aligned_features)
         average_precision_truth = validation_truth_average_precision(probabilities, truth_scored)
@@ -747,6 +759,7 @@ def _select_by_label_average_precision(
                 seed,
                 n_estimators=n_estimators,
                 sample_weight=training_weights,
+                device=mule_config.xgboost_device,
             )
             score = average_precision(predict_account_days(model, validation_rows_for_keys), validation_targets)
             if score > best_ap:
@@ -770,6 +783,7 @@ def _select_by_label_average_precision(
                     n_bags,
                     unlabelled_per_positive,
                     sample_weight=training_weights,
+                    device=mule_config.xgboost_device,
                 )
                 score = average_precision(predict_account_days(model, validation_rows_for_keys), validation_targets)
                 if score > best_ap:
@@ -793,6 +807,7 @@ def _select_by_label_average_precision(
                 n_estimators,
                 probability_clip,
                 sample_weight=training_weights,
+                device=mule_config.xgboost_device,
             )
             score = average_precision(predict_account_days(model, validation_rows_for_keys), validation_targets)
             if score > best_ap:
@@ -884,6 +899,7 @@ def _train_pu_method(
                 seed,
                 int(params["n_estimators"]),
                 sample_weight=training_weights,
+                device=mule_config.xgboost_device,
                 **_xgb_hyperparameters(params),
             )
             return predict_account_days(model, rows_for_keys)
@@ -909,6 +925,7 @@ def _train_pu_method(
                 n_bags,
                 int(params["unlabelled_per_positive"]),
                 sample_weight=training_weights,
+                device=mule_config.xgboost_device,
                 **_xgb_hyperparameters(params),
             )
             return predict_account_days(model, rows_for_keys)
@@ -931,6 +948,7 @@ def _train_pu_method(
                 int(params["n_estimators"]),
                 probability_clip,
                 sample_weight=training_weights,
+                device=mule_config.xgboost_device,
                 **_xgb_hyperparameters(params),
             )
             return predict_account_days(model, rows_for_keys)
@@ -958,6 +976,7 @@ def _train_pu_method(
             seed,
             int(best_params["n_estimators"]),
             sample_weight=training_weights,
+            device=mule_config.xgboost_device,
             **_xgb_hyperparameters(best_params),
         )
     elif method == "bagging":
@@ -969,6 +988,7 @@ def _train_pu_method(
             n_bags,
             int(best_params["unlabelled_per_positive"]),
             sample_weight=training_weights,
+            device=mule_config.xgboost_device,
             **_xgb_hyperparameters(best_params),
         )
     else:
@@ -981,6 +1001,7 @@ def _train_pu_method(
             int(best_params["n_estimators"]),
             probability_clip,
             sample_weight=training_weights,
+            device=mule_config.xgboost_device,
             **_xgb_hyperparameters(best_params),
         )
     chosen = {**best_params, "search": "optuna"}
@@ -1380,6 +1401,7 @@ def run_full(
                 base_rules_config,
                 seed,
                 counts,
+                mule_config,
             ),
         )
         chosen_count = learning_curve["chosen_training_world_count"]
