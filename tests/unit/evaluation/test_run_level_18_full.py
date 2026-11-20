@@ -320,9 +320,7 @@ class _FakeTuningHarness:
             days=SimpleNamespace(aligned_features=[[0.0]]),
         )
         monkeypatch.setattr(run_level_18_full, "load_compact_split", lambda *args, **kwargs: split)
-        monkeypatch.setattr(
-            run_level_18_full, "_validation_scored_in_model_row_order", lambda *args: [scored_day]
-        )
+        monkeypatch.setattr(run_level_18_full, "_validation_scored_in_model_row_order", lambda *args: [scored_day])
         monkeypatch.setattr(run_level_18_full, "_compact_row_keys", lambda rows: [])
         monkeypatch.setattr(run_level_18_full, "_train_pu_method", self._train_pu_method)
         monkeypatch.setattr(run_level_18_full, "validation_truth_average_precision", lambda *args: 0.5)
@@ -339,9 +337,20 @@ class _FakeTuningHarness:
 
     def run(self, stages_dir: Path, fingerprint: dict[str, Any]) -> dict[str, Any]:
         """Calls the real _tune_each_pu_method with placeholder arguments the fakes ignore."""
+        unused: Any = None  # the faked collaborators never read these arguments
         return _tune_each_pu_method(
-            [], ["world_0"], 1, [], Path("truth"), None, None, 1.0,  # type: ignore[arg-type]
-            SimpleNamespace(hyperparameter_search="off"), 7, fingerprint, stages_dir,  # type: ignore[arg-type]
+            [],
+            ["world_0"],
+            1,
+            [],
+            Path("truth"),
+            unused,
+            unused,
+            1.0,
+            SimpleNamespace(hyperparameter_search="off"),  # type: ignore[arg-type]
+            7,
+            fingerprint,
+            stages_dir,
         )
 
 
@@ -365,9 +374,7 @@ def test_each_pu_method_is_checkpointed_and_a_second_call_trains_none(
     assert second == first
 
 
-def test_deleting_one_checkpoint_retrains_only_that_method(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_deleting_one_checkpoint_retrains_only_that_method(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A missing checkpoint costs one method's training and nothing else."""
     harness = _FakeTuningHarness(monkeypatch)
     harness.run(tmp_path, FINGERPRINT)
@@ -379,9 +386,7 @@ def test_deleting_one_checkpoint_retrains_only_that_method(
     assert harness.trained_methods == [PU_METHODS[1]]
 
 
-def test_a_checkpoint_with_a_different_fingerprint_is_refused(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_checkpoint_with_a_different_fingerprint_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A checkpoint written for other inputs raises instead of being reused or retrained over."""
     harness = _FakeTuningHarness(monkeypatch)
     harness.run(tmp_path, FINGERPRINT)
