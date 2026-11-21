@@ -56,6 +56,9 @@ def percentile_linear(sorted_values: list[float], fraction: float) -> float:
     return lower_value + (position - lower_index) * (upper_value - lower_value)
 
 
+#: Why a re-weighted metric is None for a world that recorded no complaints.
+REWEIGHTED_NOT_DEFINED_REASON = "not defined: world has 0 complaints, so the E1 inflation factor is undefined"
+
 # An account's identity. The evaluation passes (world_id, bank_id, account_id) keys so accounts that
 # share an id across worlds stay separate; any hashable identity works the same way here.
 AccountT = TypeVar("AccountT", bound=Hashable)
@@ -94,8 +97,8 @@ def recall_at_capacity(daily_escalations: dict[date, list[AccountT]], mule_accou
 def yield_rate(
     escalations: list[tuple[AccountT, date]],
     is_mule: Callable[[AccountT, date], bool],
-    inflation_factor: float,
-) -> dict[str, float | None]:
+    inflation_factor: float | None,
+) -> dict[str, float | str | None]:
     """
     WHAT: Precision of daily escalations, measured directly and after deflating mule hits.
 
@@ -106,19 +109,26 @@ def yield_rate(
     Args:
         escalations: List of (account_id, IST calendar date) pairs, one per escalation.
         is_mule: Callable deciding whether an account was a mule on the given date.
-        inflation_factor: Positive divisor applied to true positives in the reweighted yield.
+        inflation_factor: Positive divisor applied to true positives in the reweighted yield, or None
+            for a world with no complaints, whose inflation is unmeasured.
 
     Returns:
         ``{"measured": TP / (TP + FP), "reweighted": (TP / f) / (TP / f + FP)}`` where TP counts
         escalations for mules and FP counts escalations for non-mules. Both values are None when
-        no escalations were given, because a yield over an empty set is undefined.
+        no escalations were given, because a yield over an empty set is undefined. When
+        inflation_factor is None the reweighted value is None and a ``"reweighted_reason"`` key
+        carries REWEIGHTED_NOT_DEFINED_REASON: with no measured inflation the re-weighting has no
+        divisor, and a zero or floored divisor would be a made-up number. The measured value is
+        unchanged.
 
     Errors:
-        Raises ValueError when inflation_factor is not strictly positive.
+        Raises ValueError when inflation_factor is given and is not strictly positive.
     """
-    if inflation_factor <= 0:
+    if inflation_factor is not None and inflation_factor <= 0:
         raise ValueError("yield_rate requires inflation_factor > 0")
     if not escalations:
+        if inflation_factor is None:
+            return {"measured": None, "reweighted": None, "reweighted_reason": REWEIGHTED_NOT_DEFINED_REASON}
         return {"measured": None, "reweighted": None}
     true_positives = 0
     false_positives = 0
@@ -128,6 +138,8 @@ def yield_rate(
         else:
             false_positives += 1
     measured = true_positives / (true_positives + false_positives)
+    if inflation_factor is None:
+        return {"measured": measured, "reweighted": None, "reweighted_reason": REWEIGHTED_NOT_DEFINED_REASON}
     weighted_true_positives = true_positives / inflation_factor
     reweighted = weighted_true_positives / (weighted_true_positives + false_positives)
     return {"measured": measured, "reweighted": reweighted}

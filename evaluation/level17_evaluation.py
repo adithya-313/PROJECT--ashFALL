@@ -210,7 +210,7 @@ def evaluate_world(
     scorer: str,
     anomaly_threshold: float | None,
     capacity_pct: float,
-    inflation_factor: float,
+    inflation_factor: float | None,
     persona_of: Callable[[str], str],
     weights: dict[str, int],
     default_weight: int,
@@ -231,7 +231,9 @@ def evaluate_world(
             "rules_and_anomaly" (either).
         anomaly_threshold: Inclusive anomaly cut; required for the anomaly scorers.
         capacity_pct: Percentage of a bank's active accounts the review team can check per day.
-        inflation_factor: Positive divisor applied to true positives by the reweighted yield.
+        inflation_factor: Positive divisor applied to true positives by the reweighted yield, or None for a
+            world with no complaints: its reweighted yield is then None with a reason and every measured
+            metric is unchanged.
         persona_of: Callable returning an account's persona label.
         weights: Persona label to harm weight.
         default_weight: Harm weight for personas not in weights.
