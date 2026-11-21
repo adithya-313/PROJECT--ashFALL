@@ -17,7 +17,7 @@ import pytest
 
 from core.event_clock import IST
 from evaluation.level17_evaluation import evaluate_world
-from evaluation.level17_scoring import ScoredDay
+from evaluation.level17_scoring import ScoredDay, account_key
 from evaluation.run_level_17 import (
     load_split_datasets,
     read_world_base_rate,
@@ -86,6 +86,7 @@ def _evaluated_two_depth_world() -> dict[str, Any]:
     day = date(2025, 1, 1)
     scored = [
         ScoredDay(
+            world_id="world_a",
             bank_id="bank_a",
             account_id="mule_1",
             day=day,
@@ -96,6 +97,7 @@ def _evaluated_two_depth_world() -> dict[str, Any]:
             depth=1,
         ),
         ScoredDay(
+            world_id="world_a",
             bank_id="bank_a",
             account_id="mule_2",
             day=day,
@@ -106,6 +108,7 @@ def _evaluated_two_depth_world() -> dict[str, Any]:
             depth=2,
         ),
         ScoredDay(
+            world_id="world_a",
             bank_id="bank_a",
             account_id="genuine_1",
             day=day,
@@ -126,7 +129,7 @@ def _evaluated_two_depth_world() -> dict[str, Any]:
         weights={"person": 1},
         default_weight=1,
         snapshot_time_by_account_day={
-            (scored_day.account_id, day): datetime(2025, 1, 1, 12, 0, tzinfo=IST) for scored_day in scored
+            (account_key(scored_day), day): datetime(2025, 1, 1, 12, 0, tzinfo=IST) for scored_day in scored
         },
         first_credit={
             "mule_1": datetime(2025, 1, 1, 10, 0, tzinfo=IST),

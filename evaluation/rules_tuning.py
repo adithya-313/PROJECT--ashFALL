@@ -33,7 +33,9 @@ from decisions.rules_config import Rule, RulesConfig, load_rules_config, load_ru
 from evaluation.level17_scoring import (
     GENUINE_ROLES,
     MULE_ROLES,
+    AccountKey,
     ScoredDay,
+    account_key,
     feature_values_only,
     genuine_restricted_days,
     ground_sets,
@@ -188,7 +190,8 @@ class RulesDayMatrix:
     Attributes:
         features: Rule-referenced feature name -> (row_count,) float64 array; NaN means the snapshot
             carried None for that feature.
-        account_ids: (row_count,) object array of account_id strings, per account-day.
+        account_ids: (row_count,) object array of account keys (world_id, bank_id, account_id), per
+            account-day. The world is part of the key because account ids repeat across worlds.
         day_ordinals: (row_count,) int64 date.toordinal() of each account-day's IST date.
         roles: (row_count,) object array of truth_role strings.
     """
@@ -447,14 +450,14 @@ def _check_budget(budget_pct: float) -> None:
 
 def _validation_metrics(
     scored: list[ScoredDay],
-    restricted: dict[str, set[date]],
+    restricted: dict[AccountKey, set[date]],
 ) -> tuple[float, float]:
     """
     WHAT: Computes the validation genuine-restriction rate and mule recall of one restriction set.
 
     Args:
         scored: Scored account-days defining roles and mule depth.
-        restricted: account -> restricted days produced by the point being measured.
+        restricted: account key -> restricted days produced by the point being measured.
 
     Returns:
         (validation_rate_pct, validation_recall). The rate counts genuinely active accounts
@@ -470,10 +473,10 @@ def _validation_metrics(
     genuine_restricted = genuine_restricted_days(restricted, scored)
     validation_rate_pct = 100.0 * len(genuine_restricted) / len(genuine_active)
     detected = {
-        account_id
-        for account_id, days in restricted.items()
+        account
+        for account, days in restricted.items()
         for day in days
-        if is_mule(account_id, day)
+        if is_mule(account, day)
     }
     validation_recall = len(detected) / len(mules) if mules else 0.0
     return validation_rate_pct, validation_recall
@@ -550,22 +553,22 @@ def _matrix_index(matrix: RulesDayMatrix) -> _MatrixIndex:
         The precomputed index.
 
     Raises:
-        ValueError: If a role or account id is not a string.
+        ValueError: If a role is not a string or an account id is not a (world, bank, account) key.
 
     Complexity:
         O(rows) time and O(rows) memory, with one Python pass over the rows.
     """
     row_count = int(matrix.account_ids.shape[0])
     row_roles: list[str] = []
-    account_lookup: dict[str, int] = {}
+    account_lookup: dict[AccountKey, int] = {}
     account_index_by_row = numpy.empty(row_count, dtype=numpy.int64)
-    pair_lookup: dict[tuple[str, int], int] = {}
+    pair_lookup: dict[tuple[AccountKey, int], int] = {}
     pair_index = numpy.empty(row_count, dtype=numpy.int64)
 
     for row_index in range(row_count):
         account_value = matrix.account_ids[row_index]
-        if not isinstance(account_value, str):
-            raise ValueError("RulesDayMatrix account_ids must be strings")
+        if not isinstance(account_value, tuple) or len(account_value) != 3:
+            raise ValueError("RulesDayMatrix account_ids must be (world_id, bank_id, account_id) keys")
         account_index = account_lookup.get(account_value)
         if account_index is None:
             account_index = len(account_lookup)
@@ -834,7 +837,7 @@ def build_rules_day_matrix(rows: list[dict[str, Any]], config: RulesConfig) -> R
             else:
                 raise ValueError(f"Rule feature '{name}' must be a number or None; got {value!r}")
 
-        account_ids[row_index] = row["account_id"]
+        account_ids[row_index] = _row_account_key(row)
         day_ordinals[row_index] = row["snapshot_time"].astimezone(IST).date().toordinal()
 
         role = row.get("truth_role")
@@ -854,6 +857,25 @@ def build_rules_day_matrix(rows: list[dict[str, Any]], config: RulesConfig) -> R
         day_ordinals=day_ordinals,
         roles=roles,
     )
+
+
+def _row_account_key(row: dict[str, Any]) -> AccountKey:
+    """
+    WHAT: Returns (world_id, bank_id, account_id) of one snapshot row.
+
+    WHY: The tuning matrix counts accounts, and account ids repeat across worlds, so each row
+    carries its full account identity.
+
+    Raises:
+        ValueError: If the row lacks a non-empty string world_id, bank_id or account_id.
+    """
+    parts: list[str] = []
+    for name in ("world_id", "bank_id", "account_id"):
+        value = row.get(name)
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"build_rules_day_matrix requires a non-empty string '{name}' on every row")
+        parts.append(value)
+    return (parts[0], parts[1], parts[2])
 
 
 def tune_rules_matrix(
@@ -1050,7 +1072,7 @@ def tune_rules(
     )
 
 
-def _account_peak_scores(scored: list[ScoredDay]) -> tuple[dict[str, float], dict[str, float]]:
+def _account_peak_scores(scored: list[ScoredDay]) -> tuple[dict[AccountKey, float], dict[AccountKey, float]]:
     """
     WHAT: Reduces scored account-days to the highest anomaly score each account reached on its
     genuine days and on its mule days.
@@ -1058,13 +1080,15 @@ def _account_peak_scores(scored: list[ScoredDay]) -> tuple[dict[str, float], dic
     WHY: A cut restricts an account on a day when the day's score clears the cut, so an account is
     restricted on at least one genuine (or mule) day exactly when its best such day clears the cut.
     Collapsing each account-day to its last role and highest score keeps the day-level definition
-    intact even if a caller passes two rows for the same account and day.
+    intact even if a caller passes two rows for the same account and day. An account is identified
+    by its world, bank and account id: account ids repeat across worlds, and keying by the bare id
+    merged different worlds' accounts and let one world's mule rows lift another's genuine peaks.
 
     Args:
         scored: Scored account-days; every row must carry an anomaly score.
 
     Returns:
-        (genuine_peak, mule_peak), each mapping account id to its highest score on days whose last
+        (genuine_peak, mule_peak), each mapping account key to its highest score on days whose last
         role for that account belongs to the matching role set. Accounts with no such day are
         absent.
 
@@ -1074,26 +1098,26 @@ def _account_peak_scores(scored: list[ScoredDay]) -> tuple[dict[str, float], dic
     Complexity:
         O(rows) time and O(account-days) memory; each account-day is visited once.
     """
-    day_best: dict[tuple[str, date], tuple[float, str]] = {}
+    day_best: dict[tuple[AccountKey, date], tuple[float, str]] = {}
     for scored_day in scored:
         if scored_day.anomaly_score is None:
             raise ValueError("anomaly_restricted_days requires anomaly scores on every row")
-        key = (scored_day.account_id, scored_day.day)
+        key = (account_key(scored_day), scored_day.day)
         previous = day_best.get(key)
         if previous is None or scored_day.anomaly_score > previous[0]:
             day_best[key] = (scored_day.anomaly_score, scored_day.role)
         else:
             day_best[key] = (previous[0], scored_day.role)
 
-    genuine_peak: dict[str, float] = {}
-    mule_peak: dict[str, float] = {}
-    for (account_id, _day), (score, role) in day_best.items():
+    genuine_peak: dict[AccountKey, float] = {}
+    mule_peak: dict[AccountKey, float] = {}
+    for (account, _day), (score, role) in day_best.items():
         if role in GENUINE_ROLES:
-            if score > genuine_peak.get(account_id, float("-inf")):
-                genuine_peak[account_id] = score
+            if score > genuine_peak.get(account, float("-inf")):
+                genuine_peak[account] = score
         elif role in MULE_ROLES:
-            if score > mule_peak.get(account_id, float("-inf")):
-                mule_peak[account_id] = score
+            if score > mule_peak.get(account, float("-inf")):
+                mule_peak[account] = score
     return genuine_peak, mule_peak
 
 

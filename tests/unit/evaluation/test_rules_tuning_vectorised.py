@@ -24,7 +24,12 @@ from decisions.rules_config import (
     load_rules_config_with_labels,
     with_thresholds,
 )
-from evaluation.level17_scoring import one_row_per_account_day, rules_restricted_days, score_account_days
+from evaluation.level17_scoring import (
+    account_key,
+    one_row_per_account_day,
+    rules_restricted_days,
+    score_account_days,
+)
 from evaluation.rules_tuning import (
     RulesGridPoint,
     RuleStandalone,
@@ -79,6 +84,7 @@ def _row(
 ) -> dict[str, Any]:
     """Builds one validation snapshot row on 2026-01-01 plus day_index IST days."""
     return {
+        "world_id": "world_a",
         "bank_id": bank_id,
         "account_id": account_id,
         "snapshot_time": datetime(2026, 1, 1 + day_index, 12, 0, tzinfo=IST),
@@ -141,10 +147,10 @@ def _reference_per_rule_standalone(scored: list[Any], config: RulesConfig) -> tu
     """WHAT: The previous per-rule loop, kept only as the equivalence reference."""
     results: list[RuleStandalone] = []
     for rule in config.rules:
-        restricted: dict[str, set[Any]] = {}
+        restricted: dict[Any, set[Any]] = {}
         for scored_day in scored:
             if rule.reason_code in scored_day.rules_fired:
-                restricted.setdefault(scored_day.account_id, set()).add(scored_day.day)
+                restricted.setdefault(account_key(scored_day), set()).add(scored_day.day)
         rate_pct, recall = _validation_metrics(scored, restricted)
         results.append(
             RuleStandalone(

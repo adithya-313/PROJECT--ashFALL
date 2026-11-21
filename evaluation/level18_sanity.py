@@ -31,6 +31,7 @@ from evaluation.dataset_truth_join import join_truth
 from evaluation.level17_scoring import (
     ALLOWED_REPEAT_POLICIES,
     MULE_ROLES,
+    AccountKey,
     ScoredDay,
     daily_escalations,
     ground_sets,
@@ -193,8 +194,8 @@ def _truth_mule_accounts(payment_rows: Sequence[Mapping[str, Any]]) -> set[str]:
 
 def _oracle_misses(
     scored: Sequence[ScoredDay],
-    escalations: Mapping[date, Sequence[str]],
-    mules: set[str],
+    escalations: Mapping[date, Sequence[AccountKey]],
+    mules: set[AccountKey],
     truth_mules: set[str],
 ) -> dict[str, Any]:
     """
@@ -207,8 +208,8 @@ def _oracle_misses(
 
     Args:
         scored: Scored account-days of one world.
-        escalations: IST date -> escalated account ids, as returned by daily_escalations.
-        mules: The recall ground set, as returned by ground_sets.
+        escalations: IST date -> escalated account keys, as returned by daily_escalations.
+        mules: The recall ground set (account keys), as returned by ground_sets.
         truth_mules: Mule accounts named by joined payment truth.
 
     Returns:
@@ -220,17 +221,22 @@ def _oracle_misses(
         an account escalated on a strictly earlier day, and the slots are all of that day's
         escalations.
     """
-    escalated_accounts = {account_id for account_ids in escalations.values() for account_id in account_ids}
-    found = mules & escalated_accounts
-    missed = (mules | truth_mules) - escalated_accounts
-    missed_with_mule_days = missed & mules
-    missed_without_mule_day = missed - mules
+    # This report explains one world, and truth_mules come from that world's payment rows, which name
+    # accounts by id alone, so the keys are read through their account id here. The mules and the
+    # escalations were already chosen and counted by the full key.
+    escalations_by_id = {day: [account[2] for account in accounts] for day, accounts in escalations.items()}
+    mule_ids = {account[2] for account in mules}
+    escalated_accounts = {account_id for account_ids in escalations_by_id.values() for account_id in account_ids}
+    found = mule_ids & escalated_accounts
+    missed = (mule_ids | truth_mules) - escalated_accounts
+    missed_with_mule_days = missed & mule_ids
+    missed_without_mule_day = missed - mule_ids
 
     first_escalation_day: dict[str, date] = {}
     repeat_escalations = 0
     total_escalations = 0
-    for day in sorted(escalations):
-        for account_id in escalations[day]:
+    for day in sorted(escalations_by_id):
+        for account_id in escalations_by_id[day]:
             total_escalations += 1
             earlier_day = first_escalation_day.get(account_id)
             if earlier_day is not None and earlier_day < day:
@@ -247,7 +253,7 @@ def _oracle_misses(
     missed_mule_day_slots = 0
     for account_id in sorted(missed_with_mule_days):
         for day in sorted(mule_days_by_account[account_id]):
-            day_escalations = escalations.get(day, [])
+            day_escalations = escalations_by_id.get(day, [])
             missed_mule_day_slots += len(day_escalations)
             blocked_slots += sum(
                 1
@@ -256,8 +262,8 @@ def _oracle_misses(
             )
 
     return {
-        "ground_set_mules": len(mules),
-        "truth_mule_accounts": len(mules | truth_mules),
+        "ground_set_mules": len(mule_ids),
+        "truth_mule_accounts": len(mule_ids | truth_mules),
         "found_mules": len(found),
         "missed_without_mule_day": sorted(missed_without_mule_day),
         "missed_with_mule_days": sorted(missed_with_mule_days),
@@ -317,7 +323,7 @@ def oracle_report(
         settings.capacity_pct_active_accounts_per_day,
         repeat_policy=repeat_policy,
     )
-    escalation_pairs = [(account_id, day) for day, account_ids in escalations.items() for account_id in account_ids]
+    escalation_pairs = [(account, day) for day, accounts in escalations.items() for account in accounts]
     mules, _, _, is_mule = ground_sets(scored)
     truth_mules = _truth_mule_accounts(payment_rows)
     # An inflation factor of 1.0 leaves the measured yield unchanged; the CLI has no world cards,

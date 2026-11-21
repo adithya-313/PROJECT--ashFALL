@@ -12,15 +12,21 @@ from datetime import date, datetime, timezone
 import pytest
 
 from evaluation.level17_evaluation import evaluate_world
-from evaluation.level17_scoring import ScoredDay, daily_escalations
+from evaluation.level17_scoring import ScoredDay, account_key, daily_escalations
 from evaluation.rules_metrics import recall_at_capacity
 
 DAYS = [date(2026, 9, 1), date(2026, 9, 2), date(2026, 9, 3)]
 
 
+def _key(account_id: str, bank_id: str = "bank_a") -> tuple[str, str, str]:
+    """Returns the account key (world, bank, account) the escalations now report."""
+    return ("world_a", bank_id, account_id)
+
+
 def _mule(account_id: str, day: date, bank_id: str = "bank_a") -> ScoredDay:
     """Builds one mule account-day that fires a rule."""
     return ScoredDay(
+        world_id="world_a",
         bank_id=bank_id,
         account_id=account_id,
         day=day,
@@ -44,10 +50,10 @@ def test_every_day_repeats_the_top_account_and_once_per_world_moves_the_slot() -
     every_day = daily_escalations(scored, "rules", None, 10.0)
     once_per_world = daily_escalations(scored, "rules", None, 10.0, repeat_policy="once_per_world")
 
-    assert every_day == {DAYS[0]: ["acc_a"], DAYS[1]: ["acc_a"], DAYS[2]: ["acc_a"]}
-    assert once_per_world == {DAYS[0]: ["acc_a"], DAYS[1]: ["acc_b"], DAYS[2]: []}
-    assert recall_at_capacity(every_day, {"acc_a", "acc_b"}) == 0.5
-    assert recall_at_capacity(once_per_world, {"acc_a", "acc_b"}) == 1.0
+    assert every_day == {DAYS[0]: [_key("acc_a")], DAYS[1]: [_key("acc_a")], DAYS[2]: [_key("acc_a")]}
+    assert once_per_world == {DAYS[0]: [_key("acc_a")], DAYS[1]: [_key("acc_b")], DAYS[2]: []}
+    assert recall_at_capacity(every_day, {_key("acc_a"), _key("acc_b")}) == 0.5
+    assert recall_at_capacity(once_per_world, {_key("acc_a"), _key("acc_b")}) == 1.0
 
 
 def test_once_per_world_keeps_banks_independent() -> None:
@@ -57,8 +63,8 @@ def test_once_per_world_keeps_banks_independent() -> None:
     escalations = daily_escalations(scored, "rules", None, 10.0, repeat_policy="once_per_world")
 
     assert escalations == {
-        DAYS[0]: ["acc_a", "acc_a"],
-        DAYS[1]: ["acc_b", "acc_b"],
+        DAYS[0]: [_key("acc_a", "bank_a"), _key("acc_a", "bank_b")],
+        DAYS[1]: [_key("acc_b", "bank_a"), _key("acc_b", "bank_b")],
         DAYS[2]: [],
     }
 
@@ -73,6 +79,7 @@ def test_evaluate_world_forwards_the_repeat_policy() -> None:
     """The C1 world gives recall 0.5 under every_day and 1.0 under once_per_world through evaluate_world."""
     scored = _two_mule_days() + [
         ScoredDay(
+            world_id="world_a",
             bank_id="bank_a",
             account_id="acc_g",
             day=day,
@@ -85,7 +92,7 @@ def test_evaluate_world_forwards_the_repeat_policy() -> None:
         for day in DAYS
     ]
     snapshot_times = {
-        (scored_day.account_id, scored_day.day): datetime(2026, 9, scored_day.day.day, 12, 0, tzinfo=timezone.utc)
+        (account_key(scored_day), scored_day.day): datetime(2026, 9, scored_day.day.day, 12, 0, tzinfo=timezone.utc)
         for scored_day in scored
     }
     first_credit = {

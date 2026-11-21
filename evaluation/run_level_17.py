@@ -38,7 +38,7 @@ from evaluation.level17_evaluation import (
     require_tuned,
     world_start_by_world,
 )
-from evaluation.level17_scoring import one_row_per_account_day, score_account_days
+from evaluation.level17_scoring import AccountKey, one_row_per_account_day, score_account_days
 from evaluation.rules_metrics import summarise_across_worlds
 from evaluation.rules_tuning import (
     AnomalyTuningResult,
@@ -375,33 +375,38 @@ def _world_inflation_factor(base_rate: Mapping[str, Any], run_id: str) -> float:
 
 def snapshot_time_by_account_day(
     day_rows: Sequence[Mapping[str, Any]],
-) -> dict[tuple[str, date], datetime]:
+) -> dict[tuple[AccountKey, date], datetime]:
     """
     WHAT: Maps each account-day row to the timezone-aware snapshot_time it was scored from.
 
     WHY: The detection flag time must be the moment the account was actually seen, so the metric
-    layer needs the snapshot time of the very row that produced each scored account-day.
+    layer needs the snapshot time of the very row that produced each scored account-day. The account
+    is identified by (world_id, bank_id, account_id) because account ids repeat across worlds.
 
     Args:
         day_rows: Rows already reduced by one_row_per_account_day.
 
     Returns:
-        (account id, IST date) -> snapshot_time of that row.
+        ((world id, bank id, account id), IST date) -> snapshot_time of that row.
 
     Raises:
-        ValueError: If a row lacks an account id, a datetime snapshot_time, or a timezone.
+        ValueError: If a row lacks a world, bank or account id, a datetime snapshot_time, or a timezone.
     """
-    snapshot_times: dict[tuple[str, date], datetime] = {}
+    snapshot_times: dict[tuple[AccountKey, date], datetime] = {}
     for row in day_rows:
-        account_id = row.get("account_id")
-        if not isinstance(account_id, str) or not account_id:
-            raise ValueError("Snapshot rows require a non-empty string 'account_id'")
+        identifiers: list[str] = []
+        for name in ("world_id", "bank_id", "account_id"):
+            value = row.get(name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"Snapshot rows require a non-empty string '{name}'")
+            identifiers.append(value)
         moment = row.get("snapshot_time")
         if not isinstance(moment, datetime):
             raise ValueError("Snapshot rows require a datetime 'snapshot_time'")
         if moment.tzinfo is None:
             raise ValueError("snapshot_time must be timezone-aware so its IST date is unambiguous")
-        snapshot_times[(account_id, moment.astimezone(IST).date())] = moment
+        account = (identifiers[0], identifiers[1], identifiers[2])
+        snapshot_times[(account, moment.astimezone(IST).date())] = moment
     return snapshot_times
 
 

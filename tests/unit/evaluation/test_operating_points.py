@@ -27,6 +27,7 @@ TUNING_DAY = date(2025, 1, 1)
 def _row(account_id: str, distinct_payers: int, role: str = "genuine", depth: int | None = None) -> dict[str, Any]:
     """Builds one validation snapshot row carrying only distinct_payers_24h as a feature."""
     return {
+        "world_id": "world_a",
         "bank_id": "bank_a",
         "account_id": account_id,
         "snapshot_time": datetime(2025, 1, 1, 12, 0, tzinfo=IST),
@@ -56,6 +57,7 @@ def _validation_rows() -> list[dict[str, Any]]:
 def _scored_day(account_id: str, score: float, role: str) -> ScoredDay:
     """Builds one scored validation day; rules fields are unused by the score curve."""
     return ScoredDay(
+        world_id="world_a",
         bank_id="bank_a",
         account_id=account_id,
         day=TUNING_DAY,
