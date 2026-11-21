@@ -90,6 +90,12 @@ _HEADLINE_METRICS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("median_time_to_detection_hours", ("time_to_detection", "median"), "hours"),
 )
 
+#: Re-weighted headline metrics and where a world records why its value is undefined. Only these are
+#: summarised over the worlds that defined them, with the defined and undefined counts beside the median.
+_REWEIGHTED_REASON_PATHS: dict[str, tuple[str, ...]] = {
+    "yield_reweighted": ("yield_rate", "reweighted_reason"),
+}
+
 
 @dataclass(frozen=True)
 class EvaluationSettings:
@@ -360,13 +366,24 @@ def tune_on_validation(
     )
 
 
-def _world_inflation_factor(base_rate: Mapping[str, Any], run_id: str) -> float:
+def _world_inflation_factor(base_rate: Mapping[str, Any], run_id: str) -> float | None:
     """
-    WHAT: Returns the positive fraud_inflation_factor a world card records.
+    WHAT: Returns the positive fraud_inflation_factor a world card records, or None for a world whose
+    card records no complaints.
+
+    WHY: The factor is the world's complaint rate over the real-world ratio, so a world with zero
+    complaints has no measured inflation. The re-weighted metrics for such a world are undefined; a
+    zero would divide by zero and any floor would be a made-up number.
 
     Raises:
-        ValueError: If the factor is missing, not a number, or not strictly positive.
+        ValueError: If the complaint count is missing, not a number or negative, or a world with
+            complaints has a factor that is missing, not a number, or not strictly positive.
     """
+    complaints = base_rate.get("complaints")
+    if not isinstance(complaints, (int, float)) or isinstance(complaints, bool) or complaints < 0:
+        raise ValueError(f"World card for run {run_id} has no valid complaints count; got {complaints!r}")
+    if complaints == 0:
+        return None
     factor = base_rate.get("fraud_inflation_factor")
     if not isinstance(factor, (int, float)) or isinstance(factor, bool) or factor <= 0:
         raise ValueError(f"World card for run {run_id} has no positive fraud_inflation_factor; got {factor!r}")
@@ -538,12 +555,20 @@ def summarise_worlds(
         for scorer in _SCORERS:
             scorer_summary: dict[str, Any] = {}
             for metric_name, path, unit in _HEADLINE_METRICS:
+                reason_path = _REWEIGHTED_REASON_PATHS.get(metric_name)
                 values: list[float] = []
+                undefined_reason: str | None = None
+                undefined_count = 0
                 for world in window_worlds:
                     scorers = world.get("scorers", {})
                     result = scorers.get(scorer)
                     if result is None:
                         continue
+                    if reason_path is not None:
+                        reason = _metric_value(result, reason_path)
+                        if reason is not None:
+                            undefined_reason = str(reason)
+                            undefined_count += 1
                     value = _metric_value(result, path)
                     if value is None:
                         continue
@@ -551,11 +576,25 @@ def summarise_worlds(
                 if values:
                     metric_summary = summarise_across_worlds(values, min_worlds)
                     metric_summary["unit"] = unit
+                    if reason_path is not None:
+                        metric_summary["worlds_defined"] = len(values)
+                        metric_summary["worlds_undefined"] = undefined_count
                     scorer_summary[metric_name] = metric_summary
                 elif not window_worlds:
                     scorer_summary[metric_name] = {
                         "world_count": 0,
                         "status": f"not run: no {window} worlds supplied",
+                        "unit": unit,
+                    }
+                elif undefined_reason is not None:
+                    # Every world with a value left was undefined: report it as undefined, not as zero.
+                    scorer_summary[metric_name] = {
+                        "world_count": 0,
+                        "median": None,
+                        "spread": "not defined",
+                        "reason": undefined_reason,
+                        "worlds_defined": 0,
+                        "worlds_undefined": undefined_count,
                         "unit": unit,
                     }
                 else:

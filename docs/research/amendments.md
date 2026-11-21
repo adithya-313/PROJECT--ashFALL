@@ -607,3 +607,16 @@ No model code exists yet (models start in Level 18; `world/` is simulator code).
 | Stopping rule | 320 is the final Level 18 training size whatever the next learning curve reports. If it flags again, that is recorded as a limitation, not answered with more data. |
 | Disclosure | No test or stress world had been scored by any Level 18 full run when this was decided: Run A died in stage 5 while loading validation. The crashed run folders are kept for the record. |
 | Results exist? | No |
+
+## A-050
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-21 |
+| Issue IDs | None |
+| Issue IDs v2 | None |
+| Files | `evaluation/run_level_17.py`, `evaluation/rules_metrics.py`, `evaluation/level17_evaluation.py`, `docs/research/amendments.md` |
+| What changed | A world whose card records exactly 0 complaints has no measured inflation, so its E1-re-weighted metrics are undefined: `_world_inflation_factor` returns None, the re-weighted yield is None with the reason "not defined: world has 0 complaints, so the E1 inflation factor is undefined", and the per-scorer summaries compute the re-weighted median over the worlds that defined it and record `worlds_defined` and `worlds_undefined` beside it (a None median with the reason when no world defined it). Measured metrics are unchanged. The success criterion reads the measured yield, so it is unchanged. |
+| Why | 14 of the 682 world cards have 0 complaints, and for exactly those 14 the fraud inflation factor is 0: 11 training worlds, 1 validation world, 2 test worlds, 0 of the 120 stress worlds. Stage 5 crashed on test world `test-0028`, whose card records 0 complaints in 14,767 successful payments. Dividing by a zero factor is undefined, and a floor would be a fabricated number. |
+| Disclosure | Decided after stage 5 crashed on that world card and before any test metric was produced or read. At the time of the decision `runs/full/run_a320_stage5/` held only `final/<run key>/optuna_trials.json` and `stages/final_mule_model.yaml`, no `result.json`, no `final_validation_and_test.json` and no per-world metric file, and neither log held a line with "recall", "yield" or "test-0" followed by a number (0 of 440 output lines, 0 of 51 error lines). The folder and logs were renamed with the suffix `_zero_complaints_20261121` and kept. |
+| Results exist? | No |
