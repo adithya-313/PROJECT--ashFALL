@@ -21,6 +21,7 @@ DAYS = [date(2026, 9, 1), date(2026, 9, 2), date(2026, 9, 3)]
 def _mule(account_id: str, day: date, bank_id: str = "bank_a") -> ScoredDay:
     """Builds one mule account-day that fires a rule."""
     return ScoredDay(
+        world_id="world_a",
         bank_id=bank_id,
         account_id=account_id,
         day=day,
@@ -73,6 +74,7 @@ def test_evaluate_world_forwards_the_repeat_policy() -> None:
     """The C1 world gives recall 0.5 under every_day and 1.0 under once_per_world through evaluate_world."""
     scored = _two_mule_days() + [
         ScoredDay(
+            world_id="world_a",
             bank_id="bank_a",
             account_id="acc_g",
             day=day,

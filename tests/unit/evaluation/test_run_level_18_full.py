@@ -306,6 +306,7 @@ class _FakeTuningHarness:
     def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self.trained_methods: list[str] = []
         scored_day = ScoredDay(
+            world_id="world_a",
             bank_id="bank_0",
             account_id="acc_0",
             day=date(2026, 1, 1),

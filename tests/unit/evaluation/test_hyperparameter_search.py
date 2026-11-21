@@ -37,6 +37,7 @@ def _scored(roles: list[str]) -> list[ScoredDay]:
     """Wraps one role per account-day into ScoredDay records with agreeing identifiers."""
     return [
         ScoredDay(
+            world_id="world_a",
             bank_id="bank_0",
             account_id=f"acc_{index}",
             day=date(2026, 1, 1),

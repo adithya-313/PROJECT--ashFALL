@@ -35,6 +35,7 @@ SECOND_DAY = date(2025, 1, 2)
 def _row(**overrides: Any) -> dict[str, Any]:
     """Builds one snapshot row with sensible defaults for the tests below."""
     row: dict[str, Any] = {
+        "world_id": "world_a",
         "bank_id": "bank_a",
         "account_id": "acct_1",
         "snapshot_time": datetime(2025, 1, 1, 12, 0, tzinfo=IST),
@@ -185,6 +186,7 @@ def test_ground_sets_count_collectors_and_cash_outs_without_a_depth() -> None:
     """Collectors and cash-outs are mules for recall but carry no depth; truth requires depth None."""
     scored = [
         ScoredDay(
+            world_id="world_a",
             bank_id="bank_a",
             account_id="collector_1",
             day=FIRST_DAY,
@@ -195,6 +197,7 @@ def test_ground_sets_count_collectors_and_cash_outs_without_a_depth() -> None:
             depth=None,
         ),
         ScoredDay(
+            world_id="world_a",
             bank_id="bank_a",
             account_id="cash_out_1",
             day=FIRST_DAY,
@@ -219,6 +222,7 @@ def test_ground_sets_refuse_a_mule_day_without_a_depth() -> None:
     """A role-"mule" day with depth None still raises, because its depth would be unknown."""
     scored = [
         ScoredDay(
+            world_id="world_a",
             bank_id="bank_a",
             account_id="mule_1",
             day=FIRST_DAY,
@@ -239,6 +243,7 @@ def test_daily_escalations_apply_bank_day_capacity() -> None:
     """1000 active accounts at 0.25% allow 3 escalations; 10 allow the floor of 1."""
     thousand = [
         ScoredDay(
+            world_id="world_a",
             bank_id="bank_a",
             account_id=f"acct_{index:04d}",
             day=FIRST_DAY,
@@ -261,6 +266,7 @@ def test_daily_escalations_breaks_score_ties_by_account_id() -> None:
     """Two equal-score candidates at capacity one resolve to the lexicographically first id."""
     tied = [
         ScoredDay(
+            world_id="world_a",
             bank_id="bank_a",
             account_id="acct_z",
             day=FIRST_DAY,
@@ -271,6 +277,7 @@ def test_daily_escalations_breaks_score_ties_by_account_id() -> None:
             depth=None,
         ),
         ScoredDay(
+            world_id="world_a",
             bank_id="bank_a",
             account_id="acct_a",
             day=FIRST_DAY,
@@ -290,6 +297,7 @@ def test_daily_escalations_breaks_score_ties_by_account_id() -> None:
 def test_daily_escalations_anomaly_mode_requires_scores() -> None:
     """Mode 'anomaly' raises rather than treating a missing score as zero."""
     row = ScoredDay(
+        world_id="world_a",
         bank_id="bank_a",
         account_id="acct_1",
         day=FIRST_DAY,

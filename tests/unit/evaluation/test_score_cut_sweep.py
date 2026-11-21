@@ -101,6 +101,7 @@ def _random_scored_case(rng: random.Random) -> list[ScoredDay]:
             depth = rng.randint(1, 3) if role == "mule" else None
             rows.append(
                 ScoredDay(
+                    world_id="world_a",
                     bank_id=f"bank_{account_index % 2}",
                     account_id=f"account_{account_index}",
                     day=date(2026, 1, 1 + day_index),
@@ -173,6 +174,7 @@ def test_sweep_handles_two_hundred_thousand_rows_well_under_ten_seconds() -> Non
         for day in days:
             rows.append(
                 ScoredDay(
+                    world_id="world_a",
                     bank_id="bank_0",
                     account_id=f"account_{account_index}",
                     day=day,

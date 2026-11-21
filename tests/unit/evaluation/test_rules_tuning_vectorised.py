@@ -79,6 +79,7 @@ def _row(
 ) -> dict[str, Any]:
     """Builds one validation snapshot row on 2026-01-01 plus day_index IST days."""
     return {
+        "world_id": "world_a",
         "bank_id": bank_id,
         "account_id": account_id,
         "snapshot_time": datetime(2026, 1, 1 + day_index, 12, 0, tzinfo=IST),

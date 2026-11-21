@@ -71,6 +71,7 @@ def _validation_rows() -> list[dict[str, Any]]:
 def _scored_day(account_id: str, anomaly_score: float, role: str, day: date = TUNING_DAY) -> ScoredDay:
     """Builds one scored validation day; rules fields are unused by the anomaly tuner."""
     return ScoredDay(
+        world_id="world_a",
         bank_id="bank_a",
         account_id=account_id,
         day=day,

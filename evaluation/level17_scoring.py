@@ -28,9 +28,11 @@ from decisions.rules_engine import evaluate_rules
 from features.account_snapshots import account_feature_names
 
 __all__ = [
+    "AccountKey",
     "GENUINE_ROLES",
     "MULE_ROLES",
     "ScoredDay",
+    "account_key",
     "anomaly_restricted_days",
     "daily_escalations",
     "feature_values_only",
@@ -49,12 +51,18 @@ _ESCALATION_MODES: frozenset[str] = frozenset({"rules", "anomaly", "rules_and_an
 ALLOWED_REPEAT_POLICIES: frozenset[str] = frozenset({"every_day", "once_per_world"})
 
 
+# An account's identity: account identifiers repeat across simulated worlds (and banks), so the
+# account id alone would merge different accounts the moment worlds are pooled for tuning.
+AccountKey = tuple[str, str, str]
+
+
 @dataclass(frozen=True)
 class ScoredDay:
     """
     WHAT: One account's scored state on one IST calendar day.
 
     ATTRIBUTES:
+        world_id: World the account lives in.
         bank_id: Bank that holds the account.
         account_id: Account identifier.
         day: IST calendar date of the kept snapshot.
@@ -65,6 +73,7 @@ class ScoredDay:
         depth: Mule depth on this day, or None for a role that carries no depth.
     """
 
+    world_id: str
     bank_id: str
     account_id: str
     day: date
@@ -73,6 +82,16 @@ class ScoredDay:
     anomaly_score: float | None
     role: str
     depth: int | None
+
+
+def account_key(scored_day: ScoredDay) -> AccountKey:
+    """
+    WHAT: Returns the identity of the account a scored day belongs to: (world_id, bank_id, account_id).
+
+    WHY: Every metric that counts accounts must use this, never the bare account_id, so that two
+    worlds reusing the same account id are counted as two accounts.
+    """
+    return (scored_day.world_id, scored_day.bank_id, scored_day.account_id)
 
 
 def _require_string(row: dict[str, Any], key: str, caller: str) -> str:
@@ -277,6 +296,7 @@ def score_account_days(
         decision = evaluate_rules(features, rules_config)
         scored_days.append(
             ScoredDay(
+                world_id=_require_string(row, "world_id", "score_account_days"),
                 bank_id=_require_string(row, "bank_id", "score_account_days"),
                 account_id=_require_string(row, "account_id", "score_account_days"),
                 day=_ist_day(row),

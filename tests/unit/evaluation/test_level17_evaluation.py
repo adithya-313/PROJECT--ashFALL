@@ -35,6 +35,7 @@ def _scored_day(account_id: str, day: date, restricted: bool) -> ScoredDay:
     else:
         role, depth = "genuine", None
     return ScoredDay(
+        world_id="world_a",
         bank_id="bank_a",
         account_id=account_id,
         day=day,

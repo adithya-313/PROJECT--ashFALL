@@ -86,6 +86,7 @@ def _evaluated_two_depth_world() -> dict[str, Any]:
     day = date(2025, 1, 1)
     scored = [
         ScoredDay(
+            world_id="world_a",
             bank_id="bank_a",
             account_id="mule_1",
             day=day,
@@ -96,6 +97,7 @@ def _evaluated_two_depth_world() -> dict[str, Any]:
             depth=1,
         ),
         ScoredDay(
+            world_id="world_a",
             bank_id="bank_a",
             account_id="mule_2",
             day=day,
@@ -106,6 +108,7 @@ def _evaluated_two_depth_world() -> dict[str, Any]:
             depth=2,
         ),
         ScoredDay(
+            world_id="world_a",
             bank_id="bank_a",
             account_id="genuine_1",
             day=day,
