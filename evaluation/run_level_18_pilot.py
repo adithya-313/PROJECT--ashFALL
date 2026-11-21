@@ -1304,6 +1304,72 @@ def _write_shap(
     return payload
 
 
+def _no_test_leakage_checks(
+    training_matrix: FeatureRows,
+    training_targets: Sequence[int],
+    training_dirs: Sequence[Path],
+    validation_dirs: Sequence[Path],
+) -> dict[str, dict[str, Any]]:
+    """
+    WHAT: Runs the leakage checks that read training and validation data only.
+
+    WHY: They are shared by the full pilot and the stage-5 dry run, so the dry run exercises the same
+    memory and code the real stage 5 will, without reading any test data.
+
+    Returns:
+        The truth_leak, trivial_world and section_23_check_7 blocks, each with a status.
+    """
+    truth_leak = _truth_leak_check()
+    trivial_world = _trivial_world_check(training_matrix, training_targets)
+    if COMPLAINED_FEATURE in account_model_feature_names():
+        check_7_training = _check_7_by_world(training_dirs)
+        check_7_validation = _check_7_by_world(validation_dirs)
+        check_7_status = "fail" if "fail" in {check_7_training["status"], check_7_validation["status"]} else "pass"
+        check_7 = {
+            "status": check_7_status,
+            "training": check_7_training,
+            "validation": check_7_validation,
+        }
+    else:
+        check_7 = {"status": "not run", "reason": "label network features are off"}
+    return {
+        "truth_leak": truth_leak,
+        "trivial_world": trivial_world,
+        "section_23_check_7": check_7,
+    }
+
+
+def _write_dry_run(
+    path: Path,
+    stage_seconds: dict[str, float],
+    peak_rss_mb: dict[str, float],
+    training_row_count: int,
+    detector_kept_row_count: int,
+    leakage_statuses: dict[str, str],
+) -> None:
+    """
+    WHAT: Writes dry_run.json: the stages reached, their timing and memory, the row counts and proof
+    flags that no test or stress data was loaded.
+
+    WHY: The file is the evidence that stage 5 fits in memory at full scale before the long run, so it
+    states plainly that it is a rehearsal and not a result.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "note": "DRY RUN - not a result",
+        "stages_reached": list(stage_seconds),
+        "stage_seconds": stage_seconds,
+        "peak_rss_mb": peak_rss_mb,
+        "training_row_count": training_row_count,
+        "detector_kept_row_count": detector_kept_row_count,
+        "leakage_check_statuses": leakage_statuses,
+        "shap": "not run: it needs test rows",
+        "test_loaded": False,
+        "stress_loaded": False,
+    }
+    path.write_bytes(orjson.dumps(payload, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2) + b"\n")
+
+
 def run_pilot(
     training_dirs: Sequence[Path],
     validation_dirs: Sequence[Path],
@@ -1312,6 +1378,8 @@ def run_pilot(
     world_cards_root: Path,
     out_root: Path,
     stress_dirs: Sequence[Path] = (),
+    *,
+    stop_before_test: bool = False,
 ) -> int:
     """
     WHAT: Runs the complete Level 18 pilot and writes its three output files.
@@ -1328,9 +1396,13 @@ def run_pilot(
         out_root: Root folder for the pilot result.
         stress_dirs: Optional stress dataset folders, scored one world at a time after test with the
             same frozen choices and written to their own stress block.
+        stop_before_test: When true, runs every step that needs no test or stress data, writes
+            dry_run.json and returns 0 before any test or stress dataset is read. test_dirs and
+            stress_dirs must then be empty. It is a memory and timing rehearsal, not a result.
 
     Returns:
-        Process exit code: 0 when every run leakage check passes, 1 otherwise.
+        Process exit code: 0 when every run leakage check passes, 1 otherwise. A dry run returns 0
+        once it reaches its stop point.
 
     Key logic:
         The mule model config's rules_plus_labels_and_registry switch decides the rules table:
@@ -1367,7 +1439,14 @@ def run_pilot(
 
     training_datasets = load_split_datasets("training", training_dirs)
     validation_datasets = load_split_datasets("validation", validation_dirs)
-    test_datasets = load_split_datasets("test", test_dirs)
+    test_datasets: list[Dataset] = []
+    if stop_before_test:
+        # WHY: a dry run must be unable to touch the final exam, so test or stress folders are
+        # refused and the test loader is not called at all, not even with an empty list.
+        if test_dirs or stress_dirs:
+            raise ValueError("stop_before_test requires empty test_dirs and stress_dirs")
+    else:
+        test_datasets = load_split_datasets("test", test_dirs)
 
     dataset_entries = [
         _dataset_entry(dataset_dir, dataset)
@@ -1428,6 +1507,7 @@ def run_pilot(
         detector_rows = full_snapshot_rows
         world_starts = world_start_by_world(detector_rows)
     detector = train_anomaly_detector(detector_rows, "training", world_starts, anomaly_config)
+    detector_kept_row_count = len(detector_rows)
     del detector_rows
     _record_stage("detector", detector_started, stage_seconds, peak_rss_mb)
 
@@ -1803,7 +1883,24 @@ def run_pilot(
     _record_stage("tune", stage_started, stage_seconds, peak_rss_mb)
     stage_started = time.perf_counter()
 
-    test_pairs = list(zip(test_dirs, test_datasets, strict=True))
+    if stop_before_test:
+        # Everything above needs no test or stress data. The first line below reads test data.
+        checks_started = time.perf_counter()
+        no_test_checks = _no_test_leakage_checks(training_matrix, training_targets, training_dirs, validation_dirs)
+        _record_stage("leakage_checks_without_test", checks_started, stage_seconds, peak_rss_mb)
+        dry_run_path = result_dir / "dry_run.json"
+        _write_dry_run(
+            dry_run_path,
+            stage_seconds,
+            peak_rss_mb,
+            len(training_targets),
+            detector_kept_row_count,
+            {name: str(check["status"]) for name, check in no_test_checks.items()},
+        )
+        print(str(dry_run_path))
+        return 0
+
+    test_pairs =list(zip(test_dirs, test_datasets, strict=True))
     per_world, test_day_rows = _evaluate_test_worlds(
         test_pairs,
         truth_root,
@@ -2010,29 +2107,17 @@ def run_pilot(
         orjson.dumps(payload, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2) + b"\n"
     )
 
-    truth_leak = _truth_leak_check()
-    trivial_world = _trivial_world_check(training_matrix, training_targets)
-    if COMPLAINED_FEATURE in account_model_feature_names():
-        check_7_training = _check_7_by_world(training_dirs)
-        check_7_validation = _check_7_by_world(validation_dirs)
-        check_7_status = "fail" if "fail" in {check_7_training["status"], check_7_validation["status"]} else "pass"
-        check_7 = {
-            "status": check_7_status,
-            "training": check_7_training,
-            "validation": check_7_validation,
-        }
-    else:
-        check_7 = {"status": "not run", "reason": "label network features are off"}
+    no_test_checks = _no_test_leakage_checks(training_matrix, training_targets, training_dirs, validation_dirs)
     checks = {
         "split_leak": split_leak,
-        "truth_leak": truth_leak,
-        "trivial_world": trivial_world,
+        "truth_leak": no_test_checks["truth_leak"],
+        "trivial_world": no_test_checks["trivial_world"],
         "section_23_checks_4_to_7": {
             "status": "not run",
             "reason": "later round",
             "checks": [4, 5, 6],
         },
-        "section_23_check_7": check_7,
+        "section_23_check_7": no_test_checks["section_23_check_7"],
     }
     _write_leakage(leakage_path, checks)
 
