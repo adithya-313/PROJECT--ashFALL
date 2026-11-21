@@ -95,7 +95,9 @@ ALLOWED_CHANGED_PATHS: frozenset[str] = frozenset(
         "evaluation/run_level_18_from_saved_stage3.py",
     }
 )
-ALLOWED_CHANGED_PREFIXES: tuple[str, ...] = ("tests/",)
+#: Folders whose files may change freely: tests, and docs, because markdown (amendments, notes) cannot
+#: change any stage 1-3 number.
+ALLOWED_CHANGED_PREFIXES: tuple[str, ...] = ("tests/", "docs/")
 #: Largest accepted difference between a retrained model's validation truth AP and the saved one. The
 #: same code, data, seed and parameters on the CPU give bit-identical models, so any larger difference
 #: means the retraining is not the saved model. Architect ruling 2026-11-21; it is a code constant, not a

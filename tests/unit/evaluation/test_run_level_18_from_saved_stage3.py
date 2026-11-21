@@ -168,3 +168,19 @@ def test_gate_passes_an_exact_match_and_recomputes_only_the_operating_point() ->
     assert record["chosen_params"] == {"n_estimators": 10}
     assert record["validation_truth_average_precision"] == true_average_precision
     assert REPRODUCIBILITY_TOLERANCE == 1e-12
+
+
+def test_guard_accepts_a_changed_docs_file(tmp_path: Path) -> None:
+    source = _write_source(tmp_path / "stages")
+
+    assert _guard(source, changed=[*ALLOWED_PATHS, "docs/research/amendments.md"]) == SOURCE_CODE_VERSION
+
+
+def test_guard_still_refuses_a_python_path_beside_a_docs_file_and_names_only_the_python_path(tmp_path: Path) -> None:
+    source = _write_source(tmp_path / "stages")
+
+    with pytest.raises(ValueError, match="outside the allowed files") as raised:
+        _guard(source, changed=["docs/research/amendments.md", "evaluation/run_level_18_full.py"])
+
+    assert "evaluation/run_level_18_full.py" in str(raised.value)
+    assert "docs/research/amendments.md" not in str(raised.value)
