@@ -42,6 +42,7 @@ BASELINE_VALUES = {
 def _row(account_id: str, distinct_payers: int, role: str = "genuine", depth: int | None = None) -> dict[str, Any]:
     """Builds one validation snapshot row carrying only distinct_payers_24h as a feature."""
     return {
+        "world_id": "world_a",
         "bank_id": "bank_a",
         "account_id": account_id,
         "snapshot_time": datetime(2025, 1, 1, 12, 0, tzinfo=IST),

@@ -16,7 +16,9 @@ from typing import Any
 from decisions.rules_config import RulesConfig
 from evaluation.level17_scoring import (
     MULE_ROLES,
+    AccountKey,
     ScoredDay,
+    account_key,
     anomaly_restricted_days,
     daily_escalations,
     genuine_restricted_days,
@@ -141,10 +143,10 @@ def first_illicit_credit(
 
 
 def first_flag_times(
-    daily_escalations: Mapping[date, Sequence[str]],
+    daily_escalations: Mapping[date, Sequence[AccountKey]],
     scored: Sequence[ScoredDay],
-    snapshot_time_by_account_day: Mapping[tuple[str, date], datetime],
-) -> dict[str, datetime]:
+    snapshot_time_by_account_day: Mapping[tuple[AccountKey, date], datetime],
+) -> dict[AccountKey, datetime]:
     """
     WHAT: Returns each escalated account's first escalation time, taken from that day's snapshot.
 
@@ -153,39 +155,40 @@ def first_flag_times(
     start of its calendar day.
 
     Args:
-        daily_escalations: IST date -> account ids escalated that day.
+        daily_escalations: IST date -> account keys escalated that day.
         scored: Scored account-days; every escalated account-day must appear in it.
-        snapshot_time_by_account_day: (account id, IST date) -> timezone-aware snapshot_time of
+        snapshot_time_by_account_day: (account key, IST date) -> timezone-aware snapshot_time of
             the snapshot row that produced that scored account-day.
 
     Returns:
-        account id -> snapshot_time of its first escalated account-day.
+        account key -> snapshot_time of its first escalated account-day. Two worlds that reuse an
+        account id get two entries, each with its own world's first flag.
 
     Raises:
         ValueError: If an escalated account-day has no scored row, no snapshot time, or a
             timezone-naive snapshot time.
     """
-    scored_keys = {(scored_day.account_id, scored_day.day) for scored_day in scored}
-    first_flag: dict[str, datetime] = {}
+    scored_keys = {(account_key(scored_day), scored_day.day) for scored_day in scored}
+    first_flag: dict[AccountKey, datetime] = {}
     for day in sorted(daily_escalations):
-        for account_id in daily_escalations[day]:
-            key = (account_id, day)
+        for account in daily_escalations[day]:
+            key = (account, day)
             if key not in scored_keys:
-                raise ValueError(f"Escalated day {day} for account {account_id} has no scored row")
+                raise ValueError(f"Escalated day {day} for account {account} has no scored row")
             moment = snapshot_time_by_account_day.get(key)
             if moment is None:
-                raise ValueError(f"Escalated day {day} for account {account_id} has no snapshot time")
+                raise ValueError(f"Escalated day {day} for account {account} has no snapshot time")
             if moment.tzinfo is None:
-                raise ValueError(f"Snapshot time for {account_id} on {day} must be timezone-aware")
-            if account_id not in first_flag:
-                first_flag[account_id] = moment
+                raise ValueError(f"Snapshot time for {account} on {day} must be timezone-aware")
+            if account not in first_flag:
+                first_flag[account] = moment
     return first_flag
 
 
 def _merge_restrictions(
-    left: Mapping[str, set[date]],
-    right: Mapping[str, set[date]],
-) -> dict[str, set[date]]:
+    left: Mapping[AccountKey, set[date]],
+    right: Mapping[AccountKey, set[date]],
+) -> dict[AccountKey, set[date]]:
     """
     WHAT: Unions two account-to-days restriction maps.
 
@@ -196,9 +199,9 @@ def _merge_restrictions(
     Returns:
         account -> union of restricted days from both maps.
     """
-    merged: dict[str, set[date]] = {account_id: set(days) for account_id, days in left.items()}
-    for account_id, days in right.items():
-        merged.setdefault(account_id, set()).update(days)
+    merged: dict[AccountKey, set[date]] = {account: set(days) for account, days in left.items()}
+    for account, days in right.items():
+        merged.setdefault(account, set()).update(days)
     return merged
 
 
@@ -211,7 +214,7 @@ def evaluate_world(
     persona_of: Callable[[str], str],
     weights: dict[str, int],
     default_weight: int,
-    snapshot_time_by_account_day: Mapping[tuple[str, date], datetime],
+    snapshot_time_by_account_day: Mapping[tuple[AccountKey, date], datetime],
     first_credit: Mapping[str, datetime],
     reported: set[str],
     repeat_policy: str = "every_day",
@@ -232,7 +235,7 @@ def evaluate_world(
         persona_of: Callable returning an account's persona label.
         weights: Persona label to harm weight.
         default_weight: Harm weight for personas not in weights.
-        snapshot_time_by_account_day: (account id, IST date) -> snapshot_time of that account-day,
+        snapshot_time_by_account_day: (account key, IST date) -> snapshot_time of that account-day,
             used as the detection flag time.
         first_credit: Mule account -> first illicit credit time.
         reported: Accounts already reported to the national registry.
@@ -252,27 +255,33 @@ def evaluate_world(
     if scorer in ("anomaly", "rules_and_anomaly") and anomaly_threshold is None:
         raise ValueError(f"Scorer {scorer!r} requires an anomaly_threshold")
 
-    rules_restricted: dict[str, set[date]] = {}
+    rules_restricted: dict[AccountKey, set[date]] = {}
     if scorer in ("rules", "rules_and_anomaly"):
         rules_restricted = rules_restricted_days(scored)
-    anomaly_restricted: dict[str, set[date]] = {}
+    anomaly_restricted: dict[AccountKey, set[date]] = {}
     if scorer in ("anomaly", "rules_and_anomaly"):
         anomaly_restricted = anomaly_restricted_days(scored, anomaly_threshold)
 
     restricted = _merge_restrictions(rules_restricted, anomaly_restricted)
     escalations = daily_escalations(scored, scorer, anomaly_threshold, capacity_pct, repeat_policy=repeat_policy)
     escalation_pairs = [
-        (account_id, day)
-        for day, account_ids in escalations.items()
-        for account_id in account_ids
+        (account, day)
+        for day, accounts in escalations.items()
+        for account in accounts
     ]
 
     mules, genuine_active, depth_of, is_mule = ground_sets(scored)
     genuine_restricted = genuine_restricted_days(restricted, scored)
     flagged = set(restricted)
 
-    daily_capacity = max(1, ceil(len({scored_day.account_id for scored_day in scored}) * capacity_pct / 100.0))
+    daily_capacity = max(1, ceil(len({account_key(scored_day) for scored_day in scored}) * capacity_pct / 100.0))
     first_flag = first_flag_times(escalations, scored, snapshot_time_by_account_day)
+
+    # persona_of, first_credit and reported come from this one world's truth, which knows accounts by
+    # their id alone, so they are read through the key's account id. That is safe because one call
+    # holds one world; the accounts themselves were counted by the full key above.
+    first_flag_by_account_id = {account[2]: moment for account, moment in first_flag.items()}
+    reported_accounts = {account for account in depth_of if account[2] in reported}
 
     return {
         "recall_at_capacity": recall_at_capacity(escalations, mules),
@@ -280,11 +289,11 @@ def evaluate_world(
         "genuine_harm": genuine_harm(
             genuine_restricted,
             genuine_active,
-            persona_of,
+            lambda account: persona_of(account[2]),
             weights,
             default_weight,
         ),
-        "hidden_mule_recall_by_depth": hidden_mule_recall_by_depth(flagged, depth_of, reported),
-        "time_to_detection": time_to_detection(dict(first_credit), first_flag),
+        "hidden_mule_recall_by_depth": hidden_mule_recall_by_depth(flagged, depth_of, reported_accounts),
+        "time_to_detection": time_to_detection(dict(first_credit), first_flag_by_account_id),
         "analyst_load": analyst_load(escalations, daily_capacity),
     }

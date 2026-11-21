@@ -168,18 +168,19 @@ def test_ground_sets_and_genuine_harm_use_per_day_truth_roles() -> None:
         detector=None,
     )
 
+    account = ("world_a", "bank_a", "acct_1")
     restricted = rules_restricted_days(scored)
-    assert restricted == {"acct_1": {FIRST_DAY, SECOND_DAY}}
+    assert restricted == {account: {FIRST_DAY, SECOND_DAY}}
 
     genuine_restricted = genuine_restricted_days(restricted, scored)
-    assert genuine_restricted == {"acct_1": {FIRST_DAY}}
+    assert genuine_restricted == {account: {FIRST_DAY}}
 
     mules, genuine_active, depth_of, is_mule = ground_sets(scored)
-    assert mules == {"acct_1"}
-    assert genuine_active == {"acct_1"}
-    assert depth_of == {"acct_1": 2}
-    assert is_mule("acct_1", SECOND_DAY) is True
-    assert is_mule("acct_1", FIRST_DAY) is False
+    assert mules == {account}
+    assert genuine_active == {account}
+    assert depth_of == {account: 2}
+    assert is_mule(account, SECOND_DAY) is True
+    assert is_mule(account, FIRST_DAY) is False
 
 
 def test_ground_sets_count_collectors_and_cash_outs_without_a_depth() -> None:
@@ -211,11 +212,13 @@ def test_ground_sets_count_collectors_and_cash_outs_without_a_depth() -> None:
 
     mules, genuine_active, depth_of, is_mule = ground_sets(scored)
 
-    assert mules == {"collector_1", "cash_out_1"}
+    collector = ("world_a", "bank_a", "collector_1")
+    cash_out = ("world_a", "bank_a", "cash_out_1")
+    assert mules == {collector, cash_out}
     assert genuine_active == set()
     assert depth_of == {}
-    assert is_mule("collector_1", FIRST_DAY) is True
-    assert is_mule("cash_out_1", FIRST_DAY) is True
+    assert is_mule(collector, FIRST_DAY) is True
+    assert is_mule(cash_out, FIRST_DAY) is True
 
 
 def test_ground_sets_refuse_a_mule_day_without_a_depth() -> None:
@@ -234,7 +237,7 @@ def test_ground_sets_refuse_a_mule_day_without_a_depth() -> None:
         ),
     ]
 
-    with pytest.raises(ValueError, match="Mule account mule_1 has no truth_depth"):
+    with pytest.raises(ValueError, match="Mule account .*mule_1.* has no truth_depth"):
         ground_sets(scored)
 
 
@@ -291,7 +294,7 @@ def test_daily_escalations_breaks_score_ties_by_account_id() -> None:
 
     escalations = daily_escalations(tied, "rules", None, 10.0)
 
-    assert escalations == {FIRST_DAY: ["acct_a"]}
+    assert escalations == {FIRST_DAY: [("world_a", "bank_a", "acct_a")]}
 
 
 def test_daily_escalations_anomaly_mode_requires_scores() -> None:
