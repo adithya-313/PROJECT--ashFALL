@@ -243,7 +243,8 @@ def apply_complaint_row(
     bank_id = row["bank_id"]
     # Mark reported_account ONLY when reported_bank_id equals this bank
     if row["reported_bank_id"] != bank_id:
-        logger.info(
+        # A complaint naming another bank is expected and normal, so INFO level would flood the log with it.
+        logger.debug(
             "Complaint %s reported_bank_id %r does not match this bank %r; ignoring",
             row["complaint_id"],
             row["reported_bank_id"],
