@@ -15,8 +15,9 @@ plain ValueError naming the offending path.
 """
 
 import argparse
+import random
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Sequence
@@ -28,6 +29,7 @@ import pyarrow
 import pyarrow.compute as pyarrow_compute
 import shap
 import xgboost
+import yaml
 
 from core.event_clock import IST
 from core.truth_import_check import find_truth_violations
@@ -40,6 +42,7 @@ from decisions.mule_account_model import (
     account_model_feature_names,
     active_mule_model_config_path,
     build_training_rows,
+    load_model,
     load_mule_model_config,
     predict_account_days,
     save_model,
@@ -107,10 +110,12 @@ from evaluation.run_level_17 import (
 from evaluation.trivial_world import average_precision, best_direction_ap, load_evaluation_config
 from evaluation.truth import load_truth
 from replay.dataset_builder import Dataset
+from showcase.framework import get_code_version
 
 __all__ = ["PILOT_SCORERS", "main", "run_pilot"]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+SHAP_SAMPLE_CONFIG_PATH = REPO_ROOT / "config" / "shap_sample.yaml"
 
 PILOT_SCORERS: tuple[str, ...] = ("rules", "anomaly", "rules_and_anomaly", "xgboost")
 
@@ -856,6 +861,267 @@ def _tune_on_validation(
     )
 
 
+def _load_shap_sample_policy(path: Path = SHAP_SAMPLE_CONFIG_PATH) -> tuple[int, int]:
+    """
+    WHAT: Reads how many test account-days SHAP explains and the seed of that sample.
+
+    WHY: The numbers are policy, so they live in config/shap_sample.yaml with their label, source and
+    reason, not in code. They sit in their own file so the mule model config that stages 1-4 read is
+    left untouched.
+
+    Args:
+        path: The config file; defaults to config/shap_sample.yaml.
+
+    Returns:
+        (shap_sample_rows, shap_sample_seed).
+
+    Raises:
+        ValueError: If the file or a key is missing, a block lacks its label, derived_from or reason, the
+            row count is not a positive integer, or the seed is not an integer.
+    """
+    if not path.is_file():
+        raise ValueError(f"SHAP sample config not found at {path}")
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError(f"SHAP sample config {path} must hold a mapping at the root")
+    values: dict[str, int] = {}
+    for key in ("shap_sample_rows", "shap_sample_seed"):
+        block = raw.get(key)
+        if not isinstance(block, dict):
+            raise ValueError(f"SHAP sample config {path} is missing the block {key!r}")
+        for field in ("label", "derived_from", "reason"):
+            text = block.get(field)
+            if not isinstance(text, str) or not text:
+                raise ValueError(f"Block {key!r} in {path} is missing a non-empty {field!r}")
+        value = block.get("value")
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise ValueError(f"{key} in {path} must be an integer; got {value!r}")
+        values[key] = value
+    if values["shap_sample_rows"] < 1:
+        raise ValueError(f"shap_sample_rows in {path} must be a positive integer; got {values['shap_sample_rows']}")
+    return values["shap_sample_rows"], values["shap_sample_seed"]
+
+
+@dataclass(frozen=True)
+class _FitCheckpoint:
+    """
+    WHAT: Everything run_pilot's search and final fit produced, as saved after the fit.
+
+    WHY: Stage 5 spends most of its time in the search and the fit, so a crash later (during test or
+    stress scoring) must not repeat them. The field names are those of the variables the rest of
+    run_pilot reads.
+    """
+
+    model: xgboost.XGBClassifier | PUBaggedAccountModel
+    best_scale_pos_weight: float | None
+    best_n_estimators: int
+    best_validation_ap: float
+    best_unlabelled_per_positive: int | None
+    best_c: float | None
+    best_weight_summary: dict[str, float] | None
+    best_clip_count: int | None
+    n_estimators_scores: dict[str, float]
+    pu_average_precision_scores: dict[str, float]
+    training_seconds: dict[str, float]
+    search_result: OptunaSearchResult | None
+
+
+def _fit_checkpoint_fingerprint(training_dirs: Sequence[Path], validation_dirs: Sequence[Path]) -> dict[str, Any]:
+    """
+    WHAT: Returns what a saved fit is valid for: the code, the config file and the datasets.
+
+    WHY: A checkpoint made by different code, config or data must never be reused silently, so every
+    load compares this record and refuses on any difference.
+    """
+    return {
+        "code_version": get_code_version(),
+        "mule_model_config_sha256": _sha256_of_file(active_mule_model_config_path().resolve()),
+        "training_dataset_ids": sorted(directory.name for directory in training_dirs),
+        "validation_dataset_ids": sorted(directory.name for directory in validation_dirs),
+    }
+
+
+def _save_fit_checkpoint(
+    directory: Path,
+    fingerprint: dict[str, Any],
+    pu_method: str,
+    checkpoint: _FitCheckpoint,
+    seed: int,
+) -> None:
+    """
+    WHAT: Writes the fitted model, the search record and the fingerprint into one folder.
+
+    WHY: See _FitCheckpoint. The model is saved in the same format as the final result's model.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    training_dataset_ids = fingerprint["training_dataset_ids"]
+    if isinstance(checkpoint.model, PUBaggedAccountModel):
+        checkpoint.model.save(directory / "model_bags", {"training_dataset_ids": training_dataset_ids})
+    else:
+        save_model(
+            checkpoint.model,
+            directory / "model.ubj",
+            {
+                "seed": seed,
+                "scale_pos_weight": checkpoint.best_scale_pos_weight,
+                "training_dataset_ids": training_dataset_ids,
+            },
+        )
+    search = checkpoint.search_result
+    record = {
+        "fingerprint": fingerprint,
+        "pu_method": pu_method,
+        "best_scale_pos_weight": checkpoint.best_scale_pos_weight,
+        "best_n_estimators": checkpoint.best_n_estimators,
+        "best_validation_ap": checkpoint.best_validation_ap,
+        "best_unlabelled_per_positive": checkpoint.best_unlabelled_per_positive,
+        "best_c": checkpoint.best_c,
+        "best_weight_summary": checkpoint.best_weight_summary,
+        "best_clip_count": checkpoint.best_clip_count,
+        "n_estimators_scores": checkpoint.n_estimators_scores,
+        "pu_average_precision_scores": checkpoint.pu_average_precision_scores,
+        "training_seconds": checkpoint.training_seconds,
+        "search": None
+        if search is None
+        else {
+            "best_params": search.best_params,
+            "best_score": search.best_score,
+            "trials": list(search.trials),
+            "trials_run": search.trials_run,
+            "stopped_early": search.stopped_early,
+            "stop_reason": search.stop_reason,
+            "param_importances": search.param_importances,
+        },
+    }
+    (directory / "fit_record.json").write_bytes(
+        orjson.dumps(record, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2) + b"\n"
+    )
+
+
+def _load_fit_checkpoint(
+    directory: Path, fingerprint: dict[str, Any], pu_method: str
+) -> _FitCheckpoint | None:
+    """
+    WHAT: Returns the saved fit when the checkpoint folder exists and matches the current run, or None
+    when there is no checkpoint.
+
+    WHY: Reusing a fit is only sound when the code, config, datasets and method are identical, so any
+    difference raises instead of reusing silently.
+
+    Raises:
+        ValueError: If the folder exists but its record is missing or malformed, or its fingerprint or
+            PU method differs from the current run.
+    """
+    record_path = directory / "fit_record.json"
+    if not directory.exists():
+        return None
+    if not record_path.is_file():
+        raise ValueError(f"Checkpoint folder {directory} has no fit_record.json")
+    record = orjson.loads(record_path.read_bytes())
+    if not isinstance(record, dict) or "fingerprint" not in record:
+        raise ValueError(f"Checkpoint record {record_path} must hold a fingerprint")
+    saved = record["fingerprint"]
+    if not isinstance(saved, dict):
+        raise ValueError(f"Checkpoint record {record_path} must hold a fingerprint mapping")
+    differing: list[str] = []
+    for key in sorted(set(saved) | set(fingerprint)):
+        if saved.get(key) != fingerprint.get(key):
+            differing.append(key)
+    if differing or record.get("pu_method") != pu_method:
+        raise ValueError(
+            f"Checkpoint at {directory} was made for different inputs ({', '.join(differing) or 'pu_method'}); "
+            "move that folder away to refit"
+        )
+    model: xgboost.XGBClassifier | PUBaggedAccountModel
+    if pu_method == "none" or (directory / "model.ubj").is_file():
+        model = load_model(directory / "model.ubj")
+    else:
+        model = PUBaggedAccountModel.load(directory / "model_bags")
+    search_record = record["search"]
+    search_result = (
+        None
+        if search_record is None
+        else OptunaSearchResult(
+            best_params=search_record["best_params"],
+            best_score=search_record["best_score"],
+            trials=tuple(search_record["trials"]),
+            trials_run=search_record["trials_run"],
+            stopped_early=search_record["stopped_early"],
+            stop_reason=search_record["stop_reason"],
+            param_importances=search_record["param_importances"],
+        )
+    )
+    return _FitCheckpoint(
+        model=model,
+        best_scale_pos_weight=record["best_scale_pos_weight"],
+        best_n_estimators=record["best_n_estimators"],
+        best_validation_ap=record["best_validation_ap"],
+        best_unlabelled_per_positive=record["best_unlabelled_per_positive"],
+        best_c=record["best_c"],
+        best_weight_summary=record["best_weight_summary"],
+        best_clip_count=record["best_clip_count"],
+        n_estimators_scores=record["n_estimators_scores"],
+        pu_average_precision_scores=record["pu_average_precision_scores"],
+        training_seconds=record["training_seconds"],
+        search_result=search_result,
+    )
+
+
+class _RowReservoir:
+    """
+    WHAT: Keeps a uniform random sample of fixed size from the rows it is shown, in one pass.
+
+    WHY: The SHAP summary explains a sample of the test account-days, not all of them. Sampling while
+    the worlds are scored one at a time keeps memory flat, and a fixed seed makes the sample, and so
+    the summary, reproducible. Every row is kept while fewer than size have been seen.
+
+    Algorithm:
+        Reservoir sampling (Algorithm R): the first size rows fill the reservoir; row number i
+        (counting from 0) then replaces a random slot with probability size / (i + 1).
+    """
+
+    def __init__(self, size: int, seed: int) -> None:
+        if size < 1:
+            raise ValueError(f"A row reservoir needs a positive size; got {size}")
+        self.size = size
+        self.seed = seed
+        self.rows_seen = 0
+        self._random = random.Random(seed)
+        self._rows: list[dict[str, Any]] = []
+
+    def add(self, row: dict[str, Any]) -> None:
+        """Shows one row to the reservoir."""
+        if len(self._rows) < self.size:
+            self._rows.append(row)
+        else:
+            slot = self._random.randrange(self.rows_seen + 1)
+            if slot < self.size:
+                self._rows[slot] = row
+        self.rows_seen += 1
+
+    @property
+    def rows(self) -> list[dict[str, Any]]:
+        """The sampled rows."""
+        return list(self._rows)
+
+
+def _world_rows(table: pyarrow.Table, column: str, value: str) -> list[dict[str, Any]]:
+    """
+    WHAT: Returns one world's rows of an Arrow table as Python dicts, in table order.
+
+    WHY: Converting a whole dataset to Python rows held many gigabytes at full scale and crashed stage
+    5. Filtering on the Arrow table first means only one world is ever held as Python rows; the filter
+    keeps row order, so the rows are the ones a list comprehension over the whole table would have kept.
+
+    Args:
+        table: Arrow table with the filter column.
+        column: Column to match, such as "world_id" or "run_id".
+        value: Value the column must equal.
+    """
+    mask = pyarrow_compute.equal(table.column(column), value)
+    return table.filter(mask).to_pylist()
+
+
 def _evaluate_test_worlds(
     test_pairs: Sequence[tuple[Path, Dataset]],
     truth_root: Path,
@@ -865,6 +1131,7 @@ def _evaluate_test_worlds(
     xgboost_model: xgboost.XGBClassifier | PUBaggedAccountModel,
     xgboost_threshold: float,
     settings: EvaluationSettings,
+    reservoir: _RowReservoir | None = None,
 ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
     """
     WHAT: Scores every test world with rules, anomaly, their union and the XGBoost account model.
@@ -883,31 +1150,34 @@ def _evaluate_test_worlds(
         xgboost_model: Fitted XGBoost account model or PU bagging ensemble.
         xgboost_threshold: XGBoost cut chosen on validation.
         settings: Capacity, persona weights and world-count policy.
+        reservoir: When given, every scored account-day row is shown to it and its sample is returned for
+            the SHAP summary; the stress and extra-budget passes leave it None so they hold one world at
+            a time only.
 
     Returns:
-        (per-world results, every test account-day row scored, for the SHAP summary).
+        (per-world results, the reservoir's sampled account-day rows, or an empty list without one).
 
     Raises:
         ValueError: If a world repeats, a world card is missing or invalid, or a metric refuses the data.
     """
     per_world: dict[str, dict[str, Any]] = {}
-    test_day_rows: list[dict[str, Any]] = []
     repeat_policy = load_escalation_repeat_policy()
     for dataset_dir, dataset in test_pairs:
         payments, snapshots = join_truth(dataset_dir, truth_root)
-        payment_rows = payments.to_pylist()
-        snapshot_rows = snapshots.to_pylist()
-        labels_rows = dataset.labels.to_pylist()
+        labels = dataset.labels
         for world in dataset.manifest["worlds"]:
             world_id = str(world["world_id"])
             run_id = str(world["run_id"])
             if world_id in per_world:
                 raise ValueError(f"World {world_id!r} appears in more than one test dataset")
 
-            world_payments = [row for row in payment_rows if row["world_id"] == world_id]
-            world_snapshots = [row for row in snapshot_rows if row["world_id"] == world_id]
+            world_payments = _world_rows(payments, "world_id", world_id)
+            world_snapshots = _world_rows(snapshots, "world_id", world_id)
+            world_labels = _world_rows(labels, "run_id", run_id)
             day_rows = one_row_per_account_day(world_snapshots)
-            test_day_rows.extend(day_rows)
+            if reservoir is not None:
+                for day_row in day_rows:
+                    reservoir.add(day_row)
             scored = score_account_days(day_rows, tuned.rules_config, detector)
             probabilities = predict_account_days(xgboost_model, day_rows)
             xgboost_scored = [
@@ -918,7 +1188,7 @@ def _evaluate_test_worlds(
 
             truth_store = load_truth(truth_root, run_id)
             first_credit = first_illicit_credit(world_payments, truth_store.story_of)
-            reported = reported_accounts(labels_rows, run_id)
+            reported = reported_accounts(world_labels, run_id)
             inflation_factor = _world_inflation_factor(
                 read_world_base_rate(world_cards_root, run_id), run_id
             )
@@ -954,7 +1224,7 @@ def _evaluate_test_worlds(
                 repeat_policy=repeat_policy,
             )
             per_world[world_id] = {"run_id": run_id, "split": "test", "scorers": scorers}
-    return per_world, test_day_rows
+    return per_world, reservoir.rows if reservoir is not None else []
 
 
 def _summarise_pilot(
@@ -1244,9 +1514,11 @@ def _write_shap(
     model: xgboost.XGBClassifier | PUBaggedAccountModel,
     feature_names: Sequence[str],
     day_rows: Sequence[dict[str, Any]],
+    rows_total: int,
+    seed: int,
 ) -> dict[str, Any]:
     """
-    WHAT: Writes the mean |SHAP| top ten features on the test account-days.
+    WHAT: Writes the mean |SHAP| top ten features on a sample of the test account-days.
 
     WHY: The pilot needs to show which features drive the account model, without plots. A SHAP
     runtime failure is recorded verbatim and does not stop the evaluation, as the architect ruled.
@@ -1256,10 +1528,12 @@ def _write_shap(
         path: Destination shap_top_features.json.
         model: Fitted XGBoost account model or PUBaggedAccountModel ensemble.
         feature_names: Canonical model feature order.
-        day_rows: Test account-day rows that were scored.
+        day_rows: The sampled test account-day rows SHAP explains.
+        rows_total: How many test account-days were scored before sampling.
+        seed: Seed of the sample, recorded so the summary can be reproduced.
 
     Returns:
-        The written payload.
+        The written payload, which records rows_total, rows_sampled and the seed.
 
     Errors:
         A SHAP/runtime exception is caught and written as {"status": "not run", "reason": "..."}.
@@ -1289,6 +1563,9 @@ def _write_shap(
             "simulated": True,
             "pilot": True,
             "status": "run",
+            "rows_total": rows_total,
+            "rows_sampled": len(day_rows),
+            "seed": seed,
             "top_features": [
                 {"feature": name, "mean_abs_shap": value} for name, value in ranked[:10]
             ],
@@ -1298,6 +1575,9 @@ def _write_shap(
             "simulated": True,
             "pilot": True,
             "status": "not run",
+            "rows_total": rows_total,
+            "rows_sampled": len(day_rows),
+            "seed": seed,
             "reason": f"{type(exc).__name__}: {exc}",
         }
     path.write_bytes(orjson.dumps(payload, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2) + b"\n")
@@ -1580,259 +1860,298 @@ def run_pilot(
     best_clip_count: int | None = None
     search_result: OptunaSearchResult | None = None
 
-    model: xgboost.XGBClassifier | PUBaggedAccountModel
-    if pu_method == "none":
-        if search_setting == "optuna":
-            (
-                optuna_space,
-                optuna_trials,
-                optuna_seed,
-                optuna_min_trials_before_stop,
-                optuna_stall_patience_trials,
-                optuna_min_improvement,
-            ) = _optuna_requirements(mule_model_config)
-            if validation_truth_scored is None:
-                raise ValueError("The Optuna search requires validation truth roles")
+    checkpoint_directory = result_dir / "checkpoint"
+    fit_fingerprint = _fit_checkpoint_fingerprint(training_dirs, validation_dirs)
+    restored_fit = _load_fit_checkpoint(checkpoint_directory, fit_fingerprint, pu_method)
+    if restored_fit is not None:
+        print("SKIP search+fit: checkpoint matches")
+        best_model = restored_fit.model
+        best_scale_pos_weight = restored_fit.best_scale_pos_weight
+        best_n_estimators = restored_fit.best_n_estimators
+        best_validation_ap = restored_fit.best_validation_ap
+        best_unlabelled_per_positive = restored_fit.best_unlabelled_per_positive
+        best_c = restored_fit.best_c
+        best_weight_summary = restored_fit.best_weight_summary
+        best_clip_count = restored_fit.best_clip_count
+        n_estimators_scores = restored_fit.n_estimators_scores
+        pu_average_precision_scores = restored_fit.pu_average_precision_scores
+        training_seconds = restored_fit.training_seconds
+        search_result = restored_fit.search_result
+    else:
+        model: xgboost.XGBClassifier | PUBaggedAccountModel
+        if pu_method == "none":
+            if search_setting == "optuna":
+                (
+                    optuna_space,
+                    optuna_trials,
+                    optuna_seed,
+                    optuna_min_trials_before_stop,
+                    optuna_stall_patience_trials,
+                    optuna_min_improvement,
+                ) = _optuna_requirements(mule_model_config)
+                if validation_truth_scored is None:
+                    raise ValueError("The Optuna search requires validation truth roles")
 
-            def train_none_trial(params: dict[str, int | float]) -> Sequence[float]:
-                """Trains one supervised candidate and returns its validation probabilities."""
-                trial_model, _ = train_account_model(
-                    training_matrix,
-                    training_targets,
-                    seed,
-                    int(params["n_estimators"]),
-                    sample_weight=training_weights,
-                    device=mule_model_config.xgboost_device,
-                    **_xgb_hyperparameters(params),
-                )
-                return predict_account_days(trial_model, validation_rows_for_keys)
-
-            started = time.perf_counter()
-            search_result = run_optuna_search(
-                train_none_trial,
-                validation_truth_scored,
-                optuna_space,
-                optuna_trials,
-                optuna_seed,
-                min_trials_before_stop=optuna_min_trials_before_stop,
-                stall_patience_trials=optuna_stall_patience_trials,
-                min_improvement=optuna_min_improvement,
-            )
-            training_seconds["optuna_search"] = time.perf_counter() - started
-            started = time.perf_counter()
-            best_model, best_scale_pos_weight = train_account_model(
-                training_matrix,
-                training_targets,
-                seed,
-                int(search_result.best_params["n_estimators"]),
-                sample_weight=training_weights,
-                device=mule_model_config.xgboost_device,
-                **_xgb_hyperparameters(search_result.best_params),
-            )
-            best_n_estimators = int(search_result.best_params["n_estimators"])
-            training_seconds["optuna_best"] = time.perf_counter() - started
-            probabilities = predict_account_days(best_model, validation_rows_for_keys)
-            best_validation_ap = average_precision(probabilities, validation_targets)
-        else:
-            for n_estimators in N_ESTIMATOR_CANDIDATES:
-                started = time.perf_counter()
-                model, scale_pos_weight = train_account_model(
-                    training_matrix,
-                    training_targets,
-                    seed,
-                    n_estimators=n_estimators,
-                    sample_weight=training_weights,
-                    device=mule_model_config.xgboost_device,
-                )
-                training_seconds[str(n_estimators)] = time.perf_counter() - started
-                probabilities = predict_account_days(model, validation_rows_for_keys)
-                score = average_precision(probabilities, validation_targets)
-                n_estimators_scores[str(n_estimators)] = score
-                if score > best_validation_ap:
-                    best_validation_ap = score
-                    best_model = model
-                    best_scale_pos_weight = scale_pos_weight
-                    best_n_estimators = n_estimators
-    elif pu_method == "bagging":
-        n_bags = mule_model_config.pu_bagging_n_bags
-        if n_bags is None:
-            raise ValueError("pu_bagging_n_bags is required when pu_method is 'bagging'")
-        unlabelled_candidates = mule_model_config.pu_unlabelled_per_positive_candidates
-        if unlabelled_candidates is None:
-            raise ValueError(
-                "pu_unlabelled_per_positive_candidates is required when pu_method is 'bagging'"
-            )
-        if search_setting == "optuna":
-            (
-                optuna_space,
-                optuna_trials,
-                optuna_seed,
-                optuna_min_trials_before_stop,
-                optuna_stall_patience_trials,
-                optuna_min_improvement,
-            ) = _optuna_requirements(mule_model_config)
-            if validation_truth_scored is None:
-                raise ValueError("The Optuna search requires validation truth roles")
-
-            def train_bagging_trial(params: dict[str, int | float]) -> Sequence[float]:
-                """Trains one bagged candidate and returns its validation probabilities."""
-                trial_model = train_pu_bagged_model(
-                    training_matrix,
-                    training_targets,
-                    seed,
-                    int(params["n_estimators"]),
-                    n_bags,
-                    int(params["unlabelled_per_positive"]),
-                    sample_weight=training_weights,
-                    device=mule_model_config.xgboost_device,
-                    **_xgb_hyperparameters(params),
-                )
-                return predict_account_days(trial_model, validation_rows_for_keys)
-
-            started = time.perf_counter()
-            search_result = run_optuna_search(
-                train_bagging_trial,
-                validation_truth_scored,
-                optuna_space,
-                optuna_trials,
-                optuna_seed,
-                min_trials_before_stop=optuna_min_trials_before_stop,
-                stall_patience_trials=optuna_stall_patience_trials,
-                min_improvement=optuna_min_improvement,
-                categorical_choices={"unlabelled_per_positive": unlabelled_candidates},
-            )
-            training_seconds["optuna_search"] = time.perf_counter() - started
-            started = time.perf_counter()
-            best_unlabelled_per_positive = int(search_result.best_params["unlabelled_per_positive"])
-            best_n_estimators = int(search_result.best_params["n_estimators"])
-            best_model = train_pu_bagged_model(
-                training_matrix,
-                training_targets,
-                seed,
-                best_n_estimators,
-                n_bags,
-                best_unlabelled_per_positive,
-                sample_weight=training_weights,
-                device=mule_model_config.xgboost_device,
-                **_xgb_hyperparameters(search_result.best_params),
-            )
-            training_seconds["optuna_best"] = time.perf_counter() - started
-            probabilities = predict_account_days(best_model, validation_rows_for_keys)
-            best_validation_ap = average_precision(probabilities, validation_targets)
-        else:
-            for n_estimators in N_ESTIMATOR_CANDIDATES:
-                for unlabelled_per_positive in unlabelled_candidates:
-                    variant = f"{n_estimators}|{unlabelled_per_positive}"
-                    started = time.perf_counter()
-                    model = train_pu_bagged_model(
+                def train_none_trial(params: dict[str, int | float]) -> Sequence[float]:
+                    """Trains one supervised candidate and returns its validation probabilities."""
+                    trial_model, _ = train_account_model(
                         training_matrix,
                         training_targets,
                         seed,
-                        n_estimators,
-                        n_bags,
-                        unlabelled_per_positive,
+                        int(params["n_estimators"]),
+                        sample_weight=training_weights,
+                        device=mule_model_config.xgboost_device,
+                        **_xgb_hyperparameters(params),
+                    )
+                    return predict_account_days(trial_model, validation_rows_for_keys)
+
+                started = time.perf_counter()
+                search_result = run_optuna_search(
+                    train_none_trial,
+                    validation_truth_scored,
+                    optuna_space,
+                    optuna_trials,
+                    optuna_seed,
+                    min_trials_before_stop=optuna_min_trials_before_stop,
+                    stall_patience_trials=optuna_stall_patience_trials,
+                    min_improvement=optuna_min_improvement,
+                )
+                training_seconds["optuna_search"] = time.perf_counter() - started
+                started = time.perf_counter()
+                best_model, best_scale_pos_weight = train_account_model(
+                    training_matrix,
+                    training_targets,
+                    seed,
+                    int(search_result.best_params["n_estimators"]),
+                    sample_weight=training_weights,
+                    device=mule_model_config.xgboost_device,
+                    **_xgb_hyperparameters(search_result.best_params),
+                )
+                best_n_estimators = int(search_result.best_params["n_estimators"])
+                training_seconds["optuna_best"] = time.perf_counter() - started
+                probabilities = predict_account_days(best_model, validation_rows_for_keys)
+                best_validation_ap = average_precision(probabilities, validation_targets)
+            else:
+                for n_estimators in N_ESTIMATOR_CANDIDATES:
+                    started = time.perf_counter()
+                    model, scale_pos_weight = train_account_model(
+                        training_matrix,
+                        training_targets,
+                        seed,
+                        n_estimators=n_estimators,
                         sample_weight=training_weights,
                         device=mule_model_config.xgboost_device,
                     )
-                    training_seconds[variant] = time.perf_counter() - started
+                    training_seconds[str(n_estimators)] = time.perf_counter() - started
                     probabilities = predict_account_days(model, validation_rows_for_keys)
                     score = average_precision(probabilities, validation_targets)
-                    pu_average_precision_scores[variant] = score
+                    n_estimators_scores[str(n_estimators)] = score
+                    if score > best_validation_ap:
+                        best_validation_ap = score
+                        best_model = model
+                        best_scale_pos_weight = scale_pos_weight
+                        best_n_estimators = n_estimators
+        elif pu_method == "bagging":
+            n_bags = mule_model_config.pu_bagging_n_bags
+            if n_bags is None:
+                raise ValueError("pu_bagging_n_bags is required when pu_method is 'bagging'")
+            unlabelled_candidates = mule_model_config.pu_unlabelled_per_positive_candidates
+            if unlabelled_candidates is None:
+                raise ValueError(
+                    "pu_unlabelled_per_positive_candidates is required when pu_method is 'bagging'"
+                )
+            if search_setting == "optuna":
+                (
+                    optuna_space,
+                    optuna_trials,
+                    optuna_seed,
+                    optuna_min_trials_before_stop,
+                    optuna_stall_patience_trials,
+                    optuna_min_improvement,
+                ) = _optuna_requirements(mule_model_config)
+                if validation_truth_scored is None:
+                    raise ValueError("The Optuna search requires validation truth roles")
+
+                def train_bagging_trial(params: dict[str, int | float]) -> Sequence[float]:
+                    """Trains one bagged candidate and returns its validation probabilities."""
+                    trial_model = train_pu_bagged_model(
+                        training_matrix,
+                        training_targets,
+                        seed,
+                        int(params["n_estimators"]),
+                        n_bags,
+                        int(params["unlabelled_per_positive"]),
+                        sample_weight=training_weights,
+                        device=mule_model_config.xgboost_device,
+                        **_xgb_hyperparameters(params),
+                    )
+                    return predict_account_days(trial_model, validation_rows_for_keys)
+
+                started = time.perf_counter()
+                search_result = run_optuna_search(
+                    train_bagging_trial,
+                    validation_truth_scored,
+                    optuna_space,
+                    optuna_trials,
+                    optuna_seed,
+                    min_trials_before_stop=optuna_min_trials_before_stop,
+                    stall_patience_trials=optuna_stall_patience_trials,
+                    min_improvement=optuna_min_improvement,
+                    categorical_choices={"unlabelled_per_positive": unlabelled_candidates},
+                )
+                training_seconds["optuna_search"] = time.perf_counter() - started
+                started = time.perf_counter()
+                best_unlabelled_per_positive = int(search_result.best_params["unlabelled_per_positive"])
+                best_n_estimators = int(search_result.best_params["n_estimators"])
+                best_model = train_pu_bagged_model(
+                    training_matrix,
+                    training_targets,
+                    seed,
+                    best_n_estimators,
+                    n_bags,
+                    best_unlabelled_per_positive,
+                    sample_weight=training_weights,
+                    device=mule_model_config.xgboost_device,
+                    **_xgb_hyperparameters(search_result.best_params),
+                )
+                training_seconds["optuna_best"] = time.perf_counter() - started
+                probabilities = predict_account_days(best_model, validation_rows_for_keys)
+                best_validation_ap = average_precision(probabilities, validation_targets)
+            else:
+                for n_estimators in N_ESTIMATOR_CANDIDATES:
+                    for unlabelled_per_positive in unlabelled_candidates:
+                        variant = f"{n_estimators}|{unlabelled_per_positive}"
+                        started = time.perf_counter()
+                        model = train_pu_bagged_model(
+                            training_matrix,
+                            training_targets,
+                            seed,
+                            n_estimators,
+                            n_bags,
+                            unlabelled_per_positive,
+                            sample_weight=training_weights,
+                            device=mule_model_config.xgboost_device,
+                        )
+                        training_seconds[variant] = time.perf_counter() - started
+                        probabilities = predict_account_days(model, validation_rows_for_keys)
+                        score = average_precision(probabilities, validation_targets)
+                        pu_average_precision_scores[variant] = score
+                        if score > best_validation_ap:
+                            best_validation_ap = score
+                            best_model = model
+                            best_n_estimators = n_estimators
+                            best_unlabelled_per_positive = unlabelled_per_positive
+        elif pu_method == "elkan_noto":
+            probability_clip = mule_model_config.pu_probability_clip
+            if probability_clip is None:
+                raise ValueError("pu_probability_clip is required when pu_method is 'elkan_noto'")
+            if search_setting == "optuna":
+                (
+                    optuna_space,
+                    optuna_trials,
+                    optuna_seed,
+                    optuna_min_trials_before_stop,
+                    optuna_stall_patience_trials,
+                    optuna_min_improvement,
+                ) = _optuna_requirements(mule_model_config)
+                if validation_truth_scored is None:
+                    raise ValueError("The Optuna search requires validation truth roles")
+
+                def train_elkan_trial(params: dict[str, int | float]) -> Sequence[float]:
+                    """Trains one Elkan-Noto candidate and returns its validation probabilities."""
+                    trial_model, _, _, _ = train_elkan_noto_model(
+                        training_matrix,
+                        training_targets,
+                        validation_matrix,
+                        validation_targets,
+                        seed,
+                        int(params["n_estimators"]),
+                        probability_clip,
+                        sample_weight=training_weights,
+                        device=mule_model_config.xgboost_device,
+                        **_xgb_hyperparameters(params),
+                    )
+                    return predict_account_days(trial_model, validation_rows_for_keys)
+
+                started = time.perf_counter()
+                search_result = run_optuna_search(
+                    train_elkan_trial,
+                    validation_truth_scored,
+                    optuna_space,
+                    optuna_trials,
+                    optuna_seed,
+                    min_trials_before_stop=optuna_min_trials_before_stop,
+                    stall_patience_trials=optuna_stall_patience_trials,
+                    min_improvement=optuna_min_improvement,
+                )
+                training_seconds["optuna_search"] = time.perf_counter() - started
+                started = time.perf_counter()
+                best_n_estimators = int(search_result.best_params["n_estimators"])
+                best_model, best_c, best_weight_summary, best_clip_count = train_elkan_noto_model(
+                    training_matrix,
+                    training_targets,
+                    validation_matrix,
+                    validation_targets,
+                    seed,
+                    best_n_estimators,
+                    probability_clip,
+                    sample_weight=training_weights,
+                    device=mule_model_config.xgboost_device,
+                    **_xgb_hyperparameters(search_result.best_params),
+                )
+                training_seconds["optuna_best"] = time.perf_counter() - started
+                probabilities = predict_account_days(best_model, validation_rows_for_keys)
+                best_validation_ap = average_precision(probabilities, validation_targets)
+            else:
+                for n_estimators in N_ESTIMATOR_CANDIDATES:
+                    started = time.perf_counter()
+                    model, c, weight_summary, clip_count = train_elkan_noto_model(
+                        training_matrix,
+                        training_targets,
+                        validation_matrix,
+                        validation_targets,
+                        seed,
+                        n_estimators,
+                        probability_clip,
+                        sample_weight=training_weights,
+                        device=mule_model_config.xgboost_device,
+                    )
+                    training_seconds[str(n_estimators)] = time.perf_counter() - started
+                    probabilities = predict_account_days(model, validation_rows_for_keys)
+                    score = average_precision(probabilities, validation_targets)
+                    n_estimators_scores[str(n_estimators)] = score
                     if score > best_validation_ap:
                         best_validation_ap = score
                         best_model = model
                         best_n_estimators = n_estimators
-                        best_unlabelled_per_positive = unlabelled_per_positive
-    elif pu_method == "elkan_noto":
-        probability_clip = mule_model_config.pu_probability_clip
-        if probability_clip is None:
-            raise ValueError("pu_probability_clip is required when pu_method is 'elkan_noto'")
-        if search_setting == "optuna":
-            (
-                optuna_space,
-                optuna_trials,
-                optuna_seed,
-                optuna_min_trials_before_stop,
-                optuna_stall_patience_trials,
-                optuna_min_improvement,
-            ) = _optuna_requirements(mule_model_config)
-            if validation_truth_scored is None:
-                raise ValueError("The Optuna search requires validation truth roles")
-
-            def train_elkan_trial(params: dict[str, int | float]) -> Sequence[float]:
-                """Trains one Elkan-Noto candidate and returns its validation probabilities."""
-                trial_model, _, _, _ = train_elkan_noto_model(
-                    training_matrix,
-                    training_targets,
-                    validation_matrix,
-                    validation_targets,
-                    seed,
-                    int(params["n_estimators"]),
-                    probability_clip,
-                    sample_weight=training_weights,
-                    device=mule_model_config.xgboost_device,
-                    **_xgb_hyperparameters(params),
-                )
-                return predict_account_days(trial_model, validation_rows_for_keys)
-
-            started = time.perf_counter()
-            search_result = run_optuna_search(
-                train_elkan_trial,
-                validation_truth_scored,
-                optuna_space,
-                optuna_trials,
-                optuna_seed,
-                min_trials_before_stop=optuna_min_trials_before_stop,
-                stall_patience_trials=optuna_stall_patience_trials,
-                min_improvement=optuna_min_improvement,
-            )
-            training_seconds["optuna_search"] = time.perf_counter() - started
-            started = time.perf_counter()
-            best_n_estimators = int(search_result.best_params["n_estimators"])
-            best_model, best_c, best_weight_summary, best_clip_count = train_elkan_noto_model(
-                training_matrix,
-                training_targets,
-                validation_matrix,
-                validation_targets,
-                seed,
-                best_n_estimators,
-                probability_clip,
-                sample_weight=training_weights,
-                device=mule_model_config.xgboost_device,
-                **_xgb_hyperparameters(search_result.best_params),
-            )
-            training_seconds["optuna_best"] = time.perf_counter() - started
-            probabilities = predict_account_days(best_model, validation_rows_for_keys)
-            best_validation_ap = average_precision(probabilities, validation_targets)
+                        best_c = c
+                        best_weight_summary = weight_summary
+                        best_clip_count = clip_count
         else:
-            for n_estimators in N_ESTIMATOR_CANDIDATES:
-                started = time.perf_counter()
-                model, c, weight_summary, clip_count = train_elkan_noto_model(
-                    training_matrix,
-                    training_targets,
-                    validation_matrix,
-                    validation_targets,
-                    seed,
-                    n_estimators,
-                    probability_clip,
-                    sample_weight=training_weights,
-                    device=mule_model_config.xgboost_device,
-                )
-                training_seconds[str(n_estimators)] = time.perf_counter() - started
-                probabilities = predict_account_days(model, validation_rows_for_keys)
-                score = average_precision(probabilities, validation_targets)
-                n_estimators_scores[str(n_estimators)] = score
-                if score > best_validation_ap:
-                    best_validation_ap = score
-                    best_model = model
-                    best_n_estimators = n_estimators
-                    best_c = c
-                    best_weight_summary = weight_summary
-                    best_clip_count = clip_count
-    else:
-        raise ValueError(f"Unsupported pu_method: {pu_method!r}")
+            raise ValueError(f"Unsupported pu_method: {pu_method!r}")
     if best_model is None:
         raise ValueError("No n_estimators candidate produced a validation score")
+    if restored_fit is None:
+        _save_fit_checkpoint(
+            checkpoint_directory,
+            fit_fingerprint,
+            pu_method,
+            _FitCheckpoint(
+                model=best_model,
+                best_scale_pos_weight=best_scale_pos_weight,
+                best_n_estimators=best_n_estimators,
+                best_validation_ap=best_validation_ap,
+                best_unlabelled_per_positive=best_unlabelled_per_positive,
+                best_c=best_c,
+                best_weight_summary=best_weight_summary,
+                best_clip_count=best_clip_count,
+                n_estimators_scores=n_estimators_scores,
+                pu_average_precision_scores=pu_average_precision_scores,
+                training_seconds=training_seconds,
+                search_result=search_result,
+            ),
+            seed,
+        )
     trials_path = result_dir / "optuna_trials.json"
     if search_result is not None:
         _, optuna_trials, optuna_seed, _, _, _ = _optuna_requirements(mule_model_config)
@@ -1882,6 +2201,18 @@ def run_pilot(
     )
     _record_stage("tune", stage_started, stage_seconds, peak_rss_mb)
     stage_started = time.perf_counter()
+    (checkpoint_directory).mkdir(parents=True, exist_ok=True)
+    (checkpoint_directory / "thresholds.json").write_bytes(
+        orjson.dumps(
+            {
+                "rules_thresholds": tuned.rules_result.thresholds,
+                "anomaly_cut": tuned.anomaly_result.threshold,
+                "xgboost_cut": xgboost_tuning.threshold,
+            },
+            option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2,
+        )
+        + b"\n"
+    )
 
     if stop_before_test:
         # Everything above needs no test or stress data. The first line below reads test data.
@@ -1900,7 +2231,9 @@ def run_pilot(
         print(str(dry_run_path))
         return 0
 
-    test_pairs =list(zip(test_dirs, test_datasets, strict=True))
+    test_pairs = list(zip(test_dirs, test_datasets, strict=True))
+    shap_sample_rows, shap_sample_seed = _load_shap_sample_policy()
+    shap_reservoir = _RowReservoir(shap_sample_rows, shap_sample_seed)
     per_world, test_day_rows = _evaluate_test_worlds(
         test_pairs,
         truth_root,
@@ -1910,6 +2243,7 @@ def run_pilot(
         best_model,
         xgboost_tuning.threshold,
         settings,
+        reservoir=shap_reservoir,
     )
     across_worlds = _summarise_pilot(per_world, settings.min_test_worlds)
     by_budget = _by_budget_test_results(
@@ -2126,6 +2460,8 @@ def run_pilot(
         best_model,
         account_model_feature_names(),
         test_day_rows,
+        rows_total=shap_reservoir.rows_seen,
+        seed=shap_reservoir.seed,
     )
     if shap_payload["status"] != "run":
         print(f"SHAP not run: {shap_payload['reason']}")

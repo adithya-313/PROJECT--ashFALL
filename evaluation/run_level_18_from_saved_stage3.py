@@ -93,6 +93,8 @@ ALLOWED_CHANGED_PATHS: frozenset[str] = frozenset(
         "evaluation/run_level_18_pilot.py",
         "evaluation/stage5_dry_run.py",
         "evaluation/run_level_18_from_saved_stage3.py",
+        # Read only by stage 5's SHAP step, which runs after every stage 1-4 decision.
+        "config/shap_sample.yaml",
     }
 )
 #: Folders whose files may change freely: tests, and docs, because markdown (amendments, notes) cannot

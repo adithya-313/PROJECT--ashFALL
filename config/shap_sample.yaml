@@ -1,0 +1,20 @@
+# =====================================================================
+# SHAP SAMPLE: how many test account-days stage 5's SHAP summary explains
+# =====================================================================
+#
+# What this file is
+#   The SHAP top-features summary in the pilot result explains a fixed-seed uniform sample of the
+#   test account-days, not every one. Read by evaluation/run_level_18_pilot.py; it sits in its own file
+#   so the mule model config, which stages 1-4 read, is untouched.
+
+shap_sample_rows:
+  label: policy
+  value: 20000
+  derived_from: "architect ruling 2026-11-22"
+  reason: "SHAP top features are a global summary; a fixed-seed sample gives the same ranking without explaining 1.4M rows through 50 bagged models"
+
+shap_sample_seed:
+  label: policy
+  value: 1717
+  derived_from: "architect ruling 2026-11-22"
+  reason: "fixed seed so the SHAP sample is reproducible"
