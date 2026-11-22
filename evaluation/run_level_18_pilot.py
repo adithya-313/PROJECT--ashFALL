@@ -856,6 +856,23 @@ def _tune_on_validation(
     )
 
 
+def _world_rows(table: pyarrow.Table, column: str, value: str) -> list[dict[str, Any]]:
+    """
+    WHAT: Returns one world's rows of an Arrow table as Python dicts, in table order.
+
+    WHY: Converting a whole dataset to Python rows held many gigabytes at full scale and crashed stage
+    5. Filtering on the Arrow table first means only one world is ever held as Python rows; the filter
+    keeps row order, so the rows are the ones a list comprehension over the whole table would have kept.
+
+    Args:
+        table: Arrow table with the filter column.
+        column: Column to match, such as "world_id" or "run_id".
+        value: Value the column must equal.
+    """
+    mask = pyarrow_compute.equal(table.column(column), value)
+    return table.filter(mask).to_pylist()
+
+
 def _evaluate_test_worlds(
     test_pairs: Sequence[tuple[Path, Dataset]],
     truth_root: Path,
@@ -865,6 +882,7 @@ def _evaluate_test_worlds(
     xgboost_model: xgboost.XGBClassifier | PUBaggedAccountModel,
     xgboost_threshold: float,
     settings: EvaluationSettings,
+    collect_day_rows: bool = False,
 ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
     """
     WHAT: Scores every test world with rules, anomaly, their union and the XGBoost account model.
@@ -883,9 +901,11 @@ def _evaluate_test_worlds(
         xgboost_model: Fitted XGBoost account model or PU bagging ensemble.
         xgboost_threshold: XGBoost cut chosen on validation.
         settings: Capacity, persona weights and world-count policy.
+        collect_day_rows: When true, every scored account-day row is returned for the SHAP summary;
+            the stress and extra-budget passes leave it false so they hold one world at a time only.
 
     Returns:
-        (per-world results, every test account-day row scored, for the SHAP summary).
+        (per-world results, the scored account-day rows when collect_day_rows is true, else an empty list).
 
     Raises:
         ValueError: If a world repeats, a world card is missing or invalid, or a metric refuses the data.
@@ -895,19 +915,19 @@ def _evaluate_test_worlds(
     repeat_policy = load_escalation_repeat_policy()
     for dataset_dir, dataset in test_pairs:
         payments, snapshots = join_truth(dataset_dir, truth_root)
-        payment_rows = payments.to_pylist()
-        snapshot_rows = snapshots.to_pylist()
-        labels_rows = dataset.labels.to_pylist()
+        labels = dataset.labels
         for world in dataset.manifest["worlds"]:
             world_id = str(world["world_id"])
             run_id = str(world["run_id"])
             if world_id in per_world:
                 raise ValueError(f"World {world_id!r} appears in more than one test dataset")
 
-            world_payments = [row for row in payment_rows if row["world_id"] == world_id]
-            world_snapshots = [row for row in snapshot_rows if row["world_id"] == world_id]
+            world_payments = _world_rows(payments, "world_id", world_id)
+            world_snapshots = _world_rows(snapshots, "world_id", world_id)
+            world_labels = _world_rows(labels, "run_id", run_id)
             day_rows = one_row_per_account_day(world_snapshots)
-            test_day_rows.extend(day_rows)
+            if collect_day_rows:
+                test_day_rows.extend(day_rows)
             scored = score_account_days(day_rows, tuned.rules_config, detector)
             probabilities = predict_account_days(xgboost_model, day_rows)
             xgboost_scored = [
@@ -918,7 +938,7 @@ def _evaluate_test_worlds(
 
             truth_store = load_truth(truth_root, run_id)
             first_credit = first_illicit_credit(world_payments, truth_store.story_of)
-            reported = reported_accounts(labels_rows, run_id)
+            reported = reported_accounts(world_labels, run_id)
             inflation_factor = _world_inflation_factor(
                 read_world_base_rate(world_cards_root, run_id), run_id
             )
@@ -1910,6 +1930,7 @@ def run_pilot(
         best_model,
         xgboost_tuning.threshold,
         settings,
+        collect_day_rows=True,
     )
     across_worlds = _summarise_pilot(per_world, settings.min_test_worlds)
     by_budget = _by_budget_test_results(
