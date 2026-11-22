@@ -10,11 +10,10 @@ from pathlib import Path
 import pytest
 import yaml
 
-from decisions.mule_account_model import load_mule_model_config
-from evaluation.run_level_18_pilot import _RowReservoir
+from evaluation.run_level_18_pilot import _load_shap_sample_policy, _RowReservoir
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-COMMITTED_CONFIG = REPO_ROOT / "config" / "mule_model.yaml"
+SHAP_CONFIG = REPO_ROOT / "config" / "shap_sample.yaml"
 
 
 def _fill(reservoir: _RowReservoir, count: int) -> None:
@@ -66,31 +65,78 @@ def test_a_non_positive_size_is_refused() -> None:
         _RowReservoir(0, 1717)
 
 
-def test_committed_config_carries_the_ruled_shap_sample_policy() -> None:
-    config = load_mule_model_config(COMMITTED_CONFIG)
-
-    assert config.shap_sample_rows == 20000
-    assert config.shap_sample_seed == 1717
+def test_committed_shap_config_carries_the_ruled_policy() -> None:
+    assert _load_shap_sample_policy(SHAP_CONFIG) == (20000, 1717)
+    assert _load_shap_sample_policy() == (20000, 1717)
 
 
-def test_an_older_config_without_the_keys_reads_the_committed_values(tmp_path: Path) -> None:
-    raw = yaml.safe_load(COMMITTED_CONFIG.read_text(encoding="utf-8"))
-    del raw["parameters"]["shap_sample_rows"]
-    del raw["parameters"]["shap_sample_seed"]
-    older = tmp_path / "older_config.yaml"
-    older.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
-
-    config = load_mule_model_config(older)
-
-    assert (config.shap_sample_rows, config.shap_sample_seed) == (20000, 1717)
-
-
-@pytest.mark.parametrize("bad_value", [0, -5, 2.5, "many", True])
-def test_a_bad_sample_size_is_refused(tmp_path: Path, bad_value: object) -> None:
-    raw = yaml.safe_load(COMMITTED_CONFIG.read_text(encoding="utf-8"))
-    raw["parameters"]["shap_sample_rows"]["value"] = bad_value
-    path = tmp_path / "bad_config.yaml"
+def _write_config(tmp_path: Path, mutate: object = None) -> Path:
+    raw = yaml.safe_load(SHAP_CONFIG.read_text(encoding="utf-8"))
+    if callable(mutate):
+        mutate(raw)
+    path = tmp_path / "shap_sample.yaml"
     path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    return path
+
+
+def test_a_missing_file_raises(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="not found"):
+        _load_shap_sample_policy(tmp_path / "absent.yaml")
+
+
+@pytest.mark.parametrize("missing_key", ["shap_sample_rows", "shap_sample_seed"])
+def test_a_missing_key_raises(tmp_path: Path, missing_key: str) -> None:
+    path = _write_config(tmp_path, lambda raw: raw.pop(missing_key))
+
+    with pytest.raises(ValueError, match=missing_key):
+        _load_shap_sample_policy(path)
+
+
+@pytest.mark.parametrize("bad_rows", [0, -5, 2.5, "many", True, None])
+def test_a_bad_row_count_raises(tmp_path: Path, bad_rows: object) -> None:
+    path = _write_config(tmp_path, lambda raw: raw["shap_sample_rows"].update(value=bad_rows))
 
     with pytest.raises(ValueError, match="shap_sample_rows"):
-        load_mule_model_config(path)
+        _load_shap_sample_policy(path)
+
+
+@pytest.mark.parametrize("bad_seed", [1.5, "seed", True, None])
+def test_a_bad_seed_raises(tmp_path: Path, bad_seed: object) -> None:
+    path = _write_config(tmp_path, lambda raw: raw["shap_sample_seed"].update(value=bad_seed))
+
+    with pytest.raises(ValueError, match="shap_sample_seed"):
+        _load_shap_sample_policy(path)
+
+
+@pytest.mark.parametrize("missing_field", ["label", "derived_from", "reason"])
+def test_a_block_without_its_metadata_raises(tmp_path: Path, missing_field: str) -> None:
+    path = _write_config(tmp_path, lambda raw: raw["shap_sample_rows"].pop(missing_field))
+
+    with pytest.raises(ValueError, match=missing_field):
+        _load_shap_sample_policy(path)
+
+
+def test_a_fixture_pilot_run_records_the_sample_in_shap_top_features(tmp_path: Path) -> None:
+    import json
+
+    from evaluation.run_level_18_pilot import run_pilot
+    from showcase.level_17_checks import TEST_DATASET, TRAINING_DATASET, VALIDATION_DATASET
+
+    fixtures = REPO_ROOT / "showcase" / "fixtures" / "level_17"
+
+    exit_code = run_pilot(
+        [TRAINING_DATASET],
+        [VALIDATION_DATASET],
+        [TEST_DATASET],
+        fixtures / "truth",
+        fixtures / "world_cards",
+        tmp_path,
+    )
+
+    assert exit_code == 0
+    shap_file = next(tmp_path.rglob("shap_top_features.json"))
+    payload = json.loads(shap_file.read_text(encoding="utf-8"))
+    assert payload["seed"] == 1717
+    assert payload["rows_total"] > 0
+    # The fixture has far fewer rows than the 20000 limit, so every row is sampled.
+    assert payload["rows_sampled"] == payload["rows_total"]

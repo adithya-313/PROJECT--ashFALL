@@ -184,3 +184,14 @@ def test_guard_still_refuses_a_python_path_beside_a_docs_file_and_names_only_the
 
     assert "evaluation/run_level_18_full.py" in str(raised.value)
     assert "docs/research/amendments.md" not in str(raised.value)
+
+
+def test_guard_accepts_the_shap_sample_config_but_still_refuses_the_mule_config_and_its_loader(tmp_path: Path) -> None:
+    source = _write_source(tmp_path / "stages")
+
+    assert _guard(source, changed=[*ALLOWED_PATHS, "config/shap_sample.yaml"]) == SOURCE_CODE_VERSION
+    for refused in ("config/mule_model.yaml", "decisions/mule_account_model.py"):
+        with pytest.raises(ValueError, match="outside the allowed files") as raised:
+            _guard(source, changed=["config/shap_sample.yaml", refused])
+        assert refused in str(raised.value)
+        assert "config/shap_sample.yaml" not in str(raised.value)

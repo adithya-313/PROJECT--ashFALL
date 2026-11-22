@@ -29,6 +29,7 @@ import pyarrow
 import pyarrow.compute as pyarrow_compute
 import shap
 import xgboost
+import yaml
 
 from core.event_clock import IST
 from core.truth_import_check import find_truth_violations
@@ -112,6 +113,7 @@ from replay.dataset_builder import Dataset
 __all__ = ["PILOT_SCORERS", "main", "run_pilot"]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+SHAP_SAMPLE_CONFIG_PATH = REPO_ROOT / "config" / "shap_sample.yaml"
 
 PILOT_SCORERS: tuple[str, ...] = ("rules", "anomaly", "rules_and_anomaly", "xgboost")
 
@@ -855,6 +857,47 @@ def _tune_on_validation(
         budget_pct,
         collect_grid_points=collect_grid_points,
     )
+
+
+def _load_shap_sample_policy(path: Path = SHAP_SAMPLE_CONFIG_PATH) -> tuple[int, int]:
+    """
+    WHAT: Reads how many test account-days SHAP explains and the seed of that sample.
+
+    WHY: The numbers are policy, so they live in config/shap_sample.yaml with their label, source and
+    reason, not in code. They sit in their own file so the mule model config that stages 1-4 read is
+    left untouched.
+
+    Args:
+        path: The config file; defaults to config/shap_sample.yaml.
+
+    Returns:
+        (shap_sample_rows, shap_sample_seed).
+
+    Raises:
+        ValueError: If the file or a key is missing, a block lacks its label, derived_from or reason, the
+            row count is not a positive integer, or the seed is not an integer.
+    """
+    if not path.is_file():
+        raise ValueError(f"SHAP sample config not found at {path}")
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError(f"SHAP sample config {path} must hold a mapping at the root")
+    values: dict[str, int] = {}
+    for key in ("shap_sample_rows", "shap_sample_seed"):
+        block = raw.get(key)
+        if not isinstance(block, dict):
+            raise ValueError(f"SHAP sample config {path} is missing the block {key!r}")
+        for field in ("label", "derived_from", "reason"):
+            text = block.get(field)
+            if not isinstance(text, str) or not text:
+                raise ValueError(f"Block {key!r} in {path} is missing a non-empty {field!r}")
+        value = block.get("value")
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise ValueError(f"{key} in {path} must be an integer; got {value!r}")
+        values[key] = value
+    if values["shap_sample_rows"] < 1:
+        raise ValueError(f"shap_sample_rows in {path} must be a positive integer; got {values['shap_sample_rows']}")
+    return values["shap_sample_rows"], values["shap_sample_seed"]
 
 
 class _RowReservoir:
@@ -1971,7 +2014,8 @@ def run_pilot(
         return 0
 
     test_pairs = list(zip(test_dirs, test_datasets, strict=True))
-    shap_reservoir = _RowReservoir(mule_model_config.shap_sample_rows, mule_model_config.shap_sample_seed)
+    shap_sample_rows, shap_sample_seed = _load_shap_sample_policy()
+    shap_reservoir = _RowReservoir(shap_sample_rows, shap_sample_seed)
     per_world, test_day_rows = _evaluate_test_worlds(
         test_pairs,
         truth_root,
