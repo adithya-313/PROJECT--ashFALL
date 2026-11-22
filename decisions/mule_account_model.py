@@ -90,6 +90,8 @@ ALLOWED_MULE_MODEL_KEYS: frozenset[str] = frozenset(
         "maturity_tie_tolerance",
         "xgboost_device",
         "parity_ap_tolerance",
+        "shap_sample_rows",
+        "shap_sample_seed",
         "use_label_network_features",
         "label_network_features",
         "feedback_network_features_not_used",
@@ -107,6 +109,10 @@ ALLOWED_MULE_MODEL_KEYS: frozenset[str] = frozenset(
 )
 OPTIONAL_MULE_MODEL_KEYS: frozenset[str] = frozenset(
     {
+        # Older config files, such as the copies a saved stage holds, predate the SHAP sample keys; they
+        # read the committed file's values (see _sampling_policy_int).
+        "shap_sample_rows",
+        "shap_sample_seed",
         "data_path",
         "use_label_network_features",
         "label_network_features",
@@ -156,6 +162,9 @@ class MuleModelConfig:
         xgboost_device: Device every account model trains on, "cpu" or "cuda".
         parity_ap_tolerance: Largest validation truth AP gap between a cpu and a cuda fit that
             evaluation/xgboost_device_parity.py accepts.
+        shap_sample_rows: Most test account-day rows the SHAP summary explains; a uniform sample of this
+            size is drawn with shap_sample_seed, or every row when there are fewer.
+        shap_sample_seed: Seed of that sample.
         feature_fill_flag_share: Share of rows at or above which a feature's most common value makes
             the feature unable to separate anything, so the sanity report flags it.
         use_label_network_features: Whether the account model may use the configured label-based
@@ -196,6 +205,8 @@ class MuleModelConfig:
     maturity_tie_tolerance: float
     xgboost_device: str
     parity_ap_tolerance: float
+    shap_sample_rows: int
+    shap_sample_seed: int
     feature_fill_flag_share: float
     use_label_network_features: bool | None
     label_network_features: tuple[str, ...]
@@ -213,6 +224,35 @@ class MuleModelConfig:
     optuna_stall_patience_trials: int
     optuna_min_improvement: float
     hyperparameter_space: dict[str, HyperparameterRange] | None
+
+
+def _sampling_policy_int(parameters: dict[str, Any], key: str, resolved_path: Path, minimum: int) -> int:
+    """
+    WHAT: Returns an integer sampling policy value, reading the committed config when the file being
+    loaded does not carry the block.
+
+    WHY: The SHAP sample keys were added after the full run's config copies were saved, and stage 5 must
+    still load those copies; the numbers live in the committed config file, not in code. The committed
+    file itself must carry them.
+
+    Raises:
+        ValueError: If the committed file lacks the block, or the value is not an integer >= minimum.
+    """
+    block = parameters.get(key)
+    source = resolved_path
+    if block is None:
+        if resolved_path.resolve() == _COMMITTED_MULE_MODEL_CONFIG_PATH.resolve():
+            raise ValueError(f"Missing parameter block '{key}' in {resolved_path}")
+        with open(_COMMITTED_MULE_MODEL_CONFIG_PATH, "r", encoding="utf-8") as handle:
+            committed = yaml.safe_load(handle)
+        block = committed["parameters"].get(key) if isinstance(committed, dict) else None
+        source = _COMMITTED_MULE_MODEL_CONFIG_PATH
+    if not isinstance(block, dict):
+        raise ValueError(f"Missing parameter block '{key}' in {source}")
+    value = block.get("value")
+    if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
+        raise ValueError(f"{key} in {source} must be an integer >= {minimum}; got {value!r}")
+    return value
 
 
 def _parse_label_trust_curve(block: dict[str, Any], path: Path) -> tuple[float, ...]:
@@ -518,6 +558,9 @@ def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
             f"parity_ap_tolerance in {resolved_path} must be a positive finite number; got {parity_value!r}"
         )
 
+    shap_sample_rows = _sampling_policy_int(parameters, "shap_sample_rows", resolved_path, minimum=1)
+    shap_sample_seed = _sampling_policy_int(parameters, "shap_sample_seed", resolved_path, minimum=0)
+
     fill_share_block = parameters["feature_fill_flag_share"]
     fill_share_value = fill_share_block.get("value")
     if (
@@ -691,6 +734,8 @@ def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
         maturity_tie_tolerance=float(tolerance_value),
         xgboost_device=device_value,
         parity_ap_tolerance=float(parity_value),
+        shap_sample_rows=shap_sample_rows,
+        shap_sample_seed=shap_sample_seed,
         feature_fill_flag_share=float(fill_share_value),
         use_label_network_features=use_label_network_features,
         label_network_features=label_network_features,

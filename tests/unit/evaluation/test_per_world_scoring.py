@@ -103,7 +103,7 @@ def _capture_main_test_call(
 
     def spy(*args: Any, **kwargs: Any) -> Any:
         result = original(*args, **kwargs)
-        if kwargs.get("collect_day_rows") is True:
+        if kwargs.get("reservoir") is not None:
             captured.append((args, kwargs, result))
         return result
 

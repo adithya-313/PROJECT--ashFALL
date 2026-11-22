@@ -64,6 +64,18 @@ parameters:
     derived_from: "architect ruling 2026-11-20"
     reason: "GPU sums in a different order; a larger gap could change model choices"
 
+  shap_sample_rows:
+    label: policy
+    value: 20000
+    derived_from: "architect ruling 2026-11-22"
+    reason: "SHAP top features are a global summary; a fixed-seed sample gives the same ranking without explaining 1.4M rows through 50 bagged models"
+
+  shap_sample_seed:
+    label: policy
+    value: 1717
+    derived_from: "architect ruling 2026-11-22"
+    reason: "A fixed seed makes the SHAP sample, and so shap_top_features.json, reproducible"
+
   feature_fill_flag_share:
     label: policy
     value: 0.999

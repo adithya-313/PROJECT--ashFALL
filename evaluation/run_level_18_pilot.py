@@ -15,6 +15,7 @@ plain ValueError naming the offending path.
 """
 
 import argparse
+import random
 import time
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
@@ -856,6 +857,44 @@ def _tune_on_validation(
     )
 
 
+class _RowReservoir:
+    """
+    WHAT: Keeps a uniform random sample of fixed size from the rows it is shown, in one pass.
+
+    WHY: The SHAP summary explains a sample of the test account-days, not all of them. Sampling while
+    the worlds are scored one at a time keeps memory flat, and a fixed seed makes the sample, and so
+    the summary, reproducible. Every row is kept while fewer than size have been seen.
+
+    Algorithm:
+        Reservoir sampling (Algorithm R): the first size rows fill the reservoir; row number i
+        (counting from 0) then replaces a random slot with probability size / (i + 1).
+    """
+
+    def __init__(self, size: int, seed: int) -> None:
+        if size < 1:
+            raise ValueError(f"A row reservoir needs a positive size; got {size}")
+        self.size = size
+        self.seed = seed
+        self.rows_seen = 0
+        self._random = random.Random(seed)
+        self._rows: list[dict[str, Any]] = []
+
+    def add(self, row: dict[str, Any]) -> None:
+        """Shows one row to the reservoir."""
+        if len(self._rows) < self.size:
+            self._rows.append(row)
+        else:
+            slot = self._random.randrange(self.rows_seen + 1)
+            if slot < self.size:
+                self._rows[slot] = row
+        self.rows_seen += 1
+
+    @property
+    def rows(self) -> list[dict[str, Any]]:
+        """The sampled rows."""
+        return list(self._rows)
+
+
 def _world_rows(table: pyarrow.Table, column: str, value: str) -> list[dict[str, Any]]:
     """
     WHAT: Returns one world's rows of an Arrow table as Python dicts, in table order.
@@ -882,7 +921,7 @@ def _evaluate_test_worlds(
     xgboost_model: xgboost.XGBClassifier | PUBaggedAccountModel,
     xgboost_threshold: float,
     settings: EvaluationSettings,
-    collect_day_rows: bool = False,
+    reservoir: _RowReservoir | None = None,
 ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
     """
     WHAT: Scores every test world with rules, anomaly, their union and the XGBoost account model.
@@ -901,17 +940,17 @@ def _evaluate_test_worlds(
         xgboost_model: Fitted XGBoost account model or PU bagging ensemble.
         xgboost_threshold: XGBoost cut chosen on validation.
         settings: Capacity, persona weights and world-count policy.
-        collect_day_rows: When true, every scored account-day row is returned for the SHAP summary;
-            the stress and extra-budget passes leave it false so they hold one world at a time only.
+        reservoir: When given, every scored account-day row is shown to it and its sample is returned for
+            the SHAP summary; the stress and extra-budget passes leave it None so they hold one world at
+            a time only.
 
     Returns:
-        (per-world results, the scored account-day rows when collect_day_rows is true, else an empty list).
+        (per-world results, the reservoir's sampled account-day rows, or an empty list without one).
 
     Raises:
         ValueError: If a world repeats, a world card is missing or invalid, or a metric refuses the data.
     """
     per_world: dict[str, dict[str, Any]] = {}
-    test_day_rows: list[dict[str, Any]] = []
     repeat_policy = load_escalation_repeat_policy()
     for dataset_dir, dataset in test_pairs:
         payments, snapshots = join_truth(dataset_dir, truth_root)
@@ -926,8 +965,9 @@ def _evaluate_test_worlds(
             world_snapshots = _world_rows(snapshots, "world_id", world_id)
             world_labels = _world_rows(labels, "run_id", run_id)
             day_rows = one_row_per_account_day(world_snapshots)
-            if collect_day_rows:
-                test_day_rows.extend(day_rows)
+            if reservoir is not None:
+                for day_row in day_rows:
+                    reservoir.add(day_row)
             scored = score_account_days(day_rows, tuned.rules_config, detector)
             probabilities = predict_account_days(xgboost_model, day_rows)
             xgboost_scored = [
@@ -974,7 +1014,7 @@ def _evaluate_test_worlds(
                 repeat_policy=repeat_policy,
             )
             per_world[world_id] = {"run_id": run_id, "split": "test", "scorers": scorers}
-    return per_world, test_day_rows
+    return per_world, reservoir.rows if reservoir is not None else []
 
 
 def _summarise_pilot(
@@ -1264,9 +1304,11 @@ def _write_shap(
     model: xgboost.XGBClassifier | PUBaggedAccountModel,
     feature_names: Sequence[str],
     day_rows: Sequence[dict[str, Any]],
+    rows_total: int,
+    seed: int,
 ) -> dict[str, Any]:
     """
-    WHAT: Writes the mean |SHAP| top ten features on the test account-days.
+    WHAT: Writes the mean |SHAP| top ten features on a sample of the test account-days.
 
     WHY: The pilot needs to show which features drive the account model, without plots. A SHAP
     runtime failure is recorded verbatim and does not stop the evaluation, as the architect ruled.
@@ -1276,10 +1318,12 @@ def _write_shap(
         path: Destination shap_top_features.json.
         model: Fitted XGBoost account model or PUBaggedAccountModel ensemble.
         feature_names: Canonical model feature order.
-        day_rows: Test account-day rows that were scored.
+        day_rows: The sampled test account-day rows SHAP explains.
+        rows_total: How many test account-days were scored before sampling.
+        seed: Seed of the sample, recorded so the summary can be reproduced.
 
     Returns:
-        The written payload.
+        The written payload, which records rows_total, rows_sampled and the seed.
 
     Errors:
         A SHAP/runtime exception is caught and written as {"status": "not run", "reason": "..."}.
@@ -1309,6 +1353,9 @@ def _write_shap(
             "simulated": True,
             "pilot": True,
             "status": "run",
+            "rows_total": rows_total,
+            "rows_sampled": len(day_rows),
+            "seed": seed,
             "top_features": [
                 {"feature": name, "mean_abs_shap": value} for name, value in ranked[:10]
             ],
@@ -1318,6 +1365,9 @@ def _write_shap(
             "simulated": True,
             "pilot": True,
             "status": "not run",
+            "rows_total": rows_total,
+            "rows_sampled": len(day_rows),
+            "seed": seed,
             "reason": f"{type(exc).__name__}: {exc}",
         }
     path.write_bytes(orjson.dumps(payload, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2) + b"\n")
@@ -1920,7 +1970,8 @@ def run_pilot(
         print(str(dry_run_path))
         return 0
 
-    test_pairs =list(zip(test_dirs, test_datasets, strict=True))
+    test_pairs = list(zip(test_dirs, test_datasets, strict=True))
+    shap_reservoir = _RowReservoir(mule_model_config.shap_sample_rows, mule_model_config.shap_sample_seed)
     per_world, test_day_rows = _evaluate_test_worlds(
         test_pairs,
         truth_root,
@@ -1930,7 +1981,7 @@ def run_pilot(
         best_model,
         xgboost_tuning.threshold,
         settings,
-        collect_day_rows=True,
+        reservoir=shap_reservoir,
     )
     across_worlds = _summarise_pilot(per_world, settings.min_test_worlds)
     by_budget = _by_budget_test_results(
@@ -2147,6 +2198,8 @@ def run_pilot(
         best_model,
         account_model_feature_names(),
         test_day_rows,
+        rows_total=shap_reservoir.rows_seen,
+        seed=shap_reservoir.seed,
     )
     if shap_payload["status"] != "run":
         print(f"SHAP not run: {shap_payload['reason']}")
