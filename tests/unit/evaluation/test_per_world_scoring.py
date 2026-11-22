@@ -203,16 +203,16 @@ def test_each_world_is_scored_with_only_its_own_payments_snapshots_and_labels(mo
         },
     )
 
-    pilot._evaluate_test_worlds(
-        [(Path("dataset"), dataset)],
-        Path("truth"),
-        Path("cards"),
-        SimpleNamespace(rules_config=None, anomaly_result=SimpleNamespace(threshold=0.5)),
-        None,
-        None,
-        0.5,
-        SimpleNamespace(capacity_pct_active_accounts_per_day=1.0, persona_weights={}, default_persona_weight=1),
+    # Stand-ins: evaluate_world and every loader are replaced above, so these only need the fields read.
+    test_pairs: Any = [(Path("dataset"), dataset)]
+    tuned: Any = SimpleNamespace(rules_config=None, anomaly_result=SimpleNamespace(threshold=0.5))
+    settings: Any = SimpleNamespace(
+        capacity_pct_active_accounts_per_day=1.0, persona_weights={}, default_persona_weight=1
     )
+    no_detector: Any = None
+    no_model: Any = None
+
+    pilot._evaluate_test_worlds(test_pairs, Path("truth"), Path("cards"), tuned, no_detector, no_model, 0.5, settings)
 
     assert recorded["world_a"]["scored_accounts"] == ["acc_1", "acc_2"]
     assert recorded["world_b"]["scored_accounts"] == ["acc_1"]
