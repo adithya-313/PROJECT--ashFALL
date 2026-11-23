@@ -647,3 +647,16 @@ No model code exists yet (models start in Level 18; `world/` is simulator code).
 | Disclosure | Added after the single test scoring had completed and been read. It retrains nothing, re-tunes nothing and changes no threshold, so it changes no choice and no verdict. Normalized recall is reported beside recall at capacity, never instead of it. The consistency gate is the proof that the frozen model was scored on the same rows with the same cut. |
 | Results exist? | Yes: `runs/full/run_a320_stage5c/extra_reporting.json`. |
 
+## A-053
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-23 |
+| Issue IDs | None |
+| Issue IDs v2 | None |
+| Files | `evaluation/level18_extra_reporting.py`, `tests/unit/evaluation/test_level18_extra_reporting.py`, `docs/research/amendments.md` |
+| What changed | The genuine flag rate and the per-world genuine account count in `evaluation/level18_extra_reporting.py` now read the genuine-role accounts that are never mule accounts, through one new helper `_never_mule_genuine(evidence) = evidence.genuine_active - evidence.mules`. Both previously used `evidence.genuine_active` from `ground_sets`, which lists an account as genuinely active if it carries a genuine-role day on any day, so a recruited mule (genuine before recruitment, mule afterwards) sat in both populations and a flagged mule was counted as an innocent flag. The rate keeps its key `genuine_flag_rate` and its skipped branch, now taken when no never-mule genuine account exists, and `genuine_accounts` counts the same set. A new test builds a world where one of three never-mule genuine accounts is flagged and requires one third. `ground_sets`, `evaluation/level17_scoring.py`, `evaluation/rules_tuning.py`, `evaluation/level17_evaluation.py` and every config are unchanged. |
+| Why | The rate answers how often a genuinely innocent account is flagged, and an account that becomes a mule was not innocent at the frozen decision, so dividing by every ever-genuine account mixed mules into the harm denominator. |
+| Disclosure | Reporting-only fix made after the single test scoring; it retrains nothing, changes no threshold, no choice and no verdict. The official harm metric `genuine_restricted_days` is unaffected because it counts harm only on genuine-role days, so the shared `ground_sets` and the frozen run's numbers stand. |
+| Results exist? | Yes: `runs/full/run_a320_stage5c/extra_reporting.json`, rerun after the fix; the previous file is kept as `runs/full/run_a320_stage5c/extra_reporting_before_a053_20261123.json`. |
+
