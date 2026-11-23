@@ -15,6 +15,7 @@ import pytest
 from evaluation.level17_scoring import AccountKey, ScoredDay
 from evaluation.level18_extra_reporting import (
     PINNED_ACCOUNT_LABELS_CHANGED_LINES,
+    _never_mule_genuine,
     _pure_metrics,
     _WorldEvidence,
     family_recall,
@@ -105,6 +106,51 @@ def test_pure_metrics_on_a_hand_example() -> None:
     assert pure["precision_at_cut"] == 0.5
     assert pure["genuine_flag_rate"] == 0.5
     assert 0.0 <= pure["account_day_average_precision"] <= 1.0
+
+
+def test_genuine_flag_rate_never_counts_a_recruited_mule() -> None:
+    """
+    WHAT: A recruited mule carries genuine days before its mule days, so it sits in both truth
+    sets; the genuine flag rate must divide only by accounts that are never mules.
+    WHY: Counting a flagged mule as an innocent flag inflates the harm metric, so a world where one
+    of three never-mule genuine accounts is flagged must read one third, not one half.
+    """
+    scored = [
+        _scored("acc_recruited", "genuine", 0.90, None),
+        _scored("acc_recruited", "mule", 0.90, 2),
+        _scored("acc_genuine_1", "genuine", 0.80, None),
+        _scored("acc_genuine_2", "genuine", 0.10, None),
+        _scored("acc_genuine_3", "genuine", 0.20, None),
+    ]
+    evidence = _WorldEvidence(
+        world_id=WORLD,
+        run_id="run_1",
+        xgboost_cut=0.5,
+        scored=scored,
+        probabilities=[0.90, 0.90, 0.80, 0.10, 0.20],
+        day_rows=[],
+        mules={_key("acc_recruited")},
+        genuine_active={
+            _key("acc_recruited"),
+            _key("acc_genuine_1"),
+            _key("acc_genuine_2"),
+            _key("acc_genuine_3"),
+        },
+        depth_of={},
+        flagged_at_cut={_key("acc_recruited"), _key("acc_genuine_1")},
+        reported=set(),
+    )
+
+    pure = _pure_metrics(evidence)
+
+    assert pure["genuine_flag_rate"] == 1 / 3
+    # _world_metrics needs a TruthStore, so the genuine_accounts population is checked on the same
+    # helper that both it and the rate now read.
+    assert _never_mule_genuine(evidence) == {
+        _key("acc_genuine_1"),
+        _key("acc_genuine_2"),
+        _key("acc_genuine_3"),
+    }
 
 
 def test_family_recall_on_a_hand_example() -> None:

@@ -791,12 +791,30 @@ def _consistency_comparisons(
     return comparisons
 
 
+def _never_mule_genuine(evidence: _WorldEvidence) -> set[AccountKey]:
+    """
+    WHAT: Returns the world's genuine-role accounts that are never mule accounts.
+
+    WHY: A recruited mule carries genuine days before its mule days, so ground_sets records it in
+    both populations; counting a flagged mule as an innocent flag would overstate genuine harm.
+
+    Args:
+        evidence: The world's scored account-days and truth sets.
+
+    Returns:
+        The accounts with at least one genuine day and no mule day.
+    """
+    return evidence.genuine_active - evidence.mules
+
+
 def _pure_metrics(evidence: _WorldEvidence) -> dict[str, Any]:
     """
     WHAT: Computes the cut-independent and cut-based account metrics of one world.
 
     WHY: Average precision judges the ranking over every account-day, while recall, precision and
-    the genuine flag rate judge the single frozen account-level decision.
+    the genuine flag rate judge the single frozen account-level decision; the genuine flag rate
+    divides by genuine accounts that are never mules, because a recruited mule's genuine days
+    would otherwise count a correctly flagged mule as an innocent flag.
 
     Returns:
         A mapping from metric name to its number, or to {"skipped": reason} where the world holds
@@ -825,10 +843,9 @@ def _pure_metrics(evidence: _WorldEvidence) -> dict[str, Any]:
     else:
         pure["precision_at_cut"] = {"skipped": "no account reached the frozen cut"}
 
-    if evidence.genuine_active:
-        pure["genuine_flag_rate"] = len(evidence.flagged_at_cut & evidence.genuine_active) / len(
-            evidence.genuine_active
-        )
+    never_mule_genuine = _never_mule_genuine(evidence)
+    if never_mule_genuine:
+        pure["genuine_flag_rate"] = len(evidence.flagged_at_cut & never_mule_genuine) / len(never_mule_genuine)
     else:
         pure["genuine_flag_rate"] = {"skipped": "world has no genuine account"}
     return pure
@@ -978,7 +995,7 @@ def _world_metrics(
         "run_id": evidence.run_id,
         "account_days": len(evidence.scored),
         "mule_accounts": len(evidence.mules),
-        "genuine_accounts": len(evidence.genuine_active),
+        "genuine_accounts": len(_never_mule_genuine(evidence)),
     }
     record["pure"] = _pure_metrics(evidence)
     capacity, headline_escalations = _capacity_metrics(evidence, capacity_points, headline_pct, repeat_policy)
