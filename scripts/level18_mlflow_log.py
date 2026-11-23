@@ -3,9 +3,13 @@ File: scripts/level18_mlflow_log.py
 Purpose: Back-fill MLflow with every Level 18 experiment after the fact, from the saved result files only.
 
 This script never trains, scores or rewrites a result: it imports the pure readers, turns their dataclasses into
-MLflow runs, and is idempotent. Before creating a run it searches the experiment for a run with the same
-source_sha256 tag and the same run name; if one exists it prints SKIP and logs nothing. That lookup is the only
-read from MLflow, and nothing reads MLflow for any model decision.
+MLflow runs, and is idempotent. Before creating a run it searches the experiment for a run with the same idem_key
+tag (a sha256 over the source file bytes and the canonical JSON of the unit's name, tags, params and failed-attempt
+record, so editing a YAML reason re-logs that attempt) and the same run name; if one exists it prints SKIP and logs
+nothing. The idem_key and source_sha256 tags are set only after params, metrics, children and artifacts all
+succeeded. A run that fails part-way is ended FAILED with a backfill_error tag and no idem_key, so the next pass
+logs a fresh complete run and the partial run remains as evidence. That lookup is the only read from MLflow, and
+nothing reads MLflow for any model decision.
 
 Every run carries the base tags code_version, config_sha256, dataset_ids (from a stage fingerprint, or "not
 recorded"), fingerprint_source, source_file, source_sha256 and simulated="true". Failed and killed attempts carry
@@ -15,6 +19,7 @@ no metrics, only tags and a file-list artifact.
 from __future__ import annotations
 
 import argparse
+import hashlib
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -88,6 +93,7 @@ class Unit:
     artifacts_copy: tuple[Path, ...]
     listings: tuple[Listing, ...]
     status: str
+    failed_record: dict[str, Any] | None = None
 
 
 def _as_str(value: Any) -> str:
@@ -415,6 +421,16 @@ def _failed_unit(runs_root: Path, failed_yaml: Path, record: FailedAttempt) -> U
         artifacts_copy=(),
         listings=listings,
         status=record.status,
+        failed_record={
+            "name": record.name,
+            "folder": _label(record.folder, (runs_root, REPO_ROOT)) if record.folder is not None else None,
+            "reason": record.reason,
+            "fixed_by": record.fixed_by,
+            "derived_from": record.derived_from,
+            "status": record.status,
+            "reason_recorded": record.reason_recorded,
+            "evidence": record.evidence,
+        },
     )
 
 
@@ -456,10 +472,27 @@ def _experiment_id() -> str:
     return experiment.experiment_id
 
 
-def _already_logged(experiment_id: str, name: str, source_sha256: str) -> bool:
+def _idem_key(unit: Unit) -> str:
+    """sha256 over the source file bytes and the canonical JSON (sorted keys) of the unit's name, tags, params and
+    failed-attempt record.
+
+    The key therefore covers everything the run would log: editing a YAML reason, a tag or a param changes the key
+    and the unit is logged again, instead of being skipped as already present.
+    """
+    canonical = orjson.dumps(
+        {"name": unit.name, "tags": unit.tags, "params": unit.params, "failed_record": unit.failed_record},
+        option=orjson.OPT_SORT_KEYS,
+    )
+    digest = hashlib.sha256()
+    digest.update(unit.source_file.read_bytes())
+    digest.update(canonical)
+    return digest.hexdigest()
+
+
+def _already_logged(experiment_id: str, name: str, idem_key: str) -> bool:
     found = mlflow.search_runs(
         experiment_ids=[experiment_id],
-        filter_string=f"tags.source_sha256 = '{source_sha256}'",
+        filter_string=f"tags.idem_key = '{idem_key}'",
         output_format="list",
         max_results=100_000,
     )
@@ -475,10 +508,9 @@ def _log_metric(metric: Metric) -> None:
         mlflow.log_metric(metric.name, metric.value, step=metric.step)
 
 
-def _log_unit(unit: Unit, source_sha256: str, roots: Sequence[Path]) -> None:
+def _log_unit(unit: Unit, source_sha256: str, idem_key: str, roots: Sequence[Path]) -> None:
     tags = dict(unit.tags)
     tags["source_file"] = _label(unit.source_file, roots)
-    tags["source_sha256"] = source_sha256
     tags["simulated"] = "true"
 
     mlflow.start_run(run_name=unit.name, tags=tags)
@@ -495,6 +527,7 @@ def _log_unit(unit: Unit, source_sha256: str, roots: Sequence[Path]) -> None:
                     mlflow.log_params(child.params)
                 for metric in child.metrics:
                     _log_metric(metric)
+                mlflow.set_tag("source_sha256", source_sha256)
             finally:
                 mlflow.end_run()
         for path in unit.artifacts_copy:
@@ -510,8 +543,15 @@ def _log_unit(unit: Unit, source_sha256: str, roots: Sequence[Path]) -> None:
                 {"base": _label(listing.base, roots), "files": list(records)},
                 listing.filename,
             )
-    finally:
-        mlflow.end_run(status=unit.status)
+    except Exception as exc:
+        # The tag must go before end_run because the fluent API needs an active run; the observable state is the
+        # ruling's: a FAILED run carrying backfill_error and no idem_key.
+        mlflow.set_tag("backfill_error", f"{type(exc).__name__}: {exc}")
+        mlflow.end_run(status="FAILED")
+        raise
+    mlflow.set_tag("source_sha256", source_sha256)
+    mlflow.set_tag("idem_key", idem_key)
+    mlflow.end_run(status=unit.status)
 
 
 def log_units(units: Sequence[Unit], runs_root: Path) -> dict[str, dict[str, int]]:
@@ -522,11 +562,12 @@ def log_units(units: Sequence[Unit], runs_root: Path) -> dict[str, dict[str, int
     skipped: dict[str, int] = defaultdict(int)
     for unit in units:
         source_sha256 = sha256_of(unit.source_file)
-        if _already_logged(experiment_id, unit.name, source_sha256):
+        key = _idem_key(unit)
+        if _already_logged(experiment_id, unit.name, key):
             print(f"SKIP {unit.kind}: {unit.name}")
             skipped[unit.kind] += 1 + len(unit.children)
             continue
-        _log_unit(unit, source_sha256, roots)
+        _log_unit(unit, source_sha256, key, roots)
         created[unit.kind] += 1 + len(unit.children)
         print(f"LOG {unit.kind}: {unit.name} (+{len(unit.children)} children)")
     return {"created": dict(created), "skipped": dict(skipped)}

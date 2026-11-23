@@ -347,3 +347,78 @@ def test_idempotent_second_pass_and_failed_status(
     assert final.data.tags["code_version"] == "abc1234"
     artifact_names = [item.path for item in mlflow.MlflowClient().list_artifacts(final.info.run_id)]
     assert "not_copied_files.json" in artifact_names
+
+
+def test_crash_mid_unit_is_relogged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, log_script: ModuleType) -> None:
+    """A crash after the artifacts start leaves a FAILED run with backfill_error and no idem_key; the next pass logs
+    the unit again and a third pass logs nothing."""
+    runs_root, yaml_path = make_tree(tmp_path)
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "sqlite:///" + (tmp_path / "mlflow.db").as_posix())
+    monkeypatch.chdir(tmp_path)
+
+    units = log_script.build_units(runs_root, yaml_path)
+
+    import mlflow
+
+    real_log_artifact = mlflow.log_artifact
+    calls = {"count": 0}
+
+    def fail_once(*args, **kwargs):
+        if calls["count"] == 0:
+            calls["count"] += 1
+            raise RuntimeError("artifact write failed")
+        return real_log_artifact(*args, **kwargs)
+
+    monkeypatch.setattr(mlflow, "log_artifact", fail_once)
+
+    with pytest.raises(RuntimeError, match="artifact write failed"):
+        log_script.log_units(units, runs_root)
+
+    experiment = mlflow.get_experiment_by_name(log_script.EXPERIMENT)
+    assert experiment is not None
+    runs = mlflow.search_runs(experiment_ids=[experiment.experiment_id], output_format="list", max_results=10_000)
+    assert isinstance(runs, list)
+    final_runs = [run for run in runs if run.data.tags.get("mlflow.runName") == "final_test_and_stress"]
+    assert len(final_runs) == 1
+    partial = final_runs[0]
+    assert partial.info.status == "FAILED"
+    assert partial.data.tags["backfill_error"] == "RuntimeError: artifact write failed"
+    assert "idem_key" not in partial.data.tags
+
+    second = log_script.log_units(units, runs_root)
+    assert second["created"]["final_test_and_stress"] == 1
+    assert "stage1_label_maturity" not in second["created"]
+
+    runs = mlflow.search_runs(experiment_ids=[experiment.experiment_id], output_format="list", max_results=10_000)
+    assert isinstance(runs, list)
+    final_runs = [run for run in runs if run.data.tags.get("mlflow.runName") == "final_test_and_stress"]
+    finished = [run for run in final_runs if run.info.status == "FINISHED"]
+    assert len(finished) == 1
+    assert "idem_key" in finished[0].data.tags
+    artifact_names = [item.path for item in mlflow.MlflowClient().list_artifacts(finished[0].info.run_id)]
+    assert "not_copied_files.json" in artifact_names
+
+    third = log_script.log_units(units, runs_root)
+    assert sum(third["created"].values()) == 0
+
+
+def test_changed_failed_reason_relogs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, log_script: ModuleType) -> None:
+    """Rewording one failed-attempt reason changes that attempt's idem_key, so a second pass creates exactly it."""
+    runs_root, yaml_path = make_tree(tmp_path)
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "sqlite:///" + (tmp_path / "mlflow.db").as_posix())
+    monkeypatch.chdir(tmp_path)
+
+    units = log_script.build_units(runs_root, yaml_path)
+    planned = sum(log_script.plan_counts(units).values())
+    first = log_script.log_units(units, runs_root)
+    assert sum(first["created"].values()) == planned
+
+    original = yaml_path.read_text(encoding="utf-8")
+    changed = original.replace("reason: merged accounts", "reason: merged accounts (reworded)")
+    assert changed != original
+    yaml_path.write_text(changed, encoding="utf-8")
+
+    updated = log_script.build_units(runs_root, yaml_path)
+    second = log_script.log_units(updated, runs_root)
+    assert second["created"] == {"failed_attempt": 1}
+    assert sum(second["skipped"].values()) == planned - 1
