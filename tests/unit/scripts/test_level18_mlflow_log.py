@@ -317,6 +317,7 @@ def test_idempotent_second_pass_and_failed_status(
     experiment = mlflow.get_experiment_by_name(log_script.EXPERIMENT)
     assert experiment is not None
     runs = mlflow.search_runs(experiment_ids=[experiment.experiment_id], output_format="list", max_results=10_000)
+    assert isinstance(runs, list)
     by_name = {run.data.tags.get("mlflow.runName"): run for run in runs}
 
     assert len(runs) == planned

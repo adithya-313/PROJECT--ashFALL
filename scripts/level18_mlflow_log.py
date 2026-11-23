@@ -463,6 +463,8 @@ def _already_logged(experiment_id: str, name: str, source_sha256: str) -> bool:
         output_format="list",
         max_results=100_000,
     )
+    if not isinstance(found, list):
+        raise ValueError(f"search_runs with output_format='list' returned {type(found).__name__}")
     return any(run.data.tags.get("mlflow.runName") == name for run in found)
 
 
