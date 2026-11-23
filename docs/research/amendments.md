@@ -719,3 +719,25 @@ Rulings, fixed before any payment-model result:
 5. **`payee_same_bank_risk` is kept:** it reads labels by arrival time only (`features/m1_payment.py`, `labelled_accounts_visible`/`complained_accounts_visible` with `arrival_cutoff`), which a real bank may see. The report includes validation truth AP of the best model with `payee_same_bank_risk` set to NaN as an ablation; the ablation is not used for any choice.
 6. **Same-bank split:** the report states the frozen best model's validation truth AP separately for payments whose receiver is at the payment row's bank (`payee_risk` finite) and payments where `payee_risk` is NaN.
 
+## A-057
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-24 |
+| Issue IDs | None |
+| Issue IDs v2 | None |
+| Files | `evaluation/payment_model.py`, `tests/unit/evaluation/test_payment_model.py`, `evaluation/payment_oof_risk.py`, `decisions/mule_account_model.py`, `evaluation/hyperparameter_search.py`, `evaluation/level17_scoring.py`, `docs/research/amendments.md` |
+| What changed | Corrects the payment model's training target, voids the 23 Nov payment-model search, and fixes the two mypy findings the end-of-round workflow exposed. The target is now derived in `evaluation/payment_model.py`: a payment is positive when `(world_id, receiver_account_id)` is a `(world_id, account_id)` pair in the same dataset's `labels.parquet`. The payments column `label_receiver_reported_by_cutoff` is no longer read. The 23 Nov search (24 trials, best validation truth AP 0.3222) is void and kept only as evidence under `runs/full/payment_model_v1_void_bad_target/`. Mypy: `payment_oof_risk.py` saves and restores the config override through the new `mule_model_config_override()` getter in `decisions/mule_account_model.py`; the truth-scored search functions take the new `HasRole` Protocol (`role: str`) from `evaluation/level17_scoring.py` instead of `ScoredDay`. |
+| Why | `replay/dataset_builder.py:394` builds `reported_accounts` from the bare `account_id` with no world id, and `:476` tests `rec_acc in reported_accounts`, so a label received in any world marks every payment to that id in every world as positive — the same bug class as PR #159. The old target's 51.37% positive share against 1.49% validation truth positive share showed the mismatch. The builder and every dataset are frozen and unchanged; Run A does not use this column. |
+| Disclosure | Written after the invalid 23 Nov search and before any valid payment-model result. It changes no dataset, no `replay/` file, no committed config value and no prior result; the void run folder is renamed, not deleted. Test and stress data are not read in any phase. |
+| Results exist? | No valid payment-model result. The 23 Nov run is void evidence only. Valid results are to land under `runs/full/payment_model_v1/`. |
+
+Facts recorded with the correction:
+
+1. **Finding.** `replay/dataset_builder.py` forms `reported_accounts` from account ids only (`:394`, `reported_accounts.add(r["account_id"])`) and sets the payment column from `rec_acc in reported_accounts` (`:476`). `labels.parquet` keeps `world_id` on every row.
+2. **Evidence.** The old column marks 2,523,136 of 4,911,546 training payment rows positive (51.37%); hidden truth marks 27,393 of 1,834,135 validation rows positive (1.49%). The corrected world-scoped target marks 70,821 of 4,911,546 training payment rows positive (1.44%).
+3. **Verdicts.** `labels.parquet` holds only verdict `fraud`: training label rows 997, 502, 519 and 1,967 (3,985 total); validation label rows 466 and 956. No "not fraud" verdict exists, so no verdict filter is applied; the builder counts every non-revoked label row that arrived by the cutoff, and `labels.parquet` already holds only those rows.
+4. **Fix.** The target is `receiver is not None and (world, receiver) in reported_pairs(dataset)`, where `reported_pairs` is the `(world_id, account_id)` set of that dataset's `labels.parquet`. A null `world_id` or `account_id` in a label row raises `ValueError`. A hand test proves two worlds using `acc_17` with only world A reported leave world B's payments negative; removing the world id from the key makes it fail with `[True, True, True, True] == [True, True, False, False]`.
+5. **Void search.** The 23 Nov device check and search are invalid because their target was the buggy column. The folder is renamed to `runs/full/payment_model_v1_void_bad_target/`; `runs/full/payment_model_v1/` is rebuilt by a fresh device check and search after this amendment.
+6. **Estimator unchanged.** The single supervised XGBoost classifier with no PU bagging stands by the A-056 ruling; the corrected positive share is 1.44%, recorded in `model_metadata.json` as `training_positives` and `training_rows`.
+

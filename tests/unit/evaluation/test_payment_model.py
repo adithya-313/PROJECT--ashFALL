@@ -89,26 +89,34 @@ def test_build_matrix_refuses_a_category_outside_the_frozen_encoding() -> None:
         build_matrix(table, ["payee_type"], {"payee_type": ["merchant", "person"]})
 
 
-def _write_dataset(folder: Path, world_id: str, payment_ids: list[str], split: str = "training") -> None:
+def _write_dataset(
+    folder: Path,
+    worlds: list[str],
+    payment_ids: list[str],
+    receivers: list[str],
+    reported: list[tuple[str, str]],
+    split: str = "training",
+) -> None:
     folder.mkdir(parents=True)
     (folder / "manifest.json").write_text(json.dumps({"split": split}), encoding="utf-8")
     table = pa.table(
         {
-            "world_id": [world_id] * len(payment_ids),
+            "world_id": worlds,
             "payment_id": payment_ids,
             "bank_id": ["bank_0"] * len(payment_ids),
-            "decision_time": pa.array([1, 2][: len(payment_ids)], pa.timestamp("us", tz="UTC")),
-            "receiver_account_id": ["acc"] * len(payment_ids),
-            TARGET: [True] * len(payment_ids),
+            "decision_time": pa.array([1] * len(payment_ids), pa.timestamp("us", tz="UTC")),
+            "receiver_account_id": receivers,
             "payee_same_bank_risk": [0.0] * len(payment_ids),
         }
     )
     pq.write_table(table, folder / "payments.parquet")
+    labels = pa.table({"world_id": [pair[0] for pair in reported], "account_id": [pair[1] for pair in reported]})
+    pq.write_table(labels, folder / "labels.parquet")
 
 
 def _write_oof(folder: Path, world_id: str, rows: list[tuple[str, float, str]], split: str) -> None:
     per_world = folder / "per_world"
-    per_world.mkdir(parents=True)
+    per_world.mkdir(parents=True, exist_ok=True)
     table = pa.table(
         {
             "world_id": [world_id] * len(rows),
@@ -124,7 +132,7 @@ def _write_oof(folder: Path, world_id: str, rows: list[tuple[str, float, str]], 
 
 def test_load_split_rows_aligns_payments_and_payee_risk_on_sorted_keys(tmp_path: Path) -> None:
     dataset = tmp_path / "training-ds"
-    _write_dataset(dataset, "w1", ["p2", "p1"])
+    _write_dataset(dataset, ["w1", "w1"], ["p2", "p1"], ["acc", "acc"], [("w1", "acc")])
     oof = tmp_path / "oof"
     _write_oof(oof, "w1", [("p1", 0.1, ""), ("p2", float("nan"), "receiver_at_other_bank")], "training")
 
@@ -136,9 +144,36 @@ def test_load_split_rows_aligns_payments_and_payee_risk_on_sorted_keys(tmp_path:
     assert rows["same_bank"].to_pylist() == [True, True]
 
 
+def test_target_is_world_scoped_so_a_receiver_reported_in_another_world_is_negative(
+    tmp_path: Path,
+) -> None:
+    dataset = tmp_path / "training-ds"
+    _write_dataset(
+        dataset,
+        ["wA", "wA", "wB", "wB"],
+        ["pA1", "pA2", "pB1", "pB2"],
+        ["acc_17", "acc_17", "acc_17", "acc_17"],
+        [("wA", "acc_17")],
+    )
+    oof = tmp_path / "oof"
+    _write_oof(
+        oof,
+        "wA",
+        [("pA1", 0.1, ""), ("pA2", 0.1, "")],
+        "training",
+    )
+    _write_oof(oof, "wB", [("pB1", 0.1, ""), ("pB2", 0.1, "")], "training")
+
+    rows = load_split_rows([dataset], "training", ["payee_risk"], oof)
+
+    assert rows["world_id"].to_pylist() == ["wA", "wA", "wB", "wB"]
+    assert rows["receiver_account_id"].to_pylist() == ["acc_17"] * 4
+    assert rows[TARGET].to_pylist() == [True, True, False, False]
+
+
 def test_load_split_rows_refuses_rows_that_do_not_align(tmp_path: Path) -> None:
     dataset = tmp_path / "training-ds"
-    _write_dataset(dataset, "w1", ["p1", "p2"])
+    _write_dataset(dataset, ["w1", "w1"], ["p1", "p2"], ["acc", "acc"], [("w1", "acc")])
     oof = tmp_path / "oof"
     _write_oof(oof, "w1", [("p1", 0.1, "")], "training")
 
@@ -148,7 +183,7 @@ def test_load_split_rows_refuses_rows_that_do_not_align(tmp_path: Path) -> None:
 
 def test_load_split_rows_refuses_the_wrong_split(tmp_path: Path) -> None:
     dataset = tmp_path / "validation-ds"
-    _write_dataset(dataset, "w1", ["p1"], split="validation")
+    _write_dataset(dataset, ["w1"], ["p1"], ["acc"], [("w1", "acc")], split="validation")
     oof = tmp_path / "oof"
     _write_oof(oof, "w1", [("p1", 0.1, "")], "validation")
 

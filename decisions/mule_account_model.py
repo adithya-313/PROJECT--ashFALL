@@ -397,6 +397,12 @@ def set_mule_model_config_path(path: Path | str | None) -> None:
     _MULE_MODEL_CONFIG_OVERRIDE = resolved
 
 
+def mule_model_config_override() -> Path | None:
+    """WHAT: Returns the process-wide override, or None when the committed config is active."""
+
+    return _MULE_MODEL_CONFIG_OVERRIDE
+
+
 def active_mule_model_config_path() -> Path:
     """
     WHAT: Returns the config file load_mule_model_config reads when no explicit path is given.

@@ -5,8 +5,8 @@ validation truth average precision, and freezes the best model.
 
 WHY: The payment model consumes the out-of-fold payee risk built in Phase 1 and must be chosen on
 hidden truth rather than on the bank-visible label it is trained on. The feature order, the target
-and the device rule are frozen in writing (A-055, A-056) before any fit, so every reported number is
-a held-out measurement rather than a choice tuned on the result.
+derivation and the device rule are frozen in writing (A-055, A-056, A-057) before any fit, so every
+reported number is a held-out measurement rather than a choice tuned on the result.
 
 TERM: payer account features: the M1 feature groups computed from the paying customer's account
 snapshot and present in `payments.parquet`; the payment-level group describes the payment and its
@@ -48,6 +48,10 @@ DEFAULT_TRUTH_ROOT = REPO_ROOT / "runs" / "truth"
 DEFAULT_MULE_CONFIG_PATH = REPO_ROOT / "config" / "mule_model.yaml"
 
 TARGET = "label_receiver_reported_by_cutoff"
+TARGET_DERIVATION = (
+    "world-scoped: a payment is positive when (world_id, receiver_account_id) is a "
+    "(world_id, account_id) pair in the same dataset's labels.parquet"
+)
 PAYEE_RISK = "payee_risk"
 PAYEE_SAME_BANK_RISK = "payee_same_bank_risk"
 PAYMENT_LEVEL_GROUP = "payment_level"
@@ -56,10 +60,7 @@ KEY_COLUMNS = ("world_id", "payment_id")
 OBJECTIVE = "binary:logistic"
 TREE_METHOD = "hist"
 DEVICE_AP_TOLERANCE = 0.005
-NO_PU_REASON = (
-    "no PU bagging: positives are about 45% of training rows (2,523,136 of 4,911,546 payment rows), "
-    "so unlabelled rows need no maybe-positive handling"
-)
+NO_PU_REASON = "no PU bagging by the A-056 ruling: one supervised XGBoost classifier on the world-scoped reported label"
 
 
 @dataclass(frozen=True)
@@ -248,6 +249,24 @@ def _assert_same_keys(left: pa.Table, right: pa.Table, left_name: str, right_nam
             raise ValueError(f"{left_name} and {right_name} disagree on {name!r} at the same row")
 
 
+def _reported_pairs(dataset_dir: Path) -> set[tuple[str, str]]:
+    """
+    WHAT: Returns the (world_id, account_id) pairs reported in one dataset's labels.parquet.
+
+    WHY: The payments label column was built from account ids alone, so it marks a receiver as
+    reported in every world that ever used the same id. The builder keeps the world id on every
+    label row; keying on both columns restores the per-world meaning of the label.
+
+    Raises:
+        ValueError: If the label table lacks a key column or holds a null world id or account id.
+    """
+    labels = pq.read_table(dataset_dir / "labels.parquet", columns=["world_id", "account_id"])
+    for name in ("world_id", "account_id"):
+        if labels[name].null_count:
+            raise ValueError(f"{dataset_dir} labels hold {labels[name].null_count} null {name!r} values")
+    return set(zip(labels["world_id"].to_pylist(), labels["account_id"].to_pylist(), strict=True))
+
+
 def load_split_rows(
     dataset_dirs: Sequence[Path],
     split: str,
@@ -255,25 +274,33 @@ def load_split_rows(
     oof_root: Path,
 ) -> pa.Table:
     """
-    WHAT: Loads one split's payment rows with `payee_risk` and `same_bank` attached, sorted by
-    (world_id, payment_id).
+    WHAT: Loads one split's payment rows with the world-scoped target, `payee_risk` and `same_bank`
+    attached, sorted by (world_id, payment_id).
 
     WHY: Payments and the per-world payee-risk files are written in different file orders, so both
-    are sorted on the same keys and their keys are proven equal before any row is used.
+    are sorted on the same keys and their keys are proven equal before any row is used. The target
+    is derived from each dataset's own labels.parquet rather than read from the payments label
+    column, which the builder computed without the world id.
 
     Raises:
-        ValueError: If a dataset's manifest split is wrong, a dataset lacks a needed column, or the
-            payment and payee-risk keys disagree.
+        ValueError: If a dataset's manifest split is wrong, a dataset lacks a needed column, a
+            label row has no key, or the payment and payee-risk keys disagree.
     """
     tables: list[pa.Table] = []
-    needed = [*KEY_COLUMNS, "bank_id", "decision_time", "receiver_account_id", TARGET]
+    needed = [*KEY_COLUMNS, "bank_id", "decision_time", "receiver_account_id"]
     needed.extend(name for name in features if name != PAYEE_RISK and name not in needed)
     for dataset_dir in dataset_dirs:
         validate_dataset_split(dataset_dir, split)
-        tables.append(pq.read_table(dataset_dir / "payments.parquet", columns=needed))
+        reported = _reported_pairs(dataset_dir)
+        table = pq.read_table(dataset_dir / "payments.parquet", columns=needed)
+        targets = [
+            receiver is not None and (world, receiver) in reported
+            for world, receiver in zip(
+                table["world_id"].to_pylist(), table["receiver_account_id"].to_pylist(), strict=True
+            )
+        ]
+        tables.append(table.append_column(TARGET, pa.array(targets, pa.bool_())))
     payments = pa.concat_tables(tables)
-    if payments[TARGET].null_count:
-        raise ValueError(f"{split} payments hold {payments[TARGET].null_count} null targets")
     oof = _read_oof_rows(oof_root, split)
     payments = payments.sort_by([("world_id", "ascending"), ("payment_id", "ascending")])
     oof = oof.sort_by([("world_id", "ascending"), ("payment_id", "ascending")])
@@ -350,7 +377,7 @@ def build_matrix(
 
 
 def target_labels(table: pa.Table) -> np.ndarray:
-    """Returns the bank-visible training target as an int8 array."""
+    """Returns the world-scoped reported target as an int8 array."""
     return table[TARGET].cast(pa.int8()).to_numpy(zero_copy_only=False)
 
 
@@ -563,6 +590,7 @@ def freeze_best_model(
     metadata = {
         "model": "mule_payment_xgb",
         "target": TARGET,
+        "target_derivation": TARGET_DERIVATION,
         "objective": OBJECTIVE,
         "tree_method": TREE_METHOD,
         "no_pu_reason": NO_PU_REASON,
@@ -575,6 +603,8 @@ def freeze_best_model(
         "stopped_early": search.stopped_early,
         "stop_reason": search.stop_reason,
         "search_best_score": search.best_score,
+        "training_rows": int(training_labels.shape[0]),
+        "training_positives": int(training_labels.sum()),
         "validation_truth_ap": validation_ap,
         "validation_rows": len(labels),
         "validation_positives": sum(labels),
@@ -683,6 +713,7 @@ def run(
     print(f"training rows {training_rows.num_rows}", flush=True)
     training_matrix = build_matrix(training_rows, features, encodings)
     training_labels = target_labels(training_rows)
+    print(f"training positives {int(training_labels.sum())} of {training_labels.shape[0]}", flush=True)
 
     print(f"loading {len(validation_dirs)} validation datasets", flush=True)
     validation_rows = load_split_rows(validation_dirs, "validation", features, oof_root)

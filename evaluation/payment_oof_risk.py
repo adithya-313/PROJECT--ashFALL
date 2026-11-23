@@ -43,6 +43,7 @@ import pyarrow.parquet as pq
 
 from decisions.mule_account_model import (
     account_model_feature_names,
+    mule_model_config_override,
     predict_account_days,
     set_mule_model_config_path,
 )
@@ -381,7 +382,8 @@ def load_frozen_recipe(
         raise ValueError("frozen config sha256 does not match the fit record's mule_model_config_sha256")
 
     # Feature order is evaluated under the frozen config so the label-network switch is the fit's.
-    previous = set_mule_model_config_path(config_path)
+    previous = mule_model_config_override()
+    set_mule_model_config_path(config_path)
     try:
         feature_names = account_model_feature_names()
     finally:
@@ -482,7 +484,8 @@ def _build_fold_rows(
     Returns:
         The fold's CompactRows (matrix, targets, keys and trust weights).
     """
-    previous = set_mule_model_config_path(frozen_config)
+    previous = mule_model_config_override()
+    set_mule_model_config_path(frozen_config)
     try:
         split = load_compact_split(list(training_dirs), world_ids=list(train_worlds))
     finally:
@@ -751,7 +754,8 @@ def run_oof(
     fold_records: dict[str, Any] = {}
     training_reason_totals: dict[str, int] = {}
 
-    previous_config = set_mule_model_config_path(recipe.config_path)
+    previous_config = mule_model_config_override()
+    set_mule_model_config_path(recipe.config_path)
     try:
         for fold in range(FOLD_COUNT):
             held_out = [world_id for world_id in training_worlds if folds[world_id] == fold]
