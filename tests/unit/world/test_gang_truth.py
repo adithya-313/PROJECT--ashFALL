@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from evaluation.truth import load_truth
+from evaluation.truth import TruthStore, load_truth
 from world.fast_mode import FastRunSettings
 from world.gang_config import BlockStep, FixtureSource, GangBudget, GangConfig
 from world.held_out_options import gang_truth_for
@@ -144,6 +144,38 @@ def test_full_test_world_run_and_truth_store(tmp_path: Path) -> None:
     assert store.gang_kind("gang_drip") == "held_out"
     with pytest.raises(KeyError, match="Unknown gang 'phantom_gang'"):
         store.gang_kind("phantom_gang")
+
+    # 4. The family accessor returns each gang's recorded family and refuses an unknown gang the same way.
+    assert store.gang_family("gang_seen") == "fast_pass_through"
+    assert store.gang_family("gang_drip") == "slow_drip"
+    with pytest.raises(KeyError, match="Unknown gang 'phantom_gang'"):
+        store.gang_family("phantom_gang")
+
+
+def test_gang_family_requires_a_family_and_keeps_gang_kind() -> None:
+    """
+    WHAT: Verifies gang_family raises ValueError when a gang record has no family or an empty family,
+    while gang_kind keeps returning the same kind for those records.
+    WHY: A gang without a family cannot be grouped for held-out reporting, and the kind query must not
+    change because the family accessor was added.
+    """
+    store = TruthStore(
+        roles=[],
+        device_control=[],
+        payment_stories={},
+        gangs=[
+            {"gang_id": "gang_plain", "kind": "seen"},
+            {"gang_id": "gang_empty", "kind": "held_out", "family": ""},
+        ],
+        personas={},
+    )
+
+    assert store.gang_kind("gang_plain") == "seen"
+    assert store.gang_kind("gang_empty") == "held_out"
+    with pytest.raises(ValueError, match="Gang 'gang_plain' has no non-empty 'family'"):
+        store.gang_family("gang_plain")
+    with pytest.raises(ValueError, match="Gang 'gang_empty' has no non-empty 'family'"):
+        store.gang_family("gang_empty")
 
 
 def test_opening_handles_preserves_gang_truth() -> None:

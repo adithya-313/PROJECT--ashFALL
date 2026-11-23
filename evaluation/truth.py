@@ -340,6 +340,36 @@ class TruthStore:
                 return str(g["kind"])
         raise KeyError(f"Unknown gang '{gang_id}'")
 
+    def gang_family(self, gang_id: str) -> str:
+        """
+        WHAT: Returns the tactical family recorded for the specified gang.
+        Raises KeyError if the gang identifier does not exist in the truth store, and ValueError when
+        the gang record has no non-empty family.
+
+        WHY: Held-out family reporting needs the family each gang was generated from, and every truth
+        read must stay inside this verified store.
+
+        Args:
+            gang_id: String gang identifier to query.
+
+        Returns:
+            Non-empty tactical family string, such as 'slow_drip'.
+
+        Raises:
+            KeyError: If gang_id is not recorded in the gang truth records.
+            ValueError: If the gang record has no 'family' key or its family is not a non-empty string.
+
+        Example:
+            # store.gang_family('gang_alpha') -> 'slow_drip'
+        """
+        for g in self._gangs:
+            if g.get("gang_id") == gang_id:
+                family = g.get("family")
+                if not isinstance(family, str) or not family:
+                    raise ValueError(f"Gang '{gang_id}' has no non-empty 'family'")
+                return family
+        raise KeyError(f"Unknown gang '{gang_id}'")
+
 
 def _verify_direct_caller() -> None:
     """
