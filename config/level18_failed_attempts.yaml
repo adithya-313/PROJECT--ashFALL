@@ -1,0 +1,58 @@
+# File: config/level18_failed_attempts.yaml
+# Purpose: One entry per failed Level 18 run, for the MLflow back-fill. Folders are named under the runs root
+#          (runs/full). account-identity has no single folder, so its folder is null. Every run here is logged with
+#          status FAILED or KILLED and carries no metrics.
+attempts:
+  - name: run_a_crashed_20261120
+    folder: run_a_crashed_20261120
+    reason: "numpy float64 in stage-file importances"
+    fixed_by: "PR #155"
+    derived_from: "23 Nov handoff"
+    status: FAILED
+    reason_recorded: true
+    evidence: null
+
+  - name: run_a_160_worlds
+    folder: run_a
+    reason: "stage-5 OOM"
+    fixed_by: "PR #156, PR #157"
+    derived_from: "23 Nov handoff"
+    status: FAILED
+    reason_recorded: true
+    evidence: null
+
+  - name: run_a320_stage5_zero_complaints_20261121
+    folder: run_a320_stage5_zero_complaints_20261121
+    reason: "zero-complaint world crash"
+    fixed_by: "PR #161"
+    derived_from: "23 Nov handoff"
+    status: FAILED
+    reason_recorded: true
+    evidence: null
+
+  - name: run_a320_stage5b_stress_oom_20261122
+    folder: run_a320_stage5b_stress_oom_20261122
+    reason: "stress-scoring OOM"
+    fixed_by: "PR #163"
+    derived_from: "23 Nov handoff"
+    status: FAILED
+    reason_recorded: true
+    evidence: null
+
+  - name: account_identity_382_merged_accounts
+    folder: null
+    reason: "382 merged accounts across 120 worlds (account-identity bug)"
+    fixed_by: "PR #159"
+    derived_from: "23 Nov handoff"
+    status: FAILED
+    reason_recorded: true
+    evidence: "no folder; recorded in the 23 Nov handoff"
+
+  - name: run_a_aborted_20261120
+    folder: run_a_aborted_20261120
+    reason: "not recorded: the folder holds only stages/ (5 files) and no log"
+    fixed_by: null
+    derived_from: "Step 0 inventory, 23 Nov"
+    status: KILLED
+    reason_recorded: false
+    evidence: null

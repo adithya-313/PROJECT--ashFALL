@@ -659,4 +659,18 @@ No model code exists yet (models start in Level 18; `world/` is simulator code).
 | Why | The rate answers how often a genuinely innocent account is flagged, and an account that becomes a mule was not innocent at the frozen decision, so dividing by every ever-genuine account mixed mules into the harm denominator. |
 | Disclosure | Reporting-only fix made after the single test scoring; it retrains nothing, changes no threshold, no choice and no verdict. The official harm metric `genuine_restricted_days` is unaffected because it counts harm only on genuine-role days, so the shared `ground_sets` and the frozen run's numbers stand. |
 | Results exist? | Yes: `runs/full/run_a320_stage5c/extra_reporting.json`, rerun after the fix; the previous file is kept as `runs/full/run_a320_stage5c/extra_reporting_before_a053_20261123.json`. |
++
++## A-054
++
++| Field | Value |
++| --- | --- |
++| Date | 2026-11-23 |
++| Issue IDs | None |
++| Issue IDs v2 | None |
++| Files | `scripts/level18_mlflow_read.py`, `scripts/level18_mlflow_log.py`, `config/level18_failed_attempts.yaml`, `tests/unit/scripts/test_level18_mlflow_read.py`, `tests/unit/scripts/test_level18_mlflow_log.py`, `docs/research/amendments.md` |
++| What changed | Every Level 18 experiment is back-filled into the MLflow experiment `ashFALL Level 18 — mule models` from the saved result files, after the fact. `scripts/level18_mlflow_read.py` holds pure readers that turn a stage file, a maturity check, a learning curve, a PU method search, the recomputed stage 4 file, the final stage 5 folder and the failed-attempt YAML into plain records; it imports no MLflow and no `evaluation` module. `scripts/level18_mlflow_log.py` writes one run per maturity variant, one per learning-curve step, one parent per PU method with one nested child per trial, one per recomputed stage 4 method, one for the final test and stress numbers, and one per failed attempt (ended `FAILED`, or `KILLED` when it was killed, with tags and a file list but no metrics). Every run carries `code_version`, `config_sha256`, `dataset_ids`, `fingerprint_source` (`stage_file`, `partial` or `none`), `source_file`, `source_sha256` and `simulated=true`; a value the files do not record is the literal `not recorded`. The logger is idempotent: before creating a run it searches the experiment for the same `source_sha256` and run name and prints SKIP when it finds one. Failed attempts are listed in `config/level18_failed_attempts.yaml` with their reason, the PR that fixed them and where the record came from. |
++| Why | Every Level 18 experiment, including the failed ones, should be browsable in MLflow with its inputs and provenance, and that record can be built from what the runs already saved. |
++| Disclosure | Read-only back-fill: it retrains nothing, re-scores nothing and changes no file under `runs/`. Nothing reads MLflow for any decision; the only MLflow read is the idempotency lookup, and `core.truth_import_check` stays green because no reader imports an evaluation module. |
++| Results exist? | Yes: the source files under `runs/full`; the back-fill is run after this amendment is merged. |
+
 
