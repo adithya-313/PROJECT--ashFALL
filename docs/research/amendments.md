@@ -697,4 +697,25 @@ Pre-registered settings, fixed before any Phase 1-3 result:
 7. **Search.** Reuse `evaluation/hyperparameter_search.py:run_optuna_search` with the same nine numeric parameters from `config/mule_model.yaml` `hyperparameter_space`, the same early stop (`optuna_min_trials_before_stop` 20, `optuna_stall_patience_trials` 10, `optuna_min_improvement` 0.001), at most 40 trials, and seed 1717. This is the same constant stage 3 used: `config/mule_model.yaml` `optuna_seed` 1717 for the sampler and `config/anomaly_detector.yaml` `random_state` 1717 for model fits. The payment model's feature order is frozen and written to `config/mule_payment_feature_order.yaml`, with its sha256 recorded beside the frozen model.
 8. **No test, no stress.** Test and stress datasets are not read in any of phases 0-3. The new entry points accept only training and validation dataset folders and raise if a folder's manifest `split` is `test` or `stress`.
 
+## A-056
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-23 |
+| Issue IDs | None |
+| Issue IDs v2 | None |
+| Files | `docs/research/amendments.md`, `evaluation/payment_model.py`, `tests/unit/evaluation/test_payment_model.py`, `config/mule_payment_feature_order.yaml` |
+| What changed | Architect ruling for the Level 18 payment model: it fixes the estimator and its target, the fixed parameters for the cpu-versus-cuda device check, the correct feature-list sha256 for the frozen account recipe, the leakage-field sources the input test must use, and the decision to keep `payee_same_bank_risk` with an ablation and a same-bank versus other-bank AP split. |
+| Why | Phase 1 finished before the payment-model fit, but A-055 did not name the payment estimator or the fixed device-check values and it recorded the wrong feature-list sha256. Recording the architect's ruling in writing before any payment-model fit keeps the device choice and the search from being tuned on the result. |
+| Disclosure | Written after the Phase 1 out-of-fold build had finished (`runs/full/payment_oof/fold_record.json` existed) and before any payment-model fit, device comparison, ablation or search trial existed. It does not edit A-055. |
+| Results exist? | No payment-model result at the time of writing; the only prior result is the Phase 1 out-of-fold payee risk. Payment-model results are to land under `runs/full/payment_model_v1/`. |
+
+Rulings, fixed before any payment-model result:
+
+1. **Estimator:** one supervised XGBoost classifier, objective `binary:logistic`, target `label_receiver_reported_by_cutoff`. No PU bagging: positives are about 45% of training rows (the architect's figure; the four training datasets hold 2,523,136 positive of 4,911,546 payment rows = 51.4%), so "unlabelled = maybe positive" handling is not needed.
+2. **Fixed device-check parameters:** the Run A frozen account-model best params from Phase 0c (`max_depth` 8, `learning_rate` 0.14438948595626225, `n_estimators` 118, `min_child_weight` 3.2610095175519205, `subsample` 0.9690047660778822, `colsample_bytree` 0.6934144991295391, `gamma` 3.010102041099164, `reg_alpha` 0.6145078263840675, `reg_lambda` 0.1514174707354069), `tree_method` `hist`, and seed 1717. The seed is `config/mule_model.yaml` `optuna_seed` 1717 (lines 147-150), read at `evaluation/run_level_18_pilot.py:530` and passed to `run_optuna_search` at `evaluation/run_level_18_pilot.py:1909`. Derived from: "frozen account recipe, used only as a neutral fixed point for the device check".
+3. **A-055 correction:** the frozen feature list is the 42-name `account_model_feature_names()` with sha256 `075183a2b9192ab889029e16c06a01f4f837db1c331218cfb93c2acd6d6efa20` (sha over newline-joined names), not `468638cb…`. A-055 is not edited.
+4. **Leakage field lists:** reuse `evaluation/leakage_checks_5_6.py` `simulator_only_fields`, `truth_file_columns` and `bank_visible_fields`. The input-name test fails if any payment-model input is a simulator-only field, a truth field, or not bank-visible.
+5. **`payee_same_bank_risk` is kept:** it reads labels by arrival time only (`features/m1_payment.py`, `labelled_accounts_visible`/`complained_accounts_visible` with `arrival_cutoff`), which a real bank may see. The report includes validation truth AP of the best model with `payee_same_bank_risk` set to NaN as an ablation; the ablation is not used for any choice.
+6. **Same-bank split:** the report states the frozen best model's validation truth AP separately for payments whose receiver is at the payment row's bank (`payee_risk` finite) and payments where `payee_risk` is NaN.
 
