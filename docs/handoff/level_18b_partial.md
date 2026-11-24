@@ -12,7 +12,7 @@ account booster exported to ONNX next to the payment export, and the Triton mode
 | Reason codes (task 5) | A-059 | `31b61ed`, `ae0d558`, `b5ee071`, `c097f0b` | #174, merged as `1c41243` |
 | Calibration (task 7) | A-060, A-060a | `27c4899`, `ef6959d`, `fb70523`, `22008d8` | #175, merged as `b989085` |
 | ONNX export (task 8) | A-061, A-061a, A-061b | `4b8738a`, `2d9c6d9`, `9deaea6`, `97ae69c`, `6f2c4fe`, `34cdbb5` | #176, merged as `caf6617` |
-| Triton folders (task 9) | A-062 | this branch, `feature/level-18b-triton`, based on `caf6617` | #177 |
+| Triton folders (task 9) | A-062, A-062a | this branch, `feature/level-18b-triton`, based on `caf6617` | #177 |
 
 Task 9 adds only the two model folders, their `config.pbtxt` files and this note. The `1/model.onnx`
 files inside the folders are copies of the Phase 8 outputs; `*.onnx` is gitignored, so they are not
@@ -48,8 +48,9 @@ ten equal-count bins and the payment test check under the owner ruling. A-061 an
 rule, the converter contract, the parity tolerance and the output shape. A-061b replaces A-061's 1e-6
 margin gate with the probability, decision and ranking gates and states explicitly that it was written
 after the margin gate failed at 1.310e-05. A-062 fixes the Triton folder layout, the input and output
-contract, the batch limit and the smoke-load rule, and states explicitly that it was recorded after the
-load ran.
+contract and the batch limit, and states explicitly that it was recorded after the load ran. A-062a
+replaces A-062's synthetic-row smoke check with the owner's restated live test on 100 real validation
+rows per model plus a READY check for the served fraud model, and fixes the start and stop commands.
 
 ## Reason codes (SIMULATED, validation, 20,000 rows per model)
 Run: exit 0, git `c097f0b`, wall 138.67 s (wrapper 146.06 s), peak committed 18.19 GiB. Both models:
@@ -113,25 +114,31 @@ outputs `label` and `probabilities`. Files: `mule_account_xgb.onnx` sha256
 `e1823d5d35b930e16344ca2fe792f04ae726a10207459c6015ee95f0db2bb4ef`, `mule_payment_xgb.onnx` sha256
 `7eb86c0e582c49a008fd89858cc220f4936ad8b90ac8566b720ae7aad20371d0`.
 
-## Triton folders (task 9, A-062)
-Both folders load in the local Docker Triton image and serve 100-row requests. A-062 was recorded after
-this load ran; it states that no setting or check was taken from the result.
+## Triton folders (task 9, A-062, A-062a)
+Both folders load in the local Docker Triton image and serve 100 real validation rows each. The service
+is `triton` in `docker-compose.yml` (line 167), image `nvcr.io/nvidia/tritonserver:24.01-py3` (line 168),
+mount `./serving/model_repository:/models:ro` (line 182). It was started alone with
+`docker compose up -d --no-deps triton` and stopped with `docker compose stop triton`. A-062 and A-062a
+were recorded after their loads ran; they state that no setting or check was taken from a result.
 
-Triton load: PASS (Docker engine 29.0.1 running, `nvcr.io/nvidia/tritonserver:24.01-py3`, gRPC on
-127.0.0.1:8001, 100 rows per model, seed 20261124, one NaN feature in each batch). Server log:
+Triton load: PASS (Docker engine 29.0.1 running, gRPC on 127.0.0.1:8001, the first 100 rows of the
+A-061 sorted validation sample per model, all 100 rows of each batch hold a NaN feature). Readiness
+lines from the server log, including the served fraud model v1:
 
 ```
-I1124 20:35:35.955126 1 model_lifecycle.cc:827] successfully loaded 'mule_account_xgb'
-I1124 20:35:35.976062 1 model_lifecycle.cc:827] successfully loaded 'mule_payment_xgb'
+I1124 21:00:28.551791 1 model_lifecycle.cc:827] successfully loaded 'mule_payment_xgb'
+I1124 21:00:28.982614 1 model_lifecycle.cc:827] successfully loaded 'mule_account_xgb'
+I1124 21:00:29.020174 1 model_lifecycle.cc:827] successfully loaded 'fraud_xgboost'
 ```
 
 | Model | Response | Max abs diff vs the same file on local onnxruntime | Labels |
 | --- | --- | --- | --- |
-| mule_account_xgb | probabilities (100, 2), label int64 (100, 1) | 1.1920928955078125e-07 | match |
-| mule_payment_xgb | probabilities (100, 2), label int64 (100, 1) | 2.980232238769531e-07 | match |
+| mule_account_xgb | probabilities (100, 2), label int64 (100, 1) | 1.1920928955078125e-07 (limit 1e-5) | match |
+| mule_payment_xgb | probabilities (100, 2), label int64 (100, 1) | 1.1920928955078125e-07 (limit 1e-5) | match |
 
-The container was stopped after the check. `probabilities` column 1 is the RAW model probability; the
-isotonic calibrators above are applied by the client, not by Triton.
+`fraud_xgboost` reported READY before the check (`v1_ready: true` in `triton_load.json`). The container
+was stopped after the check. `probabilities` column 1 is the RAW model probability; the isotonic
+calibrators above are applied by the client, not by Triton.
 
 ## Generated facts
 The block below is the verbatim output of:

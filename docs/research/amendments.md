@@ -926,3 +926,24 @@ Rulings:
 5. **Handoff note.** `docs/handoff/level_18b_partial.md` carries the phase numbers already reported, the load result of ruling 4, and the verbatim output of `PYTHONPATH=. py -3.12 -B scripts/handoff_facts.py --part 18b` under its `## Register Changes` heading. The `18b` part in `scripts/handoff_facts.py` lists `evaluation.calibration`, `evaluation.onnx_export` and `evaluation.reason_codes` as interface modules, the records `Calibrator`, `ReasonCode`, `ReasonCodeMap`, `ReasonFeature`, `RowReason` and `WorldRecord`, `config/feature_reason_codes.yaml` and `config/mule_payment_feature_order.yaml` as config files, and no register ids, because Level 18b changes no register entry.
 6. **No model change and no decision on test or stress.** This task fits, tunes or changes nothing: no model, feature order, calibrator, threshold or decision rule. No test or stress row is read. Docker availability is not a gate: the load is a smoke check of the committed layout and its absence is reported, not worked around.
 
+## A-062a
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-24 |
+| Issue IDs | None |
+| Issue IDs v2 | None |
+| Files | `docs/research/amendments.md`, `docs/handoff/level_18b_partial.md` |
+| What changed | Replaces A-062 ruling 4's synthetic 100-row smoke check with the owner's restated Phase 9 live test: 100 real validation rows per model, a readiness check that the served fraud model (v1) still loads, and the exact start and stop commands for the Triton service alone. |
+| Why | A load check on random feature values proves the transport and the graph shapes, but not that the served model consumes the production validation rows the ONNX export was checked on. Scoring 100 validation rows through Triton and comparing with the same file under local onnxruntime closes that gap, and the v1 READY check proves the new folders did not displace the existing model. |
+| Disclosure | Written 2026-11-24 21:03 UTC, AFTER both loads ran: the synthetic 100-row load at 20:35 UTC under A-062 and the 100-validation-row load at 21:00 UTC under the owner's restated rule. The owner restated the test in the round message after the first load; this entry records the restated rule, so it is a late record, not a pre-registration. No threshold, row source or setting was chosen from either result: the 1e-5 limit is the A-061 parity tolerance and the rows are the first 100 of the A-061 sorted validation sample on the production feature paths. It changes no model, feature order, calibrator, threshold or decision rule and does not edit A-055 to A-062. |
+| Results exist? | Yes: `runs/full/level18b/triton/triton_load.json` records the validation-row load (exit 0, both models under 1e-5, v1 ready). Results are SIMULATED and land under `runs/`, which is gitignored. |
+
+Rulings:
+
+1. **Row source.** Each mule model scores the first 100 rows of the A-061 validation sample, sorted by the A-059 key fields and built with the production feature paths: `account_sample(validation_folders, "validation", feature_names)` for the account model and `_payment_validation_sample(validation_folders, features, encodings, DEFAULT_OOF_ROOT)` for the payment model. The two validation folders are `validation-20261031T1830-5a6d507bde9c` and `validation-20261031T1830-99fed7ecb1d1`. No NaN is injected; the NaN row count of the selected rows is reported (100 of 100 for both models).
+2. **Comparison.** The served `probabilities[:, 1]` is compared with the same `1/model.onnx` file under local onnxruntime on the same row matrix. The maximum absolute difference must be at most 1e-5 (the A-061 parity tolerance); any larger value stops the phase. The served `label` shape `(100, 1)` and its agreement with the local ONNX decision are reported.
+3. **v1 READY.** `fraud_xgboost` must report ready on the same server before the check passes, so the new folders are proven not to displace the existing model. The server's `successfully loaded` lines for `fraud_xgboost`, `mule_account_xgb` and `mule_payment_xgb` are the pasted readiness evidence.
+4. **Start and stop only Triton.** The service is `triton` in `docker-compose.yml` (line 167), image `nvcr.io/nvidia/tritonserver:24.01-py3` (line 168), model repository mount `./serving/model_repository:/models:ro` (line 182). It is started with `docker compose up -d --no-deps triton` and stopped with `docker compose stop triton`; no other service is started. Docker availability is a precondition, not a gate: if the engine is not running, the load says `Triton load: NOT RUN (Docker engine not running)`.
+5. **A-062 stays in force otherwise.** Rulings 1 to 3 and 5 to 6 of A-062 (folder layout, input and output contract, limits, handoff note, no model change) are unchanged; only ruling 4's row source and comparison are replaced.
+
