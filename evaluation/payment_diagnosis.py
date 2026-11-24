@@ -303,7 +303,7 @@ def leakage_checks(
         "payee_risk_prior_snapshot": _citation(
             "evaluation/payment_oof_risk.py", "if day.snapshot_time < decision_time:"
         ),
-        "payment_decision_time": _citation("features/m1_payment.py", "decision_time = proposed.event_time"),
+        "payment_decision_time": _citation("features/m1_payment.py", "    decision_time = proposed.event_time"),
         "payment_feature_call": _citation("features/m1_payment.py", "arrival_cutoff=arrival_cutoff"),
         "label_arrival_cutoff": _citation(
             "features/m1_payment.py",
