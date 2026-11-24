@@ -225,8 +225,8 @@ def world_metrics(world: WorldScores, threshold: float) -> dict[str, Any]:
     same_bank = np.isfinite(risk)
     other_bank = ~same_bank
 
-    same_bank_ap = _average_precision_or_none(scores[same_bank], labels[same_bank])
-    other_bank_ap = _average_precision_or_none(scores[other_bank], labels[other_bank])
+    same_bank_ap = _average_precision_or_none(scores[same_bank].tolist(), labels[same_bank].tolist())
+    other_bank_ap = _average_precision_or_none(scores[other_bank].tolist(), labels[other_bank].tolist())
     return {
         "split": world.split,
         "dataset": world.dataset,
@@ -235,7 +235,7 @@ def world_metrics(world: WorldScores, threshold: float) -> dict[str, Any]:
         "positives": positives,
         "held": held,
         "true_positives": true_positives,
-        "truth_ap": _average_precision_or_none(scores, labels),
+        "truth_ap": _average_precision_or_none(scores.tolist(), labels.tolist()),
         "recall": true_positives / positives if positives else None,
         "precision": true_positives / held if held else None,
         "hold_rate": held / rows,
@@ -508,7 +508,7 @@ def run(
         scored[split] = worlds
         extras[split] = {"reason_counts": reason_counts, "datasets": dataset_records}
 
-    result = evaluate_splits(validation_scores, scored)
+    result = evaluate_splits(validation_scores.tolist(), scored)
     for split in SCORING_SPLITS:
         reason_counts = extras[split]["reason_counts"]
         total = sum(reason_counts.values())
