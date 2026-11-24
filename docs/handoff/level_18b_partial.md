@@ -16,7 +16,10 @@ account booster exported to ONNX next to the payment export, and the Triton mode
 
 Task 9 adds only the two model folders, their `config.pbtxt` files and this note. The `1/model.onnx`
 files inside the folders are copies of the Phase 8 outputs; `*.onnx` is gitignored, so they are not
-committed, the same as `serving/model_repository/fraud_xgboost/1/model.onnx`.
+committed, the same as `serving/model_repository/fraud_xgboost/1/model.onnx`. A fresh checkout therefore
+holds only a tracked `1/.gitkeep` in each version folder: copy `runs/full/level18b/onnx/mule_account_xgb.onnx`
+and `runs/full/level18b/onnx/mule_payment_xgb.onnx` into the two `1/model.onnx` paths before starting the
+`serving` profile.
 
 ## What each component does
 - `evaluation/reason_codes.py`: builds the committed feature-to-code map from the M1 schema and the payment
