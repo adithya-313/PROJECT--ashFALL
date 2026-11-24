@@ -8,21 +8,7 @@ import numpy as np
 import pytest
 import xgboost
 
-from evaluation.onnx_export import (
-    EXPECTED_OUTPUTS,
-    MERGE_TOLERANCE,
-    PARITY_TOLERANCE,
-    _nan_rows,
-    _split_datasets,
-    export_model,
-    merge_member_models,
-    onnx_probabilities,
-    open_session,
-    parity_summary,
-    save_onnx,
-    write_margin_booster,
-)
-from evaluation.payment_model import predict_scores
+pytestmark = pytest.mark.ml  # needs the requirements-ml.txt libraries: CI's fast job leaves it out, the ml job runs it
 
 N_FEATURES = 4
 ROUNDS = 3
@@ -56,6 +42,8 @@ def _leaves(tree: dict) -> list[float]:
 
 
 def test_merge_member_models_scales_every_leaf_and_matches_the_mean_margin(tmp_path):
+    from evaluation.onnx_export import MERGE_TOLERANCE, _nan_rows, merge_member_models, write_margin_booster
+
     models = [_toy_booster(11), _toy_booster(23)]
     raws = [_raw(model) for model in models]
 
@@ -90,6 +78,8 @@ def test_merge_member_models_scales_every_leaf_and_matches_the_mean_margin(tmp_p
 
 
 def test_merge_member_models_rejects_a_disagreeing_base_score():
+    from evaluation.onnx_export import merge_member_models
+
     raws = [_raw(_toy_booster(11)), _raw(_toy_booster(23))]
     base_scores = {raw["learner"]["learner_model_param"]["base_score"] for raw in raws}
     assert len(base_scores) == 1
@@ -102,6 +92,8 @@ def test_merge_member_models_rejects_a_disagreeing_base_score():
 
 
 def test_merge_member_models_rejects_a_non_logistic_objective():
+    from evaluation.onnx_export import merge_member_models
+
     raws = [_raw(_toy_booster(11)), _raw(_toy_booster(23))]
     assert raws[0]["learner"]["objective"]["name"] == "binary:logistic"
     changed = json.loads(json.dumps(raws[0]))
@@ -112,6 +104,8 @@ def test_merge_member_models_rejects_a_non_logistic_objective():
 
 
 def test_merge_member_models_rejects_a_wrong_member_count():
+    from evaluation.onnx_export import merge_member_models
+
     raws = [_raw(_toy_booster(11)), _raw(_toy_booster(23))]
 
     with pytest.raises(ValueError, match="do not match the 3 frozen bags"):
@@ -119,6 +113,18 @@ def test_merge_member_models_rejects_a_wrong_member_count():
 
 
 def test_export_model_keeps_the_classifier_contract_and_matches_the_native_probability(tmp_path):
+    from evaluation.onnx_export import (
+        EXPECTED_OUTPUTS,
+        PARITY_TOLERANCE,
+        _nan_rows,
+        export_model,
+        onnx_probabilities,
+        open_session,
+        parity_summary,
+        save_onnx,
+    )
+    from evaluation.payment_model import predict_scores
+
     model = _toy_booster(41)
     converted = export_model(model.get_booster(), N_FEATURES)
     assert [node.op_type for node in converted.graph.node] == ["TreeEnsembleClassifier"]
@@ -143,6 +149,8 @@ def test_export_model_keeps_the_classifier_contract_and_matches_the_native_proba
 
 
 def test_parity_summary_enforces_the_tolerance_and_reports_the_nan_rows():
+    from evaluation.onnx_export import parity_summary
+
     summary = parity_summary([0.1, 0.2], [0.1, 0.2 + 1e-6], 3)
     assert summary["rows"] == 2
     assert summary["nan_rows"] == 3
@@ -158,6 +166,8 @@ def test_parity_summary_enforces_the_tolerance_and_reports_the_nan_rows():
 
 
 def test_write_margin_booster_rejects_the_wrong_round_count(tmp_path):
+    from evaluation.onnx_export import merge_member_models, write_margin_booster
+
     raws = [_raw(_toy_booster(11)), _raw(_toy_booster(23))]
     merged = merge_member_models(raws, 2, N_FEATURES)
 
@@ -168,6 +178,8 @@ def test_write_margin_booster_rejects_the_wrong_round_count(tmp_path):
 
 
 def test_split_datasets_guards_the_split_and_the_folder_names(tmp_path):
+    from evaluation.onnx_export import _split_datasets
+
     with pytest.raises(ValueError, match="no validation dataset folder"):
         _split_datasets([], "validation")
 

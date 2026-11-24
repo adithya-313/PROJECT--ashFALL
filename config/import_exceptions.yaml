@@ -34,3 +34,6 @@ declared_in_other_files:
   modules:
     mlflow: requirements-ml.txt
     numpy: requirements-ml.txt
+    onnx: requirements-ml.txt
+    onnxmltools: requirements-ml.txt
+    onnxruntime: requirements-ml.txt
