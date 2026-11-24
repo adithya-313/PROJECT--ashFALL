@@ -281,7 +281,7 @@ def write_reason_code_map(
     """
     reason_map = build_reason_code_map(schema_path, payment_feature_order_path)
     text = _MAP_HEADER + yaml.safe_dump(reason_map.payload(), sort_keys=False, allow_unicode=True)
-    Path(path).write_text(text, encoding="utf-8")
+    Path(path).write_text(text, encoding="utf-8", newline="\n")
     return reason_map
 
 
