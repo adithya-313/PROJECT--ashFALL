@@ -16,7 +16,7 @@ from typing import Any
 import optuna
 
 from decisions.mule_account_model import HyperparameterRange
-from evaluation.level17_scoring import MULE_ROLES, ScoredDay
+from evaluation.level17_scoring import MULE_ROLES, HasRole
 from evaluation.trivial_world import average_precision
 
 __all__ = ["OptunaSearchResult", "run_optuna_search", "validation_truth_average_precision"]
@@ -51,7 +51,7 @@ class OptunaSearchResult:
 
 def validation_truth_average_precision(
     scores: Sequence[float],
-    scored: Sequence[ScoredDay],
+    scored: Sequence[HasRole],
 ) -> float:
     """
     WHAT: Average precision of model scores against the hidden truth, where a positive day is any
@@ -116,7 +116,7 @@ def _suggest_parameters(
 
 def run_optuna_search(
     train_trial: Callable[[dict[str, int | float]], Sequence[float]],
-    scored: Sequence[ScoredDay],
+    scored: Sequence[HasRole],
     space: Mapping[str, HyperparameterRange],
     trial_count: int,
     seed: int,

@@ -18,7 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from math import ceil
-from typing import Any
+from typing import Any, Protocol
 
 from core.event_clock import IST
 from decisions.anomaly_detector import TrainedAnomalyDetector, score_rows
@@ -30,6 +30,7 @@ from features.account_snapshots import account_feature_names
 __all__ = [
     "AccountKey",
     "GENUINE_ROLES",
+    "HasRole",
     "MULE_ROLES",
     "ScoredDay",
     "account_key",
@@ -54,6 +55,13 @@ ALLOWED_REPEAT_POLICIES: frozenset[str] = frozenset({"every_day", "once_per_worl
 # An account's identity: account identifiers repeat across simulated worlds (and banks), so the
 # account id alone would merge different accounts the moment worlds are pooled for tuning.
 AccountKey = tuple[str, str, str]
+
+
+class HasRole(Protocol):
+    """WHAT: The only attribute the truth-scored search reads from a scored item."""
+
+    @property
+    def role(self) -> str: ...
 
 
 @dataclass(frozen=True)

@@ -673,4 +673,71 @@ No model code exists yet (models start in Level 18; `world/` is simulator code).
 +| Disclosure | Read-only back-fill: it retrains nothing, re-scores nothing and changes no file under `runs/`. Nothing reads MLflow for any decision; the only MLflow read is the idempotency lookup, and `core.truth_import_check` stays green because no reader imports an evaluation module. |
 +| Results exist? | Yes: the source files under `runs/full`; the back-fill is run after this amendment is merged. |
 
+## A-055
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-23 |
+| Issue IDs | None |
+| Issue IDs v2 | None |
+| Files | `evaluation/payment_oof_risk.py`, `tests/unit/evaluation/test_payment_oof_risk.py`, `evaluation/payment_model.py`, `tests/unit/evaluation/test_payment_model.py`, `config/mule_payment_feature_order.yaml`, `docs/research/amendments.md` |
+| What changed | Pre-registration for the Level 18 payment model `mule_payment_xgb`, written before any Phase 1-3 result exists. It fixes the out-of-fold payee-risk construction that feeds the payment model, the payment model's target and validation objective, the device choice rule, and the hyperparameter search, so none of them can be chosen after seeing a result. The numbered settings below are the complete pre-registered recipe. |
+| Why | The payment model consumes an account-model score for the receiver, and that score must come from a model that never saw the row's own world or the payment model would learn from its own training world. Fixing the folds, the frozen recipe, the strict-time and same-bank rule, the target, the objective, the device rule and the search in writing before the runs makes every later number a genuine held-out measurement rather than a choice tuned on the result. |
+| Disclosure | Written before Phase 1 ran; no OOF score, device comparison or trial exists yet. It adds new modules and tests and reads existing frozen artifacts (`runs/full/run_a320_stage5c/...`); it changes no existing production file, no committed config value, no threshold and no prior result. Test and stress data are not read in phases 0-3. |
+| Results exist? | No: pre-registered before any run. Results are to land under `runs/full/payment_oof/` (out-of-fold payee risk) and `runs/full/payment_model_v1/` (search and frozen model). |
+
+Pre-registered settings, fixed before any Phase 1-3 result:
+
+1. **Folds.** Five folds by whole world. Sort the 320 training `world_id` strings ascending; the world at position `i` (0-based) belongs to fold `i mod 5`. A fold model is trained on the other four folds' worlds and used only to score the held-out fold's worlds.
+2. **Fold-model recipe = the frozen Phase 0c Run A recipe exactly.** PU method `bagging`, `n_bags` 50, `unlabelled_per_positive` 1, device `cpu`. Fit parameters (from `runs/full/run_a320_stage5c/final/45c496799170/checkpoint/fit_record.json` `search.best_params`): `max_depth` 8, `learning_rate` 0.14438948595626225, `n_estimators` 118, `min_child_weight` 3.2610095175519205, `subsample` 0.9690047660778822, `colsample_bytree` 0.6934144991295391, `gamma` 3.010102041099164, `reg_alpha` 0.6145078263840675, `reg_lambda` 0.1514174707354069. Trust weighting on, `label_maturity_days` 0, `label_cut` `arrival_time` (from `runs/full/run_a320_stage5c/stages/final_mule_model.yaml`). Features are `account_model_feature_names()` in that order, sha256 `468638cb4d063d5f473ba73d5d99dc2bf45a8534ca77646fd3a967e8126ec061`. Seed 1717 (member seeds 1717 to 1766). Each fold model is discarded after scoring its held-out fold and is never served.
+3. **`payee_risk` for a payment** is the account-model score of the receiver's latest account-day (one row per account-day, `snapshot_time` the kept snapshot's time) whose `snapshot_time` is strictly earlier than the payment's `decision_time`, and only when the receiver's bank equals the payment row's `bank_id`. Otherwise it is NaN with a recorded reason: `receiver_bank_unknown` (receiver account absent from snapshots), `receiver_at_other_bank`, or `no_prior_account_day`. Training worlds use their out-of-fold model; validation worlds use the frozen Run A model at `runs/full/run_a320_stage5c/final/45c496799170/checkpoint/model_bags`.
+4. **Payment-model target** for training is `label_receiver_reported_by_cutoff` (the bank-visible label already in `payments.parquet`).
+5. **Optuna objective** is validation payment-level truth average precision. Truth is the receiver's hidden role at the payment's `decision_time` (`evaluation/dataset_truth_join.py:join_truth` `truth_role_receiver`) being in `MULE_ROLES` (`mule`, `collector`, `cash_out`); this is the existing evaluation reading of the receiver's role on the payment's own day. Truth is read only inside `evaluation/`.
+6. **Device rule.** The payment model is fitted once on `cpu` and once on `cuda` with identical fixed parameters and seed, before the search. `cuda` is chosen only if the validation truth AP differs by at most 0.005 in absolute value and the `cuda` wall time is lower on this laptop; otherwise `cpu`. The device is decided once, before the search.
+7. **Search.** Reuse `evaluation/hyperparameter_search.py:run_optuna_search` with the same nine numeric parameters from `config/mule_model.yaml` `hyperparameter_space`, the same early stop (`optuna_min_trials_before_stop` 20, `optuna_stall_patience_trials` 10, `optuna_min_improvement` 0.001), at most 40 trials, and seed 1717. This is the same constant stage 3 used: `config/mule_model.yaml` `optuna_seed` 1717 for the sampler and `config/anomaly_detector.yaml` `random_state` 1717 for model fits. The payment model's feature order is frozen and written to `config/mule_payment_feature_order.yaml`, with its sha256 recorded beside the frozen model.
+8. **No test, no stress.** Test and stress datasets are not read in any of phases 0-3. The new entry points accept only training and validation dataset folders and raise if a folder's manifest `split` is `test` or `stress`.
+
+## A-056
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-23 |
+| Issue IDs | None |
+| Issue IDs v2 | None |
+| Files | `docs/research/amendments.md`, `evaluation/payment_model.py`, `tests/unit/evaluation/test_payment_model.py`, `config/mule_payment_feature_order.yaml` |
+| What changed | Architect ruling for the Level 18 payment model: it fixes the estimator and its target, the fixed parameters for the cpu-versus-cuda device check, the correct feature-list sha256 for the frozen account recipe, the leakage-field sources the input test must use, and the decision to keep `payee_same_bank_risk` with an ablation and a same-bank versus other-bank AP split. |
+| Why | Phase 1 finished before the payment-model fit, but A-055 did not name the payment estimator or the fixed device-check values and it recorded the wrong feature-list sha256. Recording the architect's ruling in writing before any payment-model fit keeps the device choice and the search from being tuned on the result. |
+| Disclosure | Written after the Phase 1 out-of-fold build had finished (`runs/full/payment_oof/fold_record.json` existed) and before any payment-model fit, device comparison, ablation or search trial existed. It does not edit A-055. |
+| Results exist? | No payment-model result at the time of writing; the only prior result is the Phase 1 out-of-fold payee risk. Payment-model results are to land under `runs/full/payment_model_v1/`. |
+
+Rulings, fixed before any payment-model result:
+
+1. **Estimator:** one supervised XGBoost classifier, objective `binary:logistic`, target `label_receiver_reported_by_cutoff`. No PU bagging: positives are about 45% of training rows (the architect's figure; the four training datasets hold 2,523,136 positive of 4,911,546 payment rows = 51.4%), so "unlabelled = maybe positive" handling is not needed.
+2. **Fixed device-check parameters:** the Run A frozen account-model best params from Phase 0c (`max_depth` 8, `learning_rate` 0.14438948595626225, `n_estimators` 118, `min_child_weight` 3.2610095175519205, `subsample` 0.9690047660778822, `colsample_bytree` 0.6934144991295391, `gamma` 3.010102041099164, `reg_alpha` 0.6145078263840675, `reg_lambda` 0.1514174707354069), `tree_method` `hist`, and seed 1717. The seed is `config/mule_model.yaml` `optuna_seed` 1717 (lines 147-150), read at `evaluation/run_level_18_pilot.py:530` and passed to `run_optuna_search` at `evaluation/run_level_18_pilot.py:1909`. Derived from: "frozen account recipe, used only as a neutral fixed point for the device check".
+3. **A-055 correction:** the frozen feature list is the 42-name `account_model_feature_names()` with sha256 `075183a2b9192ab889029e16c06a01f4f837db1c331218cfb93c2acd6d6efa20` (sha over newline-joined names), not `468638cb…`. A-055 is not edited.
+4. **Leakage field lists:** reuse `evaluation/leakage_checks_5_6.py` `simulator_only_fields`, `truth_file_columns` and `bank_visible_fields`. The input-name test fails if any payment-model input is a simulator-only field, a truth field, or not bank-visible.
+5. **`payee_same_bank_risk` is kept:** it reads labels by arrival time only (`features/m1_payment.py`, `labelled_accounts_visible`/`complained_accounts_visible` with `arrival_cutoff`), which a real bank may see. The report includes validation truth AP of the best model with `payee_same_bank_risk` set to NaN as an ablation; the ablation is not used for any choice.
+6. **Same-bank split:** the report states the frozen best model's validation truth AP separately for payments whose receiver is at the payment row's bank (`payee_risk` finite) and payments where `payee_risk` is NaN.
+
+## A-057
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-24 |
+| Issue IDs | None |
+| Issue IDs v2 | None |
+| Files | `evaluation/payment_model.py`, `tests/unit/evaluation/test_payment_model.py`, `evaluation/payment_oof_risk.py`, `decisions/mule_account_model.py`, `evaluation/hyperparameter_search.py`, `evaluation/level17_scoring.py`, `docs/research/amendments.md` |
+| What changed | Corrects the payment model's training target, voids the 23 Nov payment-model search, and fixes the two mypy findings the end-of-round workflow exposed. The target is now derived in `evaluation/payment_model.py`: a payment is positive when `(world_id, receiver_account_id)` is a `(world_id, account_id)` pair in the same dataset's `labels.parquet`. The payments column `label_receiver_reported_by_cutoff` is no longer read. The 23 Nov search (24 trials, best validation truth AP 0.3222) is void and kept only as evidence under `runs/full/payment_model_v1_void_bad_target/`. Mypy: `payment_oof_risk.py` saves and restores the config override through the new `mule_model_config_override()` getter in `decisions/mule_account_model.py`; the truth-scored search functions take the new `HasRole` Protocol (`role: str`) from `evaluation/level17_scoring.py` instead of `ScoredDay`. |
+| Why | `replay/dataset_builder.py:394` builds `reported_accounts` from the bare `account_id` with no world id, and `:476` tests `rec_acc in reported_accounts`, so a label received in any world marks every payment to that id in every world as positive — the same bug class as PR #159. The old target's 51.37% positive share against 1.49% validation truth positive share showed the mismatch. The builder and every dataset are frozen and unchanged; Run A does not use this column. |
+| Disclosure | Written after the invalid 23 Nov search and before any valid payment-model result. It changes no dataset, no `replay/` file, no committed config value and no prior result; the void run folder is renamed, not deleted. Test and stress data are not read in any phase. |
+| Results exist? | No valid payment-model result. The 23 Nov run is void evidence only. Valid results are to land under `runs/full/payment_model_v1/`. |
+
+Facts recorded with the correction:
+
+1. **Finding.** `replay/dataset_builder.py` forms `reported_accounts` from account ids only (`:394`, `reported_accounts.add(r["account_id"])`) and sets the payment column from `rec_acc in reported_accounts` (`:476`). `labels.parquet` keeps `world_id` on every row.
+2. **Evidence.** The old column marks 2,523,136 of 4,911,546 training payment rows positive (51.37%); hidden truth marks 27,393 of 1,834,135 validation rows positive (1.49%). The corrected world-scoped target marks 70,821 of 4,911,546 training payment rows positive (1.44%).
+3. **Verdicts.** `labels.parquet` holds only verdict `fraud`: training label rows 997, 502, 519 and 1,967 (3,985 total); validation label rows 466 and 956. No "not fraud" verdict exists, so no verdict filter is applied; the builder counts every non-revoked label row that arrived by the cutoff, and `labels.parquet` already holds only those rows.
+4. **Fix.** The target is `receiver is not None and (world, receiver) in reported_pairs(dataset)`, where `reported_pairs` is the `(world_id, account_id)` set of that dataset's `labels.parquet`. A null `world_id` or `account_id` in a label row raises `ValueError`. A hand test proves two worlds using `acc_17` with only world A reported leave world B's payments negative; removing the world id from the key makes it fail with `[True, True, True, True] == [True, True, False, False]`.
+5. **Void search.** The 23 Nov device check and search are invalid because their target was the buggy column. The folder is renamed to `runs/full/payment_model_v1_void_bad_target/`; `runs/full/payment_model_v1/` is rebuilt by a fresh device check and search after this amendment.
+6. **Estimator unchanged.** The single supervised XGBoost classifier with no PU bagging stands by the A-056 ruling; the corrected positive share is 1.44%, recorded in `model_metadata.json` as `training_positives` and `training_rows`.
 
