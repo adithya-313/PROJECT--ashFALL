@@ -1,0 +1,496 @@
+{
+  "data": {
+    "calibrator": {
+      "account": {
+        "application": "linear interpolation between the thresholds, clipped to [y_min, y_max]",
+        "file": "account_isotonic.json",
+        "sha256": "0d287917a2c68e089f2375d6d85c2600db69b5b3b01aea57d3fa11f648afa33d"
+      },
+      "payment": {
+        "application": "linear interpolation between the thresholds, clipped to [y_min, y_max]",
+        "file": "payment_isotonic.json",
+        "sha256": "00ce58b8d49604174bc83de889ded17f0af7cbe0584556321fab0fbf62276818"
+      }
+    },
+    "points": [
+      {
+        "bin": 0,
+        "count": 139548,
+        "max_probability": 0.004541929361872013,
+        "mean_probability": 0.004094780860278164,
+        "min_probability": 0.0028667203698655407,
+        "model": "account",
+        "observed_rate": 0.0,
+        "split": "test",
+        "state": "raw"
+      },
+      {
+        "bin": 1,
+        "count": 139548,
+        "max_probability": 0.005407288526883765,
+        "mean_probability": 0.004936667146639072,
+        "min_probability": 0.004541931560914979,
+        "model": "account",
+        "observed_rate": 0.0,
+        "split": "test",
+        "state": "raw"
+      },
+      {
+        "bin": 2,
+        "count": 139548,
+        "max_probability": 0.00827920872415428,
+        "mean_probability": 0.0064033544229739016,
+        "min_probability": 0.005407293476282165,
+        "model": "account",
+        "observed_rate": 0.0,
+        "split": "test",
+        "state": "raw"
+      },
+      {
+        "bin": 3,
+        "count": 139548,
+        "max_probability": 0.019844643780245648,
+        "mean_probability": 0.014206189001282642,
+        "min_probability": 0.0082792456440949,
+        "model": "account",
+        "observed_rate": 0.0,
+        "split": "test",
+        "state": "raw"
+      },
+      {
+        "bin": 4,
+        "count": 139548,
+        "max_probability": 0.03549296986109902,
+        "mean_probability": 0.02672987340181467,
+        "min_probability": 0.019845155574609707,
+        "model": "account",
+        "observed_rate": 0.0,
+        "split": "test",
+        "state": "raw"
+      },
+      {
+        "bin": 5,
+        "count": 139548,
+        "max_probability": 0.0694455449546255,
+        "mean_probability": 0.050630090434812786,
+        "min_probability": 0.03549330319196522,
+        "model": "account",
+        "observed_rate": 0.000028663972253274857,
+        "split": "test",
+        "state": "raw"
+      },
+      {
+        "bin": 6,
+        "count": 139548,
+        "max_probability": 0.1322529137723226,
+        "mean_probability": 0.09793242232241929,
+        "min_probability": 0.06944575002594562,
+        "model": "account",
+        "observed_rate": 0.00022931177802619886,
+        "split": "test",
+        "state": "raw"
+      },
+      {
+        "bin": 7,
+        "count": 139548,
+        "max_probability": 0.28308314801611184,
+        "mean_probability": 0.19469715278273006,
+        "min_probability": 0.13225304866414297,
+        "model": "account",
+        "observed_rate": 0.0010104050219279389,
+        "split": "test",
+        "state": "raw"
+      },
+      {
+        "bin": 8,
+        "count": 139547,
+        "max_probability": 0.5680577706648179,
+        "mean_probability": 0.42572637014118675,
+        "min_probability": 0.2830844131395383,
+        "model": "account",
+        "observed_rate": 0.00988197524848259,
+        "split": "test",
+        "state": "raw"
+      },
+      {
+        "bin": 9,
+        "count": 139547,
+        "max_probability": 0.993683102231012,
+        "mean_probability": 0.7380411653883096,
+        "min_probability": 0.5680583863839714,
+        "model": "account",
+        "observed_rate": 0.28087311085154104,
+        "split": "test",
+        "state": "raw"
+      },
+      {
+        "bin": 0,
+        "count": 139548,
+        "max_probability": 0.0,
+        "mean_probability": 0.0,
+        "min_probability": 0.0,
+        "model": "account",
+        "observed_rate": 0.0,
+        "split": "test",
+        "state": "calibrated"
+      },
+      {
+        "bin": 1,
+        "count": 139548,
+        "max_probability": 0.0,
+        "mean_probability": 0.0,
+        "min_probability": 0.0,
+        "model": "account",
+        "observed_rate": 0.0,
+        "split": "test",
+        "state": "calibrated"
+      },
+      {
+        "bin": 2,
+        "count": 139548,
+        "max_probability": 0.0,
+        "mean_probability": 0.0,
+        "min_probability": 0.0,
+        "model": "account",
+        "observed_rate": 0.0,
+        "split": "test",
+        "state": "calibrated"
+      },
+      {
+        "bin": 3,
+        "count": 139548,
+        "max_probability": 0.0,
+        "mean_probability": 0.0,
+        "min_probability": 0.0,
+        "model": "account",
+        "observed_rate": 0.0,
+        "split": "test",
+        "state": "calibrated"
+      },
+      {
+        "bin": 4,
+        "count": 139548,
+        "max_probability": 0.0,
+        "mean_probability": 0.0,
+        "min_probability": 0.0,
+        "model": "account",
+        "observed_rate": 7.165993063318714e-6,
+        "split": "test",
+        "state": "calibrated"
+      },
+      {
+        "bin": 5,
+        "count": 139548,
+        "max_probability": 0.00009319954021560161,
+        "mean_probability": 0.0000455916253746193,
+        "min_probability": 0.0,
+        "model": "account",
+        "observed_rate": 0.000014331986126637429,
+        "split": "test",
+        "state": "calibrated"
+      },
+      {
+        "bin": 6,
+        "count": 139548,
+        "max_probability": 0.0004374674002658455,
+        "mean_probability": 0.0003321764550243001,
+        "min_probability": 0.00009319954021560161,
+        "model": "account",
+        "observed_rate": 0.00021497979189956143,
+        "split": "test",
+        "state": "calibrated"
+      },
+      {
+        "bin": 7,
+        "count": 139548,
+        "max_probability": 0.0013766519823788547,
+        "mean_probability": 0.0007973398763502186,
+        "min_probability": 0.0004374674002658455,
+        "model": "account",
+        "observed_rate": 0.0010319030011178949,
+        "split": "test",
+        "state": "calibrated"
+      },
+      {
+        "bin": 8,
+        "count": 139547,
+        "max_probability": 0.00787616911885358,
+        "mean_probability": 0.005092069438155633,
+        "min_probability": 0.0013766519823788547,
+        "model": "account",
+        "observed_rate": 0.00986047711523716,
+        "split": "test",
+        "state": "calibrated"
+      },
+      {
+        "bin": 9,
+        "count": 139547,
+        "max_probability": 1.0,
+        "mean_probability": 0.2676269823644207,
+        "min_probability": 0.00787616911885358,
+        "model": "account",
+        "observed_rate": 0.28089460898478646,
+        "split": "test",
+        "state": "calibrated"
+      },
+      {
+        "bin": 0,
+        "count": 184659,
+        "max_probability": 0.0016460904153063893,
+        "mean_probability": 0.0013652278385064113,
+        "min_probability": 0.00014519455726258457,
+        "model": "payment",
+        "observed_rate": 0.00041156943338802873,
+        "split": "test",
+        "state": "raw"
+      },
+      {
+        "bin": 1,
+        "count": 184659,
+        "max_probability": 0.0019526529358699918,
+        "mean_probability": 0.0018110030167205666,
+        "min_probability": 0.0016460918122902513,
+        "model": "payment",
+        "observed_rate": 0.00018953855484975008,
+        "split": "test",
+        "state": "raw"
+      },
+      {
+        "bin": 2,
+        "count": 184659,
+        "max_probability": 0.0021881400607526302,
+        "mean_probability": 0.0020711148327982164,
+        "min_probability": 0.0019526557298377156,
+        "model": "payment",
+        "observed_rate": 0.00024910781494538584,
+        "split": "test",
+        "state": "raw"
+      },
+      {
+        "bin": 3,
+        "count": 184659,
+        "max_probability": 0.0024677834007889032,
+        "mean_probability": 0.0023197786487572964,
+        "min_probability": 0.0021881400607526302,
+        "model": "payment",
+        "observed_rate": 0.0005090464044536145,
+        "split": "test",
+        "state": "raw"
+      },
+      {
+        "bin": 4,
+        "count": 184659,
+        "max_probability": 0.002924600848928094,
+        "mean_probability": 0.0026741132754452028,
+        "min_probability": 0.0024677834007889032,
+        "model": "payment",
+        "observed_rate": 0.0005361233408607217,
+        "split": "test",
+        "state": "raw"
+      },
+      {
+        "bin": 5,
+        "count": 184659,
+        "max_probability": 0.003908673767000437,
+        "mean_probability": 0.0033244944015619537,
+        "min_probability": 0.0029246050398796797,
+        "model": "payment",
+        "observed_rate": 0.0006011079882377789,
+        "split": "test",
+        "state": "raw"
+      },
+      {
+        "bin": 6,
+        "count": 184659,
+        "max_probability": 0.021332886070013046,
+        "mean_probability": 0.011725213509278637,
+        "min_probability": 0.003908681217581034,
+        "model": "payment",
+        "observed_rate": 0.01377674524393612,
+        "split": "test",
+        "state": "raw"
+      },
+      {
+        "bin": 7,
+        "count": 184658,
+        "max_probability": 0.02519199624657631,
+        "mean_probability": 0.02329989542034337,
+        "min_probability": 0.02133301831781864,
+        "model": "payment",
+        "observed_rate": 0.015060273586847037,
+        "split": "test",
+        "state": "raw"
+      },
+      {
+        "bin": 8,
+        "count": 184658,
+        "max_probability": 0.027681760489940643,
+        "mean_probability": 0.026422521154079393,
+        "min_probability": 0.025191999971866608,
+        "model": "payment",
+        "observed_rate": 0.028864170520638152,
+        "split": "test",
+        "state": "raw"
+      },
+      {
+        "bin": 9,
+        "count": 184658,
+        "max_probability": 0.9999922513961792,
+        "mean_probability": 0.07491735996159536,
+        "min_probability": 0.027681760489940643,
+        "model": "payment",
+        "observed_rate": 0.17395942769877287,
+        "split": "test",
+        "state": "raw"
+      },
+      {
+        "bin": 0,
+        "count": 184659,
+        "max_probability": 0.002393671366436057,
+        "mean_probability": 0.002082717525847871,
+        "min_probability": 0.0,
+        "model": "payment",
+        "observed_rate": 0.0004007386588251859,
+        "split": "test",
+        "state": "calibrated"
+      },
+      {
+        "bin": 1,
+        "count": 184659,
+        "max_probability": 0.0025832626109995654,
+        "mean_probability": 0.002555571670318923,
+        "min_probability": 0.002393671366436057,
+        "model": "payment",
+        "observed_rate": 0.0002274462658197001,
+        "split": "test",
+        "state": "calibrated"
+      },
+      {
+        "bin": 2,
+        "count": 184659,
+        "max_probability": 0.0026766151477467873,
+        "mean_probability": 0.0026091108783674465,
+        "min_probability": 0.0025832626109995654,
+        "model": "payment",
+        "observed_rate": 0.00023286165310112153,
+        "split": "test",
+        "state": "calibrated"
+      },
+      {
+        "bin": 3,
+        "count": 184659,
+        "max_probability": 0.0027116848391592514,
+        "mean_probability": 0.0027053976712756935,
+        "min_probability": 0.0026766151477467873,
+        "model": "payment",
+        "observed_rate": 0.0005036310171721931,
+        "split": "test",
+        "state": "calibrated"
+      },
+      {
+        "bin": 4,
+        "count": 184659,
+        "max_probability": 0.003663785437342155,
+        "mean_probability": 0.003433761975951112,
+        "min_probability": 0.0027116848391592514,
+        "model": "payment",
+        "observed_rate": 0.0005307079535793002,
+        "split": "test",
+        "state": "calibrated"
+      },
+      {
+        "bin": 5,
+        "count": 184659,
+        "max_probability": 0.0037460497816283783,
+        "mean_probability": 0.003670279838432836,
+        "min_probability": 0.003663785437342155,
+        "model": "payment",
+        "observed_rate": 0.0007960619303689503,
+        "split": "test",
+        "state": "calibrated"
+      },
+      {
+        "bin": 6,
+        "count": 184659,
+        "max_probability": 0.02035741520506614,
+        "mean_probability": 0.011235718450930403,
+        "min_probability": 0.0037460497816283783,
+        "model": "payment",
+        "observed_rate": 0.013354345035985248,
+        "split": "test",
+        "state": "calibrated"
+      },
+      {
+        "bin": 7,
+        "count": 184658,
+        "max_probability": 0.023491145645103,
+        "mean_probability": 0.021907304235076266,
+        "min_probability": 0.02035741520506614,
+        "model": "payment",
+        "observed_rate": 0.015054858170239037,
+        "split": "test",
+        "state": "calibrated"
+      },
+      {
+        "bin": 8,
+        "count": 184658,
+        "max_probability": 0.024977550923956707,
+        "mean_probability": 0.024461682028655292,
+        "min_probability": 0.023491145645103,
+        "model": "payment",
+        "observed_rate": 0.02903746385209414,
+        "split": "test",
+        "state": "calibrated"
+      },
+      {
+        "bin": 9,
+        "count": 184658,
+        "max_probability": 1.0,
+        "mean_probability": 0.0737230555000212,
+        "min_probability": 0.024977550923956707,
+        "model": "payment",
+        "observed_rate": 0.17401899728146086,
+        "split": "test",
+        "state": "calibrated"
+      }
+    ],
+    "summaries": {
+      "account": {
+        "calibrated": {
+          "brier": 0.009745198042330058,
+          "ece": 0.0018426116879839516,
+          "positives": 40751,
+          "rows": 1395478
+        },
+        "raw": {
+          "brier": 0.05834658687838746,
+          "ece": 0.12713701651550158,
+          "positives": 40751,
+          "rows": 1395478
+        }
+      },
+      "payment": {
+        "calibrated": {
+          "brier": 0.017060249278719006,
+          "ece": 0.012820779159490377,
+          "positives": 43239,
+          "rows": 1846587
+        },
+        "raw": {
+          "brier": 0.017319462773228423,
+          "ece": 0.012284371452845708,
+          "positives": 43239,
+          "rows": 1846587
+        }
+      }
+    }
+  },
+  "manifest": {
+    "generator": "scripts/level18_console.py",
+    "git_hash": "1f406958215dcb680952350225edb58f50d3c6b2",
+    "sources": {
+      "runs/full/level18b/calibration/calibration_data.json": "1404cab03a0334387fd8ae2d4ff9d92c2b6caaf29b6143563d78e3e7af11945c"
+    }
+  },
+  "simulated": true
+}

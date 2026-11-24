@@ -1,0 +1,76 @@
+{
+  "data": {
+    "hidden_by_depth": {
+      "1": {
+        "accounts_median": 6.0,
+        "accounts_total": 704,
+        "recall": {
+          "median": 1.0,
+          "p10": 0.8300000000000001,
+          "p90": 1.0,
+          "world_count": 120,
+          "worlds_skipped": 0,
+          "worlds_used": 120
+        }
+      },
+      "2": {
+        "accounts_median": 6.0,
+        "accounts_total": 687,
+        "recall": {
+          "median": 0.9444444444444444,
+          "p10": 0.6666666666666666,
+          "p90": 1.0,
+          "world_count": 120,
+          "worlds_skipped": 0,
+          "worlds_used": 120
+        }
+      },
+      "3": {
+        "accounts_median": 6.0,
+        "accounts_total": 526,
+        "recall": {
+          "median": 1.0,
+          "p10": 0.6,
+          "p90": 1.0,
+          "world_count": 90,
+          "worlds_skipped": 0,
+          "worlds_used": 90
+        }
+      },
+      "4": {
+        "accounts_median": 6.0,
+        "accounts_total": 353,
+        "recall": {
+          "median": 0.8571428571428571,
+          "p10": 0.5971428571428571,
+          "p90": 1.0,
+          "world_count": 60,
+          "worlds_skipped": 0,
+          "worlds_used": 60
+        }
+      },
+      "5": {
+        "accounts_median": 5.0,
+        "accounts_total": 171,
+        "recall": {
+          "median": 1.0,
+          "p10": 0.5955555555555555,
+          "p90": 1.0,
+          "world_count": 30,
+          "worlds_skipped": 0,
+          "worlds_used": 30
+        }
+      }
+    },
+    "world_cards_checked": 120,
+    "worlds_processed": 120
+  },
+  "manifest": {
+    "generator": "scripts/level18_console.py",
+    "git_hash": "1f406958215dcb680952350225edb58f50d3c6b2",
+    "sources": {
+      "runs/full/run_a320_stage5c/extra_reporting.json": "a11e208fda21e4419d20ef55c35bb52a95dc1cb3663792d4a39adfdc40d96ff6"
+    }
+  },
+  "simulated": true
+}
