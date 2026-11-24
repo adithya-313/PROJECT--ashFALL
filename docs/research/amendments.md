@@ -882,3 +882,25 @@ Rulings:
 2. **Export contract check.** Each converted graph must hold exactly one input named `input`, the operator `TreeEnsembleClassifier`, and exactly the outputs `label` and `probabilities`; anything else stops the phase as A-061 ruling 7 fixes.
 3. **All other A-061 rulings remain in force.** The frozen-artifact checks, the feature orders, the merge preconditions, the merge proof, the sampling rule, the row construction, the parity check, the outputs and the no-decision rule are unchanged.
 
+## A-061b
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-24 |
+| Issue IDs | None |
+| Issue IDs v2 | None |
+| Files | `evaluation/onnx_export.py`, `tests/unit/evaluation/test_onnx_export.py`, `docs/research/amendments.md` |
+| What changed | Replaces A-061 ruling 4's single 1e-6 margin gate with the owner's three-part merge gate: a 1e-5 probability-space limit, zero decision flips at the account model's frozen cut, and a ranking check (Spearman correlation at least 0.999999 and identical top-1% index sets). The margin difference is still computed and reported but is no longer gated. |
+| Why | The 1e-6 margin limit was an architect guess with no `derived_from`. The merged booster sums 5,900 leaves in float32, and the 20,000-row validation proof measured a deterministic maximum margin difference of 1.310e-05 in two runs (exit 1 each), so the limit cannot be met by any faithful leaf scaling. The new gates measure the properties that matter for serving: the probability error, the decisions the frozen cut makes, and the ranking. |
+| Disclosure | Written AFTER the 1e-6 gate failed: the run stopped at `merge_proof` with `merged booster margin differs from the bagged mean margin by 1.310e-05, over the 1e-06 limit` (run exit 1, 80.9 s, reproduced at 77.6 s with the same value and the same merged-booster sha256 `a21ba6033ad957dc75f413eca92348abf11e2835af996f3f7651b15e17f4a954`). No ONNX file or parity value existed when this was written. It changes no frozen model, feature order, sampling rule, row construction or parity tolerance; it only replaces the merge gate and records the margin as a reported number. It does not edit A-055 to A-061a. |
+| Results exist? | Partly: the failed margin value exists and is recorded above. No export or parity result exists yet. Results land under `runs/full/level18b/onnx/` and are labelled SIMULATED. |
+
+Rulings:
+
+1. **Merge gate 1 — probability space.** On the A-061 ruling 5 account validation sample of 20,000 rows, the native probability is `PUBaggedAccountModel.predict_probabilities(matrix)` and the merged probability is `1 / (1 + exp(-margin))` from the merged booster's `output_margin=True` margin. The maximum absolute difference must be at most 1e-5, the A-061 parity tolerance. The maximum difference, mean difference, row count and NaN row count are reported.
+2. **Margin reported, not gated.** The maximum and mean absolute margin differences between the merged booster and `PUBaggedAccountModel.predict_margins` are computed and reported in `onnx_export.json` and the console summary; no limit applies.
+3. **Merge gate 2 — decisions at the frozen cut.** The frozen inclusive cut is read at run time from `runs/full/run_a320_stage5c/extra_reporting.json`, key path `manifest.xgboost_cut`, whose value is `0.9631869778454679` (the ruling's rounded `0.96319`). A row is flagged when its probability is at least the cut, the same inclusive rule as `anomaly_restricted_days` in `evaluation/level17_scoring.py`. The number of rows where the merged and native flags differ must be zero. No cut value is typed into the code.
+4. **Merge gate 3 — ranking.** Spearman correlation is the Pearson correlation of midranks (equal values share the average of the ranks they span; scipy is not a declared dependency, so the midranks are computed with numpy). It must be at least 0.999999. The top-1% set is the `ceil(0.01 × rows)` rows ordered by descending probability, with ties broken by ascending row index; the merged and native top-1% index sets must be identical. The correlation, top row count and whether the sets match are reported.
+5. **Stop rule.** If any of the three gates fails, the phase stops and the values are reported; no gate is weakened, waived or retried.
+6. **All other A-061 and A-061a rulings remain in force.** The frozen-artifact checks, the feature orders, the merge preconditions, the sampling rule, the row construction, the export contract, the parity checks, the outputs and the no-decision rule are unchanged.
+
