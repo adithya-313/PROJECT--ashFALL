@@ -44,7 +44,7 @@ from decisions.mule_account_model import predict_account_days
 from decisions.pu_learning import PUBaggedAccountModel
 from evaluation.dataset_truth_join import _world_entries
 from evaluation.level17_scoring import GENUINE_ROLES, MULE_ROLES, one_row_per_account_day
-from evaluation.payment_model import build_matrix, load_feature_order, load_split_rows, predict_scores
+from evaluation.payment_model import TARGET, build_matrix, load_feature_order, load_split_rows, predict_scores
 from evaluation.payment_oof_risk import (
     _CommitSampler,
     _git_head,
@@ -513,7 +513,8 @@ def payment_validation_rows(
     receiver-reported target.
 
     WHY: A-060 ruling 3 fixes validation payments as the production `load_split_rows` rows and their
-    `target` column, so the fit sees the same rows and label the payment model was trained on.
+    `label_receiver_reported_by_cutoff` column, so the fit sees the same rows and label the payment
+    model was trained on.
 
     Raises:
         ValueError: If the validation rows are empty or their targets are not 0/1.
@@ -523,7 +524,7 @@ def payment_validation_rows(
         raise ValueError("the validation datasets hold no payment rows")
     matrix = build_matrix(table, features, encodings)
     probabilities = np.asarray(predict_scores(model, matrix), dtype=np.float64)
-    truth = np.asarray(table["target"].to_pylist(), dtype=np.int8)
+    truth = np.asarray(table[TARGET].to_pylist(), dtype=np.int8)
     if truth.size != probabilities.size:
         raise ValueError(f"{truth.size} targets do not match {probabilities.size} scores")
     return (
