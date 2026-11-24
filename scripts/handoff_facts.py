@@ -350,6 +350,30 @@ PART_CONFIGS: dict[str, dict[str, Any]] = {
         "CONFIG_FILES": ("config/dataset_build.yaml",),
         "REGISTER_IDS": ("16-4",),
     },
+    "18b": {
+        "INTERFACE_MODULES": (
+            "evaluation.calibration",
+            "evaluation.onnx_export",
+            "evaluation.reason_codes",
+        ),
+        "RECORDS_MODULE": (
+            "evaluation.calibration",
+            "evaluation.reason_codes",
+        ),
+        "RECORD_NAMES": (
+            "Calibrator",
+            "ReasonCode",
+            "ReasonCodeMap",
+            "ReasonFeature",
+            "RowReason",
+            "WorldRecord",
+        ),
+        "CONFIG_FILES": (
+            "config/feature_reason_codes.yaml",
+            "config/mule_payment_feature_order.yaml",
+        ),
+        "REGISTER_IDS": (),
+    },
 }
 
 
