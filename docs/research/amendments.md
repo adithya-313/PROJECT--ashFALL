@@ -863,3 +863,22 @@ Rulings, fixed before any export or parity value:
 9. **Output.** `runs/full/level18b/onnx/account_margin_booster.json`, `mule_account_xgb.onnx`, `mule_payment_xgb.onnx` and `onnx_export.json`, the last holding the amendment id, `simulated: true`, the run git hash, the model and feature sha256 values, the dataset folder names and manifest `content_hash`, the seed and sampling rule, the converter, onnx, onnxruntime and xgboost versions, the opset, the merge proof, the four parity summaries, wall seconds and the peak system commit charge. Files under `runs/` are gitignored and are not committed.
 10. **No model change and no decision on test.** This phase fits nothing, tunes nothing and changes no frozen model, feature order, calibrator, threshold or decision rule. Test rows are used only to measure parity and never to choose a converter setting, a tolerance, a feature order or a sampling rule. A failed artifact check, member disagreement, merge-proof or parity value stops the phase and is reported; nothing is retried with weakened checks.
 
+## A-061a
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-24 |
+| Issue IDs | None |
+| Issue IDs v2 | None |
+| Files | `evaluation/onnx_export.py`, `tests/unit/evaluation/test_onnx_export.py`, `docs/research/amendments.md` |
+| What changed | Records two mechanical details A-061 leaves open, fixed before any merge, export or parity value on real dataset rows: merged tree ids are renumbered from 0 in concatenation order, and the exporter proves the ONNX graph has exactly one input named `input`. |
+| Why | A-061 ruling 3 requires the written `account_margin_booster.json` to reload and predict for the merge proof, and xgboost 3.2.0 crashes on predict when two loaded trees share an id, which the concatenated members do; A-061 ruling 7 requires the input contract to be proven, and the converter keeps the `FloatTensorType` name `input` verbatim instead of appending `:0`, so the check must pin that name rather than a guessed suffix. |
+| Disclosure | Written after the unit tests exist and before any merge, export or parity value on real dataset rows exists. No result file is written by this amendment. |
+| Results exist? | No. Results are to land under `runs/full/level18b/onnx/` and are labelled SIMULATED. |
+
+Rulings:
+
+1. **Tree ids in the merged booster.** Merged tree `i` carries `id` `i` for `i` 0 to 5899, in the A-061 ruling 3 concatenation order. No other tree field changes: every leaf `split_conditions` value is still multiplied by 1/50 and internal split values are untouched.
+2. **Export contract check.** Each converted graph must hold exactly one input named `input`, the operator `TreeEnsembleClassifier`, and exactly the outputs `label` and `probabilities`; anything else stops the phase as A-061 ruling 7 fixes.
+3. **All other A-061 rulings remain in force.** The frozen-artifact checks, the feature orders, the merge preconditions, the merge proof, the sampling rule, the row construction, the parity check, the outputs and the no-decision rule are unchanged.
+
