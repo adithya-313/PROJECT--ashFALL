@@ -14,6 +14,13 @@ xgboost==3.2.0
 shap==0.51.0
 # optuna: Level 18a4 full-run driver searches six XGBoost hyperparameters on validation truth AP (same pin as requirements-ml.txt)
 optuna==4.7.0
+# onnx, onnxruntime, onnxmltools, skl2onnx: Level 18 exports the merged account and payment models to
+# ONNX and checks their parity in the dev environment (A-061). Same pins as requirements-ml.txt; keep
+# them in step. Not in requirements.txt: serving uses Triton (Level 19), not these packages.
+onnx==1.20.1
+onnxruntime==1.24.2
+onnxmltools==1.16.0
+skl2onnx==1.20.0
 
 # pydantic: core/config.py imports it directly. It was only installed as a dependency of pydantic-settings and
 # fastapi, so it is declared here with the range those packages already require.
