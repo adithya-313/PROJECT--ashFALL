@@ -31,6 +31,7 @@ import hashlib
 import json
 import math
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -447,6 +448,9 @@ class _CommitSampler:
 def committed_gb() -> float:
     """Returns the system commit charge in GiB (page-file committed bytes)."""
     import ctypes
+
+    if sys.platform != "win32":
+        raise ValueError("committed_gb reads the Windows commit charge and runs only on win32")
     from ctypes import wintypes
 
     class _MemoryStatusEx(ctypes.Structure):
