@@ -33,6 +33,7 @@ from typing import Any
 
 import numpy as np
 import pyarrow as pa
+import pyarrow.parquet as pq
 import shap
 import xgboost
 import yaml
@@ -741,57 +742,48 @@ def _run_payment(
         raise ValueError(f"frozen model takes {booster.num_features()} features but the order holds {len(features)}")
     rounds = verify_booster_rounds(booster, metadata)
 
-    tables: dict[str, pa.Table] = {}
+    table = load_split_rows(list(datasets), "validation", features, oof_root)
+    if table.num_rows == 0:
+        raise ValueError("the validation datasets hold no payment rows")
+    dataset_of: dict[tuple[str, str], str] = {}
+    for dataset_dir in datasets:
+        keys = pq.read_table(dataset_dir / "payments.parquet", columns=["world_id", "payment_id"])
+        if keys.num_rows == 0:
+            raise ValueError(f"validation dataset {dataset_dir.name} holds no payment rows")
+        for world_id, payment_id in zip(keys["world_id"].to_pylist(), keys["payment_id"].to_pylist(), strict=True):
+            key = (world_id, payment_id)
+            if key in dataset_of:
+                raise ValueError(f"validation payment key {key} appears in two datasets")
+            dataset_of[key] = dataset_dir.name
 
     def candidates() -> Iterator[dict[str, Any]]:
-        for dataset_dir in datasets:
-            table = load_split_rows([dataset_dir], "validation", features, oof_root)
-            if table.num_rows == 0:
-                raise ValueError(f"validation dataset {dataset_dir.name} holds no payment rows")
-            tables[dataset_dir.name] = table
-            for world_id, payment_id in zip(
-                table["world_id"].to_pylist(), table["payment_id"].to_pylist(), strict=True
-            ):
-                yield {"dataset": dataset_dir.name, "world_id": world_id, "payment_id": payment_id}
+        for world_id, payment_id in zip(table["world_id"].to_pylist(), table["payment_id"].to_pylist(), strict=True):
+            if (world_id, payment_id) not in dataset_of:
+                raise ValueError(f"validation payment key {(world_id, payment_id)} belongs to no dataset")
+            yield {"dataset": dataset_of[(world_id, payment_id)], "world_id": world_id, "payment_id": payment_id}
 
     sample = select_sample(candidates(), PAYMENT_KEY_FIELDS, SEED, SAMPLE_ROWS)
     if not sample:
         raise ValueError("the validation sample holds no payment rows")
 
-    selected: dict[str, set[tuple[str, str]]] = {}
-    for row in sample:
-        selected.setdefault(str(row["dataset"]), set()).add((str(row["world_id"]), str(row["payment_id"])))
-
-    parts: list[pa.Table] = []
-    rows: list[dict[str, Any]] = []
-    for name in sorted(tables):
-        table = tables[name]
-        wanted = selected.get(name, set())
-        indices: list[int] = []
-        for index, (world_id, payment_id) in enumerate(
-            zip(table["world_id"].to_pylist(), table["payment_id"].to_pylist(), strict=True)
-        ):
-            if (str(world_id), str(payment_id)) in wanted:
-                indices.append(index)
-        part = table.take(pa.array(indices, type=pa.int64()))
-        parts.append(part)
-        for world_id, payment_id, decision_time in zip(
-            part["world_id"].to_pylist(),
-            part["payment_id"].to_pylist(),
-            part["decision_time"].to_pylist(),
-            strict=True,
-        ):
-            rows.append(
-                {
-                    "dataset": name,
-                    "world_id": world_id,
-                    "payment_id": payment_id,
-                    "decision_time": decision_time,
-                }
-            )
+    wanted = {_sample_key(row, PAYMENT_KEY_FIELDS) for row in sample}
+    located: list[dict[str, Any]] = []
+    positions: list[int] = []
+    for index, (world_id, payment_id) in enumerate(
+        zip(table["world_id"].to_pylist(), table["payment_id"].to_pylist(), strict=True)
+    ):
+        row = {"dataset": dataset_of[(world_id, payment_id)], "world_id": world_id, "payment_id": payment_id}
+        if _sample_key(row, PAYMENT_KEY_FIELDS) in wanted:
+            located.append(row)
+            positions.append(index)
+    combined = table.take(pa.array(positions, type=pa.int64()))
+    rows = [
+        {**row, "decision_time": decision_time}
+        for row, decision_time in zip(located, combined["decision_time"].to_pylist(), strict=True)
+    ]
     order = sorted(range(len(rows)), key=lambda index: _sample_key(rows[index], PAYMENT_KEY_FIELDS))
     rows = [rows[index] for index in order]
-    combined = pa.concat_tables(parts).take(pa.array(order, type=pa.int64()))
+    combined = combined.take(pa.array(order, type=pa.int64()))
     if sorted(_sample_key(row, PAYMENT_KEY_FIELDS) for row in sample) != [
         _sample_key(row, PAYMENT_KEY_FIELDS) for row in rows
     ]:
