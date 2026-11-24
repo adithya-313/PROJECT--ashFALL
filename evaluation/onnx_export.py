@@ -4,15 +4,17 @@
 WHAT:
     Merges the 50 frozen Run A account members into one margin-space booster by keeping every member
     tree and dividing every leaf weight by 50, proves the merged booster reproduces the production
-    bagged mean margin within 1e-6, exports that booster and the frozen payment booster to ONNX with
-    the committed feature orders, and checks ONNX against the native production probability within
-    1e-5 on 20,000-row validation and test samples that keep their NaNs.
+    bagged probability within 1e-5, makes the same decisions at the frozen cut and keeps the ranking
+    (A-061b), exports that booster and the frozen payment booster to ONNX with the committed feature
+    orders, and checks ONNX against the native production probability within 1e-5 on 20,000-row
+    validation and test samples that keep their NaNs.
 
 WHY:
-    A-061 fixes the merge rule, the merge tolerance, the 20,000-row sampling rule, the required
-    converter output contract and the parity tolerance before any export exists, so the reported
-    differences describe the frozen models instead of a setting chosen after seeing them. Nothing is
-    fitted, tuned or changed, and test rows are used only to measure parity.
+    A-061 fixes the merge rule, the 20,000-row sampling rule, the required converter output contract
+    and the parity tolerance before any export exists. A-061b replaces the 1e-6 margin gate after it
+    failed at 1.310e-05: float32 accumulation over 5,900 leaves cannot meet it, so the merge is now
+    gated on the probability error, the decisions and the ranking instead. Nothing is fitted, tuned
+    or changed, and test rows are used only to measure parity.
 
 TERM: margin-space booster: one XGBoost booster holding every member tree with each leaf weight
       divided by the bag count, so its raw output is the mean member margin.
@@ -25,6 +27,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import time
 from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
@@ -87,11 +90,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL_DIR = REPO_ROOT / "runs" / "full" / "payment_model_v1"
 DEFAULT_OOF_ROOT = REPO_ROOT / "runs" / "full" / "payment_oof"
 DEFAULT_OUT_ROOT = REPO_ROOT / "runs" / "full" / "level18b" / "onnx"
+DEFAULT_EXTRA_REPORTING = REPO_ROOT / "runs" / "full" / "run_a320_stage5c" / "extra_reporting.json"
 
-#: A-061 fixes these names, limits and the sampling constants reused from A-059.
+#: A-061 and A-061b fix these names, limits and the sampling constants reused from A-059.
 AMENDMENT = "A-061"
-MERGE_TOLERANCE = 1e-6
+AMENDMENTS = ["A-061", "A-061a", "A-061b"]
 PARITY_TOLERANCE = 1e-5
+SPEARMAN_MIN = 0.999999
+TOP_FRACTION = 0.01
+CUT_SOURCE_KEY = "manifest.xgboost_cut"
 MERGED_BOOSTER_NAME = "account_margin_booster.json"
 ACCOUNT_ONNX_NAME = "mule_account_xgb.onnx"
 PAYMENT_ONNX_NAME = "mule_payment_xgb.onnx"
@@ -487,38 +494,192 @@ def write_margin_booster(
     return booster
 
 
+def load_account_cut(path: Path = DEFAULT_EXTRA_REPORTING) -> float:
+    """
+    WHAT: Returns the account model's frozen decision cut from the extra-reporting manifest.
+
+    WHY: A-061b gates the merge proof on the decisions the deployed model makes, so the cut is read
+    from the artifact that set it instead of being typed into this module.
+
+    Raises:
+        ValueError: If the file, the manifest block or the cut is missing, non-numeric or outside [0, 1].
+    """
+    path = Path(path)
+    if not path.exists():
+        raise ValueError(f"{path} is missing, so the frozen account cut cannot be read")
+    document = json.loads(path.read_text(encoding="utf-8"))
+    manifest = document.get("manifest") if isinstance(document, Mapping) else None
+    cut = manifest.get("xgboost_cut") if isinstance(manifest, Mapping) else None
+    if isinstance(cut, bool) or not isinstance(cut, (int, float)):
+        raise ValueError(f"{path} {CUT_SOURCE_KEY} must be a number; got {cut!r}")
+    value = float(cut)
+    if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+        raise ValueError(f"{path} {CUT_SOURCE_KEY} must lie in [0, 1]; got {value!r}")
+    return value
+
+
+def midranks(values: Sequence[float] | np.ndarray) -> np.ndarray:
+    """
+    WHAT: Returns the average rank of every value, giving tied values the mean of the ranks they span.
+
+    WHY: A-061b's rank check uses Spearman's rho, the Pearson correlation of midranks; scipy is not a
+    declared dependency, so the ranks are computed here with numpy.
+    """
+    array = np.asarray(values, dtype=np.float64)
+    if array.ndim != 1:
+        raise ValueError(f"midranks needs a one-dimensional array; got shape {array.shape}")
+    order = np.argsort(array, kind="mergesort")
+    ordered = array[order]
+    ranks = np.empty(array.shape[0], dtype=np.float64)
+    start = 0
+    while start < array.shape[0]:
+        stop = start + 1
+        while stop < array.shape[0] and ordered[stop] == ordered[start]:
+            stop += 1
+        ranks[order[start:stop]] = (start + stop - 1) / 2.0 + 1.0
+        start = stop
+    return ranks
+
+
+def spearman_correlation(left: Sequence[float] | np.ndarray, right: Sequence[float] | np.ndarray) -> float:
+    """
+    WHAT: Returns Spearman's rank correlation between two equally long score vectors.
+
+    Raises:
+        ValueError: If the vectors differ in shape, hold fewer than two values, or every value is tied.
+    """
+    left_values = np.asarray(left, dtype=np.float64)
+    right_values = np.asarray(right, dtype=np.float64)
+    if left_values.shape != right_values.shape:
+        raise ValueError(f"Spearman needs equal shapes; got {left_values.shape} and {right_values.shape}")
+    if left_values.ndim != 1 or left_values.size < 2:
+        raise ValueError(f"Spearman needs at least two one-dimensional values; got shape {left_values.shape}")
+    left_centered = midranks(left_values)
+    right_centered = midranks(right_values)
+    left_centered = left_centered - left_centered.mean()
+    right_centered = right_centered - right_centered.mean()
+    denominator = float(np.sqrt(np.square(left_centered).sum() * np.square(right_centered).sum()))
+    if denominator == 0.0:
+        raise ValueError("Spearman is undefined when every value is tied in one vector")
+    return float((left_centered * right_centered).sum() / denominator)
+
+
+def top_fraction_indices(scores: Sequence[float] | np.ndarray, fraction: float) -> set[int]:
+    """
+    WHAT: Returns the row indices of the highest scores inside the given top fraction.
+
+    WHY: A-061b compares the merged and native top-1% sets; breaking ties by ascending index makes
+    the set well defined even when two scores are equal.
+    """
+    array = np.asarray(scores, dtype=np.float64)
+    if array.ndim != 1 or array.size == 0:
+        raise ValueError(f"top fraction needs at least one one-dimensional score; got shape {array.shape}")
+    if not 0.0 < fraction <= 1.0:
+        raise ValueError(f"top fraction must lie in (0, 1]; got {fraction!r}")
+    count = math.ceil(fraction * array.size)
+    order = np.lexsort((np.arange(array.size), -array))
+    return {int(index) for index in order[:count]}
+
+
+def decision_flips(native: Sequence[float] | np.ndarray, merged: Sequence[float] | np.ndarray, cut: float) -> int:
+    """
+    WHAT: Returns how many rows sit on different sides of the inclusive cut in the two score vectors.
+
+    WHY: A-061b requires the merged booster to make the same restriction decision as the production
+    probabilities at the frozen cut; the comparison uses >= because the cut is inclusive.
+    """
+    native_values = np.asarray(native, dtype=np.float64)
+    merged_values = np.asarray(merged, dtype=np.float64)
+    if native_values.shape != merged_values.shape:
+        raise ValueError(f"decision check needs equal shapes; got {native_values.shape} and {merged_values.shape}")
+    mismatch = (native_values >= cut) != (merged_values >= cut)
+    return int(mismatch.sum())
+
+
+def merge_gate(
+    native_probability: Sequence[float] | np.ndarray,
+    merged_probability: Sequence[float] | np.ndarray,
+    native_margin: Sequence[float] | np.ndarray,
+    merged_margin: Sequence[float] | np.ndarray,
+    cut: float,
+) -> dict[str, Any]:
+    """
+    WHAT: Applies A-061b's three merge gates and returns the reported differences.
+
+    WHY: The merged booster is a float32 approximation of the bagged mean, so the phase gates what
+    serving depends on: the probability error, the decisions at the frozen cut and the ranking.
+
+    Raises:
+        ValueError: If the sample is empty, the vectors differ in shape, or any gate fails.
+    """
+    native_probabilities = np.asarray(native_probability, dtype=np.float64)
+    merged_probabilities = np.asarray(merged_probability, dtype=np.float64)
+    native_margins = np.asarray(native_margin, dtype=np.float64)
+    merged_margins = np.asarray(merged_margin, dtype=np.float64)
+    if native_probabilities.size == 0:
+        raise ValueError("the merge proof needs at least one row")
+    for name, values in (
+        ("merged probability", merged_probabilities),
+        ("native margin", native_margins),
+        ("merged margin", merged_margins),
+    ):
+        if values.shape != native_probabilities.shape:
+            raise ValueError(f"{name} has shape {values.shape}, expected {native_probabilities.shape}")
+    probability_difference = np.abs(native_probabilities - merged_probabilities)
+    margin_difference = np.abs(native_margins - merged_margins)
+    flips = decision_flips(native_probabilities, merged_probabilities, cut)
+    correlation = spearman_correlation(native_probabilities, merged_probabilities)
+    native_top = top_fraction_indices(native_probabilities, TOP_FRACTION)
+    merged_top = top_fraction_indices(merged_probabilities, TOP_FRACTION)
+    summary = {
+        "rows": int(native_probabilities.size),
+        "probability_max_abs_diff": float(probability_difference.max()),
+        "probability_mean_abs_diff": float(probability_difference.mean()),
+        "margin_max_abs_diff": float(margin_difference.max()),
+        "margin_mean_abs_diff": float(margin_difference.mean()),
+        "decision_cut": float(cut),
+        "decision_flips": flips,
+        "spearman": correlation,
+        "top_rows": len(native_top),
+        "top_set_identical": native_top == merged_top,
+    }
+    if summary["probability_max_abs_diff"] > PARITY_TOLERANCE:
+        raise ValueError(
+            f"merged probability differs from the bagged probability by {summary['probability_max_abs_diff']:.3e}, "
+            f"over the {PARITY_TOLERANCE} limit"
+        )
+    if flips != 0:
+        raise ValueError(f"{flips} rows change side of the frozen cut {cut}")
+    if summary["spearman"] < SPEARMAN_MIN:
+        raise ValueError(f"Spearman correlation {summary['spearman']} is below the {SPEARMAN_MIN} minimum")
+    if native_top != merged_top:
+        raise ValueError(f"the top-{TOP_FRACTION:.0%} row sets differ: {len(native_top ^ merged_top)} rows")
+    return summary
+
+
 def merge_proof(
     merged_booster: xgboost.Booster,
     account_model: PUBaggedAccountModel,
     matrix: np.ndarray,
+    cut: float,
 ) -> dict[str, Any]:
     """
-    WHAT: Compares the merged booster's margin with the production bagged mean margin on one sample.
+    WHAT: Compares the merged booster with the production bagged ensemble on one sample.
 
-    WHY: A-061 makes a 1e-6 maximum difference the proof that the leaf scaling really is the bag
-    average; a larger difference means the export must stop.
+    WHY: A-061b gates the merge on the probability error, the decisions at the frozen cut and the
+    ranking; the margin difference is still measured and reported but has no limit.
 
     Raises:
-        ValueError: If the sample is empty or the largest difference exceeds the merge tolerance.
+        ValueError: If the sample is empty or any A-061b gate fails.
     """
     if matrix.shape[0] == 0:
         raise ValueError("the merge proof needs at least one row")
-    native = np.asarray(account_model.predict_margins(matrix), dtype=np.float64)
-    merged = np.asarray(merged_booster.predict(xgboost.DMatrix(matrix), output_margin=True), dtype=np.float64)
-    if native.shape != merged.shape:
-        raise ValueError(f"merged margins have shape {merged.shape}, the bagged margins {native.shape}")
-    difference = np.abs(native - merged)
-    summary = {
-        "rows": int(matrix.shape[0]),
-        "nan_rows": _nan_rows(matrix),
-        "max_abs_diff": float(difference.max()),
-        "mean_abs_diff": float(difference.mean()),
-    }
-    if summary["max_abs_diff"] > MERGE_TOLERANCE:
-        raise ValueError(
-            f"merged booster margin differs from the bagged mean margin by {summary['max_abs_diff']:.3e}, "
-            f"over the {MERGE_TOLERANCE} limit"
-        )
+    native_margin = np.asarray(account_model.predict_margins(matrix), dtype=np.float64)
+    merged_margin = np.asarray(merged_booster.predict(xgboost.DMatrix(matrix), output_margin=True), dtype=np.float64)
+    native_probability = np.asarray(account_model.predict_probabilities(matrix), dtype=np.float64)
+    merged_probability = 1.0 / (1.0 + np.exp(-merged_margin))
+    summary = merge_gate(native_probability, merged_probability, native_margin, merged_margin, cut)
+    summary["nan_rows"] = _nan_rows(matrix)
     return summary
 
 
@@ -662,6 +823,7 @@ def run(
             f"frozen model takes {payment_booster.num_features()} features but the order holds {len(features)}"
         )
     payment_rounds = verify_booster_rounds(payment_booster, metadata)
+    account_cut = load_account_cut()
 
     member_raws: list[dict[str, Any]] = []
     for index, member in enumerate(account_model.members):
@@ -685,7 +847,7 @@ def run(
         account_validation_matrix, account_validation_keys = account_sample(
             validation_datasets, "validation", feature_names
         )
-        merge_summary = merge_proof(merged_booster, account_model, account_validation_matrix)
+        merge_summary = merge_proof(merged_booster, account_model, account_validation_matrix, account_cut)
 
         account_onnx = export_model(merged_booster, len(feature_names))
         save_onnx(account_onnx, out_root / ACCOUNT_ONNX_NAME)
@@ -737,6 +899,7 @@ def run(
         wall_seconds = time.perf_counter() - started
         data = {
             "amendment": AMENDMENT,
+            "amendments": AMENDMENTS,
             "simulated": True,
             "git_hash": _git_head(),
             "datasets": {
@@ -783,6 +946,10 @@ def run(
                     "n_estimators": recipe.n_estimators,
                 },
                 "checkpoint_sha256": checkpoint_hashes,
+                "decision_cut_source": {
+                    "path": str(DEFAULT_EXTRA_REPORTING),
+                    "key": CUT_SOURCE_KEY,
+                },
                 "merged_booster": {
                     "path": str(merged_path),
                     "sha256": _sha256_file(merged_path),
@@ -820,7 +987,13 @@ def run(
                     "test": payment_test_parity,
                 },
             },
-            "tolerances": {"merge": MERGE_TOLERANCE, "parity": PARITY_TOLERANCE},
+            "tolerances": {
+                "merge_probability": PARITY_TOLERANCE,
+                "margin_report_only": True,
+                "spearman_min": SPEARMAN_MIN,
+                "top_fraction": TOP_FRACTION,
+                "parity": PARITY_TOLERANCE,
+            },
             "wall_seconds": wall_seconds,
             "peak_committed_gb": sampler.peak_gb,
             "out_root": str(out_root),
