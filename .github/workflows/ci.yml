@@ -358,6 +358,10 @@ jobs:
       - name: Check the Level 7 report exists
         run: test -f reports/showcase/level_07/result.json
 
+      # The Level 18 checks only read committed console files, so a missing result file means the level never ran.
+      - name: Check the Level 18 report exists
+        run: test -f reports/showcase/level_18/result.json
+
       # Keep the HTML and JSON reports so they can be downloaded from the run page, even when an earlier step failed.
       - name: Upload showcase reports
         if: always()
