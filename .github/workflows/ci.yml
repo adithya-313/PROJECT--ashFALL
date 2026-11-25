@@ -175,6 +175,32 @@ jobs:
             exit 1
           fi
 
+  # Level 18 task 10 (A-064 ruling 8): the mule model quality gate. It reads the two committed model cards under
+  # reports/level_18/model_cards/ and the thresholds in config/mule_model_quality_gate.yaml, prints one PASS/FAIL
+  # line per threshold and exits 1 on any failure. Model v1's gate above is a separate job and is untouched.
+  mule-model-quality-gate:
+    name: Mule model quality gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install the config loader dependency
+        run: pip install pyyaml
+
+      # The gate imports core/config_validator and world/run_identity; a file under scripts/ does not put the
+      # repository root on sys.path by itself, so the step names it explicitly.
+      - name: Run the mule model quality gate on the committed cards
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python scripts/mule_model_quality_gate.py
+
   # ---------------------------------------------------------------------------
   # Job: level-showcase
   # What: checks the Level 7 code (lint, types, tests) with the SAME pinned versions as requirements.txt on

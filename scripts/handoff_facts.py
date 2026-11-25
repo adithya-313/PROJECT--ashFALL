@@ -377,6 +377,7 @@ PART_CONFIGS: dict[str, dict[str, Any]] = {
         ),
         "CONFIG_FILES": (
             "config/feature_reason_codes.yaml",
+            "config/mule_model_quality_gate.yaml",
             "config/mule_payment_feature_order.yaml",
         ),
         "REGISTER_IDS": (),

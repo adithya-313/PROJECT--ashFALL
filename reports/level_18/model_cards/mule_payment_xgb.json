@@ -1,0 +1,225 @@
+{
+  "data": {
+    "calibration": {
+      "calibrated": {
+        "brier": 0.017060249278719006,
+        "ece": 0.012820779159490377,
+        "positives": 43239,
+        "rows": 1846587
+      },
+      "calibrator": {
+        "application": "linear interpolation between the thresholds, clipped to [y_min, y_max]",
+        "file": "payment_isotonic.json",
+        "sha256": "00ce58b8d49604174bc83de889ded17f0af7cbe0584556321fab0fbf62276818"
+      },
+      "raw": {
+        "brier": 0.017319462773228423,
+        "ece": 0.012284371452845708,
+        "positives": 43239,
+        "rows": 1846587
+      }
+    },
+    "frozen_model": {
+      "feature_count": 54,
+      "feature_sha256": "42f52628ad9c6c5cd440fe4b2aa328dd067beea6b929a2368f8dfccda28867c6",
+      "git_hash": "dbefd6c7b13032fc2c0c1655e7a644b95d064f14",
+      "rounds": 647,
+      "seed": 1717,
+      "sha256": "98dffe1fda74342b36d55651deb2168fa144c4886a87cdb10715ff90d3a7864e"
+    },
+    "hold_share": 0.005,
+    "intended_use": "Rank same-bank incoming payments for human review at the frozen hold share 0.005 and the committed threshold, using the frozen xgboost payment model recorded in payment_results.json (647 boosted rounds, seed 1717).",
+    "known_limitations": [
+      "Per-payee precision is 0.911046, not the reported per-world median 0.994179: 1023 distinct payees and 11196 held payments, so the per-world number overstates precision at the payee level.",
+      "Payment ranking collapses under stress: test truth AP median 0.632033 falls to 0.070938, while the payee-risk feature alone keeps 0.543550 under stress against 0.922653 on test.",
+      "Payees at another bank have no payee score: 0.617159 of test payments carry a NaN payee risk, and receiver_at_other_bank accounts for 1115957 of the NaN rows.",
+      "Simulator new-account cleanness: the simulator opens accounts itself and records the opening minute (world/bank_connectors.py:344-369), so a new account here has no prior history; a mule's fresh account opened with a borrowed identity is not modelled, so new-account detection is cleaner than reality.",
+      "Capacity rounds to one per bank-day: recall at capacity uses max(1, ceil(active_accounts * capacity_pct / 100)) per bank-day (evaluation/level17_scoring.py:527), so on a bank-day with few active accounts a single review decision is the whole capacity."
+    ],
+    "leakage": {
+      "item_status": {
+        "id_leak": "fail",
+        "label_dependent_inputs_by_arrival": "pass",
+        "split_isolation": "pass",
+        "temporal_cutoff": "pass",
+        "truth_and_simulator_only_fields": "pass"
+      },
+      "run_a_check_6b": {
+        "average_precision_over_base_rate": 10.415125553116175,
+        "max_ap_over_base_rate": 2.0,
+        "status": "fail",
+        "validation_average_precision": 0.6377814058283728,
+        "validation_base_rate": 0.06123607464698787
+      },
+      "status": "fail"
+    },
+    "metrics": {
+      "feature_truth_ap_payee_risk": {
+        "stress": {
+          "median": 0.5435498675272497,
+          "p10": 0.32443482273658947,
+          "p90": 0.8114507881207781,
+          "worlds": 119
+        },
+        "test": {
+          "median": 0.9226525197880212,
+          "p10": 0.7308858249302789,
+          "p90": 0.9929159977316449,
+          "worlds": 119
+        }
+      },
+      "hold_rate": {
+        "stress": {
+          "median": 0.028381564386260896,
+          "p10": 0.007690030929544584,
+          "p90": 0.06404073823427602,
+          "worlds": 120
+        },
+        "test": {
+          "median": 0.005003022362144852,
+          "p10": 0.0013742593823383772,
+          "p90": 0.011878595506298321,
+          "worlds": 120
+        }
+      },
+      "nan_payee_risk_share": {
+        "stress": 0.6103295639551499,
+        "test": 0.6171591157091434
+      },
+      "nan_reason_counts": {
+        "stress": {
+          "no_prior_account_day": 32230,
+          "receiver_at_other_bank": 2775705,
+          "receiver_bank_unknown": 314,
+          "scored": 1792952
+        },
+        "test": {
+          "no_prior_account_day": 23468,
+          "receiver_at_other_bank": 1115957,
+          "receiver_bank_unknown": 213,
+          "scored": 706949
+        }
+      },
+      "other_bank_truth_ap": {
+        "median": 0.467390559057543,
+        "p10": 0.19556894865304636,
+        "p90": 0.749861317039495,
+        "stress": {
+          "median": 0.08006363374243769,
+          "p10": 0.00990589816640219,
+          "p90": 0.3960972296137525,
+          "worlds": 120
+        },
+        "worlds": 120
+      },
+      "payee_precision": {
+        "distinct_payees": 1023,
+        "held_payments": 11196,
+        "payee_precision": 0.9110459433040078,
+        "payees_for_half": 115,
+        "payees_for_half_share": 0.11241446725317693,
+        "per_payment_precision": 0.942390139335477,
+        "positive_payees": 932,
+        "reported_per_world_precision_median": 0.9941791044776119
+      },
+      "precision": {
+        "stress": {
+          "median": 0.09381740143214562,
+          "p10": 0.009400869042662036,
+          "p90": 0.4128421740195415,
+          "worlds": 120
+        },
+        "test": {
+          "median": 0.9941791044776119,
+          "p10": 0.8721212121212121,
+          "p90": 1.0,
+          "worlds": 120
+        }
+      },
+      "recall": {
+        "stress": {
+          "median": 0.17482998395354168,
+          "p10": 0.05433673469387755,
+          "p90": 0.4364482435848271,
+          "worlds": 120
+        },
+        "test": {
+          "median": 0.247117435203129,
+          "p10": 0.09131490934694597,
+          "p90": 0.48767475090754614,
+          "worlds": 120
+        }
+      },
+      "same_bank_truth_ap": {
+        "stress": {
+          "median": 0.10308689439120552,
+          "p10": 0.015903912381406184,
+          "p90": 0.5578822236299779,
+          "worlds": 119
+        },
+        "test": {
+          "median": 0.8764378360928944,
+          "p10": 0.5609060995847125,
+          "p90": 0.9694659918158891,
+          "worlds": 119
+        }
+      },
+      "truth_ap": {
+        "stress": {
+          "median": 0.07093756449237654,
+          "p10": 0.015869576475501364,
+          "p90": 0.35374211033816283,
+          "worlds": 120
+        },
+        "test": {
+          "median": 0.6320326905308613,
+          "p10": 0.3858057224904785,
+          "p90": 0.7882695781562038,
+          "worlds": 120
+        }
+      }
+    },
+    "model": "mule_payment_xgb",
+    "not_intended_for": [
+      "Blocking payments automatically or any decision without a human reviewer",
+      "Ranking payments whose receiver is at another bank, which carry no payee-risk score",
+      "Production evidence while leakage checks id_leak and 6b are recorded as failed",
+      "Payments from banks or behaviours outside the simulator's rules"
+    ],
+    "onnx": {
+      "file": "mule_payment_xgb.onnx",
+      "parity": {
+        "test": {
+          "max_abs_diff": 5.364418029785156e-7,
+          "mean_abs_diff": 3.7679821252822874e-8,
+          "nan_rows": 20000,
+          "rows": 20000,
+          "rows_over_tolerance": 0
+        },
+        "validation": {
+          "max_abs_diff": 4.470348358154297e-7,
+          "mean_abs_diff": 3.724137277458794e-8,
+          "nan_rows": 20000,
+          "rows": 20000,
+          "rows_over_tolerance": 0
+        }
+      },
+      "sha256": "7eb86c0e582c49a008fd89858cc220f4936ad8b90ac8566b720ae7aad20371d0"
+    },
+    "threshold": 0.20182080343366296,
+    "training_data": {
+      "description": "Payment rows generated by the ashFALL interactive simulator. The frozen payment model is scored without re-training; the test check uses the hidden receiver role as truth (A-060a).",
+      "label": "SIMULATED"
+    }
+  },
+  "manifest": {
+    "generator": "scripts/level18_model_cards.py",
+    "git_hash": "3d3a64c090c4e3e424d92de82be0b5e0dc32ab4b",
+    "sources": {
+      "reports/level_18/console/calibration.json": "b35ef1dc49a4fc3d78cb6e51fb2d5fde6ee2f1936d209ab39dd0ebffbdfbdf4f",
+      "reports/level_18/console/onnx_parity.json": "fdb0cec298c6d6e2f34e7edf1bd628af19d470efa1284ee807092a5956ad821d",
+      "reports/level_18/console/payment_results.json": "91d2fca6570f8e610b20c09779e7cac73bc5b1f2abb069fb5e706cb7dc2b5e4c"
+    }
+  },
+  "simulated": true
+}
