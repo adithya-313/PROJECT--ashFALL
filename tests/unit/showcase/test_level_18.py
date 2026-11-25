@@ -148,7 +148,7 @@ def test_check_18_5_reports_the_calibration_and_its_chart() -> None:
     """Checks 18-5 reports both models' ECEs and attaches the four-series reliability scatter chart."""
     outcome = asyncio.run(level_18_checks.check_18_5_calibration(None))
     assert outcome.key_number == (
-        "account ECE 0.127137 to 0.001843, payment 0.012284 to 0.012821 (1395478 and 1846587 rows)"
+        "account ECE 0.127137 to 0.001843, payment 0.017176 to 0.013593 (1395478 and 1846587 rows)"
     )
     assert outcome.evidence["summaries"]["account"]["calibrated"]["ece"] == pytest.approx(0.0018426116879839516)
     chart = outcome.chart
@@ -167,7 +167,7 @@ def test_check_18_6_reports_the_onnx_parity() -> None:
     """Checks 18-6 reports both models' validation and test parity within the file's tolerance."""
     outcome = asyncio.run(level_18_checks.check_18_6_onnx_parity(None))
     assert outcome.key_number == (
-        "account 1.788418e-07 / 1.678902e-07, payment 4.470348e-07 / 5.364418e-07 "
+        "account 1.788418e-07 / 1.678902e-07, payment 2.980232e-07 / 2.682209e-07 "
         "vs 1.000000e-05; 0 rows over"
     )
     assert outcome.evidence["parity"]["account"]["validation"]["max_abs_diff"] == pytest.approx(
