@@ -120,10 +120,13 @@ def test_check_18_3_reports_the_hidden_depth_recall() -> None:
     assert outcome.evidence["world_cards_checked"] == 120
 
 
-def test_check_18_4_reports_all_seven_leakage_checks() -> None:
-    """Checks 18-4 keeps the six passes, the one 6b failure and the not-run check 4."""
+def test_check_18_4_reports_every_leakage_check() -> None:
+    """Checks 18-4 requires all seven published statuses plus check 4 and shows 6b as the A-051 finding."""
     outcome = asyncio.run(level_18_checks.check_18_4_leakage(None))
-    assert outcome.key_number == "7 checks: 6 pass, 1 fail (check_6b 10.415126 > 2.000000); check 4 not run"
+    assert outcome.key_number == (
+        "8 recorded: 7 pass, check_6b FINDING — documented limitation (A-051) 10.415126 > 2.000000; "
+        "check 4 (trivial world) pass 0.028270 < 0.900000"
+    )
     assert [entry["status"] for entry in outcome.evidence["checks"]] == [
         "pass",
         "pass",
@@ -133,6 +136,11 @@ def test_check_18_4_reports_all_seven_leakage_checks() -> None:
         "fail",
         "pass",
     ]
+    assert outcome.evidence["check_4"]["status"] == "pass"
+    assert outcome.evidence["check_4"]["best_direction_ap"] == pytest.approx(0.028269987287482604)
+    assert outcome.evidence["check_4_source"] == (
+        "runs/full/run_a320_stage5c/final/45c496799170/leakage_checks.json:checks.trivial_world"
+    )
     assert outcome.evidence["check_6b"]["average_precision_over_base_rate"] == pytest.approx(10.415125553116175)
 
 

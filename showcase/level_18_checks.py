@@ -65,6 +65,9 @@ CALIBRATION_SERIES = (
 PARITY_SPLITS = ("validation", "test")
 PARITY_MODELS = ("account", "payment")
 BINS_PER_SERIES = 10
+CHECK_4_NAME = "check_4"
+CHECK_4_SOURCE = "runs/full/run_a320_stage5c/final/45c496799170/leakage_checks.json:checks.trivial_world"
+RECORDED_STATUSES = ("pass", "fail")
 
 
 def _mapping(value: Any, where: str) -> dict[str, Any]:
@@ -301,12 +304,13 @@ async def check_18_3_hidden_depth(workspace: Any) -> CheckOutcome:
 
 async def check_18_4_leakage(workspace: Any) -> CheckOutcome:
     """
-    WHAT: Reads the leakage console and checks all seven published outcomes in their fixed order,
-    including that the one recorded failure is check_6b and that its average precision over the base
-    rate really exceeds its own limit, and that check 4 is recorded as not run.
+    WHAT: Reads the leakage console and checks the seven published outcomes in their fixed order plus
+    check 4's recorded trivial-world result. Every record must carry a pass or fail status; the only
+    one that does not pass is check_6b, shown as the documented A-051 finding with its numbers, and
+    check 4 must pass with its best single feature below the threshold.
 
-    WHY: A leakage report is only honest if a failure stays visible and a missing check is named
-    instead of being dropped; the showcase must show the failure, not work around it.
+    WHY: A leakage report is only honest if a failure stays visible, a check that ran is not reported
+    as not run, and a missing or unrecorded outcome fails the check instead of being dropped.
     """
     data = load_console("18-4")
     checks = _sequence(data.get("checks"), "leakage:data.checks")
@@ -321,9 +325,17 @@ async def check_18_4_leakage(workspace: Any) -> CheckOutcome:
     if tuple(names) != EXPECTED_LEAKAGE_CHECKS:
         raise ValueError(f"leakage:data.checks is {names}, expected {list(EXPECTED_LEAKAGE_CHECKS)}")
 
-    failures = [name for name, status in statuses.items() if status == "fail"]
+    trivial = _mapping(data.get("trivial_world"), "leakage:data.trivial_world")
+    check_4_status = _text(trivial.get("status"), "leakage:data.trivial_world.status")
+
+    recorded = {**statuses, CHECK_4_NAME: check_4_status}
+    unrecorded = [name for name, status in recorded.items() if status not in RECORDED_STATUSES]
+    if unrecorded:
+        raise ValueError(f"leakage:{unrecorded[0]} has no recorded pass or fail status; not recorded: {unrecorded}")
+
+    failures = [name for name, status in recorded.items() if status == "fail"]
     if failures != ["check_6b"]:
-        raise ValueError(f"leakage:data.checks has failures {failures}, expected exactly ['check_6b']")
+        raise ValueError(f"leakage has failures {failures}, expected exactly ['check_6b']")
 
     six_b = _mapping(checks[5].get("detail"), "leakage:check_6b.detail")
     observed = _number(
@@ -333,35 +345,23 @@ async def check_18_4_leakage(workspace: Any) -> CheckOutcome:
     if not observed > limit:
         raise ValueError(f"leakage:check_6b: {observed} over the base rate does not exceed its limit {limit}")
 
-    trivial = _mapping(data.get("trivial_world"), "leakage:data.trivial_world")
-    if _text(trivial.get("status"), "leakage:trivial_world.status") != "pass":
-        raise ValueError(f"leakage:trivial_world.status is {trivial.get('status')!r}, expected 'pass'")
     best = _number(trivial.get("best_direction_ap"), "leakage:trivial_world.best_direction_ap")
     threshold = _number(trivial.get("fail_threshold"), "leakage:trivial_world.fail_threshold")
     if not best < threshold:
         raise ValueError(f"leakage:trivial_world: best feature {best} reaches the fail threshold {threshold}")
 
-    section_23 = _mapping(data.get("section_23_checks_4_to_7"), "leakage:data.section_23_checks_4_to_7")
-    if _text(section_23.get("status"), "leakage:section_23_checks_4_to_7.status") != "not run":
-        raise ValueError(f"leakage:section_23_checks_4_to_7.status is {section_23.get('status')!r}, expected 'not run'")
-    not_implemented = _mapping(data.get("not_implemented"), "leakage:data.not_implemented")
-    check_4 = _mapping(not_implemented.get("check_4"), "leakage:data.not_implemented.check_4")
-    if _text(check_4.get("status"), "leakage:not_implemented.check_4.status") != "not run":
-        raise ValueError(f"leakage:not_implemented.check_4.status is {check_4.get('status')!r}, expected 'not run'")
-
-    passed = sum(1 for status in statuses.values() if status == "pass")
+    passed = sum(1 for status in recorded.values() if status == "pass")
     key_number = (
-        f"{len(names)} checks: {passed} pass, {len(failures)} fail "
-        f"(check_6b {observed:.6f} > {limit:.6f}); check 4 not run"
+        f"{len(recorded)} recorded: {passed} pass, check_6b FINDING — documented limitation (A-051) "
+        f"{observed:.6f} > {limit:.6f}; check 4 (trivial world) pass {best:.6f} < {threshold:.6f}"
     )
     return CheckOutcome(
         key_number=key_number,
         evidence={
             "checks": [{"check": name, "status": statuses[name]} for name in names],
+            "check_4": trivial,
+            "check_4_source": CHECK_4_SOURCE,
             "check_6b": six_b,
-            "trivial_world": trivial,
-            "section_23_checks_4_to_7": section_23,
-            "not_implemented": not_implemented,
         },
     )
 

@@ -28,9 +28,11 @@ WHAT_YOU_SAW = (
     "across 120 test worlds, above both the rules (0.368112) and rules-and-anomaly (0.375000) baselines, "
     "with p10 0.477045 and p90 0.833333. The held-out device-rotation and slow-drip families keep their "
     "world counts and both show better recall at the cut than at capacity. Recall by hidden depth 1 to 5 "
-    "keeps its spreads and world counts. The leakage page shows all seven published checks: six pass and "
-    "the payment check_6b fails with an average precision over the base rate of 10.415126 against its "
-    "2.000000 limit, and check 4 is recorded as not run, not hidden. Calibration shows the reliability "
+    "keeps its spreads and world counts. The leakage page shows all seven published checks plus check 4's "
+    "recorded trivial-world pass: seven pass and the payment check_6b is a FINDING — a documented "
+    "limitation (A-051) — with an average precision over the base rate of 10.415126 against its 2.000000 "
+    "limit; check 4 passes with its best single feature at 0.028270 against the 0.900000 threshold. "
+    "Calibration shows the reliability "
     "bins before and after isotonic: the account ECE falls from 0.127137 to 0.001843, while the payment "
     "ECE stays close (0.012284 to 0.012821) and is shown as recorded. The ONNX files match the native "
     "models within the 1e-5 tolerance with zero rows over it, and the merge proof keeps zero decision "
@@ -90,11 +92,14 @@ def get_checks(quick: bool = False) -> list[CheckDefinition]:
         d(
             "18-4 leakage: all seven published checks, including the recorded 6b failure",
             "negative",
-            "All seven leakage outcomes are present in their fixed order; the only failure is check_6b and its "
-            "average precision over the base rate really exceeds its limit; check 4 is recorded as not run.",
+            "All seven published leakage outcomes and check 4 are present with a recorded pass or fail status; "
+            "the only one that does not pass is check_6b, shown as the documented A-051 finding with its "
+            "numbers, and a missing or not-run record fails the check.",
             c.check_18_4_leakage,
-            "A leakage outcome was removed, reordered or turned into a pass.",
-            "reports/level_18/console/leakage.json, docs/research/amendments.md (A-057)",
+            "A leakage record was removed, reordered or left not run, or check 4's record was dropped.",
+            "reports/level_18/console/leakage.json (data.checks, data.trivial_world), "
+            "runs/full/run_a320_stage5c/final/45c496799170/leakage_checks.json:checks.trivial_world, "
+            "docs/research/amendments.md (A-051, A-065a)",
             "b",
         ),
         d(
