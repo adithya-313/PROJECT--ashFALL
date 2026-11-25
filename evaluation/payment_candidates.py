@@ -94,6 +94,9 @@ CANDIDATE_SEGMENTED = {"C1": False, "C2": True, "C3": True}
 TIE_WINDOW = 0.002
 TIE_PRIORITY = ("C1", "C3", "C2")
 V1_VALIDATION_AP_FLOOR = 0.4659
+# Reloading the CUDA-frozen v1 booster on cpu reproduces its validation AP to ~1.6e-8, so the
+# sanity guard below allows prediction noise while still catching a wrong booster or wrong rows.
+V1_REPRODUCTION_TOLERANCE = 1e-6
 
 PRESENT = "present"
 ABSENT = "nan"
@@ -649,13 +652,14 @@ def measure_v1_validation(
     scores = predict_scores(model, validation_matrix)
     truth_ap = pooled_truth_ap(scores, validation_roles)
     recorded = float(metadata["validation_truth_ap"])
-    if not math.isclose(truth_ap, recorded, rel_tol=0.0, abs_tol=1e-12):
+    if not math.isclose(truth_ap, recorded, rel_tol=0.0, abs_tol=V1_REPRODUCTION_TOLERANCE):
         raise ValueError(f"v1 validation truth AP {truth_ap} does not reproduce its recorded {recorded}")
     world_rows = world_truth_ap(world_ids, scores, truth_labels(validation_roles))
     return {
         "model_dir": str(model_dir),
         "artifacts": {name: _sha256_file(model_dir / name) for name in ("frozen_model.json", "feature_order.yaml")},
         "validation_truth_ap": truth_ap,
+        "recorded_validation_truth_ap": recorded,
         "validation_worlds": world_rows,
         "validation_p10": world_p10(world_rows),
     }
