@@ -44,6 +44,7 @@ from decisions.mule_account_model import predict_account_days
 from decisions.pu_learning import PUBaggedAccountModel
 from evaluation.dataset_truth_join import _world_entries
 from evaluation.level17_scoring import GENUINE_ROLES, MULE_ROLES, one_row_per_account_day
+from evaluation.payment_candidates import load_candidate_model, verify_candidate_artifacts
 from evaluation.payment_model import TARGET, build_matrix, load_feature_order, load_split_rows, predict_scores
 from evaluation.payment_oof_risk import (
     _CommitSampler,
@@ -58,17 +59,16 @@ from evaluation.payment_test_score import (
     score_split,
     validate_scoring_split,
     verify_booster_rounds,
-    verify_frozen_artifacts,
 )
 from evaluation.reason_codes import verify_account_checkpoint
 from evaluation.truth import load_truth
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_MODEL_DIR = REPO_ROOT / "runs" / "full" / "payment_model_v1"
+DEFAULT_CANDIDATE_DIR = REPO_ROOT / "runs" / "full" / "payment_model_v2" / "C1"
 DEFAULT_OOF_ROOT = REPO_ROOT / "runs" / "full" / "payment_oof"
 DEFAULT_TRUTH_ROOT = REPO_ROOT / "runs" / "full" / "truth"
-DEFAULT_SCORING_RESULT = DEFAULT_MODEL_DIR / "test_score" / "result.json"
-DEFAULT_OUT_ROOT = REPO_ROOT / "runs" / "full" / "level18b" / "calibration"
+DEFAULT_SCORING_RESULT = REPO_ROOT / "runs" / "full" / "payment_model_v2" / "test_score" / "result.json"
+DEFAULT_OUT_ROOT = REPO_ROOT / "runs" / "full" / "level18c" / "calibration"
 
 AMENDMENTS = ("A-060", "A-060a")
 BINS = 10
@@ -718,25 +718,25 @@ def run(
     if list(account_model.member_seeds) != list(range(recipe.seed, recipe.seed + recipe.n_bags)):
         raise ValueError("loaded account ensemble member seeds are not the frozen seed block")
 
-    model_sha256, feature_file_sha256 = verify_frozen_artifacts(DEFAULT_MODEL_DIR)
-    feature_order = load_feature_order(DEFAULT_MODEL_DIR / "feature_order.yaml")
+    metadata = verify_candidate_artifacts(DEFAULT_CANDIDATE_DIR)
+    feature_order = load_feature_order(DEFAULT_CANDIDATE_DIR / "feature_order.yaml")
     features = feature_order["features"]
     encodings = feature_order["categorical_encodings"]
     if not isinstance(features, list) or not isinstance(encodings, dict):
-        raise ValueError(f"{DEFAULT_MODEL_DIR} holds malformed feature-order data")
-    metadata = json.loads((DEFAULT_MODEL_DIR / "model_metadata.json").read_text(encoding="utf-8"))
-    if (
-        not isinstance(metadata, dict)
-        or feature_order["feature_sha256"] != metadata.get("feature_sha256")
-        or len(features) != metadata.get("feature_count")
-    ):
-        raise ValueError("frozen feature order does not match model_metadata.json")
-    payment_model = xgboost.XGBClassifier()
-    payment_model.load_model(str(DEFAULT_MODEL_DIR / "frozen_model.json"))
+        raise ValueError(f"{DEFAULT_CANDIDATE_DIR} holds malformed feature-order data")
+    if feature_order["feature_sha256"] != metadata["feature_sha256"] or len(features) != metadata["feature_count"]:
+        raise ValueError("candidate feature order does not match model_metadata.json")
+    if metadata["structure"] != "all":
+        raise ValueError(
+            f"{DEFAULT_CANDIDATE_DIR} holds the {metadata['structure']!r} structure, not C1's single model"
+        )
+    payment_model = load_candidate_model(DEFAULT_CANDIDATE_DIR).models["all"]
     booster = payment_model.get_booster()
     if booster.num_features() != len(features):
         raise ValueError(f"frozen model takes {booster.num_features()} features but the order holds {len(features)}")
-    rounds = verify_booster_rounds(booster, metadata)
+    rounds = verify_booster_rounds(booster, {"best_params": metadata["best_params"]["all"]})
+    model_sha256 = metadata["artifacts"]["frozen_model.json"]
+    feature_file_sha256 = metadata["artifacts"]["feature_order.yaml"]
 
     sampler = _CommitSampler()
     with sampler:
@@ -838,15 +838,16 @@ def run(
                     "test": payment_test_diagnostics,
                 },
                 "model": {
-                    "path": str(DEFAULT_MODEL_DIR / "frozen_model.json"),
+                    "candidate": metadata["candidate"],
+                    "path": str(DEFAULT_CANDIDATE_DIR / "frozen_model.json"),
                     "sha256": model_sha256,
-                    "feature_order_path": str(DEFAULT_MODEL_DIR / "feature_order.yaml"),
+                    "feature_order_path": str(DEFAULT_CANDIDATE_DIR / "feature_order.yaml"),
                     "feature_order_file_sha256": feature_file_sha256,
                     "feature_sha256": feature_order["feature_sha256"],
                     "feature_count": len(features),
                     "rounds": rounds,
-                    "seed": metadata.get("seed"),
-                    "device": metadata.get("device"),
+                    "seed": metadata["seed"],
+                    "device": metadata["device"],
                 },
             },
         },
