@@ -185,7 +185,13 @@ def main() -> int:
     # A3b: C1 features without the eight payment-level features.
     keep_b = [index for index, name in enumerate(features) if name not in set(payment_features)]
     print("A3b no-payment-level fit", flush=True)
-    a3b = fit_and_score(train_matrix[:, keep_b], train_labels, [0] * len(keep_b), 1717, validation_matrix[:, keep_b])
+    a3b = fit_and_score(
+        train_matrix[:, keep_b],
+        train_labels,
+        monotone_vector([features[index] for index in keep_b]),
+        1717,
+        validation_matrix[:, keep_b],
+    )
     a3b.update(
         {
             "seed": 1717,
