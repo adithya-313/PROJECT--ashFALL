@@ -22,6 +22,11 @@ onnxruntime==1.24.2
 onnxmltools==1.16.0
 skl2onnx==1.20.0
 
+# lightgbm: the Level 18 audit compares the C1 payment recipe with an alternative learner
+# (A-068 item B4) in the dev environment. Same pin as requirements-ml.txt; keep them in step.
+# Not in requirements.txt: serving uses Triton (Level 19), not this package.
+lightgbm==4.7.0
+
 # pydantic: core/config.py imports it directly. It was only installed as a dependency of pydantic-settings and
 # fastapi, so it is declared here with the range those packages already require.
 pydantic>=2.7,<3
