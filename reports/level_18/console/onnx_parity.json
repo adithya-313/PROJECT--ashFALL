@@ -43,27 +43,27 @@
             "rows_over_tolerance": 0
           }
         },
-        "sha256": "e1823d5d35b930e16344ca2fe792f04ae726a10207459c6015ee95f0db2bb4ef"
+        "sha256": "44b8f80efb01dad468b806b008eb4c7ec6111d0fd10128787fca3903e27d973a"
       },
       "payment": {
         "file": "mule_payment_xgb.onnx",
         "parity": {
           "test": {
-            "max_abs_diff": 5.364418029785156e-7,
-            "mean_abs_diff": 3.7679821252822874e-8,
+            "max_abs_diff": 2.682209014892578e-7,
+            "mean_abs_diff": 3.505332861095667e-8,
             "nan_rows": 20000,
             "rows": 20000,
             "rows_over_tolerance": 0
           },
           "validation": {
-            "max_abs_diff": 4.470348358154297e-7,
-            "mean_abs_diff": 3.724137277458794e-8,
+            "max_abs_diff": 2.980232238769531e-7,
+            "mean_abs_diff": 3.491193056106568e-8,
             "nan_rows": 20000,
             "rows": 20000,
             "rows_over_tolerance": 0
           }
         },
-        "sha256": "7eb86c0e582c49a008fd89858cc220f4936ad8b90ac8566b720ae7aad20371d0"
+        "sha256": "85e45e5579706a35563996cd60fc7fd67c6f8f1eb98c6ece065db4896a5c0266"
       }
     },
     "tolerances": {
@@ -76,9 +76,9 @@
   },
   "manifest": {
     "generator": "scripts/level18_console.py",
-    "git_hash": "1f406958215dcb680952350225edb58f50d3c6b2",
+    "git_hash": "c60d6138afb5bc03dd0da2cec995d0da73283baf",
     "sources": {
-      "runs/full/level18b/onnx/onnx_export.json": "74daf7687b4de63a2a8b280b9e2479669845181e291701f8c3f780656032b9dc"
+      "runs/full/level18c/onnx/onnx_export.json": "ba6bcea8a6f1b3b0f9916cdafa73bf7c75e498b6a0f9988cf6e1bf8c247d0309"
     }
   },
   "simulated": true
