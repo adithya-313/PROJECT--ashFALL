@@ -1053,3 +1053,16 @@ Rulings, fixed before any card value or gate exists:
 | Disclosure | Written AFTER the first CI run of the new job failed. It changes only the step's path setup: no threshold, card, card value, gate line, exit rule or `derived_from` changes, the gate keeps failing rather than skipping, and model v1's gate and job are still untouched. |
 | Results exist? | Yes: the four card files under `reports/level_18/model_cards/`, unchanged by this correction. Results are labelled SIMULATED. |
 
+## A-064b
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-25 |
+| Issue IDs | None |
+| Issue IDs v2 | None |
+| Files | `scripts/check.py`, `docs/research/amendments.md` |
+| What changed | `scripts/check.py` gains one step, `mule model quality gate` with `ci_job` `mule-model-quality-gate`, running exactly the CI job's command `python scripts/mule_model_quality_gate.py`, and the `Step` record gains an `env` mapping so a step can run under the variables its CI job sets; this step sets `PYTHONPATH` to the repository root. `run_step` passes `{**os.environ, **step.env}` to the subprocess. |
+| Why | The guard test `tests/unit/test_check_matches_ci.py` requires every job in `ci.yml` to have a step in `scripts/check.py`. Its first run with the new job failed in the `Fast tests (no Docker)` and `level-showcase` jobs of run 45526700070 with `AssertionError: These CI jobs have no step in scripts/check.py: ['mule-model-quality-gate']`. The local step needs the same `PYTHONPATH` its CI job sets, or it would fail locally for the same import reason A-064a fixed in CI. |
+| Disclosure | Written AFTER that CI failure and BEFORE the step was added. It adds no rule about the cards, the 14 thresholds, the gate's output or exit code, or model v1's gate; the new step runs the same gate and fails the same way locally. |
+| Results exist? | Yes: the four card files under `reports/level_18/model_cards/`, unchanged by this correction. Results are labelled SIMULATED. |
+
