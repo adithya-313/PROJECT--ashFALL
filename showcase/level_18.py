@@ -34,7 +34,7 @@ WHAT_YOU_SAW = (
     "limit; check 4 passes with its best single feature at 0.028270 against the 0.900000 threshold. "
     "Calibration shows the reliability "
     "bins before and after isotonic: the account ECE falls from 0.127137 to 0.001843, while the payment "
-    "ECE stays close (0.012284 to 0.012821) and is shown as recorded. The ONNX files match the native "
+    "ECE stays close (0.017176 to 0.013593) and is shown as recorded. The ONNX files match the native "
     "models within the 1e-5 tolerance with zero rows over it, and the merge proof keeps zero decision "
     "flips. The E1 re-weighting shows the xgboost median yield falling from 0.923077 measured to 0.272955 "
     "re-weighted, with a median inflation factor of 39.316691 over 118 of the 120 worlds."

@@ -51,6 +51,7 @@ from decisions.mule_account_model import (
 )
 from decisions.pu_learning import PUBaggedAccountModel
 from evaluation.level17_scoring import one_row_per_account_day
+from evaluation.payment_candidates import load_candidate_model, verify_candidate_artifacts
 from evaluation.payment_model import (
     KEY_COLUMNS,
     PAYEE_RISK,
@@ -73,7 +74,6 @@ from evaluation.payment_test_score import (
     attach_payee_risk,
     validate_scoring_split,
     verify_booster_rounds,
-    verify_frozen_artifacts,
 )
 from evaluation.reason_codes import (
     _SAMPLING_RULE,
@@ -87,9 +87,9 @@ from evaluation.reason_codes import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_MODEL_DIR = REPO_ROOT / "runs" / "full" / "payment_model_v1"
+DEFAULT_CANDIDATE_DIR = REPO_ROOT / "runs" / "full" / "payment_model_v2" / "C1"
 DEFAULT_OOF_ROOT = REPO_ROOT / "runs" / "full" / "payment_oof"
-DEFAULT_OUT_ROOT = REPO_ROOT / "runs" / "full" / "level18b" / "onnx"
+DEFAULT_OUT_ROOT = REPO_ROOT / "runs" / "full" / "level18c" / "onnx"
 DEFAULT_EXTRA_REPORTING = REPO_ROOT / "runs" / "full" / "run_a320_stage5c" / "extra_reporting.json"
 
 #: A-061 and A-061b fix these names, limits and the sampling constants reused from A-059.
@@ -802,27 +802,27 @@ def run(
     if tuple(account_model_feature_names()) != tuple(feature_names):
         raise ValueError("the frozen account recipe feature order differs from account_model_feature_names()")
 
-    model_sha256, feature_file_sha256 = verify_frozen_artifacts(DEFAULT_MODEL_DIR)
-    feature_order = load_feature_order(DEFAULT_MODEL_DIR / "feature_order.yaml")
+    metadata = verify_candidate_artifacts(DEFAULT_CANDIDATE_DIR)
+    feature_order = load_feature_order(DEFAULT_CANDIDATE_DIR / "feature_order.yaml")
     features = feature_order["features"]
     encodings = feature_order["categorical_encodings"]
     if not isinstance(features, list) or not isinstance(encodings, dict):
-        raise ValueError(f"{DEFAULT_MODEL_DIR} holds malformed feature-order data")
-    metadata = json.loads((DEFAULT_MODEL_DIR / "model_metadata.json").read_text(encoding="utf-8"))
-    if (
-        not isinstance(metadata, dict)
-        or feature_order["feature_sha256"] != metadata.get("feature_sha256")
-        or len(features) != metadata.get("feature_count")
-    ):
-        raise ValueError("frozen feature order does not match model_metadata.json")
-    payment_model = xgboost.XGBClassifier()
-    payment_model.load_model(str(DEFAULT_MODEL_DIR / "frozen_model.json"))
+        raise ValueError(f"{DEFAULT_CANDIDATE_DIR} holds malformed feature-order data")
+    if feature_order["feature_sha256"] != metadata["feature_sha256"] or len(features) != metadata["feature_count"]:
+        raise ValueError("candidate feature order does not match model_metadata.json")
+    if metadata["structure"] != "all":
+        raise ValueError(
+            f"{DEFAULT_CANDIDATE_DIR} holds the {metadata['structure']!r} structure, not C1's single model"
+        )
+    payment_model = load_candidate_model(DEFAULT_CANDIDATE_DIR).models["all"]
     payment_booster = payment_model.get_booster()
     if payment_booster.num_features() != len(features):
         raise ValueError(
             f"frozen model takes {payment_booster.num_features()} features but the order holds {len(features)}"
         )
-    payment_rounds = verify_booster_rounds(payment_booster, metadata)
+    payment_rounds = verify_booster_rounds(payment_booster, {"best_params": metadata["best_params"]["all"]})
+    model_sha256 = metadata["artifacts"]["frozen_model.json"]
+    feature_file_sha256 = metadata["artifacts"]["feature_order.yaml"]
     account_cut = load_account_cut()
 
     member_raws: list[dict[str, Any]] = []
@@ -967,16 +967,17 @@ def run(
                 },
             },
             "payment": {
+                "candidate": metadata["candidate"],
                 "model": {
-                    "path": str(DEFAULT_MODEL_DIR / "frozen_model.json"),
+                    "path": str(DEFAULT_CANDIDATE_DIR / "frozen_model.json"),
                     "sha256": model_sha256,
-                    "feature_order_path": str(DEFAULT_MODEL_DIR / "feature_order.yaml"),
+                    "feature_order_path": str(DEFAULT_CANDIDATE_DIR / "feature_order.yaml"),
                     "feature_order_file_sha256": feature_file_sha256,
                     "feature_sha256": feature_order["feature_sha256"],
                     "feature_count": len(features),
                     "rounds": payment_rounds,
-                    "seed": metadata.get("seed"),
-                    "device": metadata.get("device"),
+                    "seed": metadata["seed"],
+                    "device": metadata["device"],
                 },
                 "onnx": {
                     "path": str(out_root / PAYMENT_ONNX_NAME),

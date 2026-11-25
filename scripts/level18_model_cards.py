@@ -8,7 +8,7 @@
 #   including check 6b, ONNX parity and five known limitations stated plainly. No model is loaded or fitted,
 #   no row is scored and no other file is read.
 #
-# Rules: docs/research/amendments.md, A-064.
+# Rules: docs/research/amendments.md, A-064 and A-067.
 #
 # Usage:
 #   PYTHONPATH=<repo root> py -3.12 -B scripts/level18_model_cards.py
@@ -49,6 +49,14 @@ PAYMENT_MODEL = "mule_payment_xgb"
 ACCOUNT_SOURCES: tuple[str, ...] = (COMPARISON, HIDDEN_DEPTH, HELD_OUT_FAMILIES, CALIBRATION, LEAKAGE, ONNX_PARITY)
 PAYMENT_SOURCES: tuple[str, ...] = (PAYMENT_RESULTS, CALIBRATION, ONNX_PARITY)
 PARITY_SPLITS: tuple[str, ...] = ("validation", "test")
+PAYMENT_AGGREGATES: tuple[str, ...] = (
+    "truth_ap",
+    "precision",
+    "recall",
+    "hold_rate",
+    "same_bank_truth_ap",
+    "other_bank_truth_ap",
+)
 
 
 def _console(root: Path, rel_path: str) -> dict[str, Any]:
@@ -277,7 +285,7 @@ def _account_limitations(leakage: dict[str, Any]) -> list[str]:
     ]
 
 
-def _payment_limitations(metrics: dict[str, Any]) -> list[str]:
+def _payment_limitations(metrics: dict[str, Any], hold_share: float) -> list[str]:
     """State the five payment limitations plainly, embedding the published console numbers."""
     payee = metrics["payee_precision"]
     truth_ap = metrics["truth_ap"]
@@ -287,7 +295,7 @@ def _payment_limitations(metrics: dict[str, Any]) -> list[str]:
     return [
         (
             f"Per-payee precision is {_fmt(payee['payee_precision'])}, not the reported per-world median "
-            f"{_fmt(payee['reported_per_world_precision_median'])}: {payee['distinct_payees']} distinct payees "
+            f"{_fmt(metrics['precision']['test']['median'])}: {payee['distinct_payees']} distinct payees "
             f"and {payee['held_payments']} held payments, so the per-world number overstates precision at the "
             "payee level."
         ),
@@ -295,7 +303,8 @@ def _payment_limitations(metrics: dict[str, Any]) -> list[str]:
             f"Payment ranking collapses under stress: test truth AP median {_fmt(truth_ap['test']['median'])} "
             f"falls to {_fmt(truth_ap['stress']['median'])}, while the payee-risk feature alone keeps "
             f"{_fmt(feature_ap['stress']['median'])} under stress against {_fmt(feature_ap['test']['median'])} "
-            "on test."
+            f"on test, and the stress hold rate {_fmt(metrics['hold_rate']['stress']['median'])} overshoots the "
+            f"{_fmt(hold_share)} target."
         ),
         (
             f"Payees at another bank have no payee score: {_fmt(nan_share)} of test payments carry a NaN payee "
@@ -421,8 +430,50 @@ def _payment_card(documents: dict[str, dict[str, Any]]) -> dict[str, Any]:
         "frozen_model",
     )
     hold_share = _number(_entry(payment, "hold_share", PAYMENT_RESULTS), f"{PAYMENT_RESULTS}:hold_share")
+    previous = _mapping(_entry(payment, "previous_version", PAYMENT_RESULTS), f"{PAYMENT_RESULTS}:previous_version")
+    previous_splits = _mapping(_entry(previous, "splits", "previous_version"), "previous_version.splits")
+    previous_aggregates = {
+        split: _mapping(
+            _entry(
+                _mapping(_entry(previous_splits, split, "previous_version.splits"), f"previous_version.splits.{split}"),
+                "aggregate",
+                f"previous_version.splits.{split}",
+            ),
+            f"previous_version.splits.{split}.aggregate",
+        )
+        for split in ("test", "stress")
+    }
+    previous_metrics = {
+        split: {
+            name: _spread(
+                _mapping(
+                    _entry(previous_aggregates[split], name, f"previous_version.splits.{split}.aggregate"),
+                    f"previous_version.splits.{split}.aggregate.{name}",
+                ),
+                f"previous_version.splits.{split}.aggregate.{name}",
+            )
+            for name in PAYMENT_AGGREGATES
+        }
+        for split in ("test", "stress")
+    }
+    previous_version = {
+        "version": _text(_entry(previous, "version", "previous_version"), "previous_version.version"),
+        "git_hash": _text(_entry(previous, "git_hash", "previous_version"), "previous_version.git_hash"),
+        "threshold": _number(_entry(previous, "threshold", "previous_version"), "previous_version.threshold"),
+        "hold_share": _number(_entry(previous, "hold_share", "previous_version"), "previous_version.hold_share"),
+        "frozen_model": _flat(
+            _mapping(_entry(previous, "frozen_model", "previous_version"), "previous_version.frozen_model"),
+            "previous_version.frozen_model",
+        ),
+        "metrics": previous_metrics,
+        "payee_precision": _flat(
+            _mapping(_entry(previous, "payee_precision", "previous_version"), "previous_version.payee_precision"),
+            "previous_version.payee_precision",
+        ),
+    }
     return {
         "model": PAYMENT_MODEL,
+        "version": _text(_entry(payment, "version", PAYMENT_RESULTS), f"{PAYMENT_RESULTS}:version"),
         "intended_use": (
             "Rank same-bank incoming payments for human review at the frozen hold share "
             f"{hold_share!r} and the committed threshold, using the frozen xgboost payment model recorded in "
@@ -444,11 +495,12 @@ def _payment_card(documents: dict[str, dict[str, Any]]) -> dict[str, Any]:
         "threshold": _number(_entry(payment, "threshold", PAYMENT_RESULTS), f"{PAYMENT_RESULTS}:threshold"),
         "hold_share": hold_share,
         "frozen_model": frozen,
+        "previous_version": previous_version,
         "metrics": metrics,
         "calibration": _calibration(documents[CALIBRATION], "payment"),
         "leakage": _payment_leakage(payment),
         "onnx": _onnx(documents[ONNX_PARITY], "payment"),
-        "known_limitations": _payment_limitations(metrics),
+        "known_limitations": _payment_limitations(metrics, hold_share),
     }
 
 
@@ -696,6 +748,49 @@ def _payment_markdown(data: dict[str, Any], git_hash: str, root: Path) -> str:
     for split, reasons in metrics["nan_reason_counts"].items():
         for reason, count in reasons.items():
             lines.append(f"| {split} | {reason} | {count} |")
+    previous = data["previous_version"]
+    lines.extend(
+        [
+            "",
+            "## Previous version (v1)",
+            "",
+            f"Version {previous['version']} (git commit `{previous['git_hash']}`): threshold "
+            f"{previous['threshold']!r}, hold share {previous['hold_share']!r}, "
+            f"{previous['frozen_model']['rounds']} boosted rounds, seed {previous['frozen_model']['seed']}.",
+            "",
+            "### Test split",
+            "",
+        ]
+    )
+    lines.extend(
+        _spread_rows(
+            "metric",
+            {
+                "truth AP": previous["metrics"]["test"]["truth_ap"],
+                "precision": previous["metrics"]["test"]["precision"],
+                "recall": previous["metrics"]["test"]["recall"],
+                "hold rate": previous["metrics"]["test"]["hold_rate"],
+                "same-bank truth AP": previous["metrics"]["test"]["same_bank_truth_ap"],
+                "other-bank truth AP": previous["metrics"]["test"]["other_bank_truth_ap"],
+            },
+        )
+    )
+    lines.extend(["", "### Stress split", ""])
+    lines.extend(
+        _spread_rows(
+            "metric",
+            {
+                "truth AP": previous["metrics"]["stress"]["truth_ap"],
+                "precision": previous["metrics"]["stress"]["precision"],
+                "recall": previous["metrics"]["stress"]["recall"],
+                "hold rate": previous["metrics"]["stress"]["hold_rate"],
+                "same-bank truth AP": previous["metrics"]["stress"]["same_bank_truth_ap"],
+                "other-bank truth AP": previous["metrics"]["stress"]["other_bank_truth_ap"],
+            },
+        )
+    )
+    lines.extend(["", "### Payee precision", "", "| measure | value |", "| --- | --- |"])
+    lines.extend(f"| {key} | {_fmt(value)} |" for key, value in previous["payee_precision"].items())
     lines.extend(
         [
             "",

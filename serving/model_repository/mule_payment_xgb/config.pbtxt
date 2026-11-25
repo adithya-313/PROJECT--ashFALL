@@ -2,9 +2,9 @@
 # Purpose: Tells Triton Inference Server how to serve the Level 18 frozen payment model exported to ONNX.
 #
 # The model file lives next to this file at mule_payment_xgb/1/model.onnx ("1" is the model version). It is the
-# export of runs/full/payment_model_v1/frozen_model.json from runs/full/level18b/onnx/mule_payment_xgb.onnx
-# (sha256 7eb86c0e582c49a008fd89858cc220f4936ad8b90ac8566b720ae7aad20371d0); *.onnx is gitignored, so the file is
-# copied into place, not committed.
+# export of runs/full/payment_model_v2/C1/frozen_model.json from runs/full/level18c/onnx/mule_payment_xgb.onnx
+# (sha256 85e45e5579706a35563996cd60fc7fd67c6f8f1eb98c6ece065db4896a5c0266); *.onnx is gitignored, so the file is
+# copied into place, not committed. The v1 export is kept at serving/model_archive/mule_payment_xgb_v1/1/model.onnx.
 
 # The name clients use to ask for this model. It must match the folder name (mule_payment_xgb).
 name: "mule_payment_xgb"
@@ -38,7 +38,7 @@ input [
 # What comes out.
 #   label         - the predicted class per row (0 or 1), a 64-bit integer.
 #   probabilities - [P(0), P(1)]; column 1 is the RAW frozen-model probability. The Level 18 isotonic calibrator
-#                   (runs/full/level18b/calibration/payment_isotonic.json) is applied afterwards, in the client,
+#                   (runs/full/level18c/calibration/payment_isotonic.json) is applied afterwards, in the client,
 #                   not by Triton.
 output [
   {

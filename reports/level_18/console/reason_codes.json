@@ -108,83 +108,83 @@
           "codes": [
             {
               "code": "PAYMENT_LEVEL",
-              "first": 10876,
+              "first": 11688,
               "group": "payment_level",
               "plain_reason": "payment level",
-              "rows": 16504,
-              "share": 0.8252
-            },
-            {
-              "code": "PAYEE_RISK",
-              "first": 1248,
-              "group": "payee_risk",
-              "plain_reason": "payee risk",
-              "rows": 7585,
-              "share": 0.37925
-            },
-            {
-              "code": "OUTFLOW",
-              "first": 2104,
-              "group": "outflow",
-              "plain_reason": "outflow",
-              "rows": 7449,
-              "share": 0.37245
+              "rows": 15776,
+              "share": 0.7888
             },
             {
               "code": "NETWORK",
-              "first": 2322,
+              "first": 2300,
               "group": "network",
               "plain_reason": "network",
-              "rows": 6945,
-              "share": 0.34725
+              "rows": 8302,
+              "share": 0.4151
             },
             {
               "code": "ROUTINE_LIFE",
-              "first": 2827,
+              "first": 3625,
               "group": "routine_life",
               "plain_reason": "routine life",
-              "rows": 6007,
-              "share": 0.30035
+              "rows": 7754,
+              "share": 0.3877
             },
             {
               "code": "BALANCE_PATTERN",
-              "first": 291,
+              "first": 1211,
               "group": "balance_pattern",
               "plain_reason": "balance pattern",
-              "rows": 3994,
-              "share": 0.1997
+              "rows": 6169,
+              "share": 0.30845
             },
             {
-              "code": "LIFECYCLE",
-              "first": 152,
-              "group": "lifecycle",
-              "plain_reason": "lifecycle",
-              "rows": 1649,
-              "share": 0.08245
+              "code": "OUTFLOW",
+              "first": 804,
+              "group": "outflow",
+              "plain_reason": "outflow",
+              "rows": 4904,
+              "share": 0.2452
             },
             {
               "code": "CONTROL",
-              "first": 159,
+              "first": 158,
               "group": "control",
               "plain_reason": "control",
-              "rows": 1628,
-              "share": 0.0814
+              "rows": 1391,
+              "share": 0.06955
+            },
+            {
+              "code": "LIFECYCLE",
+              "first": 18,
+              "group": "lifecycle",
+              "plain_reason": "lifecycle",
+              "rows": 764,
+              "share": 0.0382
+            },
+            {
+              "code": "PAYEE_RISK",
+              "first": 126,
+              "group": "payee_risk",
+              "plain_reason": "payee risk",
+              "rows": 603,
+              "share": 0.03015
             },
             {
               "code": "INFLOW",
-              "first": 19,
+              "first": 70,
               "group": "inflow",
               "plain_reason": "inflow",
-              "rows": 344,
-              "share": 0.0172
+              "rows": 539,
+              "share": 0.02695
             },
             {
               "code": "REGION",
-              "first": 2,
+              "first": 0,
               "group": "region",
               "plain_reason": "region",
-              "rows": 20,
-              "share": 0.001
+              "rows": 1,
+              "share": 0.00005
             },
             {
               "code": "INTELLIGENCE",
@@ -205,10 +205,10 @@
   },
   "manifest": {
     "generator": "scripts/level18_console.py",
-    "git_hash": "1f406958215dcb680952350225edb58f50d3c6b2",
+    "git_hash": "c60d6138afb5bc03dd0da2cec995d0da73283baf",
     "sources": {
-      "runs/full/level18b/reason_codes/account_model.json": "83c1d770aaac8ed83a06196621f2b85a077e7a1a7bc8abc34451d101fe8ff8ba",
-      "runs/full/level18b/reason_codes/payment_model.json": "00cc512be9d4edec7716f07ad25fa9659c78249690ee17ba98673133b75587cd"
+      "runs/full/level18c/reason_codes/account_model.json": "df81499d4aa19da3ba30a9f86b9da4db69016da1b4bad3456adb07a8230c1b23",
+      "runs/full/level18c/reason_codes/payment_model.json": "fad74418c0c2d06d00d3138cd935b8aa38fbd0d058caf5030f5c76a37e0b5092"
     }
   },
   "simulated": true
