@@ -8,7 +8,7 @@
 #   each input it read and the generating commit hash. No model is fitted, no row is scored, no SHAP
 #   or Triton work runs and no dataset is read.
 #
-# Rules: docs/research/amendments.md, A-063.
+# Rules: docs/research/amendments.md, A-063 and A-067.
 #
 # Usage:
 #   PYTHONPATH=<repo root> py -3.12 -B scripts/level18_console.py
@@ -32,12 +32,14 @@ RUN_A_RESULT = "runs/full/run_a320_stage5c/final/45c496799170/result.json"
 RUN_A_EXTRA = "runs/full/run_a320_stage5c/extra_reporting.json"
 RUN_A_LEAKAGE = "runs/full/run_a320_stage5c/final/45c496799170/leakage_checks.json"
 RUN_A_LEAKAGE_5_6 = "runs/full/run_a320_stage5c/leakage_checks_5_6.json"
-PAYMENT_RESULT = "runs/full/payment_model_v1/test_score/result.json"
+PAYMENT_RESULT = "runs/full/payment_model_v2/test_score/result.json"
+PAYMENT_METADATA = "runs/full/payment_model_v2/C1/model_metadata.json"
+PAYMENT_PREVIOUS_RESULT = "runs/full/payment_model_v1/test_score/result.json"
 PAYMENT_DIAGNOSIS = "runs/full/payment_model_v1/diagnosis/diagnosis.json"
-CALIBRATION = "runs/full/level18b/calibration/calibration_data.json"
-REASON_ACCOUNT = "runs/full/level18b/reason_codes/account_model.json"
-REASON_PAYMENT = "runs/full/level18b/reason_codes/payment_model.json"
-ONNX_EXPORT = "runs/full/level18b/onnx/onnx_export.json"
+CALIBRATION = "runs/full/level18c/calibration/calibration_data.json"
+REASON_ACCOUNT = "runs/full/level18c/reason_codes/account_model.json"
+REASON_PAYMENT = "runs/full/level18c/reason_codes/payment_model.json"
+ONNX_EXPORT = "runs/full/level18c/onnx/onnx_export.json"
 WORLD_CARDS_DIR = "runs/full/world_cards"
 OUT_DIR = "reports/level_18/console"
 
@@ -47,6 +49,8 @@ INPUT_PATHS: tuple[str, ...] = (
     RUN_A_LEAKAGE,
     RUN_A_LEAKAGE_5_6,
     PAYMENT_RESULT,
+    PAYMENT_METADATA,
+    PAYMENT_PREVIOUS_RESULT,
     PAYMENT_DIAGNOSIS,
     CALIBRATION,
     REASON_ACCOUNT,
@@ -336,8 +340,13 @@ def _payment_leakage(leakage: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def collect_payment_results(result: dict[str, Any], diagnosis: dict[str, Any]) -> dict[str, Any]:
-    """Copy the payment split results, payee precision, feature truth AP, provenance and leakage."""
+def collect_payment_results(
+    result: dict[str, Any],
+    metadata: dict[str, Any],
+    previous_result: dict[str, Any],
+    diagnosis: dict[str, Any],
+) -> dict[str, Any]:
+    """Copy the v2 payment results beside v1's previous-version block, its provenance and leakage."""
     splits = _mapping(_entry(result, "splits", PAYMENT_RESULT), f"{PAYMENT_RESULT}:splits")
     out_splits = {
         split: _payment_split(
@@ -348,7 +357,6 @@ def collect_payment_results(result: dict[str, Any], diagnosis: dict[str, Any]) -
     }
     diag_splits = _mapping(_entry(diagnosis, "splits", PAYMENT_DIAGNOSIS), f"{PAYMENT_DIAGNOSIS}:splits")
     diag_test = _mapping(_entry(diag_splits, "test", "diagnosis.splits"), "diagnosis.splits.test")
-    diag_stress = _mapping(_entry(diag_splits, "stress", "diagnosis.splits"), "diagnosis.splits.stress")
     feature_truth_ap = {
         split: _mapping(
             _entry(
@@ -358,29 +366,98 @@ def collect_payment_results(result: dict[str, Any], diagnosis: dict[str, Any]) -
             ),
             "feature_truth_ap.payee_risk",
         )
-        for split, block in (("test", diag_test), ("stress", diag_stress))
+        for split, block in (
+            ("test", diag_test),
+            ("stress", _mapping(_entry(diag_splits, "stress", "diagnosis.splits"), "diagnosis.splits.stress")),
+        )
     }
-    manifest = _mapping(_entry(result, "manifest", PAYMENT_RESULT), f"{PAYMENT_RESULT}:manifest")
-    model = _mapping(_entry(manifest, "model", f"{PAYMENT_RESULT}:manifest"), "manifest.model")
+    stress_block = _mapping(_entry(splits, "stress", f"{PAYMENT_RESULT}:splits"), f"{PAYMENT_RESULT}:splits.stress")
+    alone = _mapping(
+        _entry(stress_block, "payee_risk_alone_truth_ap", f"{PAYMENT_RESULT}:splits.stress"),
+        f"{PAYMENT_RESULT}:splits.stress.payee_risk_alone_truth_ap",
+    )
+    for key in ("median", "p10", "p90", "worlds_used"):
+        expected = _number(_entry(alone, key, "payee_risk_alone_truth_ap"), f"payee_risk_alone_truth_ap.{key}")
+        recorded = _number(_entry(feature_truth_ap["stress"], key, "feature_truth_ap.stress"), key)
+        if recorded != expected:
+            raise ValueError(
+                f"v1 diagnosis payee_risk stress {key} {recorded!r} disagrees with the v2 result's {expected!r}"
+            )
+    artifacts = _mapping(_entry(metadata, "artifacts", PAYMENT_METADATA), f"{PAYMENT_METADATA}:artifacts")
+    best_params = _mapping(
+        _entry(
+            _mapping(_entry(metadata, "best_params", PAYMENT_METADATA), f"{PAYMENT_METADATA}:best_params"),
+            "all",
+            f"{PAYMENT_METADATA}:best_params",
+        ),
+        f"{PAYMENT_METADATA}:best_params.all",
+    )
     frozen_model = {
-        "git_hash": _text(_entry(manifest, "git_hash", "manifest"), "manifest.git_hash"),
-        "sha256": _text(_entry(model, "sha256", "manifest.model"), "manifest.model.sha256"),
-        "feature_sha256": _text(_entry(model, "feature_sha256", "manifest.model"), "manifest.model.feature_sha256"),
-        "feature_count": int(_number(_entry(model, "feature_count", "manifest.model"), "manifest.model.feature_count")),
-        "rounds": int(_number(_entry(model, "rounds", "manifest.model"), "manifest.model.rounds")),
-        "seed": int(_number(_entry(model, "seed", "manifest.model"), "manifest.model.seed")),
+        "sha256": _text(_entry(artifacts, "frozen_model.json", "artifacts"), "artifacts.frozen_model.json"),
+        "feature_sha256": _text(_entry(metadata, "feature_sha256", PAYMENT_METADATA), "feature_sha256"),
+        "feature_count": int(_number(_entry(metadata, "feature_count", PAYMENT_METADATA), "feature_count")),
+        "rounds": int(_number(_entry(best_params, "n_estimators", "best_params.all"), "best_params.all.n_estimators")),
+        "seed": int(_number(_entry(metadata, "seed", PAYMENT_METADATA), "seed")),
     }
-    leakage = _mapping(_entry(diagnosis, "leakage", PAYMENT_DIAGNOSIS), f"{PAYMENT_DIAGNOSIS}:leakage")
-    return {
-        "threshold": _number(_entry(result, "threshold", PAYMENT_RESULT), f"{PAYMENT_RESULT}:threshold"),
-        "hold_share": _number(_entry(result, "hold_share", PAYMENT_RESULT), f"{PAYMENT_RESULT}:hold_share"),
-        "splits": out_splits,
+    previous_manifest = _mapping(
+        _entry(previous_result, "manifest", PAYMENT_PREVIOUS_RESULT), f"{PAYMENT_PREVIOUS_RESULT}:manifest"
+    )
+    previous_model = _mapping(
+        _entry(previous_manifest, "model", f"{PAYMENT_PREVIOUS_RESULT}:manifest"),
+        f"{PAYMENT_PREVIOUS_RESULT}:manifest.model",
+    )
+    previous_splits = _mapping(
+        _entry(previous_result, "splits", PAYMENT_PREVIOUS_RESULT), f"{PAYMENT_PREVIOUS_RESULT}:splits"
+    )
+    previous_version = {
+        "version": "v1",
+        "git_hash": _text(
+            _entry(previous_manifest, "git_hash", "manifest"), f"{PAYMENT_PREVIOUS_RESULT}:manifest.git_hash"
+        ),
+        "threshold": _number(
+            _entry(previous_result, "threshold", PAYMENT_PREVIOUS_RESULT), f"{PAYMENT_PREVIOUS_RESULT}:threshold"
+        ),
+        "hold_share": _number(
+            _entry(previous_result, "hold_share", PAYMENT_PREVIOUS_RESULT), f"{PAYMENT_PREVIOUS_RESULT}:hold_share"
+        ),
+        "splits": {
+            split: _payment_split(
+                _mapping(
+                    _entry(previous_splits, split, f"{PAYMENT_PREVIOUS_RESULT}:splits"),
+                    f"{PAYMENT_PREVIOUS_RESULT}:splits.{split}",
+                ),
+                f"previous_result.splits.{split}",
+            )
+            for split in ("test", "stress")
+        },
         "payee_precision": _mapping(
             _entry(diag_test, "payee_precision", "diagnosis.splits.test"), "diagnosis.splits.test.payee_precision"
         ),
         "feature_truth_ap": feature_truth_ap,
+        "frozen_model": {
+            "sha256": _text(_entry(previous_model, "sha256", "manifest.model"), "manifest.model.sha256"),
+            "feature_count": int(
+                _number(_entry(previous_model, "feature_count", "manifest.model"), "manifest.model.feature_count")
+            ),
+            "rounds": int(_number(_entry(previous_model, "rounds", "manifest.model"), "manifest.model.rounds")),
+            "seed": int(_number(_entry(previous_model, "seed", "manifest.model"), "manifest.model.seed")),
+        },
+    }
+    leakage = _mapping(_entry(diagnosis, "leakage", PAYMENT_DIAGNOSIS), f"{PAYMENT_DIAGNOSIS}:leakage")
+    test_block = _mapping(_entry(splits, "test", f"{PAYMENT_RESULT}:splits"), f"{PAYMENT_RESULT}:splits.test")
+    return {
+        "version": "v2",
+        "threshold": _number(_entry(result, "threshold", PAYMENT_RESULT), f"{PAYMENT_RESULT}:threshold"),
+        "hold_share": _number(_entry(result, "hold_share", PAYMENT_RESULT), f"{PAYMENT_RESULT}:hold_share"),
+        "splits": out_splits,
+        "payee_precision": _mapping(
+            _entry(test_block, "payee_precision", f"{PAYMENT_RESULT}:splits.test"),
+            f"{PAYMENT_RESULT}:splits.test.payee_precision",
+        ),
+        "feature_truth_ap": feature_truth_ap,
         "frozen_model": frozen_model,
         "leakage": _payment_leakage(leakage),
+        "previous_version": previous_version,
     }
 
 
@@ -568,8 +645,13 @@ def build(root: Path = REPO_ROOT, output_dir: Path | None = None) -> list[Path]:
         ),
         (
             "payment_results.json",
-            collect_payment_results(documents[PAYMENT_RESULT], documents[PAYMENT_DIAGNOSIS]),
-            [PAYMENT_RESULT, PAYMENT_DIAGNOSIS],
+            collect_payment_results(
+                documents[PAYMENT_RESULT],
+                documents[PAYMENT_METADATA],
+                documents[PAYMENT_PREVIOUS_RESULT],
+                documents[PAYMENT_DIAGNOSIS],
+            ),
+            [PAYMENT_RESULT, PAYMENT_METADATA, PAYMENT_PREVIOUS_RESULT, PAYMENT_DIAGNOSIS],
         ),
         (
             "leakage.json",

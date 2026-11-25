@@ -127,10 +127,10 @@ def _leakage_b() -> dict:
     }
 
 
-def _payment_aggregate() -> dict:
+def _payment_aggregate(truth_ap: float = 0.6) -> dict:
     """Return one payment split aggregate block."""
     return {
-        "truth_ap": _spread(0.6),
+        "truth_ap": _spread(truth_ap),
         "recall": _spread(0.2),
         "precision": _spread(0.9),
         "hold_rate": _spread(0.005),
@@ -139,18 +139,82 @@ def _payment_aggregate() -> dict:
     }
 
 
-def _payment_result() -> dict:
-    """Return a frozen payment test result shaped like the real one."""
+def _truth_ap(value: float, worlds: int) -> dict:
+    """Return a payee-risk truth-AP block with the four keys the stress guard compares."""
+    return {"median": value, "p10": value / 2.0, "p90": value, "worlds_used": worlds, "nan_rows": 0}
+
+
+def _payee_precision(value: float, payees: int, held: int) -> dict:
+    """Return one frozen payee-precision block."""
     return {
-        "threshold": 0.2,
+        "held_payments": held,
+        "distinct_payees": payees,
+        "positive_payees": 900,
+        "payee_precision": value,
+        "payees_for_half": 100,
+        "payees_for_half_share": 0.1,
+    }
+
+
+def _payment_result() -> dict:
+    """Return the frozen v2 payment test result shaped like the real one, without a git hash."""
+    return {
+        "threshold": 0.1304200652241741,
         "hold_share": 0.005,
         "splits": {
             "test": {
                 "aggregate": _payment_aggregate(),
                 "nan_payee_risk_share": 0.6,
                 "nan_reason_counts": {"scored": 1},
+                "payee_precision": _payee_precision(0.9256820319849483, 1063, 12839),
             },
-            "stress": {"aggregate": _payment_aggregate(), "nan_payee_risk_share": 0.5},
+            "stress": {
+                "aggregate": _payment_aggregate(0.12),
+                "nan_payee_risk_share": 0.5,
+                "nan_reason_counts": {"scored": 1},
+                "payee_precision": _payee_precision(0.5, 800, 9000),
+                "payee_risk_alone_truth_ap": _truth_ap(0.5435498675272497, 119),
+            },
+        },
+        "manifest": {
+            "candidate": "C1",
+            "model": {
+                "sha256": "9" * 64,
+                "feature_sha256": "7" * 64,
+                "feature_count": 54,
+                "seed": 1717,
+                "device": "cpu",
+            },
+        },
+    }
+
+
+def _payment_metadata() -> dict:
+    """Return the frozen C1 candidate metadata with the rounds and artifact hashes."""
+    return {
+        "artifacts": {"frozen_model.json": "9" * 64, "feature_order.yaml": "8" * 64},
+        "best_params": {"all": {"max_depth": 5, "n_estimators": 104}},
+        "candidate": "C1",
+        "feature_count": 54,
+        "feature_sha256": "7" * 64,
+        "seed": 1717,
+        "device": "cpu",
+        "structure": "all",
+    }
+
+
+def _previous_result() -> dict:
+    """Return the frozen v1 payment test result shaped like the real one."""
+    return {
+        "threshold": 0.20182080343366296,
+        "hold_share": 0.005,
+        "splits": {
+            "test": {
+                "aggregate": _payment_aggregate(0.66),
+                "nan_payee_risk_share": 0.6,
+                "nan_reason_counts": {"scored": 1},
+            },
+            "stress": {"aggregate": _payment_aggregate(0.07), "nan_payee_risk_share": 0.5},
         },
         "manifest": {
             "git_hash": "d" * 40,
@@ -160,17 +224,21 @@ def _payment_result() -> dict:
                 "feature_count": 54,
                 "rounds": 647,
                 "seed": 1717,
+                "device": "cuda",
             },
         },
     }
 
 
 def _diagnosis() -> dict:
-    """Return a frozen payment diagnosis shaped like the real one."""
+    """Return the frozen v1 payment diagnosis with payee precision and the payee-risk truth AP."""
     return {
         "splits": {
-            "test": {"payee_precision": {"payee_precision": 0.911}, "feature_truth_ap": {"payee_risk": _spread(0.9)}},
-            "stress": {"feature_truth_ap": {"payee_risk": _spread(0.5)}},
+            "test": {
+                "payee_precision": _payee_precision(0.911, 1023, 11196),
+                "feature_truth_ap": {"payee_risk": _truth_ap(0.9, 119)},
+            },
+            "stress": {"feature_truth_ap": {"payee_risk": _truth_ap(0.5435498675272497, 119)}},
         },
         "leakage": {
             "status": "fail",
@@ -292,6 +360,8 @@ def _fixture_root(tmp_path: Path, worlds: dict | None = None) -> Path:
     _write(tmp_path, module.RUN_A_LEAKAGE, _leakage_a())
     _write(tmp_path, module.RUN_A_LEAKAGE_5_6, _leakage_b())
     _write(tmp_path, module.PAYMENT_RESULT, _payment_result())
+    _write(tmp_path, module.PAYMENT_METADATA, _payment_metadata())
+    _write(tmp_path, module.PAYMENT_PREVIOUS_RESULT, _previous_result())
     _write(tmp_path, module.PAYMENT_DIAGNOSIS, _diagnosis())
     calibration = {"models": {"account": _calibration_model("account"), "payment": _calibration_model("payment")}}
     _write(tmp_path, module.CALIBRATION, calibration)
@@ -355,11 +425,62 @@ def test_yield_e1_disagreement_raises(tmp_path: Path) -> None:
         console().build(root)
 
 
+def test_payment_results_map_the_v2_candidate(tmp_path: Path) -> None:
+    """payment_results.json carries v2's values and the C1 metadata provenance without a v2 git hash."""
+    root = _fixture_root(tmp_path)
+    console().build(root)
+    data = _data(root, "payment_results.json")
+    assert data["version"] == "v2"
+    assert data["threshold"] == 0.1304200652241741
+    assert data["hold_share"] == 0.005
+    assert data["payee_precision"]["payee_precision"] == 0.9256820319849483
+    assert data["payee_precision"]["distinct_payees"] == 1063
+    assert data["splits"]["stress"]["nan_payee_risk_share"] == 0.5
+    assert data["feature_truth_ap"]["stress"]["median"] == 0.5435498675272497
+    assert data["frozen_model"] == {
+        "sha256": "9" * 64,
+        "feature_sha256": "7" * 64,
+        "feature_count": 54,
+        "rounds": 104,
+        "seed": 1717,
+    }
+    assert "git_hash" not in data["frozen_model"]
+    module = console()
+    document = json.loads((root / "reports" / "level_18" / "console" / "payment_results.json").read_text("utf-8"))
+    assert sorted(document["manifest"]["sources"]) == sorted(
+        [module.PAYMENT_RESULT, module.PAYMENT_METADATA, module.PAYMENT_PREVIOUS_RESULT, module.PAYMENT_DIAGNOSIS]
+    )
+
+
+def test_payment_results_keep_the_previous_version(tmp_path: Path) -> None:
+    """The previous_version block carries v1's commit, threshold, model, splits and payee precision."""
+    root = _fixture_root(tmp_path)
+    console().build(root)
+    previous = _data(root, "payment_results.json")["previous_version"]
+    assert previous["version"] == "v1"
+    assert previous["git_hash"] == "d" * 40
+    assert previous["threshold"] == 0.20182080343366296
+    assert previous["frozen_model"] == {"sha256": "e" * 64, "feature_count": 54, "rounds": 647, "seed": 1717}
+    assert previous["splits"]["test"]["aggregate"]["truth_ap"]["median"] == 0.66
+    assert previous["splits"]["stress"]["aggregate"]["truth_ap"]["median"] == 0.07
+    assert previous["payee_precision"]["payee_precision"] == 0.911
+
+
+def test_payment_results_stress_guard_raises(tmp_path: Path) -> None:
+    """A diagnosis payee-risk stress median that differs from the v2 result stops the build."""
+    root = _fixture_root(tmp_path)
+    diagnosis = json.loads((root / console().PAYMENT_DIAGNOSIS).read_text(encoding="utf-8"))
+    diagnosis["splits"]["stress"]["feature_truth_ap"]["payee_risk"]["median"] = 0.5
+    _write(root, console().PAYMENT_DIAGNOSIS, diagnosis)
+    with pytest.raises(ValueError, match="payee_risk stress median .* disagrees"):
+        console().build(root)
+
+
 def test_missing_input_raises(tmp_path: Path) -> None:
     """A missing input file raises a ValueError naming the path."""
     root = _fixture_root(tmp_path)
     (root / console().ONNX_EXPORT).unlink()
-    with pytest.raises(ValueError, match="console input is missing: runs/full/level18b/onnx/onnx_export.json"):
+    with pytest.raises(ValueError, match="console input is missing: runs/full/level18c/onnx/onnx_export.json"):
         console().build(root)
 
 
@@ -367,7 +488,7 @@ def test_malformed_input_raises(tmp_path: Path) -> None:
     """Invalid JSON in an input raises a ValueError naming the path."""
     root = _fixture_root(tmp_path)
     (root / console().CALIBRATION).write_text("{", encoding="utf-8")
-    message = "console input is not valid JSON: runs/full/level18b/calibration/calibration_data.json"
+    message = "console input is not valid JSON: runs/full/level18c/calibration/calibration_data.json"
     with pytest.raises(ValueError, match=message):
         console().build(root)
 
