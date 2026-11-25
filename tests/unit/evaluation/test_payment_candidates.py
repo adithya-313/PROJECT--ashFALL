@@ -30,6 +30,7 @@ from evaluation.payment_candidates import (
 from evaluation.payment_model import feature_list_sha256
 
 SMALL_PARAMS = {"n_estimators": 4, "max_depth": 2, "learning_rate": 0.5, "min_child_weight": 1.0}
+ROUTING_PARAMS = {**SMALL_PARAMS, "n_estimators": 8, "min_child_weight": 0.0}
 
 
 def _manifest(folder: Path, split: str) -> Path:
@@ -90,15 +91,26 @@ def test_the_fitted_c1_constraint_makes_the_payee_risk_response_non_decreasing()
 
 def test_candidate_models_route_each_row_to_its_own_booster() -> None:
     matrix = np.array(
-        [[0.1, 1.0], [0.9, 2.0], [math.nan, 3.0], [math.nan, 4.0]],
+        [
+            [0.1, 1.0],
+            [0.2, 2.0],
+            [0.8, 3.0],
+            [0.9, 4.0],
+            [math.nan, 1.0],
+            [math.nan, 2.0],
+            [math.nan, 3.0],
+            [math.nan, 4.0],
+        ],
         dtype=np.float32,
     )
-    labels = np.array([1, 0, 0, 1])
+    labels = np.array([1, 1, 0, 0, 0, 0, 1, 1])
     masks = segment_masks(matrix[:, 0])
+    present_rows = [0, 1, 2, 3]
+    absent_rows = [4, 5, 6, 7]
 
     segmented = fit_candidate_from_params(
         "C2",
-        {"present": SMALL_PARAMS, "nan": SMALL_PARAMS},
+        {"present": ROUTING_PARAMS, "nan": ROUTING_PARAMS},
         None,
         matrix,
         labels,
@@ -107,10 +119,13 @@ def test_candidate_models_route_each_row_to_its_own_booster() -> None:
         11,
     )
     scores = segmented.predict(matrix)
-    np.testing.assert_allclose(scores[[0, 1]], segmented.models["present"].predict_proba(matrix[[0, 1]])[:, 1])
-    np.testing.assert_allclose(scores[[2, 3]], segmented.models["nan"].predict_proba(matrix[[2, 3]])[:, 1])
+    assert len(set(scores.tolist())) > 1, "the two segment models must disagree on some rows"
+    np.testing.assert_allclose(
+        scores[present_rows], segmented.models["present"].predict_proba(matrix[present_rows])[:, 1]
+    )
+    np.testing.assert_allclose(scores[absent_rows], segmented.models["nan"].predict_proba(matrix[absent_rows])[:, 1])
 
-    single = fit_candidate_from_params("C1", {"all": SMALL_PARAMS}, None, matrix, labels, masks, "cpu", 11)
+    single = fit_candidate_from_params("C1", {"all": ROUTING_PARAMS}, None, matrix, labels, masks, "cpu", 11)
     np.testing.assert_allclose(single.predict(matrix), single.models["all"].predict_proba(matrix)[:, 1])
 
     malformed = CandidateModel(
