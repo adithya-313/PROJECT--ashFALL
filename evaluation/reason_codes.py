@@ -41,6 +41,7 @@ import yaml
 from decisions.mule_account_model import _feature_value
 from decisions.pu_learning import PUBaggedAccountModel
 from evaluation.level17_scoring import one_row_per_account_day
+from evaluation.payment_candidates import load_candidate_model, verify_candidate_artifacts
 from evaluation.payment_model import build_matrix, load_feature_order, load_split_rows
 from evaluation.payment_oof_risk import (
     _CommitSampler,
@@ -49,15 +50,15 @@ from evaluation.payment_oof_risk import (
     load_frozen_recipe,
     validate_dataset_split,
 )
-from evaluation.payment_test_score import verify_booster_rounds, verify_frozen_artifacts
+from evaluation.payment_test_score import verify_booster_rounds
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SCHEMA_PATH = REPO_ROOT / "data" / "schemas" / "feature_set_m1.yaml"
 DEFAULT_PAYMENT_FEATURE_ORDER = REPO_ROOT / "config" / "mule_payment_feature_order.yaml"
 DEFAULT_CODES_PATH = REPO_ROOT / "config" / "feature_reason_codes.yaml"
-DEFAULT_MODEL_DIR = REPO_ROOT / "runs" / "full" / "payment_model_v1"
+DEFAULT_CANDIDATE_DIR = REPO_ROOT / "runs" / "full" / "payment_model_v2" / "C1"
 DEFAULT_OOF_ROOT = REPO_ROOT / "runs" / "full" / "payment_oof"
-DEFAULT_OUT_ROOT = REPO_ROOT / "runs" / "full" / "level18b" / "reason_codes"
+DEFAULT_OUT_ROOT = REPO_ROOT / "runs" / "full" / "level18c" / "reason_codes"
 DEFAULT_EXTRA_REPORTING = REPO_ROOT / "runs" / "full" / "run_a320_stage5c" / "extra_reporting.json"
 
 #: A-059 fixes the sample at 20,000 validation rows drawn with seed 1717.
@@ -722,25 +723,23 @@ def _run_payment(
             the selected rows do not match the sampled keys.
     """
     model_dir = Path(model_dir)
-    model_sha256, feature_file_sha256 = verify_frozen_artifacts(model_dir)
+    metadata = verify_candidate_artifacts(model_dir)
     payload = load_feature_order(model_dir / "feature_order.yaml")
     features = payload["features"]
     encodings = payload["categorical_encodings"]
     if not isinstance(features, list) or not isinstance(encodings, dict):
         raise ValueError(f"{model_dir} holds malformed feature-order data")
-    metadata = json.loads((model_dir / "model_metadata.json").read_text(encoding="utf-8"))
-    if (
-        not isinstance(metadata, dict)
-        or payload["feature_sha256"] != metadata.get("feature_sha256")
-        or len(features) != metadata.get("feature_count")
-    ):
-        raise ValueError("frozen feature order does not match model_metadata.json")
-    model = xgboost.XGBClassifier()
-    model.load_model(str(model_dir / "frozen_model.json"))
+    if payload["feature_sha256"] != metadata["feature_sha256"] or len(features) != metadata["feature_count"]:
+        raise ValueError("candidate feature order does not match model_metadata.json")
+    if metadata["structure"] != "all":
+        raise ValueError(f"{model_dir} holds the {metadata['structure']!r} structure, not C1's single model")
+    model = load_candidate_model(model_dir).models["all"]
     booster = model.get_booster()
     if booster.num_features() != len(features):
         raise ValueError(f"frozen model takes {booster.num_features()} features but the order holds {len(features)}")
-    rounds = verify_booster_rounds(booster, metadata)
+    rounds = verify_booster_rounds(booster, {"best_params": metadata["best_params"]["all"]})
+    model_sha256 = metadata["artifacts"]["frozen_model.json"]
+    feature_file_sha256 = metadata["artifacts"]["feature_order.yaml"]
 
     table = load_split_rows(list(datasets), "validation", features, oof_root)
     if table.num_rows == 0:
@@ -830,6 +829,7 @@ def _run_payment(
             "validation_content_hashes": _content_hashes(datasets),
             "code_map": {"path": str(DEFAULT_CODES_PATH), "sha256": _sha256_file(DEFAULT_CODES_PATH)},
             "model": {
+                "candidate": metadata["candidate"],
                 "path": str(model_dir / "frozen_model.json"),
                 "sha256": model_sha256,
                 "feature_order_path": str(model_dir / "feature_order.yaml"),
@@ -837,8 +837,8 @@ def _run_payment(
                 "feature_sha256": payload["feature_sha256"],
                 "feature_count": len(features),
                 "rounds": rounds,
-                "seed": metadata.get("seed"),
-                "device": metadata.get("device"),
+                "seed": metadata["seed"],
+                "device": metadata["device"],
             },
         },
     }
@@ -874,7 +874,7 @@ def run(validation_dirs: Sequence[Path], out_root: Path = DEFAULT_OUT_ROOT) -> d
         account = _run_account(datasets, code_map)
         account_seconds = time.perf_counter() - account_started
         payment_started = time.perf_counter()
-        payment = _run_payment(datasets, DEFAULT_MODEL_DIR, DEFAULT_OOF_ROOT, code_map)
+        payment = _run_payment(datasets, DEFAULT_CANDIDATE_DIR, DEFAULT_OOF_ROOT, code_map)
         payment_seconds = time.perf_counter() - payment_started
     peak = sampler.peak_gb
     total_seconds = time.perf_counter() - started
