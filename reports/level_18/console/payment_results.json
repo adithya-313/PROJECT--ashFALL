@@ -1,0 +1,162 @@
+{
+  "data": {
+    "feature_truth_ap": {
+      "stress": {
+        "median": 0.5435498675272497,
+        "nan_rows": 2808249,
+        "p10": 0.32443482273658947,
+        "p90": 0.8114507881207781,
+        "worlds_used": 119
+      },
+      "test": {
+        "median": 0.9226525197880212,
+        "nan_rows": 1139638,
+        "p10": 0.7308858249302789,
+        "p90": 0.9929159977316449,
+        "worlds_used": 119
+      }
+    },
+    "frozen_model": {
+      "feature_count": 54,
+      "feature_sha256": "42f52628ad9c6c5cd440fe4b2aa328dd067beea6b929a2368f8dfccda28867c6",
+      "git_hash": "dbefd6c7b13032fc2c0c1655e7a644b95d064f14",
+      "rounds": 647,
+      "seed": 1717,
+      "sha256": "98dffe1fda74342b36d55651deb2168fa144c4886a87cdb10715ff90d3a7864e"
+    },
+    "hold_share": 0.005,
+    "leakage": {
+      "item_status": {
+        "id_leak": "fail",
+        "label_dependent_inputs_by_arrival": "pass",
+        "split_isolation": "pass",
+        "temporal_cutoff": "pass",
+        "truth_and_simulator_only_fields": "pass"
+      },
+      "run_a_check_6b": {
+        "average_precision_over_base_rate": 10.415125553116175,
+        "max_ap_over_base_rate": 2.0,
+        "status": "fail",
+        "validation_average_precision": 0.6377814058283728,
+        "validation_base_rate": 0.06123607464698787
+      },
+      "status": "fail"
+    },
+    "payee_precision": {
+      "distinct_payees": 1023,
+      "held_payments": 11196,
+      "payee_precision": 0.9110459433040078,
+      "payees_for_half": 115,
+      "payees_for_half_share": 0.11241446725317693,
+      "per_payment_precision": 0.942390139335477,
+      "positive_payees": 932,
+      "reported_per_world_precision_median": 0.9941791044776119
+    },
+    "splits": {
+      "stress": {
+        "aggregate": {
+          "hold_rate": {
+            "median": 0.028381564386260896,
+            "p10": 0.007690030929544584,
+            "p90": 0.06404073823427602,
+            "worlds_used": 120
+          },
+          "other_bank_truth_ap": {
+            "median": 0.08006363374243769,
+            "p10": 0.00990589816640219,
+            "p90": 0.3960972296137525,
+            "worlds_used": 120
+          },
+          "precision": {
+            "median": 0.09381740143214562,
+            "p10": 0.009400869042662036,
+            "p90": 0.4128421740195415,
+            "worlds_used": 120
+          },
+          "recall": {
+            "median": 0.17482998395354168,
+            "p10": 0.05433673469387755,
+            "p90": 0.4364482435848271,
+            "worlds_used": 120
+          },
+          "same_bank_truth_ap": {
+            "median": 0.10308689439120552,
+            "p10": 0.015903912381406184,
+            "p90": 0.5578822236299779,
+            "worlds_used": 119
+          },
+          "truth_ap": {
+            "median": 0.07093756449237654,
+            "p10": 0.015869576475501364,
+            "p90": 0.35374211033816283,
+            "worlds_used": 120
+          }
+        },
+        "nan_payee_risk_share": 0.6103295639551499,
+        "nan_reason_counts": {
+          "no_prior_account_day": 32230,
+          "receiver_at_other_bank": 2775705,
+          "receiver_bank_unknown": 314,
+          "scored": 1792952
+        }
+      },
+      "test": {
+        "aggregate": {
+          "hold_rate": {
+            "median": 0.005003022362144852,
+            "p10": 0.0013742593823383772,
+            "p90": 0.011878595506298321,
+            "worlds_used": 120
+          },
+          "other_bank_truth_ap": {
+            "median": 0.467390559057543,
+            "p10": 0.19556894865304636,
+            "p90": 0.749861317039495,
+            "worlds_used": 120
+          },
+          "precision": {
+            "median": 0.9941791044776119,
+            "p10": 0.8721212121212121,
+            "p90": 1.0,
+            "worlds_used": 120
+          },
+          "recall": {
+            "median": 0.247117435203129,
+            "p10": 0.09131490934694597,
+            "p90": 0.48767475090754614,
+            "worlds_used": 120
+          },
+          "same_bank_truth_ap": {
+            "median": 0.8764378360928944,
+            "p10": 0.5609060995847125,
+            "p90": 0.9694659918158891,
+            "worlds_used": 119
+          },
+          "truth_ap": {
+            "median": 0.6320326905308613,
+            "p10": 0.3858057224904785,
+            "p90": 0.7882695781562038,
+            "worlds_used": 120
+          }
+        },
+        "nan_payee_risk_share": 0.6171591157091434,
+        "nan_reason_counts": {
+          "no_prior_account_day": 23468,
+          "receiver_at_other_bank": 1115957,
+          "receiver_bank_unknown": 213,
+          "scored": 706949
+        }
+      }
+    },
+    "threshold": 0.20182080343366296
+  },
+  "manifest": {
+    "generator": "scripts/level18_console.py",
+    "git_hash": "1f406958215dcb680952350225edb58f50d3c6b2",
+    "sources": {
+      "runs/full/payment_model_v1/diagnosis/diagnosis.json": "252a2e3a877b2f19a82813cbddb3d14572c3b780f44cb8b951fd8abbe7172329",
+      "runs/full/payment_model_v1/test_score/result.json": "e157175f60c0926dec4d38035634c96e3e23291dc1aa377e42dbb97378739ab6"
+    }
+  },
+  "simulated": true
+}

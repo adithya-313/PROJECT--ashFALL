@@ -1,0 +1,215 @@
+{
+  "data": {
+    "models": {
+      "account": {
+        "feature_count": 42,
+        "feature_sha256": "075183a2b9192ab889029e16c06a01f4f837db1c331218cfb93c2acd6d6efa20",
+        "frequency": {
+          "codes": [
+            {
+              "code": "ROUTINE_LIFE",
+              "first": 8156,
+              "group": "routine_life",
+              "plain_reason": "routine life",
+              "rows": 12035,
+              "share": 0.60175
+            },
+            {
+              "code": "REGION",
+              "first": 3699,
+              "group": "region",
+              "plain_reason": "region",
+              "rows": 10180,
+              "share": 0.509
+            },
+            {
+              "code": "OUTFLOW",
+              "first": 1539,
+              "group": "outflow",
+              "plain_reason": "outflow",
+              "rows": 8280,
+              "share": 0.414
+            },
+            {
+              "code": "CONTROL",
+              "first": 2709,
+              "group": "control",
+              "plain_reason": "control",
+              "rows": 6040,
+              "share": 0.302
+            },
+            {
+              "code": "LIFECYCLE",
+              "first": 1877,
+              "group": "lifecycle",
+              "plain_reason": "lifecycle",
+              "rows": 4636,
+              "share": 0.2318
+            },
+            {
+              "code": "NETWORK",
+              "first": 694,
+              "group": "network",
+              "plain_reason": "network",
+              "rows": 4045,
+              "share": 0.20225
+            },
+            {
+              "code": "INFLOW",
+              "first": 461,
+              "group": "inflow",
+              "plain_reason": "inflow",
+              "rows": 3709,
+              "share": 0.18545
+            },
+            {
+              "code": "BALANCE_PATTERN",
+              "first": 865,
+              "group": "balance_pattern",
+              "plain_reason": "balance pattern",
+              "rows": 3038,
+              "share": 0.1519
+            },
+            {
+              "code": "INTELLIGENCE",
+              "first": 0,
+              "group": "intelligence",
+              "plain_reason": "intelligence",
+              "rows": 0,
+              "share": 0.0
+            },
+            {
+              "code": "PAYEE_RISK",
+              "first": 0,
+              "group": "payee_risk",
+              "plain_reason": "payee risk",
+              "rows": 0,
+              "share": 0.0
+            },
+            {
+              "code": "PAYMENT_LEVEL",
+              "first": 0,
+              "group": "payment_level",
+              "plain_reason": "payment level",
+              "rows": 0,
+              "share": 0.0
+            }
+          ],
+          "rows": 20000,
+          "rows_without_reason": 0
+        },
+        "sample_rows": 20000,
+        "seed": 1717
+      },
+      "payment": {
+        "feature_count": 54,
+        "feature_sha256": "42f52628ad9c6c5cd440fe4b2aa328dd067beea6b929a2368f8dfccda28867c6",
+        "frequency": {
+          "codes": [
+            {
+              "code": "PAYMENT_LEVEL",
+              "first": 10876,
+              "group": "payment_level",
+              "plain_reason": "payment level",
+              "rows": 16504,
+              "share": 0.8252
+            },
+            {
+              "code": "PAYEE_RISK",
+              "first": 1248,
+              "group": "payee_risk",
+              "plain_reason": "payee risk",
+              "rows": 7585,
+              "share": 0.37925
+            },
+            {
+              "code": "OUTFLOW",
+              "first": 2104,
+              "group": "outflow",
+              "plain_reason": "outflow",
+              "rows": 7449,
+              "share": 0.37245
+            },
+            {
+              "code": "NETWORK",
+              "first": 2322,
+              "group": "network",
+              "plain_reason": "network",
+              "rows": 6945,
+              "share": 0.34725
+            },
+            {
+              "code": "ROUTINE_LIFE",
+              "first": 2827,
+              "group": "routine_life",
+              "plain_reason": "routine life",
+              "rows": 6007,
+              "share": 0.30035
+            },
+            {
+              "code": "BALANCE_PATTERN",
+              "first": 291,
+              "group": "balance_pattern",
+              "plain_reason": "balance pattern",
+              "rows": 3994,
+              "share": 0.1997
+            },
+            {
+              "code": "LIFECYCLE",
+              "first": 152,
+              "group": "lifecycle",
+              "plain_reason": "lifecycle",
+              "rows": 1649,
+              "share": 0.08245
+            },
+            {
+              "code": "CONTROL",
+              "first": 159,
+              "group": "control",
+              "plain_reason": "control",
+              "rows": 1628,
+              "share": 0.0814
+            },
+            {
+              "code": "INFLOW",
+              "first": 19,
+              "group": "inflow",
+              "plain_reason": "inflow",
+              "rows": 344,
+              "share": 0.0172
+            },
+            {
+              "code": "REGION",
+              "first": 2,
+              "group": "region",
+              "plain_reason": "region",
+              "rows": 20,
+              "share": 0.001
+            },
+            {
+              "code": "INTELLIGENCE",
+              "first": 0,
+              "group": "intelligence",
+              "plain_reason": "intelligence",
+              "rows": 0,
+              "share": 0.0
+            }
+          ],
+          "rows": 20000,
+          "rows_without_reason": 0
+        },
+        "sample_rows": 20000,
+        "seed": 1717
+      }
+    }
+  },
+  "manifest": {
+    "generator": "scripts/level18_console.py",
+    "git_hash": "1f406958215dcb680952350225edb58f50d3c6b2",
+    "sources": {
+      "runs/full/level18b/reason_codes/account_model.json": "83c1d770aaac8ed83a06196621f2b85a077e7a1a7bc8abc34451d101fe8ff8ba",
+      "runs/full/level18b/reason_codes/payment_model.json": "00cc512be9d4edec7716f07ad25fa9659c78249690ee17ba98673133b75587cd"
+    }
+  },
+  "simulated": true
+}

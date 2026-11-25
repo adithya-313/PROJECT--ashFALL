@@ -350,6 +350,13 @@ PART_CONFIGS: dict[str, dict[str, Any]] = {
         "CONFIG_FILES": ("config/dataset_build.yaml",),
         "REGISTER_IDS": ("16-4",),
     },
+    "18a": {
+        "INTERFACE_MODULES": ("scripts.level18_console",),
+        "RECORDS_MODULE": ("scripts.level18_console",),
+        "RECORD_NAMES": (),
+        "CONFIG_FILES": (),
+        "REGISTER_IDS": (),
+    },
     "18b": {
         "INTERFACE_MODULES": (
             "evaluation.calibration",
