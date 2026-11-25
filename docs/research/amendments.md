@@ -1179,3 +1179,42 @@ Rulings, fixed before the first v2-derived artifact:
 11. **Test edits this regeneration requires.** These are the only existing-test changes permitted, and each keeps its assertions' structure and strength; only the payment fixtures and the payment literals change, to the regenerated values. `tests/unit/scripts/test_level18_console.py`: the fixtures `_payment_result`, `_diagnosis` and `_fixture_root` are replaced by v2-shaped fixtures for the four payment inputs, `test_missing_input_raises`'s expected ONNX path becomes `runs/full/level18c/onnx/onnx_export.json`, and new tests assert the v2 mapping, the `previous_version` block, the absence of a v2 `git_hash` and the stress equality guard. `tests/unit/scripts/test_level18_model_cards.py`: the fixture `_payment_results` gains `version`, `previous_version` and the v2 frozen model, and `test_card_numbers_equal_console_values`, `test_limitations_embed_console_numbers` and `test_markdown_shows_the_same_numbers` carry the regenerated payment literals plus a previous-version assertion. `tests/unit/showcase/test_level_18.py`: `test_check_18_5_reports_the_calibration_and_its_chart` and `test_check_18_6_reports_the_onnx_parity` carry the regenerated payment ECE and parity literals. Every changed test gets one sabotage proof: the production line it protects is broken, the test is shown failing, the line is restored byte-identically and `git diff` is empty.
 12. **Protections and boundaries.** The frozen v1 model, feature order, v1 result and v1 diagnosis are read, never written; only the Triton copy of v1's ONNX is created, and `runs/full/level18b/` stays unchanged. The Run A account model and checkpoint, every dataset, every config value, and every prior amendment stay unchanged. No model is retrained or re-searched, and `runs/full/payment_model_v2/` is read only. The regeneration runs detached on this laptop with the 120-second memory sampler, and logs are read from disk after exit. A failed check, hash mismatch, missing folder, unexpected row count or non-reproducing test split is a stop, not a fix; nothing is retried with weakened checks.
 
+## A-068
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-25 |
+| Issue IDs | None |
+| Issue IDs v2 | None |
+| Files | `scripts/audit_20261125/audit_b.py`, `scripts/audit_20261125/payment_experiments.py`, `docs/research/amendments.md` |
+| What changed | Pre-registers the validation-only improvement experiments of the 2026-11-25 audit round (B1 capped residual stacking, B2 payee-deduplicated sample weights, B3 dropping `payee_same_bank_risk`, B4 an alternative pinned learner, B5 account class weighting) and the one metric every experiment is judged by. Written before any B experiment is fitted or scored. |
+| Why | The audit round asks for improvement experiments but forbids adopting any of them; fixing the experiments, their data and their metric before the first fit keeps a later comparison from choosing a flattering variant or metric after seeing the numbers. |
+| Disclosure | Written after the Part A audit results (A1-A6) exist and before any Part B model is fitted. It reads only the frozen C1 metadata and `selection.json` for the baseline values, plus `requirements-ml.txt` for the learner pins. No test or stress row is read by any Part B experiment; no frozen model or result file is written; nothing in this amendment changes production code. All results are labelled SIMULATED. |
+| Results exist? | No Part B result exists at the time of writing. The C1 baseline values cited below come from the frozen `runs/full/payment_model_v2/selection.json`. |
+
+Rulings, fixed before the first B fit:
+
+1. **Rows, features, parameters and device.** Every payment experiment reuses A-067 ruling 1's four training datasets and two validation datasets, the frozen feature order `config/mule_payment_feature_order.yaml` (54 features, `payee_risk` first), the frozen C1 parameters in `runs/full/payment_model_v2/C1/model_metadata.json` (`best_params.all`, 104 rounds, seed 1717 unless a ruling below changes the learner) and the chosen device `cpu`. Truth is `truth_role_receiver` in `MULE_ROLES` on validation. Test and stress rows are never read in Part B.
+2. **The metric.** Each experiment reports (a) the pooled validation truth AP computed by `sklearn.metrics.average_precision_score` over all 1,834,135 validation rows, (b) the worst-10% worlds p10, the 10th percentile of per-world AP over the 120 validation worlds that contain both classes, and (c) as a descriptive column only, the validation hold rate at the frozen v2 threshold 0.1304200652241741. The baseline is C1's recorded validation AP 0.5175284109152372 and p10 0.3493015003495941. No experiment is adopted, and no threshold, gate or published artifact changes.
+3. **B1 capped residual stacking.** Two boosters, both with the frozen C1 parameters and seed 1717: P, trained on `payee_risk` alone, and Q, trained on the 53 features without `payee_risk`. The scored logit is `logit(p_P) + clip(logit(q_Q), -c, +c)` for `c` in {0.5, 1, 2}; the reported variant is the one with the highest validation AP, ties broken by higher p10. The clipped constant is reported.
+4. **B2 payee-deduplicated weights.** The frozen C1 recipe with training-Row sample weights `1 / count(receiver_account_id)`, so each payee's payments weigh 1 in total.
+5. **B3 dropping `payee_same_bank_risk`.** The frozen C1 recipe with that one column removed, the monotone vector adjusted to the remaining columns.
+6. **B4 alternative learner.** Runs only if the learner is installed and pinned in `requirements-ml.txt`; LightGBM or CatBoost, same features, short Optuna of at most 15 trials with the same seed. If neither is pinned, the item is NOT RUN with the reason and the installed versions.
+7. **B5 account class weighting.** One XGBoost member on the account stage-4 rows with `scale_pos_weight` set to the measured negatives/positives ratio, reported with its source count. If the stage-4 account rows cannot be built through an existing entry point within the 20-minute box, the item is NOT RUN with the reason; no substitute surrogate is fitted.
+8. **Time boxes and NOT RUN.** Each item runs in its own box; an item that exceeds its box is stopped and reported NOT RUN or PARTIAL with its last finished number. Every NOT RUN names its reason (time, missing pin, missing entry point).
+9. **Protections.** The frozen v1 model, the C1 model, their feature orders, result files, the Run A account model and checkpoint, every dataset, every config value and every prior amendment are read only. All outputs go under `runs/full/audit_20261125/`. No experiment is promoted, merged into a config, or scored on test or stress; the owner decides later.
+10. **Environment pins.** Before any B fit the report lists the installed versions of xgboost, lightgbm, catboost, scikit-learn, shap, optuna and numpy and the matching pinned lines, if any, from `requirements-ml.txt`; a learner without a pin cannot be adopted even if it runs.
+
+## A-069
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-25 |
+| Issue IDs | None |
+| Issue IDs v2 | None |
+| Files | `evaluation/audit_train_a.py`, `evaluation/audit_payment_experiments.py`, `docs/research/amendments.md` |
+| What changed | Records that the two audit retrain scripts A-068 named under `scripts/audit_20261125/` now live under `evaluation/`, with only the repository-root expression changed from `parents[2]` to `parents[1]`. |
+| Why | Level 12 showcase check 7 (truth-import guard, `core/truth_import_check.py`) rejects any `evaluation.*` import from outside the allowed reader folders `[evaluation, showcase, tests]` in `config/truth_store.yaml`; the scripts compile matrices with `evaluation.payment_model` and `evaluation.payment_candidates`, so `scripts/` is a forbidden home for them. Moving them into `evaluation/` satisfies the guard without weakening it. |
+| Disclosure | The relocation happened after the Part B results existed and after A-068 was written; the executed code is unchanged, no ruling, dataset, parameter or metric changed, and every recorded Part B number stands. The move does not read test or stress rows. |
+| Results exist? | Yes, the Part B results listed in the round report; this amendment changes no result. |
+
