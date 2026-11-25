@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import xgboost
@@ -147,7 +148,7 @@ def monotone_vector(features: Sequence[str]) -> list[int]:
     return vector
 
 
-def segment_masks(payee_risk: Sequence[float]) -> dict[str, np.ndarray]:
+def segment_masks(payee_risk: npt.ArrayLike) -> dict[str, np.ndarray]:
     """
     WHAT: Returns the A-066 segment masks: present rows are those with a finite `payee_risk`, NaN rows
     are the rest.
