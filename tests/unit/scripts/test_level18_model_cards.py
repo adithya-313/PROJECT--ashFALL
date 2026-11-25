@@ -146,30 +146,30 @@ def _leakage() -> dict:
     }
 
 
-def _aggregate(truth_ap: float, other_bank: float) -> dict:
+def _aggregate(truth_ap: float, other_bank: float, hold_rate: float = 0.005) -> dict:
     """Return one payment split aggregate block."""
     return {
         "truth_ap": _spread(truth_ap),
         "precision": _spread(0.99),
         "recall": _spread(0.25),
-        "hold_rate": _spread(0.005),
+        "hold_rate": _spread(hold_rate),
         "same_bank_truth_ap": _spread(0.87),
         "other_bank_truth_ap": _spread(other_bank),
     }
 
 
 def _payment_results() -> dict:
-    """Return the console payment-results data block for the test and stress splits."""
+    """Return the v2 console payment-results block beside v1's previous-version block."""
     return {
-        "threshold": 0.2,
+        "version": "v2",
+        "threshold": 0.1304200652241741,
         "hold_share": 0.005,
         "frozen_model": {
             "sha256": "e" * 64,
             "feature_sha256": "f" * 64,
             "feature_count": 54,
-            "rounds": 647,
+            "rounds": 104,
             "seed": 1717,
-            "git_hash": "d" * 40,
         },
         "splits": {
             "test": {
@@ -178,16 +178,18 @@ def _payment_results() -> dict:
                 "nan_reason_counts": {"scored": 60, "receiver_at_other_bank": 1234, "no_prior_account_day": 5},
             },
             "stress": {
-                "aggregate": _aggregate(0.07, 0.08),
+                "aggregate": _aggregate(0.07, 0.08, hold_rate=0.029711),
                 "nan_payee_risk_share": 0.61,
                 "nan_reason_counts": {"scored": 30, "receiver_at_other_bank": 3000},
             },
         },
         "payee_precision": {
-            "payee_precision": 0.911,
-            "reported_per_world_precision_median": 0.994,
-            "distinct_payees": 10,
-            "held_payments": 100,
+            "payee_precision": 0.9256820319849483,
+            "distinct_payees": 1063,
+            "held_payments": 12839,
+            "positive_payees": 984,
+            "payees_for_half": 106,
+            "payees_for_half_share": 0.09971777986829727,
         },
         "feature_truth_ap": {
             "test": {"median": 0.93, "p10": 0.5, "p90": 1.0, "worlds_used": 4},
@@ -202,6 +204,27 @@ def _payment_results() -> dict:
                 "max_ap_over_base_rate": 2.0,
                 "validation_average_precision": 0.6,
                 "validation_base_rate": 0.06,
+            },
+        },
+        "previous_version": {
+            "version": "v1",
+            "git_hash": "d" * 40,
+            "threshold": 0.20182080343366296,
+            "hold_share": 0.005,
+            "frozen_model": {"sha256": "b" * 64, "feature_count": 54, "rounds": 647, "seed": 1717},
+            "splits": {
+                "test": {"aggregate": _aggregate(0.632, 0.467), "nan_payee_risk_share": 0.6},
+                "stress": {"aggregate": _aggregate(0.071, 0.05), "nan_payee_risk_share": 0.6},
+            },
+            "payee_precision": {
+                "payee_precision": 0.9110459433040078,
+                "distinct_payees": 1023,
+                "held_payments": 11196,
+                "reported_per_world_precision_median": 0.9941791044776119,
+            },
+            "feature_truth_ap": {
+                "test": {"median": 0.93, "p10": 0.5, "p90": 1.0, "worlds_used": 4},
+                "stress": {"median": 0.55, "p10": 0.2, "p90": 0.9, "worlds_used": 4},
             },
         },
     }
@@ -351,13 +374,24 @@ def test_card_numbers_equal_console_values(tmp_path):
     assert pay_metrics["other_bank_truth_ap"]["median"] == 0.47
     assert pay_metrics["other_bank_truth_ap"]["stress"]["median"] == 0.08
     assert pay_metrics["other_bank_truth_ap"]["worlds"] == 5
-    assert pay_metrics["payee_precision"]["payee_precision"] == 0.911
+    assert pay_metrics["payee_precision"]["payee_precision"] == 0.9256820319849483
     assert pay_metrics["feature_truth_ap_payee_risk"]["test"]["median"] == 0.93
     assert pay_metrics["nan_payee_risk_share"] == {"test": 0.617, "stress": 0.61}
     assert pay_metrics["nan_reason_counts"]["test"]["receiver_at_other_bank"] == 1234
-    assert payment["data"]["threshold"] == 0.2
+    assert payment["data"]["version"] == "v2"
+    assert payment["data"]["threshold"] == 0.1304200652241741
     assert payment["data"]["hold_share"] == 0.005
-    assert payment["data"]["frozen_model"]["rounds"] == 647
+    assert payment["data"]["frozen_model"]["rounds"] == 104
+    assert "git_hash" not in payment["data"]["frozen_model"]
+    previous = payment["data"]["previous_version"]
+    assert previous["version"] == "v1"
+    assert previous["git_hash"] == "d" * 40
+    assert previous["threshold"] == 0.20182080343366296
+    assert previous["frozen_model"]["sha256"] == "b" * 64
+    assert previous["frozen_model"]["rounds"] == 647
+    assert previous["metrics"]["test"]["truth_ap"]["median"] == 0.632
+    assert previous["metrics"]["stress"]["truth_ap"]["median"] == 0.071
+    assert previous["payee_precision"]["payee_precision"] == 0.9110459433040078
     assert payment["data"]["leakage"]["run_a_check_6b"]["average_precision_over_base_rate"] == 10.4
     assert payment["data"]["calibration"]["calibrator"]["file"] == "payment_isotonic.json"
 
@@ -369,14 +403,15 @@ def test_limitations_embed_console_numbers(tmp_path):
     limitations = payment["data"]["known_limitations"]
 
     assert len(limitations) == 5
-    assert "0.911000" in limitations[0]
-    assert "0.994000" in limitations[0]
-    assert "10 distinct payees" in limitations[0]
-    assert "100 held payments" in limitations[0]
+    assert "0.925682" in limitations[0]
+    assert "0.990000" in limitations[0]
+    assert "1063 distinct payees" in limitations[0]
+    assert "12839 held payments" in limitations[0]
     assert "0.620000" in limitations[1]
     assert "0.070000" in limitations[1]
     assert "0.550000" in limitations[1]
     assert "0.930000" in limitations[1]
+    assert "the stress hold rate 0.029711 overshoots the 0.005000 target" in limitations[1]
     assert "0.617000" in limitations[2]
     assert "1234" in limitations[2]
     assert "world/bank_connectors.py:344-369" in limitations[3]
@@ -405,8 +440,14 @@ def test_markdown_shows_the_same_numbers(tmp_path):
     assert f"{CONSOLE_DIR}/calibration.json" in account_md
 
     assert "| truth AP | 0.620000 | 0.310000 | 0.620000 | 5 |" in payment_md
-    assert "| payee_precision | 0.911000 |" in payment_md
-    assert "Per-payee precision is 0.911000, not the reported per-world median 0.994000" in payment_md
+    assert "| payee_precision | 0.925682 |" in payment_md
+    assert "Per-payee precision is 0.925682, not the reported per-world median 0.990000" in payment_md
+    assert "the stress hold rate 0.029711 overshoots the 0.005000 target" in payment_md
+    assert "## Previous version (v1)" in payment_md
+    assert "647 boosted rounds" in payment_md
+    assert "| truth AP | 0.632000 | 0.316000 | 0.632000 | 5 |" in payment_md
+    assert "| truth AP | 0.071000 | 0.035500 | 0.071000 | 5 |" in payment_md
+    assert "| payee_precision | 0.911046 |" in payment_md
     assert "Run A check 6b: status fail" in payment_md
     assert "| id_leak | fail |" in payment_md
 
