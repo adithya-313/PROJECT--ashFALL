@@ -28,7 +28,7 @@ from evaluation.payment_model import (
     truth_labels,
 )
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "runs" / "full" / "datasets"
 OUT = ROOT / "runs" / "full" / "audit_20261125"
 TRAINING = [

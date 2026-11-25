@@ -1204,3 +1204,17 @@ Rulings, fixed before the first B fit:
 8. **Time boxes and NOT RUN.** Each item runs in its own box; an item that exceeds its box is stopped and reported NOT RUN or PARTIAL with its last finished number. Every NOT RUN names its reason (time, missing pin, missing entry point).
 9. **Protections.** The frozen v1 model, the C1 model, their feature orders, result files, the Run A account model and checkpoint, every dataset, every config value and every prior amendment are read only. All outputs go under `runs/full/audit_20261125/`. No experiment is promoted, merged into a config, or scored on test or stress; the owner decides later.
 10. **Environment pins.** Before any B fit the report lists the installed versions of xgboost, lightgbm, catboost, scikit-learn, shap, optuna and numpy and the matching pinned lines, if any, from `requirements-ml.txt`; a learner without a pin cannot be adopted even if it runs.
+
+## A-069
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-25 |
+| Issue IDs | None |
+| Issue IDs v2 | None |
+| Files | `evaluation/audit_train_a.py`, `evaluation/audit_payment_experiments.py`, `docs/research/amendments.md` |
+| What changed | Records that the two audit retrain scripts A-068 named under `scripts/audit_20261125/` now live under `evaluation/`, with only the repository-root expression changed from `parents[2]` to `parents[1]`. |
+| Why | Level 12 showcase check 7 (truth-import guard, `core/truth_import_check.py`) rejects any `evaluation.*` import from outside the allowed reader folders `[evaluation, showcase, tests]` in `config/truth_store.yaml`; the scripts compile matrices with `evaluation.payment_model` and `evaluation.payment_candidates`, so `scripts/` is a forbidden home for them. Moving them into `evaluation/` satisfies the guard without weakening it. |
+| Disclosure | The relocation happened after the Part B results existed and after A-068 was written; the executed code is unchanged, no ruling, dataset, parameter or metric changed, and every recorded Part B number stands. The move does not read test or stress rows. |
+| Results exist? | Yes, the Part B results listed in the round report; this amendment changes no result. |
+
