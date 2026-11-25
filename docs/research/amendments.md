@@ -1040,3 +1040,16 @@ Rulings, fixed before any card value or gate exists:
 10. **Tests and sabotage proof.** `tests/unit/scripts/test_level18_model_cards.py` builds a temporary repo-shaped tree of minimal console JSON documents carrying the required keys, calls the real generator and asserts: the four files and their envelopes; the numbers equal the fixture console values; the five limitations embed the fixture numbers where ruling 5 says they do; the Markdown shows the same numbers; missing, malformed and key-short inputs raise `ValueError`; inputs are byte-identical after the run. `tests/unit/scripts/test_mule_model_quality_gate.py` calls the real gate against temporary cards and configs and asserts: all thresholds pass on faithful cards; one degraded card fails with its id named and exit 1; a missing path, an empty `derived_from` and a skipped threshold fail. Each test gets one sabotage proof: the production line it protects is broken, the test is shown failing with the pasted assertion, the line is restored byte-identically and `git diff` is empty.
 11. **No scoring, no model change, no choice on test or stress.** This task re-reads committed console files only. A failed threshold stops the round and is reported; nothing is retried with a weaker threshold, and no threshold is edited after the gate first runs.
 
+## A-064a
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-25 |
+| Issue IDs | None |
+| Issue IDs v2 | None |
+| Files | `.github/workflows/ci.yml`, `docs/research/amendments.md` |
+| What changed | A-064 ruling 8's new job gains one environment line on its last step: `PYTHONPATH: ${{ github.workspace }}`. The run command stays exactly `python scripts/mule_model_quality_gate.py`. |
+| Why | The first CI run of the new job failed in 6 s with `ModuleNotFoundError: No module named 'core'` (run 45526267169, job 138910298364) on `from core.config_validator import load_yaml`. Running a file under `scripts/` puts `scripts/` first on `sys.path`, so the repository root is not importable, while every other CI step enters the code through `python -m`, which puts the working directory on the path. The only third-party import in that chain is `yaml`, which the job's `pip install pyyaml` step already provides. |
+| Disclosure | Written AFTER the first CI run of the new job failed. It changes only the step's path setup: no threshold, card, card value, gate line, exit rule or `derived_from` changes, the gate keeps failing rather than skipping, and model v1's gate and job are still untouched. |
+| Results exist? | Yes: the four card files under `reports/level_18/model_cards/`, unchanged by this correction. Results are labelled SIMULATED. |
+

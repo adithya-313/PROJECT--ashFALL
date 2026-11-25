@@ -194,7 +194,11 @@ jobs:
       - name: Install the config loader dependency
         run: pip install pyyaml
 
+      # The gate imports core/config_validator and world/run_identity; a file under scripts/ does not put the
+      # repository root on sys.path by itself, so the step names it explicitly.
       - name: Run the mule model quality gate on the committed cards
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: python scripts/mule_model_quality_gate.py
 
   # ---------------------------------------------------------------------------
