@@ -526,3 +526,21 @@ def test_driver_run_second_pass_creates_nothing(
     assert sum(first["created"].values()) == sum(log_script.plan_counts(units).values())
     assert second["created"] == {}
     assert second["skipped"] == first["created"]
+
+
+def test_attach_adds_a_file_once_and_never_overwrites(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, log_script: ModuleType
+) -> None:
+    run_root = make_driver_run(tmp_path)
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "sqlite:///" + (tmp_path / "mlflow.db").as_posix())
+    monkeypatch.chdir(tmp_path)
+    log_script.log_units(log_script.build_run_units(run_root), run_root.parent)
+    extra = write_json(run_root / "serving_validation.json", {"serve": "run_a"})
+
+    assert log_script.attach_artifact("run_x/final_test", extra) is True
+    assert log_script.attach_artifact("run_x/final_test", extra) is False
+    write_json(extra, {"serve": "run_b"})
+    with pytest.raises(ValueError, match="already holds a different"):
+        log_script.attach_artifact("run_x/final_test", extra)
+    with pytest.raises(ValueError, match="found 0"):
+        log_script.attach_artifact("run_y/final_test", extra)

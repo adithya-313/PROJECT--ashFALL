@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import tempfile
 from collections import defaultdict
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -630,6 +631,34 @@ def log_units(units: Sequence[Unit], runs_root: Path) -> dict[str, dict[str, int
     return {"created": dict(created), "skipped": dict(skipped)}
 
 
+def attach_artifact(run_name: str, path: Path) -> bool:
+    """Add one file to the artifacts of an already logged, complete run. Returns False when it is already there.
+
+    The run must be the only one of that name carrying an idem_key. A different file already stored under the same
+    name is refused, never overwritten.
+    """
+    if not path.is_file():
+        raise ValueError(f"artifact source file is missing: {path}")
+    experiment_id = _experiment_id()
+    client = mlflow.MlflowClient()
+    found = [
+        run
+        for run in client.search_runs([experiment_id], filter_string=f"tags.`mlflow.runName` = '{run_name}'")
+        if "idem_key" in run.data.tags
+    ]
+    if len(found) != 1:
+        raise ValueError(f"expected exactly one complete run named {run_name!r}, found {len(found)}")
+    run_id = found[0].info.run_id
+    if path.name in {item.path for item in client.list_artifacts(run_id)}:
+        with tempfile.TemporaryDirectory() as folder:
+            stored = Path(client.download_artifacts(run_id, path.name, folder))
+            if sha256_of(stored) != sha256_of(path):
+                raise ValueError(f"run {run_name!r} already holds a different {path.name}")
+        return False
+    client.log_artifact(run_id, str(path))
+    return True
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Log the saved Level 18 results to MLflow, idempotently.")
     parser.add_argument("--runs-root", default=DEFAULT_RUNS_ROOT)
@@ -640,7 +669,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="append",
         help="out-root of a finished full-driver run; repeatable. Logs only these, not the --runs-root plan",
     )
+    parser.add_argument(
+        "--attach",
+        nargs=2,
+        metavar=("RUN_NAME", "FILE"),
+        help="only add FILE to the artifacts of the logged run RUN_NAME",
+    )
     args = parser.parse_args(argv)
+
+    if args.attach:
+        run_name, file_text = args.attach
+        added = attach_artifact(run_name, Path(file_text).resolve())
+        print(f"[attach] {run_name}: {'added' if added else 'already present'} {Path(file_text).name}")
+        return 0
 
     if args.run:
         resolved = [path.resolve() for path in args.run]

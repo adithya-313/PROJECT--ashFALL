@@ -491,3 +491,44 @@ def test_inputs_not_modified(tmp_path):
 
     after = {rel_path: hashlib.sha256((tmp_path / rel_path).read_bytes()).hexdigest() for rel_path in _documents()}
     assert after == before
+
+
+def test_account_card_carries_the_fallback_model(tmp_path):
+    """The account card gains Run B beside Run A, shows 6b as a finding and never as a pass."""
+    _tree(tmp_path)
+    run_b = {"recall_at_capacity": _spread(0.62)}
+    run_a = {"recall_at_capacity": _spread(0.64)}
+    fallback = {
+        "serving": {
+            "amendment": "A-071",
+            "capacity_pct": 0.5,
+            "validation": {
+                "run_a": {"median_recall_at_capacity": 0.6364, "defined_worlds": 120},
+                "run_b": {"median_recall_at_capacity": 0.5955, "defined_worlds": 120},
+            },
+        },
+        "decision_cut": {"value": 0.97},
+        "success_criterion_status": "not_judgeable",
+        "test_world_count": 120,
+        "test": {"run_a": run_a, "run_b": run_b},
+        "leakage": [
+            {
+                "check": "check_6b",
+                "status": "fail",
+                "shown_as": "FINDING — documented limitation (A-051)",
+                "numbers": {"average_precision_over_base_rate": 10.415},
+            }
+        ],
+    }
+    (tmp_path / CONSOLE_DIR / "fallback_account.json").write_text(json.dumps(_envelope(fallback)), encoding="utf-8")
+
+    cards().build_with_fallback(root=tmp_path, output_dir=tmp_path / "out")
+
+    text = (tmp_path / "out" / "mule_account_xgb.md").read_text(encoding="utf-8")
+    document = json.loads((tmp_path / "out" / "mule_account_xgb.json").read_text(encoding="utf-8"))
+    assert "## Fallback model for banks with no complaint history" in text
+    assert "0.6364 for Run A against 0.5955 for Run B" in text
+    assert "| check_6b | FINDING — documented limitation (A-051) | average_precision_over_base_rate 10.415000 |" in text
+    assert "| recall_at_capacity | 0.620000 (" in text
+    assert document["data"]["fallback_model"] == fallback
+    assert f"{CONSOLE_DIR}/fallback_account.json" in document["manifest"]["sources"]

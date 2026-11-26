@@ -510,3 +510,76 @@ def test_inputs_not_modified(tmp_path: Path) -> None:
     console().build(root)
     for path, digest in before.items():
         assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
+
+
+def _fallback_root(tmp_path: Path, six_b_status: str = "fail", serve: str = "run_a") -> Path:
+    """Writes the seven inputs of the fallback file, with Run B's recall below Run A's."""
+    module = console()
+
+    def scorer(recall: float) -> dict:
+        return {"xgboost": {metric: _spread(recall) for metric in module.FALLBACK_METRICS}}
+
+    counted = {key: 0 for key in module.CHECK_5B_NUMBERS}
+    six_b = {key: 1.5 for key in module.CHECK_6B_NUMBERS}
+    documents: dict[str, dict] = {
+        module.RUN_A_RESULT: {"across_worlds": {"test": scorer(0.64)}},
+        module.RUN_B_RESULT: {"across_worlds": {"test": scorer(0.62)}, "per_world": {"w1": {}, "w2": {}}},
+        module.RUN_B_LEAKAGE: {
+            "checks": {
+                "truth_leak": {"status": "pass"},
+                "split_leak": {"status": "pass"},
+                "trivial_world": {
+                    "status": "pass",
+                    "best_feature": "age",
+                    "best_direction_ap": 0.02,
+                    "fail_threshold": 0.9,
+                },
+                "section_23_check_7": {"status": "not run"},
+            }
+        },
+        module.RUN_B_THRESHOLDS: {"xgboost_cut": 0.97},
+        module.RUN_B_STAGE5: {"result": {"success_criterion": {"status": "not_judgeable"}}},
+        module.RUN_B_LEAKAGE_5_6: {
+            "check_5a": {"status": "pass", "hit_count": 0},
+            "check_5b": {"status": "pass", **counted},
+            "check_6a": {"status": "pass", "hit_count": 0},
+            "check_6b": {"status": six_b_status, **six_b},
+        },
+        module.RUN_B_SERVING: {
+            "serve": serve,
+            "capacity_pct": 0.5,
+            "run_a": {"median_recall_at_capacity": 0.63, "defined_worlds": 2},
+            "run_b": {"median_recall_at_capacity": 0.59, "defined_worlds": 2},
+        },
+    }
+    for rel_path, document in documents.items():
+        _write(tmp_path, rel_path, document)
+    return tmp_path
+
+
+def test_fallback_file_shows_run_b_beside_run_a_and_6b_as_a_finding(tmp_path: Path) -> None:
+    """Run B's numbers sit beside Run A's, and the failed check 6b keeps its status and gains the finding label."""
+    root = _fallback_root(tmp_path)
+
+    path = console().build_fallback(root, root / "out")
+    data = json.loads(path.read_text(encoding="utf-8"))["data"]
+
+    assert data["test"]["run_b"]["recall_at_capacity"]["median"] == 0.62
+    assert data["test"]["run_a"]["recall_at_capacity"]["median"] == 0.64
+    assert data["serving"]["validation"]["run_b"]["median_recall_at_capacity"] == 0.59
+    assert data["test_world_count"] == 2
+    six_b = next(check for check in data["leakage"] if check["check"] == "check_6b")
+    assert six_b["status"] == "fail"
+    assert six_b["shown_as"] == "FINDING — documented limitation (A-051)"
+    assert six_b["numbers"]["average_precision_over_base_rate"] == 1.5
+
+
+@pytest.mark.parametrize(
+    ("six_b_status", "serve", "message"),
+    [("pass", "run_a", "records Run B check 6b as failed"), ("fail", "run_b", "only when Run A is served")],
+)
+def test_fallback_file_refuses_a_different_outcome(tmp_path: Path, six_b_status: str, serve: str, message: str) -> None:
+    """The published wording holds only for a failed 6b and a served Run A."""
+    root = _fallback_root(tmp_path, six_b_status, serve)
+    with pytest.raises(ValueError, match=message):
+        console().build_fallback(root, root / "out")
