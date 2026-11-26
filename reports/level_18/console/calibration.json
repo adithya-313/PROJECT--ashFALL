@@ -487,7 +487,7 @@
   },
   "manifest": {
     "generator": "scripts/level18_console.py",
-    "git_hash": "dd87f31be5bd5fd155d958f26f9025c000c1b480",
+    "git_hash": "2c78f8afa1ca67960ad9999e6304a309b7a33c1a",
     "sources": {
       "runs/full/level18c/calibration/calibration_data.json": "f6790507653cc6eecf18eeefb10509b697fcc13d18ec2587823762e5396507d5"
     }

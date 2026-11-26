@@ -1166,7 +1166,7 @@
   },
   "manifest": {
     "generator": "scripts/level18_console.py",
-    "git_hash": "dd87f31be5bd5fd155d958f26f9025c000c1b480",
+    "git_hash": "2c78f8afa1ca67960ad9999e6304a309b7a33c1a",
     "sources": {
       "runs/full/run_a320_stage5c/final/45c496799170/result.json": "38c0c8b6a729116d9446e94a78e5950861742dc384bb72404f4a71354caa46a9",
       "runs/full/world_cards/037577265caf5b0e/base_rate.json": "23e2c1046889347cc740f7c99aed9f86b74181b1a11799695a5bdf332e6e8ff5",

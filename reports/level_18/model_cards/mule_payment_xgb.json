@@ -312,11 +312,11 @@
   },
   "manifest": {
     "generator": "scripts/level18_model_cards.py",
-    "git_hash": "dd87f31be5bd5fd155d958f26f9025c000c1b480",
+    "git_hash": "2c78f8afa1ca67960ad9999e6304a309b7a33c1a",
     "sources": {
-      "reports/level_18/console/calibration.json": "eff5cd09cfea0e78067e183218877790fadbdd07271e45b4e0685b7dc353eda0",
-      "reports/level_18/console/onnx_parity.json": "b91bb587c0bd5e009df90fac685b49330770d21712d4276e4616d25706f05f63",
-      "reports/level_18/console/payment_results.json": "8f05f88cdd3ac75de620afc4b76d99a97dc02288726912f0827219bb5513cdfd"
+      "reports/level_18/console/calibration.json": "349b945436752b02ffd1e87f3f5c5fde061fd89f4b1346d3874a05dbe505a8e2",
+      "reports/level_18/console/onnx_parity.json": "6a516583fe23ed0ef67c430ea8c5af1e5b864b2342f8af69eb3f7a505cec678e",
+      "reports/level_18/console/payment_results.json": "adb2193977d2d40fbb270575cd50f4167dece4ad15bedb0089268f66920466ac"
     }
   },
   "simulated": true

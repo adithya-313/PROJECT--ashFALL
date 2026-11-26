@@ -277,7 +277,7 @@
   },
   "manifest": {
     "generator": "scripts/level18_console.py",
-    "git_hash": "dd87f31be5bd5fd155d958f26f9025c000c1b480",
+    "git_hash": "2c78f8afa1ca67960ad9999e6304a309b7a33c1a",
     "sources": {
       "runs/full/run_a320_stage5c/extra_reporting.json": "a11e208fda21e4419d20ef55c35bb52a95dc1cb3663792d4a39adfdc40d96ff6",
       "runs/full/run_a320_stage5c/final/45c496799170/result.json": "38c0c8b6a729116d9446e94a78e5950861742dc384bb72404f4a71354caa46a9"
