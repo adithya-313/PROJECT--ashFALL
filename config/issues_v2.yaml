@@ -1115,9 +1115,9 @@ issues:
     title: "Device rule catches almost no mules: gang phone acquisition is not in the bank feed and SIM swaps during a run are not modelled"
     origin: revision_2
     status: planned
-    levels: [18]
+    levels: [19]
     parts: []
-    later_work: ["Level 18a: after 16-6 models phone changes, re-measure rule_5 mule recall"]
+    later_work: ["Level 19: moves to Level 19+. No committed file records a full-scale rule_5 mule recall, so the re-measurement is not proven by the repository; record it from a validation run"]
   17-2:
     title: "The I4C feed is not wired into bank features; the non-DPIP bank has no registry signal"
     origin: revision_2
@@ -1128,10 +1128,14 @@ issues:
   17-3:
     title: "Level 17 real multi-world evaluation not run: replay is too slow (16-4)"
     origin: revision_2
-    status: planned
+    status: built
     levels: [18]
     parts: []
-    later_work: ["Level 18a: build full-scale datasets with --write-evaluation-inputs and run python -m evaluation.run_level_17 on >= 20 test worlds"]
+    # Covered by the Level 18 rules baseline on 120 test worlds (SIMULATED): recall at capacity median 0.368,
+    # p10 0.182, p90 0.567. A-043 is tagged with this ID but is about repeat-escalation counting, not coverage.
+    evidence:
+      - {kind: doc, file: reports/level_18/console/comparison.json, text: '"test_world_count": 120'}
+      - {kind: doc, file: reports/level_18/console/comparison.json, text: '"median": 0.36811201445347785'}
   17-4:
     title: "CI level-showcase times out: the Level 16 showcase replays twice (~2.5 h)"
     origin: revision_2
@@ -1145,7 +1149,7 @@ issues:
     status: planned
     levels: [19]
     parts: []
-    later_work: ["Level 19: commit tuned thresholds (with_thresholds) from the 18a validation run before rules serve live"]
+    later_work: ["Level 19: commit tuned thresholds (with_thresholds) from the 18a validation run before rules serve live", "Level 19: checked at the Level 18 close, config/rules_baseline.yaml still holds untuned_start values, so this moves to Level 19+"]
   18-1:
     title: "Dataset builds cannot be pinned to a code version: build_level_16_datasets.py ignores ASHFALL_CODE_VERSION, so a fixture cannot be reproduced byte-for-byte at a later commit"
     origin: revision_2
