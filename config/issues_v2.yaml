@@ -1115,9 +1115,9 @@ issues:
     title: "Device rule catches almost no mules: gang phone acquisition is not in the bank feed and SIM swaps during a run are not modelled"
     origin: revision_2
     status: planned
-    levels: [18]
+    levels: [19]
     parts: []
-    later_work: ["Level 18a: after 16-6 models phone changes, re-measure rule_5 mule recall"]
+    later_work: ["Level 19: moves to Level 19+. No committed file records a full-scale rule_5 mule recall, so the re-measurement is not proven by the repository; record it from a validation run"]
   17-2:
     title: "The I4C feed is not wired into bank features; the non-DPIP bank has no registry signal"
     origin: revision_2
@@ -1145,7 +1145,7 @@ issues:
     status: planned
     levels: [19]
     parts: []
-    later_work: ["Level 19: commit tuned thresholds (with_thresholds) from the 18a validation run before rules serve live"]
+    later_work: ["Level 19: commit tuned thresholds (with_thresholds) from the 18a validation run before rules serve live", "Level 19: checked at the Level 18 close, config/rules_baseline.yaml still holds untuned_start values, so this moves to Level 19+"]
   18-1:
     title: "Dataset builds cannot be pinned to a code version: build_level_16_datasets.py ignores ASHFALL_CODE_VERSION, so a fixture cannot be reproduced byte-for-byte at a later commit"
     origin: revision_2
