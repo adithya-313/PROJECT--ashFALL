@@ -1290,3 +1290,16 @@ Rule trace: 0.6363636363636364 > 0.5954545454545455, so Run A beats Run B; the t
 Run A was fitted at `0d0ace9` and scored here at `5ba6133`. Between the two, the changes to `decisions/mule_account_model.py`, `evaluation/level17_scoring.py` and `features/account_labels.py` add an accessor, a type protocol and a log level, and change no score.
 
 Sealed Run B outputs, recorded before opening: `runs/full/run_b320/stages/final_validation_and_test.json` sha256 `b2f7b79bee9eeedfd822be6ab22ca1d7cd85e59b99aa9cebbe8cf99f4e433100`; `runs/full/run_b320/final/45c496799170/result.json` sha256 `b184003db2391777f2b02c84fd695bb4cdb60b20d43e522ce930bb34ad0572d5`. All 57 sealed paths and hashes (that stage file and everything under `final/` outside `checkpoint/`) are in `runs/full/run_b320/seal/sealed_sha256.txt`, sha256 `5613a7f3b6c52e45acb7763a2c99318e0b9d2792d7038241d2d8d6c075f13da7`.
+
+## A-072
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-26 |
+| Issue IDs | 154 |
+| Issue IDs v2 | None |
+| Files | `docs/research/amendments.md`, `scripts/level18_console.py`, `scripts/level18_model_cards.py`, `scripts/level18_mlflow_log.py`, their tests, `reports/level_18/` |
+| What changed | Records that Run B's leakage check 6b failure is the known A-051 simulator finding. Run B's card shows it as "FINDING — documented limitation (A-051)" with its numbers, never as a pass. Run B is then added to the console files and the account model card as the fallback model for banks with no complaint history. |
+| Why | Run B's check 6b result is identical to Run A's: validation average precision 0.6378, 10.415 times the base rate, limit 2.0. Check 6b depends only on the datasets and a fixed seed, not on either account model. Check 6a passes for Run B. |
+| Disclosure | Written on the owner's ruling after Run B's checks 5 and 6 had run (`runs/full/run_b320/leakage_checks_5_6.json`) and after Run B's test result was read. The recorded status stays `fail`; no threshold, model or result changes. All results are SIMULATED. |
+| Results exist? | Yes: Run B checks 5a, 5b and 6a pass, 6b fails; check 4 recorded `pass` by the pilot. |
