@@ -677,7 +677,7 @@ def _fallback_markdown(fallback: dict[str, Any]) -> list[str]:
         "## Fallback model for banks with no complaint history",
         "",
         "Run B, the behaviour-only account model, is not the served model. Run A is served "
-        f"({serving['amendment']}): median validation recall at {_fmt(serving['capacity_pct'])}% review capacity "
+        f"({serving['amendment']}): median validation recall at {serving['capacity_pct']}% review capacity "
         f"was {validation['run_a']['median_recall_at_capacity']:.4f} for Run A against "
         f"{validation['run_b']['median_recall_at_capacity']:.4f} for Run B, over "
         f"{validation['run_b']['defined_worlds']} worlds. Run B's decision cut is "
