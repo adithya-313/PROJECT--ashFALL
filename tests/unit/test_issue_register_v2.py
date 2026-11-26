@@ -133,7 +133,7 @@ def test_real_register_passes() -> None:
     assert len(EXPECTED_V2_IDS) == 92
     assert len(issues) == 110
     # Level 18a2
-    assert count_statuses(issues) == {"built": 72, "partial": 15, "planned": 21, "deferred": 2}
+    assert count_statuses(issues) == {"built": 73, "partial": 15, "planned": 20, "deferred": 2}
 
 
 def test_missing_id_is_rejected() -> None:

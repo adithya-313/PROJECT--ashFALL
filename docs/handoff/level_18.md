@@ -56,7 +56,7 @@ Payment model:
 - **Capacity:** In these worlds both 0.25% and 0.5% capacity mean exactly 1 review per bank-day (max 172 active accounts per bank-day on test, 168 on validation); a real capacity curve needs larger worlds.
 - **Flaky test:** `test_time_estimate_within_margin` on CI runners, GitHub issue #187.
 - **Open register items:** 17-1 (rule_5 recall) and 17-5 (tuned rule thresholds not committed) move to Level 19+.
-- **17-3:** covered by the multi-world rules baseline above; the register entry still reads planned, because closing it changes counts pinned by `tests/unit/test_issue_register_v2.py`.
+- **17-3:** closed in the register, covered by the multi-world rules baseline above. A-043 is about repeat-escalation counting, not coverage.
 
 ## Interfaces Level 19 needs
 

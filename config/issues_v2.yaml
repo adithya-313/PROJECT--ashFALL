@@ -1128,10 +1128,14 @@ issues:
   17-3:
     title: "Level 17 real multi-world evaluation not run: replay is too slow (16-4)"
     origin: revision_2
-    status: planned
+    status: built
     levels: [18]
     parts: []
-    later_work: ["Level 18a: build full-scale datasets with --write-evaluation-inputs and run python -m evaluation.run_level_17 on >= 20 test worlds"]
+    # Covered by the Level 18 rules baseline on 120 test worlds (SIMULATED): recall at capacity median 0.368,
+    # p10 0.182, p90 0.567. A-043 is tagged with this ID but is about repeat-escalation counting, not coverage.
+    evidence:
+      - {kind: doc, file: reports/level_18/console/comparison.json, text: '"test_world_count": 120'}
+      - {kind: doc, file: reports/level_18/console/comparison.json, text: '"median": 0.36811201445347785'}
   17-4:
     title: "CI level-showcase times out: the Level 16 showcase replays twice (~2.5 h)"
     origin: revision_2
