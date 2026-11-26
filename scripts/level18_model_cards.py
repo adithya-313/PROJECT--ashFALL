@@ -43,6 +43,8 @@ INPUT_PATHS: tuple[str, ...] = (
     ONNX_PARITY,
 )
 OUT_DIR = "reports/level_18/model_cards"
+# Run B beside Run A; only the account card reads it, through build_with_fallback.
+FALLBACK = f"{CONSOLE_DIR}/fallback_account.json"
 
 ACCOUNT_MODEL = "mule_account_xgb"
 PAYMENT_MODEL = "mule_payment_xgb"
@@ -659,8 +661,53 @@ def _account_markdown(data: dict[str, Any], git_hash: str, root: Path) -> str:
     lines.extend(["", "## Known limitations", ""])
     lines.extend(f"- {item}" for item in data["known_limitations"])
     lines.extend([""])
-    lines.extend(_manifest_block(git_hash, ACCOUNT_SOURCES, root))
+    sources = ACCOUNT_SOURCES
+    if "fallback_model" in data:
+        lines.extend(_fallback_markdown(data["fallback_model"]))
+        sources = (*ACCOUNT_SOURCES, FALLBACK)
+    lines.extend(_manifest_block(git_hash, sources, root))
     return "\n".join(lines) + "\n"
+
+
+def _fallback_markdown(fallback: dict[str, Any]) -> list[str]:
+    """Render the fallback model section: the serving numbers, Run B beside Run A, and Run B's leakage checks."""
+    serving = fallback["serving"]
+    validation = serving["validation"]
+    lines = [
+        "## Fallback model for banks with no complaint history",
+        "",
+        "Run B, the behaviour-only account model, is not the served model. Run A is served "
+        f"({serving['amendment']}): median validation recall at {serving['capacity_pct']}% capacity (issue #154) "
+        f"was {validation['run_a']['median_recall_at_capacity']:.4f} for Run A against "
+        f"{validation['run_b']['median_recall_at_capacity']:.4f} for Run B, over "
+        f"{validation['run_b']['defined_worlds']} worlds. Run B's decision cut is "
+        f"{fallback['decision_cut']['value']!r}. Its success criterion status is "
+        f"`{fallback['success_criterion_status']}`.",
+        "",
+        f"Test split, {fallback['test_world_count']} worlds, median (p10 to p90):",
+        "",
+        "| metric | Run B (fallback) | Run A (served) |",
+        "| --- | --- | --- |",
+    ]
+    for metric, run_b in fallback["test"]["run_b"].items():
+        cells = [
+            f"{_fmt(block['median'])} ({_fmt(block['p10'])} to {_fmt(block['p90'])})"
+            for block in (run_b, fallback["test"]["run_a"][metric])
+        ]
+        label = metric
+        if metric == "recall_at_capacity":
+            label = (
+                f"recall at capacity {fallback['headline_capacity_pct']}% (headline; capacity rounds to 1 review "
+                "per bank-day in these worlds)"
+            )
+        lines.append(f"| {label} | {cells[0]} | {cells[1]} |")
+    lines.extend(["", "Run B leakage checks:", "", "| check | status | numbers |", "| --- | --- | --- |"])
+    for check in fallback["leakage"]:
+        shown = check["shown_as"] if "shown_as" in check else check["status"]
+        numbers = ", ".join(f"{key} {_fmt(value)}" for key, value in check["numbers"].items())
+        lines.append(f"| {check['check']} | {shown} | {numbers} |")
+    lines.append("")
+    return lines
 
 
 def _payment_markdown(data: dict[str, Any], git_hash: str, root: Path) -> str:
@@ -892,9 +939,20 @@ def build(root: Path = REPO_ROOT, output_dir: Path | None = None) -> list[Path]:
     ]
 
 
+def build_with_fallback(root: Path = REPO_ROOT, output_dir: Path | None = None) -> list[Path]:
+    """Write the two cards, then rewrite the account card with the fallback model added."""
+    paths = build(root, output_dir)
+    documents = {rel_path: _console(root, rel_path) for rel_path in INPUT_PATHS}
+    account = _account_card(documents)
+    account["fallback_model"] = _console(root, FALLBACK)
+    target = output_dir if output_dir is not None else root / OUT_DIR
+    _write_pair(root, target, ACCOUNT_MODEL, account, (*ACCOUNT_SOURCES, FALLBACK), _git_head(), _account_markdown)
+    return paths
+
+
 def main() -> int:
     """Write the cards and print each path relative to the repository root."""
-    for path in sorted(build()):
+    for path in sorted(build_with_fallback()):
         print(f"wrote {path.relative_to(REPO_ROOT).as_posix()}")
     return 0
 

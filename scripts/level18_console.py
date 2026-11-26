@@ -43,6 +43,44 @@ ONNX_EXPORT = "runs/full/level18c/onnx/onnx_export.json"
 WORLD_CARDS_DIR = "runs/full/world_cards"
 OUT_DIR = "reports/level_18/console"
 
+# Run B, the behaviour-only fallback account model (A-071, A-072).
+RUN_B_RESULT = "runs/full/run_b320/final/45c496799170/result.json"
+RUN_B_LEAKAGE = "runs/full/run_b320/final/45c496799170/leakage_checks.json"
+RUN_B_THRESHOLDS = "runs/full/run_b320/final/45c496799170/checkpoint/thresholds.json"
+RUN_B_STAGE5 = "runs/full/run_b320/stages/final_validation_and_test.json"
+RUN_B_LEAKAGE_5_6 = "runs/full/run_b320/leakage_checks_5_6.json"
+RUN_B_SERVING = "runs/full/run_b320/serving_validation.json"
+FALLBACK_INPUT_PATHS: tuple[str, ...] = (
+    RUN_A_RESULT,
+    RUN_B_RESULT,
+    RUN_B_LEAKAGE,
+    RUN_B_THRESHOLDS,
+    RUN_B_STAGE5,
+    RUN_B_LEAKAGE_5_6,
+    RUN_B_SERVING,
+)
+FALLBACK_FILE = "fallback_account.json"
+FALLBACK_METRICS: tuple[str, ...] = (
+    "recall_at_capacity",
+    "genuine_restriction_rate",
+    "median_time_to_detection_hours",
+    "yield_measured",
+    "yield_reweighted",
+)
+TRIVIAL_NUMBERS: tuple[str, ...] = ("best_feature", "best_direction_ap", "fail_threshold")
+CHECK_5B_NUMBERS: tuple[str, ...] = (
+    "model_feature_count",
+    "missing_model_feature_count",
+    "simulator_only_violation_count",
+)
+CHECK_6B_NUMBERS: tuple[str, ...] = (
+    "validation_average_precision",
+    "validation_base_rate",
+    "average_precision_over_base_rate",
+    "max_ap_over_base_rate",
+)
+CHECK_6B_SHOWN_AS = "FINDING — documented limitation (A-051)"
+
 INPUT_PATHS: tuple[str, ...] = (
     RUN_A_RESULT,
     RUN_A_EXTRA,
@@ -664,9 +702,106 @@ def build(root: Path = REPO_ROOT, output_dir: Path | None = None) -> list[Path]:
     return [_write(root, target, name, data, sources, git_hash) for name, data, sources in outputs]
 
 
+def _fallback_check(name: str, rel_path: str, block: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+    """Copy one Run B leakage check's recorded status and the named numbers."""
+    where = f"{rel_path}.{name}"
+    return {
+        "check": name,
+        "status": _text(_entry(block, "status", where), f"{where}.status"),
+        "source": rel_path,
+        "numbers": {key: _entry(block, key, where) for key in keys},
+    }
+
+
+def _fallback_leakage(leakage: dict[str, Any], leakage_5_6: dict[str, Any]) -> list[dict[str, Any]]:
+    """Run B's recorded checks. Check 6b must be recorded as failed; A-072 fixes how it is shown, not its status."""
+    checks_block = _mapping(_entry(leakage, "checks", RUN_B_LEAKAGE), f"{RUN_B_LEAKAGE}:checks")
+    published = [
+        _fallback_check(name, rel_path, _walk(document, keys, rel_path), numbers)
+        for name, rel_path, document, keys, numbers in (
+            ("truth_leak", RUN_B_LEAKAGE, checks_block, ("truth_leak",), ()),
+            ("split_leak", RUN_B_LEAKAGE, checks_block, ("split_leak",), ()),
+            ("trivial_world", RUN_B_LEAKAGE, checks_block, ("trivial_world",), TRIVIAL_NUMBERS),
+            ("check_5a", RUN_B_LEAKAGE_5_6, leakage_5_6, ("check_5a",), ("hit_count",)),
+            ("check_5b", RUN_B_LEAKAGE_5_6, leakage_5_6, ("check_5b",), CHECK_5B_NUMBERS),
+            ("check_6a", RUN_B_LEAKAGE_5_6, leakage_5_6, ("check_6a",), ("hit_count",)),
+            ("check_6b", RUN_B_LEAKAGE_5_6, leakage_5_6, ("check_6b",), CHECK_6B_NUMBERS),
+            ("section_23_check_7", RUN_B_LEAKAGE, checks_block, ("section_23_check_7",), ()),
+        )
+    ]
+    six_b = next(check for check in published if check["check"] == "check_6b")
+    if six_b["status"] != "fail":
+        raise ValueError(f"A-072 records Run B check 6b as failed, but the source says {six_b['status']!r}")
+    six_b["shown_as"] = CHECK_6B_SHOWN_AS
+    return published
+
+
+def _fallback_test(result: dict[str, Any], rel_path: str) -> dict[str, Any]:
+    """The five published test spreads of the xgboost scorer."""
+    block = _walk(result, ("across_worlds", "test", "xgboost"), rel_path)
+    return {metric: _mapping(_entry(block, metric, rel_path), f"{rel_path}:{metric}") for metric in FALLBACK_METRICS}
+
+
+def collect_fallback_account(documents: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Collect Run B, the behaviour-only fallback model, beside Run A, with the A-071 serving numbers."""
+    serving = documents[RUN_B_SERVING]
+    served = _text(_entry(serving, "serve", RUN_B_SERVING), f"{RUN_B_SERVING}:serve")
+    if served != "run_a":
+        raise ValueError(f"Run B is published as the fallback only when Run A is served; got serve={served!r}")
+    validation = {}
+    for run in ("run_a", "run_b"):
+        block = _mapping(_entry(serving, run, RUN_B_SERVING), f"{RUN_B_SERVING}:{run}")
+        validation[run] = {
+            "median_recall_at_capacity": _number(
+                _entry(block, "median_recall_at_capacity", run), f"{run}.median_recall_at_capacity"
+            ),
+            "defined_worlds": int(_number(_entry(block, "defined_worlds", run), f"{run}.defined_worlds")),
+        }
+    thresholds = documents[RUN_B_THRESHOLDS]
+    stage = _walk(documents[RUN_B_STAGE5], ("result", "success_criterion"), RUN_B_STAGE5)
+    run_b = documents[RUN_B_RESULT]
+    headlines = []
+    for rel_path in (RUN_A_RESULT, RUN_B_RESULT):
+        settings = _walk(documents[rel_path], ("manifest", "settings"), rel_path)
+        key = "capacity_pct_active_accounts_per_day"
+        headlines.append(_number(_entry(settings, key, rel_path), f"{rel_path}:{key}"))
+    if headlines[0] != headlines[1]:
+        raise ValueError(f"Run A and Run B test recalls use different capacities: {headlines}")
+    return {
+        "headline_capacity_pct": headlines[0],
+        "role": "fallback model for banks with no complaint history",
+        "serving": {
+            "served": served,
+            "amendment": "A-071",
+            "capacity_pct": _number(_entry(serving, "capacity_pct", RUN_B_SERVING), "capacity_pct"),
+            "validation": validation,
+        },
+        "test": {
+            "run_a": _fallback_test(documents[RUN_A_RESULT], RUN_A_RESULT),
+            "run_b": _fallback_test(run_b, RUN_B_RESULT),
+        },
+        "test_world_count": len(_mapping(_entry(run_b, "per_world", RUN_B_RESULT), f"{RUN_B_RESULT}:per_world")),
+        "decision_cut": {
+            "value": _number(_entry(thresholds, "xgboost_cut", RUN_B_THRESHOLDS), "xgboost_cut"),
+            "source": RUN_B_THRESHOLDS,
+            "key": "xgboost_cut",
+        },
+        "success_criterion_status": _text(_entry(stage, "status", RUN_B_STAGE5), "success_criterion.status"),
+        "leakage": _fallback_leakage(documents[RUN_B_LEAKAGE], documents[RUN_B_LEAKAGE_5_6]),
+    }
+
+
+def build_fallback(root: Path = REPO_ROOT, output_dir: Path | None = None) -> Path:
+    """Read Run B's frozen files and Run A's result, and write the fallback account console file."""
+    documents = {rel_path: _document(root, rel_path) for rel_path in FALLBACK_INPUT_PATHS}
+    target = output_dir if output_dir is not None else root / OUT_DIR
+    data = collect_fallback_account(documents)
+    return _write(root, target, FALLBACK_FILE, data, list(FALLBACK_INPUT_PATHS), _git_head())
+
+
 def main() -> int:
     """Write the console files and print each path relative to the repository root."""
-    for path in sorted(build()):
+    for path in sorted([*build(), build_fallback()]):
         print(f"wrote {path.relative_to(REPO_ROOT).as_posix()}")
     return 0
 

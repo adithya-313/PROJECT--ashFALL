@@ -518,3 +518,53 @@ def failed_attempts(yaml_path: Path, runs_root: Path) -> tuple[FailedAttempt, ..
             )
         )
     return tuple(records)
+
+
+@dataclass(frozen=True)
+class DriverRunResults:
+    fit_dir: Path
+    final_config_sha256: str
+    pu_method: str
+    success_status: str
+    xgboost_cut: float
+    test_world_count: int
+    test_result_medians: dict[str, dict[str, float]]
+    leakage_final_checks: dict[str, str]
+    shap_status: str
+
+
+def driver_run_results(run_root: Path) -> DriverRunResults:
+    """Read the stage-5 result of a run the full driver finished in one out-root.
+
+    Such a folder holds stages/ and final/<fit id>/ and none of the later reporting files final_results reads. The
+    code version recorded by result.json must equal the one in the stage 5 fingerprint.
+    """
+    stage_path = run_root / "stages" / "final_validation_and_test.json"
+    stage = read_stage_file(stage_path)
+    fit_dir = single_subdir(run_root / "final")
+    result_path = fit_dir / "result.json"
+    leakage_path = fit_dir / "leakage_checks.json"
+    shap_path = fit_dir / "shap_top_features.json"
+    thresholds_path = fit_dir / "checkpoint" / "thresholds.json"
+
+    result = _load_json(result_path)
+    code_version = _need(_need(result, "manifest", result_path), "code_version", result_path)
+    stage_code_version = _need(stage.fingerprint, "code_version", stage_path)
+    if code_version != stage_code_version:
+        raise ValueError(f"code version mismatch: result.json {code_version!r} vs stage file {stage_code_version!r}")
+    return DriverRunResults(
+        fit_dir=fit_dir,
+        final_config_sha256=_need(stage.result, "mule_model_config_sha256", stage_path),
+        pu_method=_need(stage.result, "pu_method", stage_path),
+        success_status=_need(_need(stage.result, "success_criterion", stage_path), "status", stage_path),
+        xgboost_cut=_need(_load_json(thresholds_path), "xgboost_cut", thresholds_path),
+        test_world_count=len(_need(result, "per_world", result_path)),
+        test_result_medians=_result_medians(
+            _need(_need(result, "across_worlds", result_path), "test", result_path), result_path
+        ),
+        leakage_final_checks={
+            name: _need(check, "status", leakage_path)
+            for name, check in _need(_load_json(leakage_path), "checks", leakage_path).items()
+        },
+        shap_status=_need(_load_json(shap_path), "status", shap_path),
+    )

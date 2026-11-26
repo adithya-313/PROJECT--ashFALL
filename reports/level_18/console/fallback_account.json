@@ -1,0 +1,190 @@
+{
+  "data": {
+    "decision_cut": {
+      "key": "xgboost_cut",
+      "source": "runs/full/run_b320/final/45c496799170/checkpoint/thresholds.json",
+      "value": 0.9772312809606538
+    },
+    "headline_capacity_pct": 0.25,
+    "leakage": [
+      {
+        "check": "truth_leak",
+        "numbers": {},
+        "source": "runs/full/run_b320/final/45c496799170/leakage_checks.json",
+        "status": "pass"
+      },
+      {
+        "check": "split_leak",
+        "numbers": {},
+        "source": "runs/full/run_b320/final/45c496799170/leakage_checks.json",
+        "status": "pass"
+      },
+      {
+        "check": "trivial_world",
+        "numbers": {
+          "best_direction_ap": 0.028269987287482604,
+          "best_feature": "account_age_days",
+          "fail_threshold": 0.9
+        },
+        "source": "runs/full/run_b320/final/45c496799170/leakage_checks.json",
+        "status": "pass"
+      },
+      {
+        "check": "check_5a",
+        "numbers": {
+          "hit_count": 0
+        },
+        "source": "runs/full/run_b320/leakage_checks_5_6.json",
+        "status": "pass"
+      },
+      {
+        "check": "check_5b",
+        "numbers": {
+          "missing_model_feature_count": 0,
+          "model_feature_count": 39,
+          "simulator_only_violation_count": 0
+        },
+        "source": "runs/full/run_b320/leakage_checks_5_6.json",
+        "status": "pass"
+      },
+      {
+        "check": "check_6a",
+        "numbers": {
+          "hit_count": 0
+        },
+        "source": "runs/full/run_b320/leakage_checks_5_6.json",
+        "status": "pass"
+      },
+      {
+        "check": "check_6b",
+        "numbers": {
+          "average_precision_over_base_rate": 10.415125553116175,
+          "max_ap_over_base_rate": 2.0,
+          "validation_average_precision": 0.6377814058283728,
+          "validation_base_rate": 0.06123607464698787
+        },
+        "shown_as": "FINDING — documented limitation (A-051)",
+        "source": "runs/full/run_b320/leakage_checks_5_6.json",
+        "status": "fail"
+      },
+      {
+        "check": "section_23_check_7",
+        "numbers": {},
+        "source": "runs/full/run_b320/final/45c496799170/leakage_checks.json",
+        "status": "not run"
+      }
+    ],
+    "role": "fallback model for banks with no complaint history",
+    "serving": {
+      "amendment": "A-071",
+      "capacity_pct": 0.5,
+      "served": "run_a",
+      "validation": {
+        "run_a": {
+          "defined_worlds": 120,
+          "median_recall_at_capacity": 0.6363636363636364
+        },
+        "run_b": {
+          "defined_worlds": 120,
+          "median_recall_at_capacity": 0.5954545454545455
+        }
+      }
+    },
+    "success_criterion_status": "not_judgeable",
+    "test": {
+      "run_a": {
+        "genuine_restriction_rate": {
+          "median": 0.0058823529411764705,
+          "p10": 0.0,
+          "p90": 0.008957905085351686,
+          "unit": "fraction",
+          "world_count": 120
+        },
+        "median_time_to_detection_hours": {
+          "median": 11.675,
+          "p10": 1.1675,
+          "p90": 33.78083333333334,
+          "unit": "hours",
+          "world_count": 120
+        },
+        "recall_at_capacity": {
+          "median": 0.6428571428571429,
+          "p10": 0.47704545454545455,
+          "p90": 0.8333333333333334,
+          "unit": "fraction",
+          "world_count": 120
+        },
+        "yield_measured": {
+          "median": 0.9230769230769231,
+          "p10": 0.8,
+          "p90": 1.0,
+          "unit": "fraction",
+          "world_count": 120
+        },
+        "yield_reweighted": {
+          "median": 0.27295545576391117,
+          "p10": 0.08667283114373164,
+          "p90": 1.0,
+          "unit": "fraction",
+          "world_count": 118,
+          "worlds_defined": 118,
+          "worlds_undefined": 2
+        }
+      },
+      "run_b": {
+        "genuine_restriction_rate": {
+          "median": 0.0058823529411764705,
+          "p10": 0.0,
+          "p90": 0.008852175734408546,
+          "unit": "fraction",
+          "world_count": 120
+        },
+        "median_time_to_detection_hours": {
+          "median": 12.579166666666666,
+          "p10": 0.7966666666666669,
+          "p90": 36.87166666666668,
+          "unit": "hours",
+          "world_count": 120
+        },
+        "recall_at_capacity": {
+          "median": 0.625,
+          "p10": 0.45454545454545453,
+          "p90": 0.7905263157894737,
+          "unit": "fraction",
+          "world_count": 120
+        },
+        "yield_measured": {
+          "median": 0.9166666666666666,
+          "p10": 0.7777777777777778,
+          "p90": 1.0,
+          "unit": "fraction",
+          "world_count": 120
+        },
+        "yield_reweighted": {
+          "median": 0.28064627492482774,
+          "p10": 0.08612677656285833,
+          "p90": 1.0,
+          "unit": "fraction",
+          "world_count": 118,
+          "worlds_defined": 118,
+          "worlds_undefined": 2
+        }
+      }
+    },
+    "test_world_count": 120
+  },
+  "manifest": {
+    "generator": "scripts/level18_console.py",
+    "git_hash": "2c78f8afa1ca67960ad9999e6304a309b7a33c1a",
+    "sources": {
+      "runs/full/run_a320_stage5c/final/45c496799170/result.json": "38c0c8b6a729116d9446e94a78e5950861742dc384bb72404f4a71354caa46a9",
+      "runs/full/run_b320/final/45c496799170/checkpoint/thresholds.json": "c9f7605007d9d65e95a41cf7956b778f2f1becf9288a119cd7bdbfaf836911cd",
+      "runs/full/run_b320/final/45c496799170/leakage_checks.json": "0892ada8f155762a431d5d9469a999dd0c6185da292581558a662630ac572736",
+      "runs/full/run_b320/final/45c496799170/result.json": "b184003db2391777f2b02c84fd695bb4cdb60b20d43e522ce930bb34ad0572d5",
+      "runs/full/run_b320/leakage_checks_5_6.json": "8d15517c348ef0907d8a4d4a251b59e37052dcc4f7e5dff96f9421e24f7c8d44",
+      "runs/full/run_b320/serving_validation.json": "da33a12bb385dbd162aadd697407a967c48890ba7e61f33632eecd822b076d78",
+      "runs/full/run_b320/stages/final_validation_and_test.json": "b2f7b79bee9eeedfd822be6ab22ca1d7cd85e59b99aa9cebbe8cf99f4e433100"
+    }
+  },
+  "simulated": true
+}
