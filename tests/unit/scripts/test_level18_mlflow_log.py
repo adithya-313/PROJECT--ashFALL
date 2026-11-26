@@ -422,3 +422,107 @@ def test_changed_failed_reason_relogs(tmp_path: Path, monkeypatch: pytest.Monkey
     second = log_script.log_units(updated, runs_root)
     assert second["created"] == {"failed_attempt": 1}
     assert sum(second["skipped"].values()) == planned - 1
+
+
+def make_driver_run(tmp_path: Path) -> Path:
+    """A folder shaped like a finished full-driver run: stages/ and final/<fit id>/, no later reporting files."""
+    run_root = tmp_path / "runs" / "run_x"
+    stages = run_root / "stages"
+    variant = {
+        "name": "all_days",
+        "label_maturity_days": 0,
+        "label_trust_weighting": False,
+        "training_row_count": 10,
+        "training_positive_count": 2,
+        "validation_truth_average_precision": 0.67,
+    }
+    point = {"training_world_count": 40, "validation_truth_average_precision": 0.2, "training_row_count": 5}
+    results = {
+        "maturity_check": {"variants": [variant], "chosen_variant": "all_days", "reason": "r", "tolerance": 0.002},
+        "learning_curve": {
+            "points": [point],
+            "doubling_improvements": [],
+            "chosen_training_world_count": 40,
+            "more_training_worlds_needed": True,
+        },
+        "tune_method_none": tune_result("none", trials()),
+        "tune_method_bagging": tune_result("bagging", trials()),
+        "tune_method_elkan_noto": tune_result("elkan_noto", trials()),
+        "final_validation_and_test": {
+            "pu_method": "bagging",
+            "mule_model_config_sha256": "final-sha",
+            "success_criterion": {"status": "not_judgeable"},
+        },
+    }
+    for stage, result in results.items():
+        write_json(stages / f"{stage}.json", stage_payload(stage, result))
+    write_text(stages / "final_mule_model.yaml", "parameters: {}\n")
+    fit = run_root / "final" / "fit0002"
+    metrics = {"recall_at_capacity": {"median": 0.625}, "yield_measured": {"median": 0.9}}
+    write_json(
+        fit / "result.json",
+        {
+            "manifest": {"code_version": FINGERPRINT["code_version"]},
+            "per_world": {"w1": {}, "w2": {}},
+            "across_worlds": {
+                "test": {detector: metrics for detector in ("anomaly", "rules", "rules_and_anomaly", "xgboost")}
+            },
+        },
+    )
+    write_json(fit / "leakage_checks.json", {"checks": {"section_23_check_7": {"status": "not run"}}})
+    write_json(fit / "shap_top_features.json", {"status": "run"})
+    write_json(fit / "optuna_trials.json", {"trial_count": 2})
+    write_json(fit / "validation_curves.json", {"curves": []})
+    write_json(fit / "checkpoint" / "thresholds.json", {"xgboost_cut": 0.97})
+    write_text(fit / "account_model_bags" / "member_000.ubj", "bag")
+    return run_root
+
+
+def test_driver_run_folder_is_planned_under_its_own_name(tmp_path: Path, log_script: ModuleType) -> None:
+    units = log_script.build_run_units(make_driver_run(tmp_path))
+
+    assert [unit.name for unit in units] == [
+        "run_x/stage1_label_maturity",
+        "run_x/learning_curve",
+        "run_x/pu_search_none",
+        "run_x/pu_search_bagging",
+        "run_x/pu_search_elkan_noto",
+        "run_x/final_test",
+    ]
+    assert log_script.plan_counts(units)["pu_search_bagging"] == 3
+    final = units[-1]
+    values = {metric.name: metric.value for metric in final.metrics}
+    assert values["test_xgboost_recall_at_capacity_median"] == 0.625
+    assert values["test_worlds_processed"] == 2
+    assert values["xgboost_cut"] == 0.97
+    assert not [name for name in values if name.startswith("stress")]
+    assert final.tags["run_folder"] == "run_x"
+    assert final.tags["code_version"] == FINGERPRINT["code_version"]
+    assert final.tags["leakage_final_section_23_check_7_status"] == "not run"
+
+
+def test_driver_run_code_version_mismatch_is_refused(tmp_path: Path, log_script: ModuleType) -> None:
+    run_root = make_driver_run(tmp_path)
+    result_path = run_root / "final" / "fit0002" / "result.json"
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    result["manifest"]["code_version"] = "other00"
+    write_json(result_path, result)
+
+    with pytest.raises(ValueError, match="code version mismatch"):
+        log_script.build_run_units(run_root)
+
+
+def test_driver_run_second_pass_creates_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, log_script: ModuleType
+) -> None:
+    run_root = make_driver_run(tmp_path)
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "sqlite:///" + (tmp_path / "mlflow.db").as_posix())
+    monkeypatch.chdir(tmp_path)
+    units = log_script.build_run_units(run_root)
+
+    first = log_script.log_units(units, run_root.parent)
+    second = log_script.log_units(log_script.build_run_units(run_root), run_root.parent)
+
+    assert sum(first["created"].values()) == sum(log_script.plan_counts(units).values())
+    assert second["created"] == {}
+    assert second["skipped"] == first["created"]

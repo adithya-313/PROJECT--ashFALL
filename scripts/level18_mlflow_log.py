@@ -21,7 +21,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -33,6 +33,7 @@ from scripts.level18_mlflow_read import (
     NOT_RECORDED,
     FailedAttempt,
     FingerprintTags,
+    driver_run_results,
     failed_attempts,
     file_records,
     files_under,
@@ -457,6 +458,62 @@ def build_units(runs_root: Path, failed_yaml: Path) -> list[Unit]:
     return units
 
 
+def _driver_final_unit(tags: FingerprintTags, run_root: Path) -> Unit:
+    run = driver_run_results(run_root)
+    metrics = [Metric("xgboost_cut", run.xgboost_cut), Metric("test_worlds_processed", run.test_world_count)]
+    for detector in _DETECTORS:
+        for metric_name, median in run.test_result_medians[detector].items():
+            metrics.append(Metric(f"test_{detector}_{metric_name}_median", median))
+    extra_tags = {
+        "pu_method": run.pu_method,
+        "final_mule_model_yaml_sha256": run.final_config_sha256,
+        "success_criterion_status": run.success_status,
+        "shap_status": run.shap_status,
+    }
+    for check_name, status in run.leakage_final_checks.items():
+        extra_tags[f"leakage_final_{check_name}_status"] = status
+    not_copied = (
+        run.fit_dir / "validation_curves.json",
+        *files_under(run.fit_dir / "checkpoint"),
+        *files_under(run.fit_dir / "account_model_bags"),
+    )
+    return _stage_unit(
+        tags=tags,
+        kind="final_test",
+        name="final_test",
+        source=run.fit_dir / "result.json",
+        params={},
+        metrics=tuple(metrics),
+        children=(),
+        extra_tags=extra_tags,
+        artifacts_copy=(
+            run.fit_dir / "result.json",
+            run.fit_dir / "leakage_checks.json",
+            run.fit_dir / "shap_top_features.json",
+            run.fit_dir / "optuna_trials.json",
+            run_root / "stages" / "final_validation_and_test.json",
+            run_root / "stages" / "final_mule_model.yaml",
+        ),
+        listings=(Listing(files=not_copied, base=run_root.parent, filename="not_copied_files.json"),),
+    )
+
+
+def build_run_units(run_root: Path) -> list[Unit]:
+    """Plan the runs of one out-root the full driver finished, named after its folder. Pure, like build_units."""
+    stages = run_root / "stages"
+    maturity_path = stages / "maturity_check.json"
+    learning_path = stages / "learning_curve.json"
+    tune_paths = tuple(stages / f"tune_method_{method}.json" for method in ("none", "bagging", "elkan_noto"))
+    tags = fingerprint_tags((maturity_path, learning_path, *tune_paths, stages / "final_validation_and_test.json"))
+    units = [_stage1_unit(tags, maturity_path), _learning_curve_unit(tags, learning_path)]
+    units.extend(_pu_search_unit(tags, path) for path in tune_paths)
+    units.append(_driver_final_unit(tags, run_root))
+    return [
+        replace(unit, name=f"{run_root.name}/{unit.name}", tags={**unit.tags, "run_folder": run_root.name})
+        for unit in units
+    ]
+
+
 def plan_counts(units: Sequence[Unit]) -> dict[str, int]:
     counts: dict[str, int] = defaultdict(int)
     for unit in units:
@@ -577,10 +634,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Log the saved Level 18 results to MLflow, idempotently.")
     parser.add_argument("--runs-root", default=DEFAULT_RUNS_ROOT)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--run",
+        type=Path,
+        action="append",
+        help="out-root of a finished full-driver run; repeatable. Logs only these, not the --runs-root plan",
+    )
     args = parser.parse_args(argv)
 
-    runs_root = Path(args.runs_root).resolve()
-    units = build_units(runs_root, FAILED_YAML)
+    if args.run:
+        resolved = [path.resolve() for path in args.run]
+        if len({path.parent for path in resolved}) != 1:
+            raise ValueError(f"every --run folder must share one parent folder; got {[str(p) for p in resolved]}")
+        runs_root = resolved[0].parent
+        units = [unit for path in resolved for unit in build_run_units(path)]
+    else:
+        runs_root = Path(args.runs_root).resolve()
+        units = build_units(runs_root, FAILED_YAML)
 
     if args.dry_run:
         counts = plan_counts(units)
