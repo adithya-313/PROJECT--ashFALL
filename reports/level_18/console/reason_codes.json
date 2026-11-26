@@ -205,7 +205,7 @@
   },
   "manifest": {
     "generator": "scripts/level18_console.py",
-    "git_hash": "2c78f8afa1ca67960ad9999e6304a309b7a33c1a",
+    "git_hash": "3c6287196837a247342c27e14dc4480b9088fcfe",
     "sources": {
       "runs/full/level18c/reason_codes/account_model.json": "df81499d4aa19da3ba30a9f86b9da4db69016da1b4bad3456adb07a8230c1b23",
       "runs/full/level18c/reason_codes/payment_model.json": "fad74418c0c2d06d00d3138cd935b8aa38fbd0d058caf5030f5c76a37e0b5092"

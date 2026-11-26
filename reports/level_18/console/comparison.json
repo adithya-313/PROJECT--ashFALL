@@ -8,113 +8,166 @@
     "stress": {
       "anomaly": {
         "genuine_restriction_rate": {
-          "status": "not run: no stress worlds supplied",
+          "median": 0.01764705882352941,
+          "p10": 0.0059666061384472295,
+          "p90": 0.02733876683203404,
           "unit": "fraction",
-          "world_count": 0
+          "world_count": 120
         },
         "median_time_to_detection_hours": {
-          "status": "not run: no stress worlds supplied",
+          "median": 34.36666666666667,
+          "p10": 0.0,
+          "p90": 1100.6033333333335,
           "unit": "hours",
-          "world_count": 0
+          "world_count": 43
         },
         "recall_at_capacity": {
-          "status": "not run: no stress worlds supplied",
+          "median": 0.0,
+          "p10": 0.0,
+          "p90": 0.08333333333333333,
           "unit": "fraction",
-          "world_count": 0
+          "world_count": 120
         },
         "yield_measured": {
-          "status": "not run: no stress worlds supplied",
+          "median": 0.0,
+          "p10": 0.0,
+          "p90": 0.25,
           "unit": "fraction",
-          "world_count": 0
+          "world_count": 119
         },
         "yield_reweighted": {
-          "status": "not run: no stress worlds supplied",
+          "median": 0.0,
+          "p10": 0.0,
+          "p90": 0.009282499555088848,
           "unit": "fraction",
-          "world_count": 0
+          "world_count": 119,
+          "worlds_defined": 119,
+          "worlds_undefined": 0
         }
       },
       "rules": {
         "genuine_restriction_rate": {
-          "status": "not run: no stress worlds supplied",
+          "median": 0.047058823529411764,
+          "p10": 0.029411764705882353,
+          "p90": 0.06178292555960438,
           "unit": "fraction",
-          "world_count": 0
+          "world_count": 120
         },
         "median_time_to_detection_hours": {
-          "status": "not run: no stress worlds supplied",
+          "median": 20.208333333333336,
+          "p10": 5.633333333333335,
+          "p90": 144.66333333333333,
           "unit": "hours",
-          "world_count": 0
+          "world_count": 118
         },
         "recall_at_capacity": {
-          "status": "not run: no stress worlds supplied",
+          "median": 0.28285714285714286,
+          "p10": 0.1111111111111111,
+          "p90": 0.4404166666666669,
           "unit": "fraction",
-          "world_count": 0
+          "world_count": 120
         },
         "yield_measured": {
-          "status": "not run: no stress worlds supplied",
+          "median": 0.2727272727272727,
+          "p10": 0.09340659340659341,
+          "p90": 0.5,
           "unit": "fraction",
-          "world_count": 0
+          "world_count": 120
         },
         "yield_reweighted": {
-          "status": "not run: no stress worlds supplied",
+          "median": 0.00924479359203021,
+          "p10": 0.0024893529745624436,
+          "p90": 0.028546174667386084,
           "unit": "fraction",
-          "world_count": 0
+          "world_count": 120,
+          "worlds_defined": 120,
+          "worlds_undefined": 0
         }
       },
       "rules_and_anomaly": {
         "genuine_restriction_rate": {
-          "status": "not run: no stress worlds supplied",
+          "median": 0.05621498599439776,
+          "p10": 0.03843891402714932,
+          "p90": 0.07941176470588235,
           "unit": "fraction",
-          "world_count": 0
+          "world_count": 120
         },
         "median_time_to_detection_hours": {
-          "status": "not run: no stress worlds supplied",
+          "median": 20.266666666666666,
+          "p10": 5.750000000000001,
+          "p90": 136.1291666666666,
           "unit": "hours",
-          "world_count": 0
+          "world_count": 118
         },
         "recall_at_capacity": {
-          "status": "not run: no stress worlds supplied",
+          "median": 0.2857142857142857,
+          "p10": 0.125,
+          "p90": 0.47671957671957677,
           "unit": "fraction",
-          "world_count": 0
+          "world_count": 120
         },
         "yield_measured": {
-          "status": "not run: no stress worlds supplied",
+          "median": 0.23205128205128206,
+          "p10": 0.0824074074074074,
+          "p90": 0.4173076923076924,
           "unit": "fraction",
-          "world_count": 0
+          "world_count": 120
         },
         "yield_reweighted": {
-          "status": "not run: no stress worlds supplied",
+          "median": 0.00755771920604442,
+          "p10": 0.0021410549878078393,
+          "p90": 0.01994440568713993,
           "unit": "fraction",
-          "world_count": 0
+          "world_count": 120,
+          "worlds_defined": 120,
+          "worlds_undefined": 0
         }
       },
       "xgboost": {
         "genuine_restriction_rate": {
-          "status": "not run: no stress worlds supplied",
+          "median": 0.0058823529411764705,
+          "p10": 0.0,
+          "p90": 0.011764705882352941,
           "unit": "fraction",
-          "world_count": 0
+          "world_count": 120
         },
         "median_time_to_detection_hours": {
-          "status": "not run: no stress worlds supplied",
+          "median": 12.466666666666665,
+          "p10": 0.5091666666666669,
+          "p90": 33.230000000000004,
           "unit": "hours",
-          "world_count": 0
+          "world_count": 120
         },
         "recall_at_capacity": {
-          "status": "not run: no stress worlds supplied",
+          "median": 0.6363636363636364,
+          "p10": 0.4535353535353535,
+          "p90": 0.8589285714285715,
           "unit": "fraction",
-          "world_count": 0
+          "world_count": 120
         },
         "yield_measured": {
-          "status": "not run: no stress worlds supplied",
+          "median": 0.9230769230769231,
+          "p10": 0.763235294117647,
+          "p90": 1.0,
           "unit": "fraction",
-          "world_count": 0
+          "world_count": 120
         },
         "yield_reweighted": {
-          "status": "not run: no stress worlds supplied",
+          "median": 0.215720836930142,
+          "p10": 0.0751385658541677,
+          "p90": 1.0,
           "unit": "fraction",
-          "world_count": 0
+          "world_count": 120,
+          "worlds_defined": 120,
+          "worlds_undefined": 0
         }
       }
     },
+    "stress_source": {
+      "key": "stress.across_worlds",
+      "source": "runs/full/run_a320_stage5c/final/45c496799170/result.json"
+    },
+    "stress_world_count": 120,
     "test": {
       "anomaly": {
         "genuine_restriction_rate": {
@@ -277,7 +330,7 @@
   },
   "manifest": {
     "generator": "scripts/level18_console.py",
-    "git_hash": "2c78f8afa1ca67960ad9999e6304a309b7a33c1a",
+    "git_hash": "3c6287196837a247342c27e14dc4480b9088fcfe",
     "sources": {
       "runs/full/run_a320_stage5c/extra_reporting.json": "a11e208fda21e4419d20ef55c35bb52a95dc1cb3663792d4a39adfdc40d96ff6",
       "runs/full/run_a320_stage5c/final/45c496799170/result.json": "38c0c8b6a729116d9446e94a78e5950861742dc384bb72404f4a71354caa46a9"
