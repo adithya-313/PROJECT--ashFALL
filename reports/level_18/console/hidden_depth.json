@@ -67,7 +67,7 @@
   },
   "manifest": {
     "generator": "scripts/level18_console.py",
-    "git_hash": "c60d6138afb5bc03dd0da2cec995d0da73283baf",
+    "git_hash": "dd87f31be5bd5fd155d958f26f9025c000c1b480",
     "sources": {
       "runs/full/run_a320_stage5c/extra_reporting.json": "a11e208fda21e4419d20ef55c35bb52a95dc1cb3663792d4a39adfdc40d96ff6"
     }

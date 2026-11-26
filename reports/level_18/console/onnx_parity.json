@@ -76,7 +76,7 @@
   },
   "manifest": {
     "generator": "scripts/level18_console.py",
-    "git_hash": "c60d6138afb5bc03dd0da2cec995d0da73283baf",
+    "git_hash": "dd87f31be5bd5fd155d958f26f9025c000c1b480",
     "sources": {
       "runs/full/level18c/onnx/onnx_export.json": "ba6bcea8a6f1b3b0f9916cdafa73bf7c75e498b6a0f9988cf6e1bf8c247d0309"
     }
