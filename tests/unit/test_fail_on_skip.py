@@ -65,3 +65,34 @@ def test_all_passing_is_fine_with_the_guard_on(pytester, monkeypatch):
 def test_other_values_leave_the_guard_off(pytester, monkeypatch, value):
     monkeypatch.setenv("FAIL_ON_SKIP", value)
     assert run_inner(pytester, SKIPPING_TEST).ret == 0
+
+
+EXEMPT_REASON = "wall-clock check runs on the laptop only (issue #187)"
+
+
+def run_at_estimates_path(pytester, test_name, reason):
+    """Skips one test at the real node path of the exempt file, so the node id is the real one."""
+    pytester.makeconftest(HOOK)
+    folder = pytester.path / "tests" / "unit" / "world"
+    folder.mkdir(parents=True)
+    (folder / "test_world_estimates.py").write_text(
+        f"import pytest\n\ndef {test_name}():\n    pytest.skip({reason!r})\n", encoding="utf-8"
+    )
+    return pytester.runpytest("-p", "no:cacheprovider", "--rootdir", str(pytester.path))
+
+
+@pytest.mark.parametrize(
+    ("test_name", "reason", "exit_code"),
+    [
+        ("test_time_estimate_within_margin", EXEMPT_REASON, 0),
+        ("test_speed_stays_steady_as_worlds_grow", EXEMPT_REASON, 1),
+        ("test_time_estimate_within_margin_again", EXEMPT_REASON, 1),
+        ("test_time_estimate_within_margin", "not here", 1),
+        ("test_time_estimate_within_margin", EXEMPT_REASON + " today", 1),
+    ],
+)
+def test_only_the_exact_test_and_reason_are_exempt(pytester, monkeypatch, test_name, reason, exit_code):
+    monkeypatch.setenv("FAIL_ON_SKIP", "1")
+    result = run_at_estimates_path(pytester, test_name, reason)
+    result.assert_outcomes(skipped=1)
+    assert result.ret == exit_code
