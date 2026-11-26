@@ -1244,3 +1244,23 @@ Rulings, fixed before Run B starts:
 9. **Protections.** The frozen Run A account model, its checkpoint and result files, the payment v1 and v2 models and results, every dataset, every config value and every prior amendment are read only. No file under `runs/full/run_a320*` is written; all Run B output goes under `runs/full/run_b320/`. Nothing from Run B is promoted, merged into a config or served in this round; the owner decides from A-071 and the test report.
 10. **Launch gates and stop rule.** Before launch the run records: commit limit at least 44 GB, `C:` free space at least 40 GB, committed usage at most 17.5 GB, and AC sleep set to never (`powercfg /setacvalueindex SCHEME_CURRENT SUB_SLEEP STANDBYIDLE 0`). The run starts detached and hidden with the 2-minute memory sampler; the sampler stops it at 85% of the commit limit measured at launch (the brief's 38.905 GB at a 45.77 GB limit). If it stops, the last 10 sampler lines are reported, and the stop line is never raised, no world count is cut and no data is dropped.
 
+## A-070a
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-26 |
+| Issue IDs | 154 |
+| Issue IDs v2 | None |
+| Files | `docs/research/amendments.md`; the script named in ruling 2 is added later with its unit test |
+| What changed | Amends A-070 rulings 7 and 8 before launch: stage 5 may score test in the same run, with the test outputs sealed until the serving decision is committed and pushed; and the validation recall at capacity of both models is computed after the run by one new read-only script. |
+| Why | The driver runs all five stages in one call and has no way to stop before stage 5, so A-070 ruling 8 could not be carried out as written. No stored Run A validation recall at capacity was found: the `validation_recall` values in Run A's stage files and `result.json` are measured at genuine-restriction budgets, not at review capacity. |
+| Disclosure | Written on the owner's ruling after the launch checks and before any Run B launch: `runs/full/run_b320/` held only the gate script and its log. Run A's frozen test result already existed. The owner directed that the run start once this amendment is pushed, without waiting for its merge. All results are SIMULATED. |
+| Results exist? | No Run B result exists at the time of writing. |
+
+Rulings, fixed before Run B starts:
+
+1. **Sealed test.** Stage 5 of the driver writes Run B's test scores in the same run, as Run A's stage 5 did. Sealed outputs are `runs/full/run_b320/stages/final_validation_and_test.json` and everything under `runs/full/run_b320/final/`. Until A-071 is committed and pushed, only their file paths and sha256 values are recorded; they are not opened, parsed, printed or reported. The one exception is each final fit's `checkpoint/` folder (`thresholds.json`, `fit_record.json` and the model files), which the pilot writes from training and validation data and which ruling 2's script reads. From the driver's stdout and stderr only progress and error lines are read before then. The check that stage 5's recorded code version is `7f35f3e` is made after A-071 is pushed. This replaces A-070 ruling 7's last sentence with "A-071 records both numbers, the rule trace and the decision before any Run B test number is read", and A-070 ruling 8's "after A-071 is written" with "in the same run, and read only after A-071 is pushed". Test is still scored exactly once.
+2. **One script, both models.** `evaluation/level18_serving_validation.py` scores Run A's frozen model (`runs/full/run_a320_stage5c`) and Run B's final model on the same two validation folders A-070 ruling 3 names, and reads no test or stress dataset. No stored recall is reused. For each model it uses that model's own run config, that checkpoint's own `xgboost_cut` and tuned rules thresholds, one row per account-day built as `evaluation/level18_extra_reporting.py` builds it, `daily_escalations` in `anomaly` mode at capacity `0.5` with `load_escalation_repeat_policy()`, then `recall_at_capacity`. The aggregate is the median across validation worlds that have at least one mule. Run A's number above Run B's serves Run A; otherwise, including exact equality, Run B is served. The script writes nothing under `runs/full/run_a320*`.
+3. **Reading of "0.5%".** The 0.5 in ruling 2 is review capacity, as A-070 ruling 7 reads issue #154. `config/evaluation.yaml` also holds a `main_genuine_restriction_rate_pct` of 0.5; each model's `xgboost_cut` is the one its run tuned at that main budget.
+4. **Everything else in A-070 stands.**
+
