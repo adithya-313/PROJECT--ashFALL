@@ -30,7 +30,7 @@ CONSOLE_FILES: tuple[str, ...] = (
 AMENDMENTS = "docs/research/amendments.md"
 LEARNING_CURVE = "runs/full/run_a320/stages/learning_curve.json"
 OUT = "docs/handoff/level_18.md"
-KEY_AMENDMENTS: tuple[str, ...] = ("A-043", "A-063", "A-064", "A-070", "A-070a", "A-071", "A-072")
+KEY_AMENDMENTS: tuple[str, ...] = ("A-043", "A-063", "A-064", "A-070", "A-070a", "A-071", "A-072", "A-073")
 METRICS: tuple[str, ...] = (
     "recall_at_capacity",
     "genuine_restriction_rate",
@@ -92,7 +92,8 @@ def render(root: Path = REPO_ROOT) -> str:
     validation = fallback["serving"]["validation"]
     stress = payment["splits"]["stress"]["aggregate"]["truth_ap"]
     nan_counts = payment["splits"]["test"]["nan_reason_counts"]
-    stress_status = comparison["stress"]["xgboost"]["recall_at_capacity"]["status"]
+    account_stress = comparison["stress"]["xgboost"]
+    account_stress_numbers = "; ".join(f"{metric} {spread(account_stress[metric])}" for metric in METRICS)
 
     lines = [
         "# Level 18 handoff: the mule account and payment models",
@@ -164,7 +165,10 @@ def render(root: Path = REPO_ROOT) -> str:
             f"{six_b['average_precision_over_base_rate']:.3f} times the base rate, limit "
             f"{six_b['max_ap_over_base_rate']}. Recorded as `{leakage['check_6b']['status']}` for Run A and Run B.",
             f"- **Payment stress ranking:** stress truth AP {spread(stress)}.",
-            f"- **Account models under stress:** {stress_status}.",
+            f"- **Run A under stress** (A-073), {comparison['stress_world_count']} stress worlds, from "
+            f"`{comparison['stress_source']['source']}` key `{comparison['stress_source']['key']}`: "
+            f"{account_stress_numbers}.",
+            "- **Run B under stress:** not run; no stress dataset was passed to it (A-070).",
             f"- **Payees at another bank:** no payee score; {nan_counts['receiver_at_other_bank']} test payments "
             "have a NaN payee risk for that reason.",
             f"- **Learning curve still rising** (Run A, training worlds: validation truth AP): {points}. "

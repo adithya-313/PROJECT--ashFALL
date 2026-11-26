@@ -73,6 +73,10 @@ def _run_a(per_world: dict) -> dict:
                 "xgboost": {"recall_at_capacity": {"status": "not run: no stress worlds supplied", "world_count": 0}}
             },
         },
+        "stress": {
+            "world_count": 7,
+            "across_worlds": {"xgboost": {"recall_at_capacity": _spread(0.55, 7)}},
+        },
         "per_world": per_world,
     }
 
@@ -589,3 +593,18 @@ def test_fallback_file_refuses_a_different_outcome(tmp_path: Path, six_b_status:
     root = _fallback_root(tmp_path, six_b_status, serve)
     with pytest.raises(ValueError, match=message):
         console().build_fallback(root, root / "out")
+
+
+def test_comparison_stress_comes_from_the_stress_block(tmp_path: Path) -> None:
+    """The fixture has both blocks; only the top-level stress block holds the stress numbers (A-073)."""
+    root = _fixture_root(tmp_path)
+    source = json.loads((root / console().RUN_A_RESULT).read_text(encoding="utf-8"))
+    assert "status" in source["across_worlds"]["stress"]["xgboost"]["recall_at_capacity"]
+    console().build(root, root / "out")
+
+    data = json.loads((root / "out" / "comparison.json").read_text(encoding="utf-8"))["data"]
+
+    assert data["stress"]["xgboost"]["recall_at_capacity"]["median"] == 0.55
+    assert "status" not in data["stress"]["xgboost"]["recall_at_capacity"]
+    assert data["stress_world_count"] == 7
+    assert data["stress_source"] == {"source": console().RUN_A_RESULT, "key": "stress.across_worlds"}

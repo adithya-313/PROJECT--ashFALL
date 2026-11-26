@@ -208,13 +208,26 @@ def _world_card_paths(run_a: dict[str, Any]) -> tuple[list[tuple[str, str]], dic
 def collect_comparison(run_a: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
     """Copy the Run A test and stress scorer blocks, the frozen cut and the world count."""
     test = _across_worlds_test(run_a)
-    across = _mapping(_entry(run_a, "across_worlds", RUN_A_RESULT), f"{RUN_A_RESULT}:across_worlds")
-    stress = _mapping(_entry(across, "stress", f"{RUN_A_RESULT}:across_worlds"), f"{RUN_A_RESULT}:across_worlds.stress")
+    # Stress worlds have their own top-level block (A-073); across_worlds.stress reads "not run" even when they ran.
+    stress_block = _walk(run_a, ("stress",), RUN_A_RESULT)
+    stress = _walk(run_a, ("stress", "across_worlds"), RUN_A_RESULT)
+    for scorer in stress:
+        _mapping(stress[scorer], f"{RUN_A_RESULT}:stress.across_worlds.{scorer}")
+    stress_worlds = _number(
+        _entry(stress_block, "world_count", f"{RUN_A_RESULT}:stress"), f"{RUN_A_RESULT}:stress.world_count"
+    )
     manifest = _mapping(_entry(extra, "manifest", RUN_A_EXTRA), f"{RUN_A_EXTRA}:manifest")
     cut = _number(_entry(manifest, "xgboost_cut", f"{RUN_A_EXTRA}:manifest"), f"{RUN_A_EXTRA}:manifest.xgboost_cut")
     per_world = _mapping(_entry(run_a, "per_world", RUN_A_RESULT), f"{RUN_A_RESULT}:per_world")
     decision_cut = {"value": cut, "source": RUN_A_EXTRA, "key": "manifest.xgboost_cut"}
-    return {"test": test, "stress": stress, "decision_cut": decision_cut, "test_world_count": len(per_world)}
+    return {
+        "test": test,
+        "stress": stress,
+        "stress_source": {"source": RUN_A_RESULT, "key": "stress.across_worlds"},
+        "stress_world_count": int(stress_worlds),
+        "decision_cut": decision_cut,
+        "test_world_count": len(per_world),
+    }
 
 
 def collect_hidden_depth(extra: dict[str, Any]) -> dict[str, Any]:
