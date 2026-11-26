@@ -760,7 +760,15 @@ def collect_fallback_account(documents: dict[str, dict[str, Any]]) -> dict[str, 
     thresholds = documents[RUN_B_THRESHOLDS]
     stage = _walk(documents[RUN_B_STAGE5], ("result", "success_criterion"), RUN_B_STAGE5)
     run_b = documents[RUN_B_RESULT]
+    headlines = []
+    for rel_path in (RUN_A_RESULT, RUN_B_RESULT):
+        settings = _walk(documents[rel_path], ("manifest", "settings"), rel_path)
+        key = "capacity_pct_active_accounts_per_day"
+        headlines.append(_number(_entry(settings, key, rel_path), f"{rel_path}:{key}"))
+    if headlines[0] != headlines[1]:
+        raise ValueError(f"Run A and Run B test recalls use different capacities: {headlines}")
     return {
+        "headline_capacity_pct": headlines[0],
         "role": "fallback model for banks with no complaint history",
         "serving": {
             "served": served,

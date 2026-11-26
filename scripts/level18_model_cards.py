@@ -677,7 +677,7 @@ def _fallback_markdown(fallback: dict[str, Any]) -> list[str]:
         "## Fallback model for banks with no complaint history",
         "",
         "Run B, the behaviour-only account model, is not the served model. Run A is served "
-        f"({serving['amendment']}): median validation recall at {serving['capacity_pct']}% review capacity "
+        f"({serving['amendment']}): median validation recall at {serving['capacity_pct']}% capacity (issue #154) "
         f"was {validation['run_a']['median_recall_at_capacity']:.4f} for Run A against "
         f"{validation['run_b']['median_recall_at_capacity']:.4f} for Run B, over "
         f"{validation['run_b']['defined_worlds']} worlds. Run B's decision cut is "
@@ -694,7 +694,13 @@ def _fallback_markdown(fallback: dict[str, Any]) -> list[str]:
             f"{_fmt(block['median'])} ({_fmt(block['p10'])} to {_fmt(block['p90'])})"
             for block in (run_b, fallback["test"]["run_a"][metric])
         ]
-        lines.append(f"| {metric} | {cells[0]} | {cells[1]} |")
+        label = metric
+        if metric == "recall_at_capacity":
+            label = (
+                f"recall at capacity {fallback['headline_capacity_pct']}% (headline; capacity rounds to 1 review "
+                "per bank-day in these worlds)"
+            )
+        lines.append(f"| {label} | {cells[0]} | {cells[1]} |")
     lines.extend(["", "Run B leakage checks:", "", "| check | status | numbers |", "| --- | --- | --- |"])
     for check in fallback["leakage"]:
         shown = check["shown_as"] if "shown_as" in check else check["status"]

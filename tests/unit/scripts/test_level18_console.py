@@ -521,9 +521,14 @@ def _fallback_root(tmp_path: Path, six_b_status: str = "fail", serve: str = "run
 
     counted = {key: 0 for key in module.CHECK_5B_NUMBERS}
     six_b = {key: 1.5 for key in module.CHECK_6B_NUMBERS}
+    manifest = {"settings": {"capacity_pct_active_accounts_per_day": 0.25}}
     documents: dict[str, dict] = {
-        module.RUN_A_RESULT: {"across_worlds": {"test": scorer(0.64)}},
-        module.RUN_B_RESULT: {"across_worlds": {"test": scorer(0.62)}, "per_world": {"w1": {}, "w2": {}}},
+        module.RUN_A_RESULT: {"across_worlds": {"test": scorer(0.64)}, "manifest": manifest},
+        module.RUN_B_RESULT: {
+            "across_worlds": {"test": scorer(0.62)},
+            "per_world": {"w1": {}, "w2": {}},
+            "manifest": manifest,
+        },
         module.RUN_B_LEAKAGE: {
             "checks": {
                 "truth_leak": {"status": "pass"},
@@ -568,6 +573,7 @@ def test_fallback_file_shows_run_b_beside_run_a_and_6b_as_a_finding(tmp_path: Pa
     assert data["test"]["run_a"]["recall_at_capacity"]["median"] == 0.64
     assert data["serving"]["validation"]["run_b"]["median_recall_at_capacity"] == 0.59
     assert data["test_world_count"] == 2
+    assert data["headline_capacity_pct"] == 0.25
     six_b = next(check for check in data["leakage"] if check["check"] == "check_6b")
     assert six_b["status"] == "fail"
     assert six_b["shown_as"] == "FINDING — documented limitation (A-051)"

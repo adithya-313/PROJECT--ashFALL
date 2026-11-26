@@ -510,6 +510,7 @@ def test_account_card_carries_the_fallback_model(tmp_path):
         "decision_cut": {"value": 0.97},
         "success_criterion_status": "not_judgeable",
         "test_world_count": 120,
+        "headline_capacity_pct": 0.25,
         "test": {"run_a": run_a, "run_b": run_b},
         "leakage": [
             {
@@ -529,6 +530,8 @@ def test_account_card_carries_the_fallback_model(tmp_path):
     assert "## Fallback model for banks with no complaint history" in text
     assert "0.6364 for Run A against 0.5955 for Run B" in text
     assert "| check_6b | FINDING — documented limitation (A-051) | average_precision_over_base_rate 10.415000 |" in text
-    assert "| recall_at_capacity | 0.620000 (" in text
+    label = "recall at capacity 0.25% (headline; capacity rounds to 1 review per bank-day in these worlds)"
+    assert f"| {label} | 0.620000 (" in text
+    assert "validation recall at 0.5% capacity (issue #154)" in text
     assert document["data"]["fallback_model"] == fallback
     assert f"{CONSOLE_DIR}/fallback_account.json" in document["manifest"]["sources"]
