@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import orjson
+import xgboost
 
 from decisions.mule_account_model import load_model, load_mule_model_config, set_mule_model_config_path
 from decisions.pu_learning import PUBaggedAccountModel
@@ -98,6 +99,7 @@ def _score_run(run_out: Path, validation_dirs: Sequence[Path], truth_root: Path)
     repeat_policy = load_escalation_repeat_policy()
     set_mule_model_config_path(config_path)
     try:
+        model: xgboost.XGBClassifier | PUBaggedAccountModel
         # The same choice the pilot's checkpoint loader makes between the two saved formats.
         if record["pu_method"] == "none" or (checkpoint / "model.ubj").is_file():
             model = load_model(checkpoint / "model.ubj")
