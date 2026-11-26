@@ -1264,3 +1264,29 @@ Rulings, fixed before Run B starts:
 3. **Reading of "0.5%".** The 0.5 in ruling 2 is review capacity, as A-070 ruling 7 reads issue #154. `config/evaluation.yaml` also holds a `main_genuine_restriction_rate_pct` of 0.5; each model's `xgboost_cut` is the one its run tuned at that main budget.
 4. **Everything else in A-070 stands.**
 
+
+## A-071
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-26 |
+| Issue IDs | 154 |
+| Issue IDs v2 | None |
+| Files | `docs/research/amendments.md` |
+| What changed | Records the serving decision of issue #154: Run A's account model (behaviour and label-network features) is served; Run B's behaviour-only model stays the documented fallback for a bank with no complaint history. |
+| Why | Run A's validation recall at capacity is above Run B's under the rule fixed in A-070 and A-070a. |
+| Disclosure | Written after Run B finished and before any Run B test number was opened. Test was already scored by stage 5 in the same run, as A-070a ruling 1 allows; those files are sealed by the hashes below. Run A's frozen test result was already known. All results are SIMULATED. |
+| Results exist? | Yes: `runs/full/run_b320/serving_validation.json`, sha256 `da33a12bb385dbd162aadd697407a967c48890ba7e61f33632eecd822b076d78`, written at code version `5ba6133`. |
+
+The comparison, at review capacity 0.5 on `validation-20261031T1830-5a6d507bde9c` and `validation-20261031T1830-99fed7ecb1d1`, repeat policy `once_per_world`:
+
+| Model | Median recall at capacity | Defined worlds | Own score cut | Method | Fit code version |
+| --- | --- | --- | --- | --- | --- |
+| Run A | 0.6363636363636364 | 120 | 0.9631869778454679 | bagging | `0d0ace9` |
+| Run B | 0.5954545454545455 | 120 | 0.9772312809606538 | bagging | `7f35f3e` |
+
+Rule trace: 0.6363636363636364 > 0.5954545454545455, so Run A beats Run B; the tie clause does not apply. **Serve Run A's account model.** World by world, Run A is higher in 59, equal in 55 and lower in 6 of 120 worlds. No test or stress number entered this choice.
+
+Run A was fitted at `0d0ace9` and scored here at `5ba6133`. Between the two, the changes to `decisions/mule_account_model.py`, `evaluation/level17_scoring.py` and `features/account_labels.py` add an accessor, a type protocol and a log level, and change no score.
+
+Sealed Run B outputs, recorded before opening: `runs/full/run_b320/stages/final_validation_and_test.json` sha256 `b2f7b79bee9eeedfd822be6ab22ca1d7cd85e59b99aa9cebbe8cf99f4e433100`; `runs/full/run_b320/final/45c496799170/result.json` sha256 `b184003db2391777f2b02c84fd695bb4cdb60b20d43e522ce930bb34ad0572d5`. All 57 sealed paths and hashes (that stage file and everything under `final/` outside `checkpoint/`) are in `runs/full/run_b320/seal/sealed_sha256.txt`, sha256 `5613a7f3b6c52e45acb7763a2c99318e0b9d2792d7038241d2d8d6c075f13da7`.
