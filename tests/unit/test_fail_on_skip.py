@@ -2,7 +2,11 @@
 File: tests/unit/test_fail_on_skip.py
 Purpose: Tests the FAIL_ON_SKIP guard on tiny test files that pytester writes and runs in a temporary folder.
 """
+from types import SimpleNamespace
+
 import pytest
+
+from tests.fail_on_skip import EXEMPT_NODE_ID, EXEMPT_REASON, _is_exempt
 
 pytest_plugins = ["pytester"]
 
@@ -67,32 +71,48 @@ def test_other_values_leave_the_guard_off(pytester, monkeypatch, value):
     assert run_inner(pytester, SKIPPING_TEST).ret == 0
 
 
-EXEMPT_REASON = "wall-clock check runs on the laptop only (issue #187)"
+# No fake test_world_estimates.py is written here: the real module already has that name, so writing
+# a same-named fake file made pytest report "import file mismatch" between the two.
 
 
-def run_at_estimates_path(pytester, test_name, reason):
-    """Skips one test at the real node path of the exempt file, so the node id is the real one."""
-    pytester.makeconftest(HOOK)
-    folder = pytester.path / "tests" / "unit" / "world"
-    folder.mkdir(parents=True)
-    (folder / "test_world_estimates.py").write_text(
-        f"import pytest\n\ndef {test_name}():\n    pytest.skip({reason!r})\n", encoding="utf-8"
-    )
-    return pytester.runpytest("-p", "no:cacheprovider", "--rootdir", str(pytester.path))
+def fake_skip_report(node_id: str, message: str) -> SimpleNamespace:
+    """Build a fake pytest skip report with the shape the matcher reads: (path, line, message)."""
+    return SimpleNamespace(nodeid=node_id, longrepr=("some/path.py", 1, message))
 
 
 @pytest.mark.parametrize(
-    ("test_name", "reason", "exit_code"),
+    ("node_id", "message", "expected"),
     [
-        ("test_time_estimate_within_margin", EXEMPT_REASON, 0),
-        ("test_speed_stays_steady_as_worlds_grow", EXEMPT_REASON, 1),
-        ("test_time_estimate_within_margin_again", EXEMPT_REASON, 1),
-        ("test_time_estimate_within_margin", "not here", 1),
-        ("test_time_estimate_within_margin", EXEMPT_REASON + " today", 1),
+        (EXEMPT_NODE_ID, f"Skipped: {EXEMPT_REASON}", True),
+        (
+            "tests/unit/world/test_world_estimates.py::test_speed_stays_steady_as_worlds_grow",
+            f"Skipped: {EXEMPT_REASON}",
+            False,
+        ),
+        (EXEMPT_NODE_ID + "_again", f"Skipped: {EXEMPT_REASON}", False),
+        (EXEMPT_NODE_ID, "Skipped: not here", False),
+        (EXEMPT_NODE_ID, f"Skipped: {EXEMPT_REASON} today", False),
     ],
 )
-def test_only_the_exact_test_and_reason_are_exempt(pytester, monkeypatch, test_name, reason, exit_code):
-    monkeypatch.setenv("FAIL_ON_SKIP", "1")
-    result = run_at_estimates_path(pytester, test_name, reason)
-    result.assert_outcomes(skipped=1)
-    assert result.ret == exit_code
+def test_only_the_exact_test_and_reason_are_exempt(node_id: str, message: str, expected: bool) -> None:
+    """Check the exemption rule on its own: only the exact node id with the exact reason matches."""
+    report = fake_skip_report(node_id, message)
+    assert _is_exempt(report) is expected
+
+
+def test_real_skip_reports_have_the_shape_the_matcher_reads(pytester) -> None:
+    """Prove a real skipped report has the same shape the matcher reads, so the checks above are meaningful."""
+    source = (
+        "import pytest\n\n"
+        f"def test_probe():\n    pytest.skip({EXEMPT_REASON!r})\n"
+    )
+    pytester.makepyfile(test_shape_probe=source)
+    recorder = pytester.inline_run("-p", "no:cacheprovider")
+    reports = recorder.getreports("pytest_runtest_logreport")
+    skipped = [report for report in reports if report.outcome == "skipped"]
+    assert len(skipped) == 1
+    report = skipped[0]
+    assert isinstance(report.longrepr, tuple)
+    assert report.longrepr[2] == f"Skipped: {EXEMPT_REASON}"
+    # Wrong node id: the probe is not the exempt test_world_estimates test.
+    assert _is_exempt(report) is False
