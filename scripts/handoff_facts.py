@@ -293,11 +293,94 @@ PART_CONFIGS: dict[str, dict[str, Any]] = {
         ),
         "CONFIG_FILES": (
             "config/rules_baseline.yaml",
+            "config/rules_labels_extension.yaml",
             "config/anomaly_detector.yaml",
             "config/cold_start.yaml",
             "config/rules_tuning.yaml",
         ),
         "REGISTER_IDS": ("17-1", "17-2", "17-3", "17-4", "17-5", "R5"),
+    },
+    "18a1": {
+        "INTERFACE_MODULES": (
+            "replay.runner",
+            "nationalsim.national_outbox",
+            "scripts.compare_datasets_normalised",
+        ),
+        "RECORDS_MODULE": ("replay.runner",),
+        "RECORD_NAMES": (
+            "DrainCounters",
+            "ReplayDropContext",
+            "ReplayHookContext",
+            "ReplayResult",
+        ),
+        "CONFIG_FILES": (
+            "config/replay.yaml",
+            "config/datasets.yaml",
+        ),
+        "REGISTER_IDS": ("16-4", "17-4", "18-1"),
+    },
+    "18a2": {
+        "INTERFACE_MODULES": (
+            "world.gang_mix",
+            "world.gang_config",
+            "world.gang_devices",
+            "world.bank_feed",
+        ),
+        "RECORDS_MODULE": (
+            "world.gang_devices",
+            "world.bank_feed",
+        ),
+        "RECORD_NAMES": (
+            "GangDeviceEvent",
+            "BankFeedAccountEvent",
+        ),
+        "CONFIG_FILES": (
+            "config/takeover_realism.yaml",
+        ),
+        "REGISTER_IDS": ("16-6",),
+    },
+    "18a1b": {
+        "INTERFACE_MODULES": (
+            "scripts.build_level_16_datasets",
+            "scripts.dataset_checkpoints",
+            "scripts.dataset_shards",
+        ),
+        "RECORDS_MODULE": ("scripts.dataset_checkpoints",),
+        "RECORD_NAMES": ("DatasetCheckpoint",),
+        "CONFIG_FILES": ("config/dataset_build.yaml",),
+        "REGISTER_IDS": ("16-4",),
+    },
+    "18a": {
+        "INTERFACE_MODULES": ("scripts.level18_console",),
+        "RECORDS_MODULE": ("scripts.level18_console",),
+        "RECORD_NAMES": (),
+        "CONFIG_FILES": (),
+        "REGISTER_IDS": (),
+    },
+    "18b": {
+        "INTERFACE_MODULES": (
+            "evaluation.calibration",
+            "evaluation.onnx_export",
+            "evaluation.reason_codes",
+        ),
+        "RECORDS_MODULE": (
+            "evaluation.calibration",
+            "evaluation.reason_codes",
+        ),
+        "RECORD_NAMES": (
+            "Calibrator",
+            "ReasonCode",
+            "ReasonCodeMap",
+            "ReasonFeature",
+            "RowReason",
+            "WorldRecord",
+        ),
+        "CONFIG_FILES": (
+            "config/feature_reason_codes.yaml",
+            "config/mule_model_quality_gate.yaml",
+            "config/mule_payment_feature_order.yaml",
+        ),
+        "REGISTER_IDS": (),
     },
 }
 

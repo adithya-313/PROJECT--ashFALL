@@ -1,0 +1,26 @@
+# =====================================================================
+# LEAKAGE CHECKS 5-6: the pass rule for the id-only measurement
+# =====================================================================
+#
+# What this file is
+#   Section 23 check 6b trains a small model on account identifiers alone and asks how much of
+#   the hidden mule role those identifiers expose. This file holds the one policy number that
+#   turns that measurement into a pass or fail.
+#
+# Who reads it
+#   evaluation/leakage_checks_5_6.py (load_leakage_checks_config) reads it when checks 5 and 6 run.
+#
+# How to read an entry
+#   label       "policy": we chose the value; no source published it.
+#   value       the setting used by the check.
+#   derived_from  the ruling the choice came from.
+#   reason      one sentence on why the value looks the way it does.
+#
+# Checked by: python -m core.config_validator config/leakage_checks.yaml
+# =====================================================================
+
+id_leak_max_ap_over_base_rate:
+  label: policy
+  value: 2.0
+  derived_from: "architect ruling 2026-11-22"
+  reason: "an id-only model more than twice as good as random means ids carry role information"

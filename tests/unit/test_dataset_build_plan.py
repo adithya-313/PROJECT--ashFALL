@@ -22,6 +22,7 @@ from scripts.build_level_16_datasets import (
     derive_dataset_cutoff,
     find_fitting_sampler_seed,
     load_datasets_config,
+    parse_worlds_per_split,
     plan_datasets,
     summarize_labels_by_source_and_via,
     supersede_prior_datasets,
@@ -160,6 +161,46 @@ def test_supersede_prior_datasets_handles_empty_root(tmp_path: Path) -> None:
     assert supersede_prior_datasets("training", new_dir, datasets_root=empty_dir) == []
 
 
+def _write_manifest(folder: Path, split: str, seeds: list[int] | None) -> Path:
+    """Creates a dataset folder whose manifest lists one world per seed, or no worlds list when seeds is None."""
+    folder.mkdir()
+    manifest: dict[str, Any] = {"split": split}
+    if seeds is not None:
+        manifest["worlds"] = [
+            {"world_id": f"{split}-{position:04d}", "split": split, "seed": seed}
+            for position, seed in enumerate(seeds)
+        ]
+    (folder / "manifest.json").write_bytes(orjson.dumps(manifest))
+    return folder
+
+
+def test_supersede_skips_a_dataset_of_other_world_seeds(tmp_path: Path) -> None:
+    """An older same-split dataset of disjoint seeds holds other worlds, so it is not marked superseded."""
+    old = _write_manifest(tmp_path / "training-20260901T0000", "training", [1000000, 1000001])
+    new = _write_manifest(tmp_path / "training-20261101T0000", "training", [3000000, 3000001])
+
+    assert supersede_prior_datasets("training", new, datasets_root=tmp_path) == []
+    assert "superseded_by" not in orjson.loads((old / "manifest.json").read_bytes())
+
+
+def test_supersede_marks_a_dataset_sharing_one_world_seed(tmp_path: Path) -> None:
+    """An older same-split dataset that recorded even one of the new seeds is superseded."""
+    old = _write_manifest(tmp_path / "training-20260901T0000", "training", [1000000, 1000001])
+    new = _write_manifest(tmp_path / "training-20261101T0000", "training", [1000001, 1000002])
+
+    assert supersede_prior_datasets("training", new, datasets_root=tmp_path) == [old]
+    assert orjson.loads((old / "manifest.json").read_bytes()).get("superseded_by") == new.name
+
+
+def test_supersede_marks_a_legacy_manifest_without_worlds(tmp_path: Path) -> None:
+    """A manifest written before worlds were listed cannot be compared, so the old same-split rule marks it."""
+    old = _write_manifest(tmp_path / "training-20260901T0000", "training", None)
+    new = _write_manifest(tmp_path / "training-20261101T0000", "training", [3000000])
+
+    assert supersede_prior_datasets("training", new, datasets_root=tmp_path) == [old]
+    assert orjson.loads((old / "manifest.json").read_bytes()).get("superseded_by") == new.name
+
+
 def test_derive_dataset_cutoff_uses_max_world_end() -> None:
     """Verifies that derive_dataset_cutoff derives the maximum simulation end timestamp."""
     # World 1: starts 2026-09-01, 61 days -> ends 2026-11-01 00:00:00 IST
@@ -280,3 +321,73 @@ def test_find_sampler_seed_cli_starts_at_the_sampler_seed_flag(
 
     assert capsys.readouterr().out == "fitting sampler seed: 5\n"
     assert attempted_seeds == [3, 4, 5]
+
+
+def test_parse_worlds_per_split_reads_pilot_counts() -> None:
+    """The pilot override text parses into the three split counts the pilot build uses."""
+    assert parse_worlds_per_split("training=6,validation=3,test=3") == {
+        "training": 6,
+        "validation": 3,
+        "test": 3,
+    }
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ("holiday=2", "unknown split"),
+        ("training=2,validation=0", "must be positive"),
+        ("training=-1", "must be positive"),
+        ("training=three", "not an integer"),
+        ("training=2,training=3", "more than once"),
+        ("training:2", "not split=count"),
+        ("", "empty"),
+        ("   ", "empty"),
+    ],
+)
+def test_parse_worlds_per_split_refuses_bad_text(text: str, message: str) -> None:
+    """Every malformed override is refused with a message naming the problem."""
+    with pytest.raises(ValueError, match=message):
+        parse_worlds_per_split(text)
+
+
+def test_main_passes_the_worlds_per_split_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A build with --worlds-per-split hands the parsed counts to the build function."""
+    calls: dict[str, Any] = {}
+
+    async def fake_build(**kwargs: Any) -> dict[str, Any]:
+        calls.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(build_module, "build_all_level_16_datasets", fake_build)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["build_level_16_datasets.py", "--worlds-per-split", "training=6,validation=3,test=3"],
+    )
+
+    build_module.main()
+
+    assert calls["worlds_per_split"] == {"training": 6, "validation": 3, "test": 3}
+
+
+def test_main_without_the_flag_passes_no_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A build without --worlds-per-split passes None, so the config counts still rule."""
+    calls: dict[str, Any] = {}
+
+    async def fake_build(**kwargs: Any) -> dict[str, Any]:
+        calls.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(build_module, "build_all_level_16_datasets", fake_build)
+    monkeypatch.setattr(sys, "argv", ["build_level_16_datasets.py"])
+
+    build_module.main()
+
+    assert calls["worlds_per_split"] is None
+    assert load_datasets_config() == {
+        "training": 2,
+        "validation": 1,
+        "test": 1,
+        "stress": 1,
+    }

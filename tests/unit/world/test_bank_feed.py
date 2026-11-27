@@ -542,3 +542,161 @@ def test_unknown_bank_index_raises_value_error_not_key_error(bank_config: Any) -
     assert "Unknown bank index 42; expected one of [0, 1, 2]" in str(helper_exc.value)
 
 
+def _binding_event(
+    minute: int, account_id: str, fingerprint: str, os_generation: int, device_id: str = "dev_ext_900001",
+) -> GangDeviceEvent:
+    """Builds a control_binding gang event with a neutral gang device."""
+    return GangDeviceEvent(
+        minute=minute,
+        device_id=device_id,
+        account_id=account_id,
+        kind="control_binding",
+        platform="android",
+        os_generation=os_generation,
+        fingerprint=fingerprint,
+    )
+
+
+def _feed_with_gang_events(output: InteractiveWorldOutput, events: list[GangDeviceEvent]) -> BankFeed:
+    """Projects a run whose applied gang device events are replaced by the given list."""
+    return project_run(replace(output, result=replace(output.result, applied_gang_device_events=events)))
+
+
+def _account_events(feed: BankFeed, account_id: str, kind: str) -> list[Any]:
+    """Returns every projected account event of a kind for an account, across banks."""
+    found: list[Any] = []
+    for bank_events in feed.account_events_by_bank.values():
+        for event in bank_events:
+            if event.account_id == account_id and event.kind == kind:
+                found.append(event)
+    return found
+
+
+def _person_without_genuine_events(output: InteractiveWorldOutput) -> Any:
+    """Returns a person whose account saw no genuine device event during the run."""
+    people_with_events = {event.person_id for event in output.result.applied_device_events}
+    return next(person for person in output.world.people if person.person_id not in people_with_events)
+
+
+def test_control_binding_before_is_the_owners_device_and_after_is_the_gang_device(
+    tiny_world_output: InteractiveWorldOutput,
+) -> None:
+    """A person-owned account's first binding has before = the owner's device and after = the gang device."""
+    person = _person_without_genuine_events(tiny_world_output)
+    binding = _binding_event(100, person.account_id, "fp_android_v4_gangbind01", 4)
+    feed = _feed_with_gang_events(tiny_world_output, [binding])
+
+    events = _account_events(feed, person.account_id, "device_binding_change")
+    projected = [event for event in events if event.details["fingerprint_after"] == binding.fingerprint]
+    assert len(projected) == 1
+    details = projected[0].details
+    assert details["fingerprint_before"] == person.device.fingerprint
+    assert details["os_generation_before"] == person.device.os_generation
+    assert details["fingerprint_after"] == binding.fingerprint
+    assert details["os_generation_after"] == binding.os_generation
+    assert details["platform"] == binding.platform
+
+
+def test_control_binding_uses_a_genuine_phone_change_at_the_same_minute(
+    tiny_world_output: InteractiveWorldOutput,
+) -> None:
+    """A genuine phone change at the binding's minute counts as the device in use just before the binding."""
+    genuine = next(
+        event for event in tiny_world_output.result.applied_device_events
+        if sum(1 for other in tiny_world_output.result.applied_device_events if other.person_id == event.person_id) == 1
+    )
+    person = next(p for p in tiny_world_output.world.people if p.person_id == genuine.person_id)
+    binding = _binding_event(genuine.minute, person.account_id, "fp_android_v4_gangbind02", 4)
+    feed = _feed_with_gang_events(tiny_world_output, [binding])
+
+    projected = [
+        event for event in _account_events(feed, person.account_id, "device_binding_change")
+        if event.details["fingerprint_after"] == binding.fingerprint
+    ]
+    assert len(projected) == 1
+    assert projected[0].details["fingerprint_before"] == genuine.fingerprint_after
+    assert projected[0].details["os_generation_before"] == genuine.os_generation_after
+
+
+def test_rotation_binding_uses_the_previous_gang_device_as_before(
+    tiny_world_output: InteractiveWorldOutput,
+) -> None:
+    """A second binding on the same account takes the first binding's gang device as its before device."""
+    person = _person_without_genuine_events(tiny_world_output)
+    first = _binding_event(100, person.account_id, "fp_android_v4_rotation01", 4)
+    second = _binding_event(700, person.account_id, "fp_android_v5_rotation02", 5)
+    feed = _feed_with_gang_events(tiny_world_output, [first, second])
+
+    projected = sorted(
+        (
+            event for event in _account_events(feed, person.account_id, "device_binding_change")
+            if event.details["fingerprint_after"] in {first.fingerprint, second.fingerprint}
+        ),
+        key=lambda event: event.event_time,
+    )
+    assert len(projected) == 2
+    assert projected[1].details["fingerprint_before"] == first.fingerprint
+    assert projected[1].details["os_generation_before"] == first.os_generation
+
+
+def test_gang_opened_accounts_first_binding_is_dropped_and_counted(
+    tiny_world_output: InteractiveWorldOutput,
+) -> None:
+    """A gang-opened account has no person and no earlier binding, so its first binding is dropped and counted."""
+    gang_account = "acc_shop_900001"
+    opened = (0, gang_account, "shop", "gang", 0, 100_000, 0)
+    output = replace(
+        tiny_world_output,
+        result=replace(tiny_world_output.result, opened_accounts=[opened]),
+    )
+    binding = _binding_event(100, gang_account, "fp_android_v4_gangopened", 4)
+    feed = _feed_with_gang_events(output, [binding])
+
+    assert _account_events(feed, gang_account, "device_binding_change") == []
+    assert feed.dropped_device_events_by_kind["control_binding_no_prior_device"] == 1
+
+
+def test_control_binding_details_have_exactly_the_genuine_device_fields(
+    tiny_world_output: InteractiveWorldOutput,
+) -> None:
+    """A projected binding carries exactly GENUINE_DEVICE_DETAIL_FIELDS, the same shape as a genuine change."""
+    person = _person_without_genuine_events(tiny_world_output)
+    binding = _binding_event(100, person.account_id, "fp_android_v4_gangshape1", 4)
+    feed = _feed_with_gang_events(tiny_world_output, [binding])
+
+    projected = [
+        event for event in _account_events(feed, person.account_id, "device_binding_change")
+        if event.details["fingerprint_after"] == binding.fingerprint
+    ]
+    assert len(projected) == 1
+    assert set(projected[0].details.keys()) == GENUINE_DEVICE_DETAIL_FIELDS
+
+
+def test_bank_feed_is_unchanged_when_no_control_binding_events_are_present(
+    tiny_world_output: InteractiveWorldOutput,
+) -> None:
+    """Adding a control_binding leaves every other projection, including the other gang events, exactly as it was."""
+    person = _person_without_genuine_events(tiny_world_output)
+    sim_swap = GangDeviceEvent(
+        minute=200,
+        device_id="dev_ext_900002",
+        account_id=person.account_id,
+        kind="sim_swap",
+        platform="android",
+        os_generation=3,
+        fingerprint="fp_android_v3_gangsimswap",
+    )
+    baseline = _feed_with_gang_events(tiny_world_output, [sim_swap])
+    with_binding = _feed_with_gang_events(
+        tiny_world_output, [sim_swap, _binding_event(100, person.account_id, "fp_android_v4_gangextra", 4)]
+    )
+
+    assert with_binding.payments_by_bank == baseline.payments_by_bank
+    assert with_binding.complaints_by_bank == baseline.complaints_by_bank
+    assert with_binding.withdrawals_by_bank == baseline.withdrawals_by_bank
+    baseline_sim_swap = _account_events(baseline, person.account_id, "sim_swap")
+    with_binding_sim_swap = _account_events(with_binding, person.account_id, "sim_swap")
+    assert with_binding_sim_swap == baseline_sim_swap
+    assert len(_account_events(with_binding, person.account_id, "device_binding_change")) == 1
+
+

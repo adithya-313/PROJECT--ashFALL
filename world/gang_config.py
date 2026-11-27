@@ -457,7 +457,7 @@ def _validate_take_control_parameters(gang_id: str, steps: tuple[BlockStep, ...]
     """
     # 1. Fetch allowed devices range from tactic blocks configuration.
     min_devices, max_devices = get_take_control_devices_range()
-    boolean_flags = ("sim_swap", "linked_number_switch", "emulator", "remote_access")
+    boolean_flags = ("sim_swap", "linked_number_switch", "emulator", "remote_access", "bind_control_device")
     for step in steps:
         if step.block != "take_control":
             continue

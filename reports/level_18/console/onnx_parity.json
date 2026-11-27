@@ -1,0 +1,85 @@
+{
+  "data": {
+    "converter": {
+      "account_opset": "ai.onnx.ml:1",
+      "function": "onnxmltools.convert.convert_xgboost",
+      "input_name": "input",
+      "onnx_version": "1.20.1",
+      "onnxmltools_version": "1.16.0",
+      "onnxruntime_version": "1.24.2",
+      "output_name": "probabilities",
+      "payment_opset": "ai.onnx.ml:1",
+      "xgboost_version": "3.2.0"
+    },
+    "models": {
+      "account": {
+        "file": "mule_account_xgb.onnx",
+        "merge_proof": {
+          "decision_cut": 0.9631869778454679,
+          "decision_flips": 0,
+          "margin_max_abs_diff": 0.000013103485107635038,
+          "margin_mean_abs_diff": 2.957019532760149e-6,
+          "nan_rows": 20000,
+          "probability_max_abs_diff": 7.059898836092593e-7,
+          "probability_mean_abs_diff": 8.631150705059898e-8,
+          "rows": 20000,
+          "spearman": 0.9999999998845,
+          "top_rows": 200,
+          "top_set_identical": true
+        },
+        "parity": {
+          "test": {
+            "max_abs_diff": 1.6789018467133765e-7,
+            "mean_abs_diff": 3.299944884183842e-8,
+            "nan_rows": 20000,
+            "rows": 20000,
+            "rows_over_tolerance": 0
+          },
+          "validation": {
+            "max_abs_diff": 1.7884182645921953e-7,
+            "mean_abs_diff": 3.294305767656536e-8,
+            "nan_rows": 20000,
+            "rows": 20000,
+            "rows_over_tolerance": 0
+          }
+        },
+        "sha256": "44b8f80efb01dad468b806b008eb4c7ec6111d0fd10128787fca3903e27d973a"
+      },
+      "payment": {
+        "file": "mule_payment_xgb.onnx",
+        "parity": {
+          "test": {
+            "max_abs_diff": 2.682209014892578e-7,
+            "mean_abs_diff": 3.505332861095667e-8,
+            "nan_rows": 20000,
+            "rows": 20000,
+            "rows_over_tolerance": 0
+          },
+          "validation": {
+            "max_abs_diff": 2.980232238769531e-7,
+            "mean_abs_diff": 3.491193056106568e-8,
+            "nan_rows": 20000,
+            "rows": 20000,
+            "rows_over_tolerance": 0
+          }
+        },
+        "sha256": "85e45e5579706a35563996cd60fc7fd67c6f8f1eb98c6ece065db4896a5c0266"
+      }
+    },
+    "tolerances": {
+      "margin_report_only": true,
+      "merge_probability": 0.00001,
+      "parity": 0.00001,
+      "spearman_min": 0.999999,
+      "top_fraction": 0.01
+    }
+  },
+  "manifest": {
+    "generator": "scripts/level18_console.py",
+    "git_hash": "3c6287196837a247342c27e14dc4480b9088fcfe",
+    "sources": {
+      "runs/full/level18c/onnx/onnx_export.json": "ba6bcea8a6f1b3b0f9916cdafa73bf7c75e498b6a0f9988cf6e1bf8c247d0309"
+    }
+  },
+  "simulated": true
+}

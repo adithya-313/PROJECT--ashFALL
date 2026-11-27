@@ -1,0 +1,52 @@
+# =====================================================================
+# DATASET BUILD: how an unattended Level 16 world replay survives a dropped connection
+# =====================================================================
+#
+# What this file is
+#   The switches and waits used when one world's replay fails because Redis or
+#   Postgres dropped the connection. A failed world is replayed from scratch,
+#   because run_replay always drops its workspace in a finally block.
+#
+# Who reads it
+#   scripts/build_level_16_datasets.py (load_dataset_build_config) reads it once
+#   per split, for replay_world_with_retry only.
+#
+# Why it lives in its own file
+#   world_ranges.yaml and the other files folded into effective_config are hashed
+#   into the run id. Retry policy must never change a run id, so it stays out of
+#   them (amendment A-041): nothing in this file is read by make_run_id or by the
+#   recording step.
+#
+# How to read an entry
+#   label       "policy": we chose the value; no source published it.
+#   value       the setting used by the build.
+#   derived_from  the brief or handoff the choice came from.
+#   reason      one sentence on why the value looks the way it does.
+#
+# Checked by: python -m core.config_validator config/dataset_build.yaml
+# =====================================================================
+
+parameters:
+  retry_world_on_connection_error:
+    label: policy
+    value: true
+    derived_from: "Level 18a1b brief"
+    reason: "A dropped Redis or Postgres connection ended a whole split on 2026-11-15 (WinError 10054), so a world replay is retried instead of the split dying."
+
+  max_world_attempts:
+    label: policy
+    value: 3
+    derived_from: "Level 18a1b brief; handoff 2026-11-15"
+    reason: "WinError 10054 killed a whole split on 2026-11-15; three attempts bound a small world's cost while riding out one transient drop."
+
+  retry_wait_seconds:
+    label: policy
+    value: [30, 120]
+    derived_from: "Level 18a1b brief"
+    reason: "Waits before attempt 2 and attempt 3 give a restarted Redis or Postgres time to come back."
+
+  replay_redis_urls:
+    label: policy
+    value: []
+    derived_from: "Level 18a1b Round 2c; lab measurement 2026-11-16 (one Redis at 88-92% of one core with 14 workers, ~20.5 small worlds/hour)"
+    reason: "An empty list keeps today's single-Redis behaviour, while several URLs spread parallel workers over several Redis servers."

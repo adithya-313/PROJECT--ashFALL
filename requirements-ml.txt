@@ -23,6 +23,7 @@ mlflow==3.15.1
 # === Explainability ===
 # shap 0.50 and newer need numpy>=2; numpy stays 1.26.4 for the frozen v1 model
 shap==0.49.1
+# Level 18 models: SHAP for xgboost 3.x needs shap>=0.50 (numpy>=2) and runs from requirements-dev.txt; this file stays on 0.49.1 for the frozen v1 model
 
 # === Data ===
 pandas==2.3.3

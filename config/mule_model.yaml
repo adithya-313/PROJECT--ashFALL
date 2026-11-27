@@ -1,0 +1,211 @@
+# =====================================================================
+# MULE MODEL: how the Level 18 account model cuts training rows at the first label
+# =====================================================================
+#
+# What this file is
+#   The switch that decides which account-days the supervised account model may
+#   learn from. A positive account keeps only snapshots the bank could have seen
+#   before it learned the account was suspicious; everything after the first
+#   label is dropped so the model cannot learn the answer.
+#
+# Who reads it
+#   decisions/mule_account_model.py (load_mule_model_config) reads it when
+#   build_training_rows is called without an explicit label_cut.
+#
+# How to read an entry
+#   label       "policy": we chose the value; no source published it.
+#   value       the setting used by the model build.
+#   derived_from  the brief or handoff the choice came from.
+#   reason      one sentence on why the value looks the way it does.
+#
+# Checked by: python -m core.config_validator config/mule_model.yaml
+# =====================================================================
+
+parameters:
+  label_cut:
+    label: policy
+    value: arrival_time
+    derived_from: "Level 18a4 Round 1 brief"
+    reason: "The bank learns about the account at the label's exact arrival_time, so snapshots at or after that moment must not train the model; label_day stays available only to reproduce the first pilot dataset's rows."
+
+  label_maturity_days:
+    label: policy
+    value: 28
+    derived_from: "evaluation/measure_label_delay.py on the 160 full training worlds, pooled p90, runs/full/label_delay_r7.json sha256 7886a2f6a357d7f5e7964ae086ae5e1547f851552abef02254e0fb553c27d824"
+    reason: "Dropping the final 28 days of every training world removes rows whose labels had not arrived yet at the pooled p90 delay of 27.6 days."
+
+  label_trust_curve:
+    label: measured
+    value: [0.017804, 0.200297, 0.25816, 0.307122, 0.34273, 0.381306, 0.419881, 0.462908, 0.529674, 0.578635, 0.620178, 0.652819, 0.698813, 0.744807, 0.778932, 0.817507, 0.836795, 0.853116, 0.862018, 0.87092, 0.878338, 0.882789, 0.882789, 0.885757, 0.888724, 0.891691, 0.894659, 0.894659, 0.902077, 0.903561, 0.906528, 0.908012, 0.909496, 0.913947, 0.916914, 0.922849, 0.924332, 0.925816, 0.930267, 0.930267, 0.933234, 0.936202, 0.940653, 0.945104, 0.951039, 0.958457, 0.965875, 0.97181, 0.974777, 0.980712, 0.980712, 0.986647, 0.991098, 0.994065, 0.995549, 0.995549, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    derived_from: "evaluation/build_label_trust_curve.py over runs/full/label_delay_r7.json sha256 7886a2f6...d824 (pooled from the 160 by_world delays_days lists, 160 training worlds)"
+    reason: "Share of bank labels that had arrived k days after the first illicit credit; an unlabelled training row with k days left in its world is trusted as a negative with this weight. Labelled delays only (censored accounts are missing), so the curve is optimistic - recorded as a limitation."
+
+  label_trust_weighting:
+    label: policy
+    value: false
+    derived_from: "architect ruling 2026-11-20"
+    reason: "Off by default; the maturity_check stage decides on validation."
+
+  maturity_tie_tolerance:
+    label: policy
+    value: 0.002
+    derived_from: "architect ruling 2026-11-20, set before any full-scale result"
+    reason: "Validation truth AP differences below this are treated as noise; ties go to the simpler variant that keeps more data."
+
+  xgboost_device:
+    label: policy
+    value: "cpu"
+    derived_from: "architect ruling 2026-11-20"
+    reason: "CPU by default; cuda only after evaluation/xgboost_device_parity.py passes on this laptop."
+
+  parity_ap_tolerance:
+    label: policy
+    value: 0.005
+    derived_from: "architect ruling 2026-11-20"
+    reason: "GPU sums in a different order; a larger gap could change model choices"
+
+  feature_fill_flag_share:
+    label: policy
+    value: 0.999
+    derived_from: "Level 18a4 round 1 review"
+    reason: "A feature that is the same value in almost every row cannot separate anything, so a feature whose most common value covers this share of rows or more is flagged."
+
+  use_label_network_features:
+    label: policy
+    value: true
+    derived_from: "Level 18 handoff P4; Section 23 check 7 enforced in evaluation/leakage_checks.py"
+    reason: "Mules work in chains, so a label that has already arrived exposes neighbours; these features read labels by arrival time only."
+
+  label_network_features:
+    label: policy
+    value:
+      - hops_to_complained_account
+      - registry_match_count
+      - registry_match_age_days
+    derived_from: "Level 18 handoff P4; Section 23 check 7 enforced in evaluation/leakage_checks.py"
+    reason: "Bank-visible features built from labels that have arrived; excluded from the anomaly detector, which uses no labels."
+
+  feedback_network_features_not_used:
+    label: policy
+    value:
+      - hops_to_confirmed_label
+      - shared_counterparties_with_flagged_7d
+    derived_from: "Level 18a4 round 2 ruling R1"
+    reason: "Built from bank_feedback confirmed_fraud rows; no replay component writes bank_feedback (feedback arrives with the simulated analyst in Levels 21-22), so these are empty in every built world. Revisit when feedback exists."
+
+  rules_plus_labels_and_registry:
+    label: policy
+    value: false
+    derived_from: "Level 18 engineer ruling 2026-11-17 (rule_6, 2x2 comparison)"
+    reason: "rule_6 joins the rules table only when this switch is true, so the default rules stay rules 1 to 5."
+
+  pu_method:
+    label: policy
+    value: "none"
+    derived_from: "Level 18 handoff next steps; Level 18a4 round 5 brief"
+    reason: "Positive-unlabelled learning is off by default so the pilot keeps the supervised path until the full-scale run compares the methods; allowed values are none, bagging and elkan_noto."
+
+  pu_bagging_n_bags:
+    label: policy
+    value: 50
+    derived_from: "Level 18 handoff next steps: about 50 small models"
+    reason: "Each bag trains one model on all positives plus a small unlabelled sample, so 50 bags average out the arbitrary negatives each sample invents."
+
+  pu_unlabelled_per_positive_candidates:
+    label: policy
+    value:
+      - 1
+      - 5
+      - 20
+    derived_from: "architect search grid; the value is chosen on validation AP"
+    reason: "How many unlabelled rows each bag draws per positive row; the pilot scores every candidate on validation average precision and keeps the best."
+
+  pu_probability_clip:
+    label: policy
+    value: 0.999999
+    derived_from: "numerical guard, not a modelling choice"
+    reason: "Caps g(x) below 1 so the Elkan-Noto factor p/(1-p) stays finite; the value is a numerical guard, not a modelling choice."
+
+  data_path:
+    label: policy
+    value: "rows"
+    derived_from: "architect memory measurement: ~19 GB with rows on full scale; laptop has 16 GB"
+    reason: "Rows keeps today's dict-based path exactly; compact loads one world at a time into float32 arrays so the full-scale run fits a 16 GB laptop."
+
+  hyperparameter_search:
+    label: policy
+    value: "off"
+    derived_from: "Level 18a4 round 7 brief"
+    reason: "Optuna search is off until the staged full-run driver runs it; allowed values are off and optuna, and off keeps today's n_estimators candidates exactly."
+
+  optuna_trials:
+    label: policy
+    value: 40
+    derived_from: "architect time budget: ~13 s per model at full scale"
+    reason: "40 trials keeps one PU method's search to about nine minutes at full scale while still covering the six-parameter space."
+
+  optuna_seed:
+    label: policy
+    value: 1717
+    derived_from: "Level 18a4 round 7 brief"
+    reason: "A fixed seed makes the sampled parameter sequence and the chosen trial reproducible across runs."
+
+  optuna_min_trials_before_stop:
+    label: policy
+    value: 20
+    derived_from: "architect ruling 2026-11-19: stop when the search has stalled"
+    reason: "TPE's first 10 trials are random startup, so no stall judgement is made before 20 trials."
+
+  optuna_stall_patience_trials:
+    label: policy
+    value: 10
+    derived_from: "architect ruling 2026-11-19: stop when the search has stalled"
+    reason: "Ten trials without a meaningful gain means TPE has stopped finding better regions."
+
+  optuna_min_improvement:
+    label: policy
+    value: 0.001
+    derived_from: "architect ruling 2026-11-19: stop when the search has stalled"
+    reason: "A 0.001 truth average precision gain is below what the method choice can resolve."
+
+  hyperparameter_space:
+    label: policy
+    value:
+      max_depth:
+        min: 3
+        max: 10
+        log: false
+      learning_rate:
+        min: 0.02
+        max: 0.3
+        log: true
+      n_estimators:
+        min: 100
+        max: 800
+        log: false
+      min_child_weight:
+        min: 1
+        max: 20
+        log: true
+      subsample:
+        min: 0.5
+        max: 1.0
+        log: false
+      colsample_bytree:
+        min: 0.5
+        max: 1.0
+        log: false
+      gamma:
+        min: 0.0
+        max: 5.0
+        log: false
+      reg_alpha:
+        min: 0.001
+        max: 10.0
+        log: true
+      reg_lambda:
+        min: 0.1
+        max: 10.0
+        log: true
+    derived_from: "architect search ranges, widened 2026-11-19 before any full-scale result"
+    reason: "The ranges bracket the XGBoost defaults, and the additive regularisation strengths are now searched instead of fixed, without searching implausibly deep trees or extreme learning rates."

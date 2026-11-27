@@ -1,0 +1,128 @@
+# File: config/mule_model_quality_gate.yaml
+# Purpose: Level 18 task 10 - the thresholds the "Mule model quality gate" CI job applies to the committed
+#          model cards reports/level_18/model_cards/<card>.json.
+#
+# Each entry names one card field, one rule and one value, and says in derived_from which already-published
+# console value (A-063 for the account model, A-067 for the v2 payment model) the threshold was set from. Rules
+# are pre-registered in A-064 and A-067; the gate has no flag, environment variable or switch that skips a
+# threshold or overrides a value.
+#
+# The gate fails when the committed cards carry fewer entries than threshold_count, so deleting a threshold
+# is a failure rather than a quieter gate.
+version: 1
+threshold_count: 14
+thresholds:
+  - id: account_recall_at_capacity_median
+    card: mule_account_xgb
+    path: metrics.recall_at_capacity.median
+    at_least: 0.60
+    derived_from: >-
+      comparison.json test.xgboost.recall_at_capacity median 0.6428571428571429 with p10 0.47704545454545455
+      over 120 worlds (A-063); the floor keeps 0.04 margin under the measured median and sits above p10, so a
+      p10-level regression cannot pass.
+
+  - id: account_recall_depth5_median
+    card: mule_account_xgb
+    path: metrics.recall_by_depth.5.median
+    at_least: 0.95
+    derived_from: >-
+      hidden_depth.json depth 5 recall median 1.0 with p10 0.5955555555555555 over 30 worlds (A-063); the floor
+      demands the depth-5 case stay at the top band while allowing the spread below it.
+
+  - id: account_genuine_restriction_rate_median
+    card: mule_account_xgb
+    path: metrics.genuine_restriction_rate.median
+    at_most: 0.01
+    derived_from: >-
+      comparison.json test.xgboost.genuine_restriction_rate median 0.0058823529411764705 with p90
+      0.008957905085351686, against the rules baseline median 0.023529411764705882 (A-063); the ceiling sits
+      above p90 and well under the rules' harm.
+
+  - id: account_calibrated_ece
+    card: mule_account_xgb
+    path: calibration.calibrated.ece
+    at_most: 0.01
+    derived_from: >-
+      calibration.json account calibrated ECE 0.0018426116879839516 against raw 0.12713701651550158 (A-063);
+      the ceiling is five times the measured value and still far below the raw score.
+
+  - id: account_onnx_validation_max_abs_diff
+    card: mule_account_xgb
+    path: onnx.parity.validation.max_abs_diff
+    at_most: 1.0e-5
+    derived_from: >-
+      onnx_parity.json account validation max abs diff 1.7884182645921953e-07 (A-063); the limit is the A-061b
+      ONNX-vs-native tolerance of 1e-5.
+
+  - id: account_onnx_test_max_abs_diff
+    card: mule_account_xgb
+    path: onnx.parity.test.max_abs_diff
+    at_most: 1.0e-5
+    derived_from: >-
+      onnx_parity.json account test max abs diff 1.6789018467133765e-07 (A-063); the limit is the A-061b
+      ONNX-vs-native tolerance of 1e-5.
+
+  - id: payment_truth_ap_median
+    card: mule_payment_xgb
+    path: metrics.truth_ap.test.median
+    at_least: 0.62
+    derived_from: >-
+      payment_results.json v2 test truth AP median 0.6493820260824092 with p10 0.4132446979009128 over 120
+      worlds (A-067); the floor keeps 0.03 margin under the measured median and above p10.
+
+  - id: payment_precision_median
+    card: mule_payment_xgb
+    path: metrics.precision.test.median
+    at_least: 0.98
+    derived_from: >-
+      payment_results.json v2 test precision median 1.0 with p10 0.8078182827535159 over 120 worlds (A-067);
+      the floor keeps the headline precision near its measured value.
+
+  - id: payment_payee_precision
+    card: mule_payment_xgb
+    path: metrics.payee_precision.payee_precision
+    at_least: 0.90
+    derived_from: >-
+      payment_results.json v2 payee precision 0.9256820319849483 over 1063 distinct payees and 12839 held
+      payments (A-067); the floor is set on the payee-level truth.
+
+  - id: payment_other_bank_truth_ap_median
+    card: mule_payment_xgb
+    path: metrics.other_bank_truth_ap.median
+    at_least: 0.42
+    derived_from: >-
+      payment_results.json v2 test other-bank truth AP median 0.47435510648054935 with p10 0.19727324667600954
+      over 120 worlds (A-067); this keeps the weaker cross-bank segment from collapsing silently.
+
+  - id: payment_calibrated_ece
+    card: mule_payment_xgb
+    path: calibration.calibrated.ece
+    at_most: 0.02
+    derived_from: >-
+      calibration.json v2 payment calibrated ECE 0.013593148004892922 against raw 0.01717590461281026 (A-067);
+      the measured value is at most 0.02, so the pre-registered tier fixes the ceiling at 0.02.
+
+  - id: payment_onnx_validation_max_abs_diff
+    card: mule_payment_xgb
+    path: onnx.parity.validation.max_abs_diff
+    at_most: 1.0e-5
+    derived_from: >-
+      onnx_parity.json v2 payment validation max abs diff 2.980232238769531e-07 (A-067); the limit is the
+      A-061b ONNX-vs-native tolerance of 1e-5.
+
+  - id: payment_onnx_test_max_abs_diff
+    card: mule_payment_xgb
+    path: onnx.parity.test.max_abs_diff
+    at_most: 1.0e-5
+    derived_from: >-
+      onnx_parity.json v2 payment test max abs diff 2.682209014892578e-07 (A-067); the limit is the A-061b
+      ONNX-vs-native tolerance of 1e-5.
+
+  - id: payment_leakage_check_6b_status
+    card: mule_payment_xgb
+    path: leakage.run_a_check_6b.status
+    equals: "fail"
+    derived_from: >-
+      the unchanged A-057/A-063 record: the v1 diagnosis's run A check 6b status fail with AP over base rate
+      10.415125553116175 against the 2.0 limit, carried into the v2 console (A-067); the gate keeps the recorded
+      failure visible instead of letting a card hide it.

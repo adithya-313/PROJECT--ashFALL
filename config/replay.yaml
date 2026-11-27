@@ -68,3 +68,31 @@ replay_workspace:
     value: true
     reason: "architect 16c-3 (b) — a quiet payment partition stalls the watermark; the replay proves the drain, so it may advance like the pollers"
     derived_from: "architect 16c-3 (b)"
+
+  watermark_advance_skip_overlap:
+    label: policy
+    value: true
+    reason: "The drain's watermark-advance step reads only rows after each poller cursor instead of re-applying the 200-row overlap tail; catch-up loops keep the overlap. Proven output-identical."
+    derived_from: "Level 18a1-i verification on test-0000 tiny sampler seed 2: dataset identical to fixture test-20261031T1830-9a2856ce53b2 after run-id normalisation (0 differing rows in payments 2895, snapshots 2683, labels 8); drain.watermark_advance 1,684.5 s -> 49.8 s; wall 4,681 s -> 3,256 s; Redis commands 9.52 M -> 2.95 M"
+
+  local_offset_tracking:
+    label: policy
+    value: true
+    reason: "When true, the drain's payments-topic caught-up check uses local produced/consumed counters instead of asking the broker for end and committed offsets every drain; a broker cross-check runs at each snapshot boundary and at run end. Forced off only when a before_decision_hook is supplied (before_drop_hook does not force them off). Proven output-identical."
+    derived_from: >-
+      Level 18a1-ii verification on test-0000 tiny sampler seed 2 (4c993ae, both switches on):
+      dataset identical to fixture test-20261031T1830-9a2856ce53b2 after run-id normalisation
+      (0 differing rows: payments 2895, snapshots 2683, labels 8); cross-check never raised;
+      drain.offset_check 1,510.9 s -> 0.004 s; drain.registry_poll 1,008.4 s -> 0.105 s;
+      wall 3,325 s -> 778 s
+
+  registry_poll_on_change:
+    label: policy
+    value: true
+    reason: "When true, the registry drain skips getmany and offset calls while the local registry produced count equals the consumed count; the national outbox relay still runs every drain. Forced off only when a before_decision_hook is supplied (before_drop_hook does not force them off). Proven output-identical."
+    derived_from: >-
+      Level 18a1-ii verification on test-0000 tiny sampler seed 2 (4c993ae, both switches on):
+      dataset identical to fixture test-20261031T1830-9a2856ce53b2 after run-id normalisation
+      (0 differing rows: payments 2895, snapshots 2683, labels 8); cross-check never raised;
+      drain.offset_check 1,510.9 s -> 0.004 s; drain.registry_poll 1,008.4 s -> 0.105 s;
+      wall 3,325 s -> 778 s

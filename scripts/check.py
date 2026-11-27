@@ -12,6 +12,7 @@
 # on purpose, as part of what they prove; that is the showcase's own behaviour, not this script's.)
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -39,6 +40,7 @@ class Step:
     expect_exit: int = 0
     must_contain: str = ""
     must_not_contain: str = ""
+    env: dict[str, str] = field(default_factory=dict)  # variables the CI job sets for this step
     is_showcase: bool = False  # True for the level showcase steps, which --skip-showcases leaves out
 
 
@@ -114,6 +116,8 @@ def build_steps() -> list[Step]:
         Step("degraded model is rejected", "model-quality-gate",
              [PYTHON, "scripts/ci_quality_gate.py", "--metrics", "tests/fixtures/metrics_degraded.json"],
              expect_exit=1, must_contain="FAIL PR-AUC"),
+        Step("mule model quality gate", "mule-model-quality-gate", [PYTHON, "scripts/mule_model_quality_gate.py"],
+             env={"PYTHONPATH": str(REPO_ROOT)}),
         ruff_step("ruff (showcase, api, core)", "level-showcase", ["showcase", "api", "core"]),
         mypy_step("mypy (showcase, api, core)", "level-showcase", ["showcase", "api", "core"]),
         Step("fast tests", "pytest-fast",
@@ -186,7 +190,8 @@ def run_step(step: Step) -> tuple[bool, str]:
     """Run one step and return (passed, output)."""
     if step.check is not None:
         return step.check()
-    result = subprocess.run(step.command, cwd=REPO_ROOT, capture_output=True, text=True, timeout=1800)
+    result = subprocess.run(step.command, cwd=REPO_ROOT, capture_output=True, text=True, timeout=1800,
+                            env={**os.environ, **step.env})
     output = result.stdout + result.stderr
     ok = result.returncode == step.expect_exit
     ok = ok and (step.must_contain in output) and not (step.must_not_contain and step.must_not_contain in output)

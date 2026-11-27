@@ -1,0 +1,57 @@
+{
+  "data": {
+    "families": {
+      "device_rotation": {
+        "accounts_total": 448,
+        "recall_at_capacity": {
+          "median": 0.6666666666666666,
+          "p10": 0.3984615384615385,
+          "p90": 1.0,
+          "world_count": 60,
+          "worlds_skipped": 0,
+          "worlds_used": 60
+        },
+        "recall_at_cut": {
+          "median": 0.9302884615384616,
+          "p10": 0.6666666666666666,
+          "p90": 1.0,
+          "world_count": 60,
+          "worlds_skipped": 0,
+          "worlds_used": 60
+        },
+        "worlds_absent": 60,
+        "worlds_used": 60
+      },
+      "slow_drip": {
+        "accounts_total": 446,
+        "recall_at_capacity": {
+          "median": 0.8,
+          "p10": 0.5,
+          "p90": 1.0,
+          "world_count": 59,
+          "worlds_skipped": 0,
+          "worlds_used": 59
+        },
+        "recall_at_cut": {
+          "median": 0.9090909090909091,
+          "p10": 0.6606060606060606,
+          "p90": 1.0,
+          "world_count": 59,
+          "worlds_skipped": 0,
+          "worlds_used": 59
+        },
+        "worlds_absent": 61,
+        "worlds_used": 59
+      }
+    },
+    "worlds_processed": 120
+  },
+  "manifest": {
+    "generator": "scripts/level18_console.py",
+    "git_hash": "3c6287196837a247342c27e14dc4480b9088fcfe",
+    "sources": {
+      "runs/full/run_a320_stage5c/extra_reporting.json": "a11e208fda21e4419d20ef55c35bb52a95dc1cb3663792d4a39adfdc40d96ff6"
+    }
+  },
+  "simulated": true
+}

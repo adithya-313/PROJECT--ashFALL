@@ -18,7 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from math import ceil
-from typing import Any
+from typing import Any, Protocol
 
 from core.event_clock import IST
 from decisions.anomaly_detector import TrainedAnomalyDetector, score_rows
@@ -28,9 +28,12 @@ from decisions.rules_engine import evaluate_rules
 from features.account_snapshots import account_feature_names
 
 __all__ = [
+    "AccountKey",
     "GENUINE_ROLES",
+    "HasRole",
     "MULE_ROLES",
     "ScoredDay",
+    "account_key",
     "anomaly_restricted_days",
     "daily_escalations",
     "feature_values_only",
@@ -46,6 +49,19 @@ GENUINE_ROLES: frozenset[str] = frozenset({"genuine", "victim"})
 
 _SNAPSHOT_KINDS: frozenset[str] = frozenset({"daily", "full"})
 _ESCALATION_MODES: frozenset[str] = frozenset({"rules", "anomaly", "rules_and_anomaly"})
+ALLOWED_REPEAT_POLICIES: frozenset[str] = frozenset({"every_day", "once_per_world"})
+
+
+# An account's identity: account identifiers repeat across simulated worlds (and banks), so the
+# account id alone would merge different accounts the moment worlds are pooled for tuning.
+AccountKey = tuple[str, str, str]
+
+
+class HasRole(Protocol):
+    """WHAT: The only attribute the truth-scored search reads from a scored item."""
+
+    @property
+    def role(self) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -54,6 +70,7 @@ class ScoredDay:
     WHAT: One account's scored state on one IST calendar day.
 
     ATTRIBUTES:
+        world_id: World the account lives in.
         bank_id: Bank that holds the account.
         account_id: Account identifier.
         day: IST calendar date of the kept snapshot.
@@ -64,6 +81,7 @@ class ScoredDay:
         depth: Mule depth on this day, or None for a role that carries no depth.
     """
 
+    world_id: str
     bank_id: str
     account_id: str
     day: date
@@ -72,6 +90,16 @@ class ScoredDay:
     anomaly_score: float | None
     role: str
     depth: int | None
+
+
+def account_key(scored_day: ScoredDay) -> AccountKey:
+    """
+    WHAT: Returns the identity of the account a scored day belongs to: (world_id, bank_id, account_id).
+
+    WHY: Every metric that counts accounts must use this, never the bare account_id, so that two
+    worlds reusing the same account id are counted as two accounts.
+    """
+    return (scored_day.world_id, scored_day.bank_id, scored_day.account_id)
 
 
 def _require_string(row: dict[str, Any], key: str, caller: str) -> str:
@@ -159,14 +187,19 @@ def _truth_depth(row: dict[str, Any]) -> int | None:
 
 def one_row_per_account_day(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
-    WHAT: Keeps one snapshot row per (bank, account, IST day): the latest, with 'daily'
+    WHAT: Keeps one snapshot row per (world, bank, account, IST day): the latest, with 'daily'
     preferred when two rows share the same latest time.
 
     WHY: An account can be snapshotted more than once a day (for example a full snapshot at
     09:00 and the daily one at 21:00). Scoring both would count the same account-day twice.
+    The world is part of the key because account identifiers repeat across simulated worlds:
+    without it, different accounts that share a bank, account and day would merge into one
+    row as soon as several worlds are deduplicated in a single call.
 
     Args:
         rows: Snapshot rows, each carrying bank_id, account_id, snapshot_time and snapshot_kind.
+            Rows may carry world_id; a row without one keeps None in that key slot, so
+            hand-built single-world rows deduplicate exactly as before.
 
     Returns:
         One row per key, in first-seen key order. No input row is modified.
@@ -179,12 +212,13 @@ def one_row_per_account_day(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         ValueError: If a row lacks a required string field, a timezone-aware snapshot_time,
             or a valid snapshot_kind.
     """
-    selected: dict[tuple[str, str, date], dict[str, Any]] = {}
+    selected: dict[tuple[object, str, str, date], dict[str, Any]] = {}
     for row in rows:
+        world_id = row.get("world_id")
         bank_id = _require_string(row, "bank_id", "one_row_per_account_day")
         account_id = _require_string(row, "account_id", "one_row_per_account_day")
         day = _ist_day(row)
-        key = (bank_id, account_id, day)
+        key = (world_id, bank_id, account_id, day)
         current = selected.get(key)
         if current is None:
             selected[key] = row
@@ -270,6 +304,7 @@ def score_account_days(
         decision = evaluate_rules(features, rules_config)
         scored_days.append(
             ScoredDay(
+                world_id=_require_string(row, "world_id", "score_account_days"),
                 bank_id=_require_string(row, "bank_id", "score_account_days"),
                 account_id=_require_string(row, "account_id", "score_account_days"),
                 day=_ist_day(row),
@@ -283,7 +318,7 @@ def score_account_days(
     return scored_days
 
 
-def rules_restricted_days(scored: list[ScoredDay]) -> dict[str, set[date]]:
+def rules_restricted_days(scored: list[ScoredDay]) -> dict[AccountKey, set[date]]:
     """
     WHAT: Maps each account to the days on which at least one rule fired.
 
@@ -294,16 +329,16 @@ def rules_restricted_days(scored: list[ScoredDay]) -> dict[str, set[date]]:
         scored: Scored account-days.
 
     Returns:
-        account_id -> set of IST dates with rules_score >= 1. Accounts with no hit are absent.
+        account key -> set of IST dates with rules_score >= 1. Accounts with no hit are absent.
     """
-    restricted: dict[str, set[date]] = {}
+    restricted: dict[AccountKey, set[date]] = {}
     for scored_day in scored:
         if scored_day.rules_score >= 1:
-            restricted.setdefault(scored_day.account_id, set()).add(scored_day.day)
+            restricted.setdefault(account_key(scored_day), set()).add(scored_day.day)
     return restricted
 
 
-def anomaly_restricted_days(scored: list[ScoredDay], threshold: float) -> dict[str, set[date]]:
+def anomaly_restricted_days(scored: list[ScoredDay], threshold: float) -> dict[AccountKey, set[date]]:
     """
     WHAT: Maps each account to the days whose anomaly score is at least the threshold.
 
@@ -315,25 +350,25 @@ def anomaly_restricted_days(scored: list[ScoredDay], threshold: float) -> dict[s
         threshold: Inclusive anomaly score cut.
 
     Returns:
-        account_id -> set of IST dates whose anomaly_score >= threshold.
+        account key -> set of IST dates whose anomaly_score >= threshold.
 
     Raises:
         ValueError: If any row has no anomaly score, because a numeric cut cannot be applied
             to rows that were scored without a detector.
     """
-    restricted: dict[str, set[date]] = {}
+    restricted: dict[AccountKey, set[date]] = {}
     for scored_day in scored:
         if scored_day.anomaly_score is None:
             raise ValueError("anomaly_restricted_days requires anomaly scores on every row")
         if scored_day.anomaly_score >= threshold:
-            restricted.setdefault(scored_day.account_id, set()).add(scored_day.day)
+            restricted.setdefault(account_key(scored_day), set()).add(scored_day.day)
     return restricted
 
 
 def genuine_restricted_days(
-    restricted: dict[str, set[date]],
+    restricted: dict[AccountKey, set[date]],
     scored: list[ScoredDay],
-) -> dict[str, set[date]]:
+) -> dict[AccountKey, set[date]]:
     """
     WHAT: Keeps only the restricted days on which the account's truth role was genuine or victim.
 
@@ -341,36 +376,36 @@ def genuine_restricted_days(
     like restricting a genuine payer.
 
     Args:
-        restricted: account_id -> restricted dates from a rules or anomaly restriction.
+        restricted: account key -> restricted dates from a rules or anomaly restriction.
         scored: Scored account-days that define each account's role per day.
 
     Returns:
-        account_id -> restricted dates whose role is in GENUINE_ROLES. Accounts left with no
+        account key -> restricted dates whose role is in GENUINE_ROLES. Accounts left with no
         such day are omitted.
 
     Raises:
         ValueError: If a restricted account-day has no scored row, because its role cannot be known.
     """
-    roles_by_account_day: dict[tuple[str, date], str] = {
-        (scored_day.account_id, scored_day.day): scored_day.role for scored_day in scored
+    roles_by_account_day: dict[tuple[AccountKey, date], str] = {
+        (account_key(scored_day), scored_day.day): scored_day.role for scored_day in scored
     }
-    genuine_restricted: dict[str, set[date]] = {}
-    for account_id, days in restricted.items():
+    genuine_restricted: dict[AccountKey, set[date]] = {}
+    for account, days in restricted.items():
         kept_days: set[date] = set()
         for day in days:
-            key = (account_id, day)
+            key = (account, day)
             if key not in roles_by_account_day:
-                raise ValueError(f"Restricted day {day} for account {account_id} has no scored row")
+                raise ValueError(f"Restricted day {day} for account {account} has no scored row")
             if roles_by_account_day[key] in GENUINE_ROLES:
                 kept_days.add(day)
         if kept_days:
-            genuine_restricted[account_id] = kept_days
+            genuine_restricted[account] = kept_days
     return genuine_restricted
 
 
 def ground_sets(
     scored: list[ScoredDay],
-) -> tuple[set[str], set[str], dict[str, int], Callable[[str, date], bool]]:
+) -> tuple[set[AccountKey], set[AccountKey], dict[AccountKey, int], Callable[[AccountKey, date], bool]]:
     """
     WHAT: Builds the truth ground sets used for recall and harm: mules, genuinely active accounts,
     each mule's deepest depth, and a per-day mule predicate.
@@ -383,7 +418,7 @@ def ground_sets(
 
     Returns:
         A 4-tuple (mules, genuine_active, depth_of, is_mule) where:
-        - mules: accounts whose role is in MULE_ROLES on at least one day. Collectors and
+        - mules: account keys whose role is in MULE_ROLES on at least one day. Collectors and
           cash-outs are mules here too, because recall, yield and time to detection must count
           them.
         - genuine_active: accounts whose role is in GENUINE_ROLES on at least one day.
@@ -396,28 +431,44 @@ def ground_sets(
     Raises:
         ValueError: If a role-"mule" day has no truth_depth, because its depth would be unknown.
     """
-    mules: set[str] = set()
-    genuine_active: set[str] = set()
-    depth_of: dict[str, int] = {}
-    roles_by_account_day: dict[tuple[str, date], str] = {}
+    mules: set[AccountKey] = set()
+    genuine_active: set[AccountKey] = set()
+    depth_of: dict[AccountKey, int] = {}
+    roles_by_account_day: dict[tuple[AccountKey, date], str] = {}
     for scored_day in scored:
-        roles_by_account_day[(scored_day.account_id, scored_day.day)] = scored_day.role
+        account = account_key(scored_day)
+        roles_by_account_day[(account, scored_day.day)] = scored_day.role
         if scored_day.role in MULE_ROLES:
-            mules.add(scored_day.account_id)
+            mules.add(account)
             if scored_day.role == "mule":
                 if scored_day.depth is None:
-                    raise ValueError(f"Mule account {scored_day.account_id} has no truth_depth")
-                known_depth = depth_of.get(scored_day.account_id)
+                    raise ValueError(f"Mule account {account} has no truth_depth")
+                known_depth = depth_of.get(account)
                 if known_depth is None or scored_day.depth > known_depth:
-                    depth_of[scored_day.account_id] = scored_day.depth
+                    depth_of[account] = scored_day.depth
         if scored_day.role in GENUINE_ROLES:
-            genuine_active.add(scored_day.account_id)
+            genuine_active.add(account)
 
-    def is_mule(account_id: str, day: date) -> bool:
+    def is_mule(account: AccountKey, day: date) -> bool:
         """True when the account had a mule role on the given IST day."""
-        return roles_by_account_day.get((account_id, day)) in MULE_ROLES
+        return roles_by_account_day.get((account, day)) in MULE_ROLES
 
     return mules, genuine_active, depth_of, is_mule
+
+
+def _review_token(account: AccountKey) -> str:
+    """
+    WHAT: Returns a string that names one account to rank_for_review, which breaks ties on a string
+    account id.
+
+    WHY: Two worlds can hold the same account id on the same bank-day, so the bare id cannot say
+    which account was chosen. The account id comes first, so ties still break on the account id
+    exactly as before; the world and bank only separate otherwise identical ids. The separator sorts
+    below every character an account id uses, so a shorter id still sorts before a longer one it
+    prefixes.
+    """
+    world_id, bank_id, account_id = account
+    return f"{account_id}\x1f{world_id}\x1f{bank_id}"
 
 
 def _is_candidate(scored_day: ScoredDay, mode: str, anomaly_threshold: float | None) -> bool:
@@ -451,7 +502,8 @@ def daily_escalations(
     mode: str,
     anomaly_threshold: float | None,
     capacity_pct: float,
-) -> dict[date, list[str]]:
+    repeat_policy: str = "every_day",
+) -> dict[date, list[AccountKey]]:
     """
     WHAT: Builds the per-day escalation list an analyst would receive, respecting per-bank capacity.
 
@@ -463,22 +515,41 @@ def daily_escalations(
         mode: 'rules', 'anomaly', or 'rules_and_anomaly'.
         anomaly_threshold: Inclusive anomaly cut; required for the two anomaly modes.
         capacity_pct: Percentage of a bank's active accounts that can be escalated that day.
+        repeat_policy: 'every_day' re-ranks every bank-day from scratch, which is the Level 17
+            behaviour; 'once_per_world' treats an account escalated on an earlier day as not a
+            candidate on any later day, so the slot goes to the next-ranked account.
 
     Returns:
-        IST date -> ordered account ids, merged across banks. Every day present in scored gets
+        IST date -> ordered account keys, merged across banks. Every day present in scored gets
         an entry, possibly an empty list, so an honest zero-escalation day is still recorded.
 
     Key logic:
-        Per bank and day, capacity = max(1, ceil(active_accounts * capacity_pct / 100)). Candidates
-        are ranked with decisions.cold_start.rank_for_review; a missing anomaly score ranks as 0.0
+        Per bank and day, capacity = max(1, ceil(active_accounts * capacity_pct / 100)) and is always
+        computed from every row that bank has that day, whatever the repeat policy. Candidates are
+        ranked with decisions.cold_start.rank_for_review; a missing anomaly score ranks as 0.0
         because ranking must stay deterministic when no detector was used.
 
+    Why the policy exists:
+        A-043: under 'every_day' an escalated account is re-queued the next day in the same world.
+        On the Level 18a4 pilot validation worlds 298 of 343 escalations (87%) repeated an already
+        escalated account and a truth oracle was capped at 69% recall at capacity. 'once_per_world'
+        models review that lasts for the rest of the world.
+
+    Complexity:
+        O(banks * days * scored rows) to collect each bank-day's rows, plus the ranking of each
+        day's candidates; 'once_per_world' adds one set lookup per candidate.
+
     Raises:
-        ValueError: If mode is unknown, if an anomaly mode is given no threshold, or if mode
-            'anomaly' is requested for rows that have no anomaly scores.
+        ValueError: If mode is unknown, if an anomaly mode is given no threshold, if mode
+            'anomaly' is requested for rows that have no anomaly scores, or if repeat_policy is
+            unknown.
     """
     if mode not in _ESCALATION_MODES:
         raise ValueError(f"Unknown escalation mode {mode!r}; expected one of {sorted(_ESCALATION_MODES)}")
+    if repeat_policy not in ALLOWED_REPEAT_POLICIES:
+        raise ValueError(
+            f"Unknown repeat policy {repeat_policy!r}; expected one of {sorted(ALLOWED_REPEAT_POLICIES)}"
+        )
     if mode in ("anomaly", "rules_and_anomaly") and anomaly_threshold is None:
         raise ValueError(f"Escalation mode {mode!r} requires an anomaly_threshold")
     if mode == "anomaly":
@@ -487,9 +558,10 @@ def daily_escalations(
                 raise ValueError("Escalation mode 'anomaly' requires anomaly scores on every row")
 
     days = sorted({scored_day.day for scored_day in scored})
-    escalations: dict[date, list[str]] = {day: [] for day in days}
+    escalations: dict[date, list[AccountKey]] = {day: [] for day in days}
     banks = sorted({scored_day.bank_id for scored_day in scored})
     for bank_id in banks:
+        escalated_earlier: set[AccountKey] = set()
         for day in days:
             bank_day_rows = [
                 scored_day
@@ -499,14 +571,24 @@ def daily_escalations(
             if not bank_day_rows:
                 continue
             capacity = max(1, ceil(len(bank_day_rows) * capacity_pct / 100.0))
-            candidates = [
-                {
-                    "account_id": scored_day.account_id,
-                    "rules_score": float(scored_day.rules_score),
-                    "anomaly_score": 0.0 if scored_day.anomaly_score is None else scored_day.anomaly_score,
-                }
-                for scored_day in bank_day_rows
-                if _is_candidate(scored_day, mode, anomaly_threshold)
-            ]
-            escalations[day].extend(rank_for_review(candidates, capacity))
+            candidates = []
+            key_by_token: dict[str, AccountKey] = {}
+            for scored_day in bank_day_rows:
+                account = account_key(scored_day)
+                if not _is_candidate(scored_day, mode, anomaly_threshold):
+                    continue
+                if repeat_policy != "every_day" and account in escalated_earlier:
+                    continue
+                token = _review_token(account)
+                key_by_token[token] = account
+                candidates.append(
+                    {
+                        "account_id": token,
+                        "rules_score": float(scored_day.rules_score),
+                        "anomaly_score": 0.0 if scored_day.anomaly_score is None else scored_day.anomaly_score,
+                    }
+                )
+            chosen = [key_by_token[token] for token in rank_for_review(candidates, capacity)]
+            escalations[day].extend(chosen)
+            escalated_earlier.update(chosen)
     return escalations

@@ -3,10 +3,14 @@ Unit tests for decisions.rules_engine: boundary checks, un-evaluable handling,
 score calculations, constructed mule patterns, and look-alike behaviors.
 """
 
+from pathlib import Path
+from typing import Any
+
 import pytest
+import yaml
 
 from decisions.rules_config import load_rules_config
-from decisions.rules_engine import evaluate_rules
+from decisions.rules_engine import RulesDecision, evaluate_rules
 
 
 def _all_quiet_features() -> dict[str, float | int | None]:
@@ -228,3 +232,131 @@ def test_constructed_cases_and_lookalikes(
     print(f"\n{case_name} -> {fired_ids}")
 
     assert fired_ids == expected_fired
+
+
+def _any_rule_config_data(match: str | None = "any") -> dict[str, Any]:
+    """Builds a one-rule config whose two branches read the two label network features."""
+    rule: dict[str, Any] = {
+        "id": "rule_any",
+        "reason_code": "RBA_ANY_LABEL_OR_REGISTRY",
+        "plain_english": "Any branch: registry match or hops to a complained account",
+        "conditions": [
+            {"feature": "registry_match_count", "op": ">=", "threshold": "registry_match_min"},
+            {"feature": "hops_to_complained_account", "op": "<=", "threshold": "complained_hops_max"},
+        ],
+    }
+    if match is not None:
+        rule["match"] = match
+    return {
+        "thresholds": {
+            "registry_match_min": {
+                "value": 1,
+                "label": "policy",
+                "reason": "test threshold",
+                "derived_from": "test spec",
+                "status": "untuned_start",
+            },
+            "complained_hops_max": {
+                "value": 1,
+                "label": "policy",
+                "reason": "test threshold",
+                "derived_from": "test spec",
+                "status": "untuned_start",
+            },
+        },
+        "rules": [rule],
+    }
+
+
+def _write_rule_config(tmp_path: Path, data: dict[str, Any]) -> Path:
+    """Writes a rules YAML file and returns its path."""
+    config_path = tmp_path / "rules_any.yaml"
+    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    return config_path
+
+
+def _any_rule_decision(tmp_path: Path, features: dict[str, float | int | None]) -> RulesDecision:
+    """Loads the any-rule config and evaluates the given features against it."""
+    config = load_rules_config(_write_rule_config(tmp_path, _any_rule_config_data()))
+    return evaluate_rules(features, config)
+
+
+def test_any_rule_fires_on_branch_a_only(tmp_path: Path) -> None:
+    """Branch A passes and branch B fails: the rule fires and its score is one."""
+    decision = _any_rule_decision(
+        tmp_path,
+        {"registry_match_count": 2, "hops_to_complained_account": 5},
+    )
+
+    assert decision.fired == (("rule_any", "RBA_ANY_LABEL_OR_REGISTRY"),)
+    assert decision.not_evaluable == ()
+    assert decision.score == 1
+
+
+def test_any_rule_fires_on_branch_b_only(tmp_path: Path) -> None:
+    """Branch A fails and branch B passes: the rule fires."""
+    decision = _any_rule_decision(
+        tmp_path,
+        {"registry_match_count": 0, "hops_to_complained_account": 1},
+    )
+
+    assert decision.fired == (("rule_any", "RBA_ANY_LABEL_OR_REGISTRY"),)
+    assert decision.not_evaluable == ()
+
+
+def test_any_rule_fires_when_branch_a_is_none_and_branch_b_passes(tmp_path: Path) -> None:
+    """A None branch is skipped, and a passing present branch still fires the rule."""
+    decision = _any_rule_decision(
+        tmp_path,
+        {"registry_match_count": None, "hops_to_complained_account": 0},
+    )
+
+    assert decision.fired == (("rule_any", "RBA_ANY_LABEL_OR_REGISTRY"),)
+    assert decision.not_evaluable == ()
+
+
+def test_any_rule_is_not_evaluable_when_every_branch_is_none(tmp_path: Path) -> None:
+    """When every condition's feature is missing or None the rule is not evaluable and does not fire."""
+    decision = _any_rule_decision(
+        tmp_path,
+        {"registry_match_count": None, "hops_to_complained_account": None},
+    )
+
+    assert decision.fired == ()
+    assert decision.not_evaluable == ("rule_any",)
+    assert decision.score == 0
+
+
+def test_any_rule_neither_fires_nor_is_not_evaluable_when_present_branch_fails(tmp_path: Path) -> None:
+    """One branch is None and the other is present but failing: the rule simply does not fire."""
+    decision = _any_rule_decision(
+        tmp_path,
+        {"registry_match_count": None, "hops_to_complained_account": 5},
+    )
+
+    assert decision.fired == ()
+    assert decision.not_evaluable == ()
+    assert decision.score == 0
+
+
+def test_any_rule_boundary_is_inclusive(tmp_path: Path) -> None:
+    """hops_to_complained_account == 1 satisfies '<= 1' and fires the rule."""
+    decision = _any_rule_decision(
+        tmp_path,
+        {"registry_match_count": None, "hops_to_complained_account": 1},
+    )
+
+    assert decision.fired == (("rule_any", "RBA_ANY_LABEL_OR_REGISTRY"),)
+
+
+def test_rule_match_defaults_to_all_when_missing(tmp_path: Path) -> None:
+    """A rule entry without a match key loads with match 'all'."""
+    config = load_rules_config(_write_rule_config(tmp_path, _any_rule_config_data(match=None)))
+
+    assert config.rules[0].match == "all"
+
+
+def test_unknown_match_value_is_refused_naming_the_rule(tmp_path: Path) -> None:
+    """An unknown match value raises ValueError naming the offending rule."""
+    with pytest.raises(ValueError, match="Unknown match 'some' in rule 'rule_any'"):
+        load_rules_config(_write_rule_config(tmp_path, _any_rule_config_data(match="some")))

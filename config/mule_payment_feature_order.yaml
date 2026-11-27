@@ -1,0 +1,124 @@
+version: 1
+target: label_receiver_reported_by_cutoff
+payee_risk_source: runs/full/payment_oof/per_world
+feature_sha256: 42f52628ad9c6c5cd440fe4b2aa328dd067beea6b929a2368f8dfccda28867c6
+features:
+- payee_risk
+- payee_registry_match
+- first_payment_to_payee
+- amount_vs_payer_median_ratio
+- amount_vs_payer_max_ratio
+- payee_same_bank_risk
+- hour_ist
+- payee_type
+- customer_failed_attempts_24h
+- distinct_payers_1h
+- distinct_payers_24h
+- distinct_payers_7d
+- first_time_payer_share_24h
+- small_credit_count_24h
+- small_credit_count_7d
+- largest_credit_paise_24h
+- below_threshold_credit_count_7d
+- pass_through_ratio_24h
+- pass_through_ratio_7d
+- median_credit_to_debit_seconds_7d
+- top_receiver_share_7d
+- other_bank_outflow_share_7d
+- outflow_to_person_paise_7d
+- outflow_to_merchant_paise_7d
+- cash_atm_paise_7d
+- cash_branch_paise_7d
+- current_balance_paise
+- min_balance_paise_7d
+- near_zero_cycles_7d
+- salary_like_payer_count
+- recurring_merchant_payee_count
+- regular_transfer_payee_count
+- routine_life_present
+- history_days_available
+- account_age_days
+- account_type
+- dormancy_days_before_recent_activity
+- volume_vs_own_history_ratio
+- days_since_device_change
+- accounts_on_same_device
+- device_hardware_changed
+- sim_swapped
+- app_reinstalled_same_phone
+- new_device_r5
+- distinct_fingerprints_lifetime
+- machine_regular_timing_score
+- distinct_same_bank_payer_regions_7d
+- unknown_region_payer_count_7d
+- hops_to_confirmed_label
+- shared_counterparties_with_flagged_7d
+- local_cluster_density
+- hops_to_complained_account
+- registry_match_count
+- registry_match_age_days
+groups:
+  payee_risk:
+  - payee_risk
+  payment_level:
+  - payee_registry_match
+  - first_payment_to_payee
+  - amount_vs_payer_median_ratio
+  - amount_vs_payer_max_ratio
+  - payee_same_bank_risk
+  - hour_ist
+  - payee_type
+  - customer_failed_attempts_24h
+  payer_account:
+  - distinct_payers_1h
+  - distinct_payers_24h
+  - distinct_payers_7d
+  - first_time_payer_share_24h
+  - small_credit_count_24h
+  - small_credit_count_7d
+  - largest_credit_paise_24h
+  - below_threshold_credit_count_7d
+  - pass_through_ratio_24h
+  - pass_through_ratio_7d
+  - median_credit_to_debit_seconds_7d
+  - top_receiver_share_7d
+  - other_bank_outflow_share_7d
+  - outflow_to_person_paise_7d
+  - outflow_to_merchant_paise_7d
+  - cash_atm_paise_7d
+  - cash_branch_paise_7d
+  - current_balance_paise
+  - min_balance_paise_7d
+  - near_zero_cycles_7d
+  - salary_like_payer_count
+  - recurring_merchant_payee_count
+  - regular_transfer_payee_count
+  - routine_life_present
+  - history_days_available
+  - account_age_days
+  - account_type
+  - dormancy_days_before_recent_activity
+  - volume_vs_own_history_ratio
+  - days_since_device_change
+  - accounts_on_same_device
+  - device_hardware_changed
+  - sim_swapped
+  - app_reinstalled_same_phone
+  - new_device_r5
+  - distinct_fingerprints_lifetime
+  - machine_regular_timing_score
+  - distinct_same_bank_payer_regions_7d
+  - unknown_region_payer_count_7d
+  - hops_to_confirmed_label
+  - shared_counterparties_with_flagged_7d
+  - local_cluster_density
+  - hops_to_complained_account
+  - registry_match_count
+  - registry_match_age_days
+categorical_encodings:
+  account_type:
+  - current
+  - savings
+  payee_type:
+  - merchant
+  - person

@@ -1,0 +1,1287 @@
+"""
+WHAT: Trains and applies the Level 18 pilot XGBoost account-day model from bank-visible labels.
+
+WHY: The pilot compares a supervised account model with the rules and the anomaly detector on the
+same account-days. The model may only learn from labels a bank could actually hold (complaints,
+police bulk reports and registry reports), never from hidden simulation truth, so this module
+lives in decisions/ and must not import evaluation.truth.
+
+TERM: account-day: one account's latest snapshot on one IST calendar day.
+TERM: positive account: an account with at least one bank-visible label in its world.
+TERM: label day: the IST calendar date of a label's arrival_time.
+
+Inputs are plain snapshot and label rows. Missing or malformed required fields raise ValueError;
+there is no silent fallback.
+"""
+
+import json
+import math
+from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from decisions.pu_learning import PUBaggedAccountModel
+
+import numpy
+import xgboost
+import yaml
+
+from core.event_clock import IST
+from decisions.anomaly_config import load_anomaly_detector_config
+from features.account_snapshots import account_feature_names
+
+__all__ = [
+    "ALLOWED_DATA_PATHS",
+    "ALLOWED_LABEL_CUTS",
+    "FeatureRows",
+    "HyperparameterRange",
+    "MuleModelConfig",
+    "account_model_feature_names",
+    "active_mule_model_config_path",
+    "build_training_rows",
+    "load_model",
+    "load_mule_model_config",
+    "predict_account_days",
+    "save_model",
+    "set_mule_model_config_path",
+    "train_account_model",
+]
+
+ALLOWED_DATA_PATHS: frozenset[str] = frozenset({"rows", "compact"})
+#: Feature rows in account_model_feature_names() order: plain Python rows or a numpy array.
+FeatureRows = list[list[float]] | numpy.ndarray
+ALLOWED_LABEL_CUTS: frozenset[str] = frozenset({"arrival_time", "label_day"})
+ALLOWED_PU_METHODS: frozenset[str] = frozenset({"none", "bagging", "elkan_noto"})
+ALLOWED_HYPERPARAMETER_SEARCHES: frozenset[str] = frozenset({"off", "optuna"})
+#: Parameters the Optuna search tunes, in the order the config lists them.
+HYPERPARAMETER_SPACE_NAMES: tuple[str, ...] = (
+    "max_depth",
+    "learning_rate",
+    "n_estimators",
+    "min_child_weight",
+    "subsample",
+    "colsample_bytree",
+    "gamma",
+    "reg_alpha",
+    "reg_lambda",
+)
+#: Space entries sampled as integers; the others are sampled as floats.
+INTEGER_HYPERPARAMETERS: frozenset[str] = frozenset({"max_depth", "n_estimators"})
+#: Space entries sampled on a log scale, as the architect's ranges specify.
+LOG_HYPERPARAMETERS: frozenset[str] = frozenset({"learning_rate", "min_child_weight", "reg_alpha", "reg_lambda"})
+#: Length of the label trust curve: one share per day 0..90, as evaluation/build_label_trust_curve.py
+#: writes it with --max-days 90.
+LABEL_TRUST_CURVE_LENGTH: int = 91
+#: Devices XGBoost may train on; "cuda" is accepted only on a CUDA build of XGBoost.
+ALLOWED_XGBOOST_DEVICES: frozenset[str] = frozenset({"cpu", "cuda"})
+ALLOWED_MULE_MODEL_KEYS: frozenset[str] = frozenset(
+    {
+        "data_path",
+        "feature_fill_flag_share",
+        "hyperparameter_search",
+        "hyperparameter_space",
+        "label_cut",
+        "label_maturity_days",
+        "label_trust_curve",
+        "label_trust_weighting",
+        "maturity_tie_tolerance",
+        "xgboost_device",
+        "parity_ap_tolerance",
+        "use_label_network_features",
+        "label_network_features",
+        "feedback_network_features_not_used",
+        "rules_plus_labels_and_registry",
+        "pu_method",
+        "pu_bagging_n_bags",
+        "pu_unlabelled_per_positive_candidates",
+        "pu_probability_clip",
+        "optuna_trials",
+        "optuna_seed",
+        "optuna_min_trials_before_stop",
+        "optuna_stall_patience_trials",
+        "optuna_min_improvement",
+    }
+)
+OPTIONAL_MULE_MODEL_KEYS: frozenset[str] = frozenset(
+    {
+        "data_path",
+        "use_label_network_features",
+        "label_network_features",
+        "feedback_network_features_not_used",
+        "rules_plus_labels_and_registry",
+        "pu_method",
+        "pu_bagging_n_bags",
+        "pu_unlabelled_per_positive_candidates",
+        "pu_probability_clip",
+    }
+)
+
+
+@dataclass(frozen=True)
+class HyperparameterRange:
+    """
+    WHAT: One numeric range the Optuna search samples from.
+
+    Attributes:
+        minimum: Inclusive lower bound.
+        maximum: Inclusive upper bound for integer parameters, exclusive in effect for floats.
+        log: Whether the parameter is sampled on a log scale.
+        integer: Whether the parameter is sampled as an integer rather than a float.
+    """
+
+    minimum: float
+    maximum: float
+    log: bool
+    integer: bool
+
+
+@dataclass(frozen=True)
+class MuleModelConfig:
+    """
+    WHAT: Holds the validated policy switches that shape the account model's training rows.
+
+    Attributes:
+        label_cut: How a positive account's rows are cut at its first label; one of
+            ALLOWED_LABEL_CUTS.
+        label_maturity_days: Number of trailing IST days dropped at the end of every world, or None
+            when the maturity window is off because the label delay has not been measured yet.
+        label_trust_curve: Share of bank labels that had arrived k days after the first illicit credit,
+            for k = 0..90; an unlabelled row with k days left in its world is trusted as a negative with
+            this weight when label_trust_weighting is on.
+        label_trust_weighting: Whether training rows carry the trust weights from label_trust_curve.
+        maturity_tie_tolerance: Validation truth AP difference below which stage 1 treats variants as tied.
+        xgboost_device: Device every account model trains on, "cpu" or "cuda".
+        parity_ap_tolerance: Largest validation truth AP gap between a cpu and a cuda fit that
+            evaluation/xgboost_device_parity.py accepts.
+        feature_fill_flag_share: Share of rows at or above which a feature's most common value makes
+            the feature unable to separate anything, so the sanity report flags it.
+        use_label_network_features: Whether the account model may use the configured label-based
+            network features, or None when the config file does not carry the switch.
+        label_network_features: Bank-visible label-based network features the model may use.
+        feedback_network_features_not_used: Label-based network features built from bank_feedback,
+            which no built world writes; recorded so the omission is explicit.
+        rules_plus_labels_and_registry: Whether the rules table also carries rule_6, the label-based
+            OR rule, or None when the config file does not carry the switch.
+        pu_method: One of ALLOWED_PU_METHODS, or None when the config file does not carry the switch.
+        pu_bagging_n_bags: Number of bagged models the PU bagging method trains, or None when the
+            config file does not carry the value.
+        pu_unlabelled_per_positive_candidates: Unlabelled rows drawn per positive row for each
+            bagging candidate, or None when the config file does not carry the value.
+        pu_probability_clip: Cap below 1 on g(x) so the Elkan-Noto weight stays finite, or None when
+            the config file does not carry the value.
+        data_path: How the pilot loads the account model's rows, one of ALLOWED_DATA_PATHS, or None
+            when the config file does not carry the switch.
+        hyperparameter_search: "off" for the estimator-candidate loop, "optuna" for the seeded TPE
+            search, or None when the config file does not carry the switch.
+        optuna_trials: Number of Optuna trials, or None when the config file does not carry it.
+        optuna_seed: Seed for the TPE sampler and every trial, or None when the config file does
+            not carry it.
+        optuna_min_trials_before_stop: Completed trials required before the stall rule may stop
+            the study.
+        optuna_stall_patience_trials: Trailing completed trials whose best score must improve on
+            the earlier best before the study may continue.
+        optuna_min_improvement: Truth average precision gain the patience window must add to the
+            earlier best for the study to keep running.
+        hyperparameter_space: Range per searched parameter, or None when the config file does not
+            carry the block.
+    """
+
+    label_cut: str
+    label_maturity_days: int | None
+    label_trust_curve: tuple[float, ...]
+    label_trust_weighting: bool
+    maturity_tie_tolerance: float
+    xgboost_device: str
+    parity_ap_tolerance: float
+    feature_fill_flag_share: float
+    use_label_network_features: bool | None
+    label_network_features: tuple[str, ...]
+    feedback_network_features_not_used: tuple[str, ...]
+    rules_plus_labels_and_registry: bool | None
+    pu_method: str | None
+    pu_bagging_n_bags: int | None
+    pu_unlabelled_per_positive_candidates: tuple[int, ...] | None
+    pu_probability_clip: float | None
+    data_path: str | None
+    hyperparameter_search: str | None
+    optuna_trials: int | None
+    optuna_seed: int | None
+    optuna_min_trials_before_stop: int
+    optuna_stall_patience_trials: int
+    optuna_min_improvement: float
+    hyperparameter_space: dict[str, HyperparameterRange] | None
+
+
+def _parse_label_trust_curve(block: dict[str, Any], path: Path) -> tuple[float, ...]:
+    """
+    WHAT: Returns the validated label trust curve from its config block.
+
+    Raises:
+        ValueError: If the value is not LABEL_TRUST_CURVE_LENGTH finite numbers in [0, 1] that never decrease.
+    """
+    value = block.get("value")
+    if not isinstance(value, list) or len(value) != LABEL_TRUST_CURVE_LENGTH:
+        raise ValueError(f"label_trust_curve in {path} must be a list of {LABEL_TRUST_CURVE_LENGTH} numbers")
+    shares: list[float] = []
+    for share in value:
+        if not isinstance(share, (int, float)) or isinstance(share, bool) or not math.isfinite(share):
+            raise ValueError(f"label_trust_curve in {path} holds a value that is not a finite number: {share!r}")
+        if not 0.0 <= share <= 1.0:
+            raise ValueError(f"label_trust_curve in {path} holds a value outside [0, 1]: {share!r}")
+        shares.append(float(share))
+    for index in range(1, len(shares)):
+        if shares[index] < shares[index - 1]:
+            raise ValueError(f"label_trust_curve in {path} decreases at day {index}")
+    return tuple(shares)
+
+
+def _parse_feature_name_list(block: dict[str, Any], key: str, path: Path) -> tuple[str, ...]:
+    """
+    WHAT: Returns a non-empty, duplicate-free list of feature names from a config block.
+
+    Raises:
+        ValueError: If the value is not a non-empty list of non-empty distinct strings.
+    """
+    value = block.get("value")
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"Block '{key}' in {path} must hold a non-empty list of feature names")
+    for name in value:
+        if not isinstance(name, str) or not name:
+            raise ValueError(f"Block '{key}' in {path} holds a feature name that is not a non-empty string")
+    if len(set(value)) != len(value):
+        raise ValueError(f"Block '{key}' in {path} holds duplicate feature names")
+    return tuple(value)
+
+
+def _parse_hyperparameter_space(block: dict[str, Any], path: Path) -> dict[str, HyperparameterRange]:
+    """
+    WHAT: Parses and checks the Optuna search ranges from a config block.
+
+    WHY: Every bound is a modelling decision read from config, so a missing, extra or malformed
+    entry must stop the run instead of falling back to an XGBoost default.
+
+    Args:
+        block: The hyperparameter_space block, holding a "value" mapping name -> min/max/log.
+        path: Config file, named in every error message.
+
+    Returns:
+        Parameter name -> validated range, in HYPERPARAMETER_SPACE_NAMES order.
+
+    Raises:
+        ValueError: If the mapping does not name exactly the searched parameters, an entry lacks
+            min/max/log, a log flag is wrong, a bound is not the right type, or a bound pair or
+            domain is invalid.
+    """
+    value = block.get("value")
+    if not isinstance(value, dict):
+        raise ValueError(f"hyperparameter_space in {path} must hold a mapping of parameter ranges")
+    if sorted(value) != sorted(HYPERPARAMETER_SPACE_NAMES):
+        raise ValueError(
+            f"hyperparameter_space in {path} must name exactly {list(HYPERPARAMETER_SPACE_NAMES)}; "
+            f"got {sorted(value)}"
+        )
+    ranges: dict[str, HyperparameterRange] = {}
+    for name in HYPERPARAMETER_SPACE_NAMES:
+        entry = value[name]
+        if not isinstance(entry, dict) or set(entry) != {"min", "max", "log"}:
+            raise ValueError(
+                f"hyperparameter_space entry '{name}' in {path} must hold exactly min, max and log"
+            )
+        minimum = entry["min"]
+        maximum = entry["max"]
+        log = entry["log"]
+        if not isinstance(log, bool):
+            raise ValueError(f"hyperparameter_space entry '{name}' in {path} must carry a boolean log")
+        expected_log = name in LOG_HYPERPARAMETERS
+        if log != expected_log:
+            raise ValueError(
+                f"hyperparameter_space entry '{name}' in {path} must set log to {expected_log}"
+            )
+        if name in INTEGER_HYPERPARAMETERS:
+            if (
+                not isinstance(minimum, int)
+                or isinstance(minimum, bool)
+                or not isinstance(maximum, int)
+                or isinstance(maximum, bool)
+            ):
+                raise ValueError(
+                    f"hyperparameter_space entry '{name}' in {path} must carry integer min and max"
+                )
+        elif (
+            not isinstance(minimum, (int, float))
+            or isinstance(minimum, bool)
+            or not isinstance(maximum, (int, float))
+            or isinstance(maximum, bool)
+        ):
+            raise ValueError(
+                f"hyperparameter_space entry '{name}' in {path} must carry numeric min and max"
+            )
+        if minimum >= maximum:
+            raise ValueError(
+                f"hyperparameter_space entry '{name}' in {path} needs min below max; "
+                f"got min {minimum!r} and max {maximum!r}"
+            )
+        if name in {"subsample", "colsample_bytree"} and not (0.0 < minimum and maximum <= 1.0):
+            raise ValueError(
+                f"hyperparameter_space entry '{name}' in {path} must lie inside (0.0, 1.0]"
+            )
+        if name in {"learning_rate", "min_child_weight"} and minimum <= 0.0:
+            raise ValueError(f"hyperparameter_space entry '{name}' in {path} must have a positive min")
+        if name in INTEGER_HYPERPARAMETERS and minimum < 1:
+            raise ValueError(f"hyperparameter_space entry '{name}' in {path} must start at 1 or more")
+        ranges[name] = HyperparameterRange(
+            minimum=float(minimum),
+            maximum=float(maximum),
+            log=log,
+            integer=name in INTEGER_HYPERPARAMETERS,
+        )
+    return ranges
+
+
+def _validate_network_feature_names(
+    label_network_features: tuple[str, ...],
+    feedback_network_features_not_used: tuple[str, ...],
+    path: Path,
+) -> None:
+    """
+    WHAT: Requires every listed network feature to exist in the canonical catalogue and in the
+    anomaly detector's exclusion list.
+
+    WHY: The model may only add features the catalogue defines, and adding one the anomaly
+    detector still uses would silently change that detector's no-labels contract.
+
+    Raises:
+        ValueError: Naming the first listed feature that fails either check.
+    """
+    canonical = set(account_feature_names())
+    excluded = set(load_anomaly_detector_config().excluded_features)
+    for name in (*label_network_features, *feedback_network_features_not_used):
+        if name not in canonical:
+            raise ValueError(f"Feature {name!r} in {path} is not in the canonical account feature catalogue")
+        if name not in excluded:
+            raise ValueError(f"Feature {name!r} in {path} is not in the anomaly exclusion list")
+
+
+_COMMITTED_MULE_MODEL_CONFIG_PATH: Path = Path(__file__).resolve().parent.parent / "config" / "mule_model.yaml"
+_MULE_MODEL_CONFIG_OVERRIDE: Path | None = None
+
+
+def set_mule_model_config_path(path: Path | str | None) -> None:
+    """
+    WHAT: Points every loader in this process at one model config, or clears the override with None.
+
+    WHY: One override point rather than a config parameter on each function: every caller of
+    load_mule_model_config must see the same file during a run, and threading a parameter through
+    the feature-name builder, the training-row builder and every evaluation caller risks one call
+    site keeping the committed file and silently mixing two configs in one result.
+
+    The override is process-wide state, set once at start-up and cleared when the run ends; it is
+    not safe to change while a run is in progress.
+
+    Args:
+        path: Config file to use instead of the committed config; None restores the committed path.
+
+    Raises:
+        FileNotFoundError: If a given path does not exist, naming that path.
+    """
+    global _MULE_MODEL_CONFIG_OVERRIDE
+    if path is None:
+        _MULE_MODEL_CONFIG_OVERRIDE = None
+        return
+    resolved = Path(path)
+    if not resolved.exists():
+        raise FileNotFoundError(f"Mule model configuration not found at: {resolved}")
+    _MULE_MODEL_CONFIG_OVERRIDE = resolved
+
+
+def mule_model_config_override() -> Path | None:
+    """WHAT: Returns the process-wide override, or None when the committed config is active."""
+
+    return _MULE_MODEL_CONFIG_OVERRIDE
+
+
+def active_mule_model_config_path() -> Path:
+    """
+    WHAT: Returns the config file load_mule_model_config reads when no explicit path is given.
+
+    WHY: The run manifest records which config actually produced a result, so the overridden and
+    committed cases must both be answerable from one place.
+    """
+    if _MULE_MODEL_CONFIG_OVERRIDE is not None:
+        return _MULE_MODEL_CONFIG_OVERRIDE
+    return _COMMITTED_MULE_MODEL_CONFIG_PATH
+
+
+def load_mule_model_config(path: Path | str | None = None) -> MuleModelConfig:
+    """
+    WHAT: Loads and validates the account model's policy switches from the active config file.
+
+    WHY: Whether the cut uses the label's exact arrival time is a modelling decision, so it is read
+    from a tracked config file instead of being typed into the builder.
+
+    Args:
+        path: Optional config path; an explicit path wins over the process-wide override; when
+            omitted the active path is config/mule_model.yaml unless set_mule_model_config_path
+            pointed elsewhere.
+
+    Returns:
+        The validated switches.
+
+    Raises:
+        FileNotFoundError: If the config file does not exist.
+        ValueError: If the root, parameters, block metadata or a parameter value is missing or invalid.
+    """
+    if path is None:
+        resolved_path = active_mule_model_config_path()
+    else:
+        resolved_path = Path(path)
+
+    if not resolved_path.exists():
+        raise FileNotFoundError(f"Mule model configuration not found at: {resolved_path}")
+
+    with open(resolved_path, "r", encoding="utf-8") as f:
+        raw: Any = yaml.safe_load(f)
+
+    if not isinstance(raw, dict):
+        raise ValueError(f"Invalid YAML content in {resolved_path}; expected mapping at root.")
+    unknown_root = set(raw.keys()) - {"parameters"}
+    if unknown_root:
+        raise ValueError(f"Unknown keys in {resolved_path}: {sorted(unknown_root)}")
+
+    parameters = raw.get("parameters")
+    if not isinstance(parameters, dict):
+        raise ValueError(f"Missing 'parameters' mapping in {resolved_path}")
+
+    unknown_keys = set(parameters.keys()) - ALLOWED_MULE_MODEL_KEYS
+    if unknown_keys:
+        raise ValueError(f"Unknown keys in {resolved_path}: {sorted(unknown_keys)}")
+
+    for key in ALLOWED_MULE_MODEL_KEYS:
+        if key in OPTIONAL_MULE_MODEL_KEYS and key not in parameters:
+            continue
+        block = parameters.get(key)
+        if not isinstance(block, dict):
+            raise ValueError(f"Missing parameter block '{key}' in {resolved_path}")
+        label = block.get("label")
+        if not isinstance(label, str) or not label:
+            raise ValueError(f"Block '{key}' in {resolved_path} is missing a non-empty 'label'")
+        derived_from = block.get("derived_from")
+        if not isinstance(derived_from, str) or not derived_from:
+            raise ValueError(f"Block '{key}' in {resolved_path} is missing a non-empty 'derived_from'")
+
+    label_cut = parameters["label_cut"].get("value")
+    if not isinstance(label_cut, str) or label_cut not in ALLOWED_LABEL_CUTS:
+        raise ValueError(f"label_cut in {resolved_path} must be one of {sorted(ALLOWED_LABEL_CUTS)}; got {label_cut!r}")
+
+    maturity_block = parameters["label_maturity_days"]
+    maturity_value = maturity_block.get("value")
+    if maturity_value is None:
+        if maturity_block.get("not_found") is not True:
+            raise ValueError(f"label_maturity_days in {resolved_path} is null but not_found is not true")
+        label_maturity_days: int | None = None
+    elif isinstance(maturity_value, int) and not isinstance(maturity_value, bool) and maturity_value >= 0:
+        label_maturity_days = maturity_value
+    else:
+        raise ValueError(
+            f"label_maturity_days in {resolved_path} must be null or a non-negative integer; got {maturity_value!r}"
+        )
+
+    label_trust_curve = _parse_label_trust_curve(parameters["label_trust_curve"], resolved_path)
+
+    trust_switch_value = parameters["label_trust_weighting"].get("value")
+    if not isinstance(trust_switch_value, bool):
+        raise ValueError(f"label_trust_weighting in {resolved_path} must be a boolean; got {trust_switch_value!r}")
+
+    tolerance_value = parameters["maturity_tie_tolerance"].get("value")
+    if (
+        not isinstance(tolerance_value, (int, float))
+        or isinstance(tolerance_value, bool)
+        or not math.isfinite(tolerance_value)
+        or tolerance_value <= 0.0
+    ):
+        raise ValueError(
+            f"maturity_tie_tolerance in {resolved_path} must be a positive finite number; got {tolerance_value!r}"
+        )
+
+    device_value = parameters["xgboost_device"].get("value")
+    if not isinstance(device_value, str) or device_value not in ALLOWED_XGBOOST_DEVICES:
+        raise ValueError(
+            f"xgboost_device in {resolved_path} must be one of {sorted(ALLOWED_XGBOOST_DEVICES)}; "
+            f"got {device_value!r}"
+        )
+
+    parity_value = parameters["parity_ap_tolerance"].get("value")
+    if (
+        not isinstance(parity_value, (int, float))
+        or isinstance(parity_value, bool)
+        or not math.isfinite(parity_value)
+        or parity_value <= 0.0
+    ):
+        raise ValueError(
+            f"parity_ap_tolerance in {resolved_path} must be a positive finite number; got {parity_value!r}"
+        )
+
+    fill_share_block = parameters["feature_fill_flag_share"]
+    fill_share_value = fill_share_block.get("value")
+    if (
+        not isinstance(fill_share_value, (int, float))
+        or isinstance(fill_share_value, bool)
+        or not 0.0 < fill_share_value <= 1.0
+    ):
+        raise ValueError(
+            f"feature_fill_flag_share in {resolved_path} must be a number in (0.0, 1.0]; got {fill_share_value!r}"
+        )
+
+    use_label_network_features: bool | None = None
+    if "use_label_network_features" in parameters:
+        switch_value = parameters["use_label_network_features"].get("value")
+        if not isinstance(switch_value, bool):
+            raise ValueError(
+                f"use_label_network_features in {resolved_path} must be a boolean; got {switch_value!r}"
+            )
+        use_label_network_features = switch_value
+
+    label_network_features: tuple[str, ...] = ()
+    if "label_network_features" in parameters:
+        label_network_features = _parse_feature_name_list(
+            parameters["label_network_features"], "label_network_features", resolved_path
+        )
+    elif use_label_network_features is True:
+        raise ValueError(
+            f"label_network_features in {resolved_path} is required when use_label_network_features is true"
+        )
+
+    feedback_network_features_not_used: tuple[str, ...] = ()
+    if "feedback_network_features_not_used" in parameters:
+        feedback_network_features_not_used = _parse_feature_name_list(
+            parameters["feedback_network_features_not_used"], "feedback_network_features_not_used", resolved_path
+        )
+
+    _validate_network_feature_names(label_network_features, feedback_network_features_not_used, resolved_path)
+
+    rules_plus_labels_and_registry: bool | None = None
+    if "rules_plus_labels_and_registry" in parameters:
+        rules_switch_value = parameters["rules_plus_labels_and_registry"].get("value")
+        if not isinstance(rules_switch_value, bool):
+            raise ValueError(
+                f"rules_plus_labels_and_registry in {resolved_path} must be a boolean; got {rules_switch_value!r}"
+            )
+        rules_plus_labels_and_registry = rules_switch_value
+
+    pu_method: str | None = None
+    if "pu_method" in parameters:
+        pu_method_value = parameters["pu_method"].get("value")
+        if not isinstance(pu_method_value, str) or pu_method_value not in ALLOWED_PU_METHODS:
+            raise ValueError(
+                f"pu_method in {resolved_path} must be one of {sorted(ALLOWED_PU_METHODS)}; got {pu_method_value!r}"
+            )
+        pu_method = pu_method_value
+
+    pu_bagging_n_bags: int | None = None
+    if "pu_bagging_n_bags" in parameters:
+        n_bags_value = parameters["pu_bagging_n_bags"].get("value")
+        if not isinstance(n_bags_value, int) or isinstance(n_bags_value, bool) or n_bags_value <= 0:
+            raise ValueError(f"pu_bagging_n_bags in {resolved_path} must be a positive integer; got {n_bags_value!r}")
+        pu_bagging_n_bags = n_bags_value
+
+    pu_unlabelled_per_positive_candidates: tuple[int, ...] | None = None
+    if "pu_unlabelled_per_positive_candidates" in parameters:
+        candidates_value = parameters["pu_unlabelled_per_positive_candidates"].get("value")
+        if not isinstance(candidates_value, list) or not candidates_value:
+            raise ValueError(
+                f"pu_unlabelled_per_positive_candidates in {resolved_path} "
+                "must be a non-empty list of positive integers"
+            )
+        for candidate in candidates_value:
+            if not isinstance(candidate, int) or isinstance(candidate, bool) or candidate <= 0:
+                raise ValueError(
+                    f"pu_unlabelled_per_positive_candidates in {resolved_path} must hold positive integers only; "
+                    f"got {candidate!r}"
+                )
+        pu_unlabelled_per_positive_candidates = tuple(candidates_value)
+
+    pu_probability_clip: float | None = None
+    if "pu_probability_clip" in parameters:
+        clip_value = parameters["pu_probability_clip"].get("value")
+        if (
+            not isinstance(clip_value, (int, float))
+            or isinstance(clip_value, bool)
+            or not 0.0 < clip_value < 1.0
+        ):
+            raise ValueError(
+                f"pu_probability_clip in {resolved_path} must be a number in (0.0, 1.0); got {clip_value!r}"
+            )
+        pu_probability_clip = float(clip_value)
+
+    data_path: str | None = None
+    if "data_path" in parameters:
+        data_path_value = parameters["data_path"].get("value")
+        if not isinstance(data_path_value, str) or data_path_value not in ALLOWED_DATA_PATHS:
+            raise ValueError(
+                f"data_path in {resolved_path} must be one of {sorted(ALLOWED_DATA_PATHS)}; got {data_path_value!r}"
+            )
+        data_path = data_path_value
+
+    hyperparameter_search_value = parameters["hyperparameter_search"].get("value")
+    if (
+        not isinstance(hyperparameter_search_value, str)
+        or hyperparameter_search_value not in ALLOWED_HYPERPARAMETER_SEARCHES
+    ):
+        raise ValueError(
+            f"hyperparameter_search in {resolved_path} must be one of "
+            f"{sorted(ALLOWED_HYPERPARAMETER_SEARCHES)}; got {hyperparameter_search_value!r}"
+        )
+    hyperparameter_search: str = hyperparameter_search_value
+
+    optuna_trials_value = parameters["optuna_trials"].get("value")
+    if (
+        not isinstance(optuna_trials_value, int)
+        or isinstance(optuna_trials_value, bool)
+        or optuna_trials_value <= 0
+    ):
+        raise ValueError(
+            f"optuna_trials in {resolved_path} must be a positive integer; got {optuna_trials_value!r}"
+        )
+    optuna_trials: int = optuna_trials_value
+
+    optuna_seed_value = parameters["optuna_seed"].get("value")
+    if not isinstance(optuna_seed_value, int) or isinstance(optuna_seed_value, bool):
+        raise ValueError(f"optuna_seed in {resolved_path} must be an integer; got {optuna_seed_value!r}")
+    optuna_seed: int = optuna_seed_value
+
+    min_trials_value = parameters["optuna_min_trials_before_stop"].get("value")
+    if not isinstance(min_trials_value, int) or isinstance(min_trials_value, bool) or min_trials_value <= 0:
+        raise ValueError(
+            f"optuna_min_trials_before_stop in {resolved_path} must be a positive integer; "
+            f"got {min_trials_value!r}"
+        )
+    optuna_min_trials_before_stop: int = min_trials_value
+
+    patience_value = parameters["optuna_stall_patience_trials"].get("value")
+    if not isinstance(patience_value, int) or isinstance(patience_value, bool) or patience_value <= 0:
+        raise ValueError(
+            f"optuna_stall_patience_trials in {resolved_path} must be a positive integer; "
+            f"got {patience_value!r}"
+        )
+    optuna_stall_patience_trials: int = patience_value
+
+    min_improvement_value = parameters["optuna_min_improvement"].get("value")
+    if (
+        not isinstance(min_improvement_value, (int, float))
+        or isinstance(min_improvement_value, bool)
+        or not math.isfinite(min_improvement_value)
+        or min_improvement_value <= 0.0
+    ):
+        raise ValueError(
+            f"optuna_min_improvement in {resolved_path} must be a positive finite number; "
+            f"got {min_improvement_value!r}"
+        )
+    optuna_min_improvement: float = float(min_improvement_value)
+
+    if optuna_min_trials_before_stop > optuna_trials:
+        raise ValueError(
+            f"optuna_min_trials_before_stop in {resolved_path} must not exceed optuna_trials; "
+            f"got {optuna_min_trials_before_stop} and {optuna_trials}"
+        )
+
+    hyperparameter_space = _parse_hyperparameter_space(parameters["hyperparameter_space"], resolved_path)
+
+    return MuleModelConfig(
+        label_cut=label_cut,
+        label_maturity_days=label_maturity_days,
+        label_trust_curve=label_trust_curve,
+        label_trust_weighting=trust_switch_value,
+        maturity_tie_tolerance=float(tolerance_value),
+        xgboost_device=device_value,
+        parity_ap_tolerance=float(parity_value),
+        feature_fill_flag_share=float(fill_share_value),
+        use_label_network_features=use_label_network_features,
+        label_network_features=label_network_features,
+        feedback_network_features_not_used=feedback_network_features_not_used,
+        rules_plus_labels_and_registry=rules_plus_labels_and_registry,
+        pu_method=pu_method,
+        pu_bagging_n_bags=pu_bagging_n_bags,
+        pu_unlabelled_per_positive_candidates=pu_unlabelled_per_positive_candidates,
+        pu_probability_clip=pu_probability_clip,
+        data_path=data_path,
+        hyperparameter_search=hyperparameter_search,
+        optuna_trials=optuna_trials,
+        optuna_seed=optuna_seed,
+        optuna_min_trials_before_stop=optuna_min_trials_before_stop,
+        optuna_stall_patience_trials=optuna_stall_patience_trials,
+        optuna_min_improvement=optuna_min_improvement,
+        hyperparameter_space=hyperparameter_space,
+    )
+
+
+def account_model_feature_names(use_label_network_features: bool | None = None) -> tuple[str, ...]:
+    """
+    WHAT: Returns the canonical account features minus the anomaly config's excluded features, plus
+    the configured label network features when that switch is on.
+
+    WHY: The pilot must use the same bank-visible feature contract as the anomaly detector, and the
+    exclusion list is policy read from config/anomaly_detector.yaml rather than copied here. The
+    label network switch is policy too, so it is read from config/mule_model.yaml unless the caller
+    states it explicitly.
+
+    Args:
+        use_label_network_features: Overrides the config switch when given; when None the committed
+            config decides.
+
+    Returns:
+        Canonical feature names in catalog order, with every configured exclusion removed except
+        the label network features the switch admits.
+
+    Raises:
+        ValueError: If the anomaly config is missing or malformed (raised by its loader), the switch
+            is absent from the config and not given, or a configured network feature fails
+            validation (raised by the config loader).
+    """
+    config = load_mule_model_config()
+    if use_label_network_features is None:
+        if config.use_label_network_features is None:
+            raise ValueError("use_label_network_features is missing from the mule model configuration")
+        use_label_network_features = config.use_label_network_features
+    excluded = set(load_anomaly_detector_config().excluded_features)
+    if not use_label_network_features:
+        return tuple(name for name in account_feature_names() if name not in excluded)
+    admitted = set(config.label_network_features)
+    return tuple(name for name in account_feature_names() if name not in excluded or name in admitted)
+
+
+def _require_string(row: dict[str, Any], key: str, caller: str) -> str:
+    """
+    WHAT: Returns a required non-empty string field from a row.
+
+    Raises:
+        ValueError: If the field is missing, empty, or not a string.
+    """
+    value = row.get(key)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{caller} requires a non-empty string '{key}' on every row")
+    return value
+
+
+def _require_datetime(row: dict[str, Any], key: str, caller: str) -> datetime:
+    """
+    WHAT: Returns a required timezone-aware datetime field from a row.
+
+    Raises:
+        ValueError: If the field is missing, not a datetime, or timezone-naive.
+    """
+    value = row.get(key)
+    if not isinstance(value, datetime):
+        raise ValueError(f"{caller} requires a datetime '{key}' on every row")
+    if value.tzinfo is None:
+        raise ValueError(f"{caller} requires a timezone-aware '{key}'")
+    return value
+
+
+def _ist_day(moment: datetime) -> date:
+    """
+    WHAT: Returns the Asia/Kolkata calendar date of a timezone-aware moment.
+
+    Raises:
+        ValueError: If the moment is not timezone-aware.
+    """
+    if moment.tzinfo is None:
+        raise ValueError("IST day requires a timezone-aware datetime")
+    return moment.astimezone(IST).date()
+
+
+def _one_row_per_account_day(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    WHAT: Keeps the latest snapshot per (world, bank, account, IST day), preferring 'daily' on a tie.
+
+    WHY: The evaluation package owns the canonical one_row_per_account_day, but decisions/ is an
+    operational package and the truth-isolation guard forbids it from importing evaluation at all.
+    This local copy keeps the same selection rule without weakening the boundary, including the
+    world in the key so account identifiers repeated across simulated worlds stay apart.
+
+    Raises:
+        ValueError: If a row lacks a required string field, a timezone-aware snapshot_time, or a
+            valid snapshot_kind.
+    """
+    selected: dict[tuple[object, str, str, date], dict[str, Any]] = {}
+    for row in rows:
+        world_id = row.get("world_id")
+        bank_id = _require_string(row, "bank_id", "one_row_per_account_day")
+        account_id = _require_string(row, "account_id", "one_row_per_account_day")
+        day = _ist_day(_require_datetime(row, "snapshot_time", "one_row_per_account_day"))
+        key = (world_id, bank_id, account_id, day)
+        current = selected.get(key)
+        if current is None:
+            selected[key] = row
+            continue
+        moment = _require_datetime(row, "snapshot_time", "one_row_per_account_day")
+        current_moment = _require_datetime(current, "snapshot_time", "one_row_per_account_day")
+        if moment > current_moment:
+            selected[key] = row
+        elif moment == current_moment:
+            kind = row.get("snapshot_kind")
+            current_kind = current.get("snapshot_kind")
+            if kind not in {"daily", "full"}:
+                raise ValueError(f"snapshot_kind must be 'daily' or 'full'; got {kind!r}")
+            if current_kind not in {"daily", "full"}:
+                raise ValueError(f"snapshot_kind must be 'daily' or 'full'; got {current_kind!r}")
+            if kind == "daily" and current_kind != "daily":
+                selected[key] = row
+    return list(selected.values())
+
+
+def _feature_value(value: Any, name: str) -> float:
+    """
+    WHAT: Converts one feature value to float, turning None into NaN.
+
+    WHY: XGBoost handles missing values natively, so an absent feature must stay missing rather
+    than be guessed as zero.
+
+    Raises:
+        ValueError: If the value is not numeric (a text feature would silently break the matrix).
+    """
+    if value is None:
+        return float("nan")
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        return float(value)
+    raise ValueError(f"Feature {name!r} must be numeric or None; got {value!r}")
+
+
+def build_training_rows(
+    snapshot_rows: list[dict[str, Any]],
+    label_rows: list[dict[str, Any]],
+    label_cut: str | None = None,
+    label_maturity_days: int | None = None,
+) -> tuple[list[list[float]], list[int], list[tuple[str, str, str, date]]]:
+    """
+    WHAT: Builds the pilot model's training matrix and targets from snapshots and bank-visible labels.
+
+    WHY: Only account-days a bank could have seen before the first label are usable; after a label
+    the bank already knows the account is suspicious, so those days would leak the answer. Unlabelled
+    accounts keep every day as a negative because the bank saw no complaint against them.
+
+    Args:
+        snapshot_rows: Raw snapshot rows carrying world_id, bank_id, account_id, snapshot_time and
+            snapshot_kind, plus the account features.
+        label_rows: Bank-visible label rows carrying world_id, account_id and arrival_time.
+        label_cut: "arrival_time" keeps a positive account's snapshots only strictly before the
+            exact moment of its first label; "label_day" is the legacy cut after the IST day of that
+            label. Defaults to the value in config/mule_model.yaml.
+        label_maturity_days: Drops each world's final N IST days, where labels have not had time to
+            arrive and positives are undercounted. Defaults to the value in config/mule_model.yaml,
+            where null keeps every day.
+
+    Returns:
+        (matrix, targets, row_keys) where matrix rows follow account_model_feature_names() order and
+        contain floats with NaN for missing values, targets are 1 for positive accounts and 0 for
+        unlabelled accounts, and row_keys are (world_id, bank_id, account_id, IST day) per kept row.
+
+    Key logic:
+        One row per account-day is selected inside each world, because account identifiers repeat
+        across simulated worlds. A positive account keeps only snapshots up to its first label:
+        under "arrival_time" the bank sees nothing at or after that instant, while "label_day"
+        keeps the whole IST day and exists only to reproduce the first pilot dataset. The maturity window is
+        measured per world against that world's own last snapshot day.
+
+    Raises:
+        ValueError: If a required field is missing or malformed, a switch is not allowed, or
+            label_maturity_days is negative.
+    """
+    if label_cut is None or label_maturity_days is None:
+        config = load_mule_model_config()
+        if label_cut is None:
+            label_cut = config.label_cut
+        if label_maturity_days is None:
+            label_maturity_days = config.label_maturity_days
+    if label_cut not in ALLOWED_LABEL_CUTS:
+        raise ValueError(f"label_cut must be one of {sorted(ALLOWED_LABEL_CUTS)}; got {label_cut!r}")
+    if label_maturity_days is not None:
+        if not isinstance(label_maturity_days, int) or isinstance(label_maturity_days, bool) or label_maturity_days < 0:
+            raise ValueError(f"label_maturity_days must be a non-negative integer; got {label_maturity_days!r}")
+
+    sources = sorted({_require_string(row, "source", "build_training_rows") for row in label_rows})
+    verdicts = sorted({_require_string(row, "verdict", "build_training_rows") for row in label_rows})
+    print(f"Label values: source={sources} verdict={verdicts}")
+
+    first_label_day: dict[tuple[str, str], date] = {}
+    first_label_arrival: dict[tuple[str, str], datetime] = {}
+    for row in label_rows:
+        world_id = _require_string(row, "world_id", "build_training_rows")
+        account_id = _require_string(row, "account_id", "build_training_rows")
+        arrival_time = _require_datetime(row, "arrival_time", "build_training_rows")
+        day = _ist_day(arrival_time)
+        key = (world_id, account_id)
+        current = first_label_day.get(key)
+        if current is None or day < current:
+            first_label_day[key] = day
+        current_arrival = first_label_arrival.get(key)
+        if current_arrival is None or arrival_time < current_arrival:
+            first_label_arrival[key] = arrival_time
+
+    feature_names = account_model_feature_names()
+    rows_by_world: dict[str, list[dict[str, Any]]] = {}
+    for row in snapshot_rows:
+        world_id = _require_string(row, "world_id", "build_training_rows")
+        rows_by_world.setdefault(world_id, []).append(row)
+
+    matrix: list[list[float]] = []
+    targets: list[int] = []
+    row_keys: list[tuple[str, str, str, date]] = []
+    for world_id in sorted(rows_by_world):
+        world_rows = rows_by_world[world_id]
+        maturity_cutoff: date | None = None
+        if label_maturity_days is not None:
+            last_day = max(
+                _ist_day(_require_datetime(row, "snapshot_time", "build_training_rows")) for row in world_rows
+            )
+            maturity_cutoff = last_day - timedelta(days=label_maturity_days)
+        day_rows = _one_row_per_account_day(world_rows)
+        for row in day_rows:
+            bank_id = _require_string(row, "bank_id", "build_training_rows")
+            account_id = _require_string(row, "account_id", "build_training_rows")
+            moment = _require_datetime(row, "snapshot_time", "build_training_rows")
+            day = _ist_day(moment)
+            if maturity_cutoff is not None and day > maturity_cutoff:
+                continue
+            key = (world_id, account_id)
+            is_positive = key in first_label_day
+            if is_positive:
+                if label_cut == "arrival_time":
+                    if moment >= first_label_arrival[key]:
+                        continue
+                elif day > first_label_day[key]:
+                    continue
+            matrix.append([_feature_value(row.get(name), name) for name in feature_names])
+            targets.append(1 if is_positive else 0)
+            row_keys.append((world_id, bank_id, account_id, day))
+    return matrix, targets, row_keys
+
+
+def train_account_model(
+    rows: FeatureRows,
+    targets: list[int] | numpy.ndarray,
+    seed: int,
+    n_estimators: int = 100,
+    *,
+    sample_weight: Sequence[float] | numpy.ndarray | None = None,
+    scale_pos_weight_override: float | None = None,
+    device: str = "cpu",
+    max_depth: int = 6,
+    learning_rate: float = 0.3,
+    min_child_weight: float = 1.0,
+    subsample: float = 1.0,
+    colsample_bytree: float = 1.0,
+    gamma: float = 0.0,
+    reg_alpha: float = 0.0,
+    reg_lambda: float = 1.0,
+) -> tuple[xgboost.XGBClassifier, float]:
+    """
+    WHAT: Fits the pilot account model and returns it with its positive-class weight.
+
+    WHY: Fraud accounts are rare, so scale_pos_weight balances the two classes. Every other
+    hyperparameter stays at the XGBoost default; n_estimators is chosen on validation by the runner.
+    The weighted Elkan-Noto path needs its own per-row weights and its own class weight, so both can
+    be supplied without changing the default supervised call.
+
+    Args:
+        rows: Feature rows in account_model_feature_names() order; plain Python rows or a
+            float32 numpy array, because XGBoost converts either to the same internal matrix.
+        targets: Binary labels aligned with rows.
+        seed: Random seed recorded in the model sidecar.
+        n_estimators: Number of boosting rounds; chosen on validation, never on test.
+        sample_weight: Optional non-negative weight per row, as a list or a numpy array; None fits
+            without weights exactly as before.
+        scale_pos_weight_override: Optional positive class weight replacing the default; None keeps
+            the default, which is negatives / positives by count without sample weights and the
+            summed weight of the target-0 rows over the summed weight of the target-1 rows with them.
+        device: "cpu" or "cuda"; "cuda" needs a CUDA build of XGBoost and never falls back to cpu.
+        max_depth: Tree depth, defaulting to the XGBoost default so the old call fits the same trees.
+        learning_rate: Boosting step, defaulting to the XGBoost default.
+        min_child_weight: Minimum child weight, defaulting to the XGBoost default.
+        subsample: Row sample share per tree, defaulting to the XGBoost default.
+        colsample_bytree: Column sample share per tree, defaulting to the XGBoost default.
+        gamma: Minimum loss reduction for a split, defaulting to the XGBoost default.
+        reg_alpha: L1 weight penalty, defaulting to the XGBoost default.
+        reg_lambda: L2 weight penalty, defaulting to the XGBoost default.
+
+    Returns:
+        (model, scale_pos_weight) where scale_pos_weight is the override when given, otherwise
+        negatives / positives, or the weighted ratio when sample weights are given.
+
+    Raises:
+        ValueError: If rows and targets differ in length, there are no positives or no negatives,
+            the sample weights do not align with the rows or include a non-finite or negative
+            value, the weights of one class sum to zero when the weighted ratio is needed, the
+            override is not a positive finite number, the device is not "cpu" or "cuda", the
+            device is "cuda" on an XGBoost build without CUDA, or a regularisation parameter is
+            not a non-negative finite number.
+    """
+    if device not in ALLOWED_XGBOOST_DEVICES:
+        raise ValueError(f"device must be one of {sorted(ALLOWED_XGBOOST_DEVICES)}; got {device!r}")
+    if device == "cuda":
+        require_cuda_build()
+    if len(rows) != len(targets):
+        raise ValueError(f"rows length {len(rows)} does not match targets length {len(targets)}")
+    if sample_weight is not None:
+        if len(sample_weight) != len(rows):
+            raise ValueError(
+                f"sample_weight length {len(sample_weight)} does not match rows length {len(rows)}"
+            )
+        if isinstance(sample_weight, numpy.ndarray):
+            # An array is checked in one pass so millions of weights do not become Python objects.
+            if sample_weight.dtype.kind not in "iuf":
+                raise ValueError(f"sample_weight array must be numeric; got dtype {sample_weight.dtype}")
+            if not numpy.all(numpy.isfinite(sample_weight)) or numpy.any(sample_weight < 0.0):
+                raise ValueError("sample_weight values must be non-negative and finite")
+        else:
+            for weight in sample_weight:
+                if not isinstance(weight, (int, float)) or isinstance(weight, bool):
+                    raise ValueError(f"sample_weight values must be numbers; got {weight!r}")
+                if not math.isfinite(weight) or weight < 0.0:
+                    raise ValueError(f"sample_weight values must be non-negative and finite; got {weight!r}")
+    if scale_pos_weight_override is not None:
+        if (
+            not isinstance(scale_pos_weight_override, (int, float))
+            or isinstance(scale_pos_weight_override, bool)
+            or not math.isfinite(scale_pos_weight_override)
+            or scale_pos_weight_override <= 0.0
+        ):
+            raise ValueError(
+                "scale_pos_weight_override must be a positive finite number; "
+                f"got {scale_pos_weight_override!r}"
+            )
+    if not isinstance(max_depth, int) or isinstance(max_depth, bool) or max_depth < 1:
+        raise ValueError(f"max_depth must be a positive integer; got {max_depth!r}")
+    if (
+        not isinstance(learning_rate, (int, float))
+        or isinstance(learning_rate, bool)
+        or not math.isfinite(learning_rate)
+        or learning_rate <= 0.0
+    ):
+        raise ValueError(f"learning_rate must be a positive finite number; got {learning_rate!r}")
+    if (
+        not isinstance(min_child_weight, (int, float))
+        or isinstance(min_child_weight, bool)
+        or not math.isfinite(min_child_weight)
+        or min_child_weight < 0.0
+    ):
+        raise ValueError(
+            f"min_child_weight must be a non-negative finite number; got {min_child_weight!r}"
+        )
+    for name, share in (("subsample", subsample), ("colsample_bytree", colsample_bytree)):
+        if (
+            not isinstance(share, (int, float))
+            or isinstance(share, bool)
+            or not math.isfinite(share)
+            or not 0.0 < share <= 1.0
+        ):
+            raise ValueError(f"{name} must be a number in (0.0, 1.0]; got {share!r}")
+    for name, penalty in (("gamma", gamma), ("reg_alpha", reg_alpha), ("reg_lambda", reg_lambda)):
+        if (
+            not isinstance(penalty, (int, float))
+            or isinstance(penalty, bool)
+            or not math.isfinite(penalty)
+            or penalty < 0.0
+        ):
+            raise ValueError(f"{name} must be a non-negative finite number; got {penalty!r}")
+    positives = sum(1 for target in targets if target == 1)
+    negatives = sum(1 for target in targets if target == 0)
+    if positives == 0:
+        raise ValueError("train_account_model requires at least one positive account-day")
+    if negatives == 0:
+        raise ValueError("train_account_model requires at least one negative account-day")
+    if scale_pos_weight_override is not None:
+        scale_pos_weight = float(scale_pos_weight_override)
+    elif sample_weight is None:
+        scale_pos_weight = negatives / positives
+    else:
+        scale_pos_weight = _weighted_class_ratio(targets, sample_weight)
+
+    model = xgboost.XGBClassifier(
+        objective="binary:logistic",
+        tree_method="hist",
+        device=device,
+        random_state=seed,
+        scale_pos_weight=scale_pos_weight,
+        n_estimators=n_estimators,
+        max_depth=max_depth,
+        learning_rate=learning_rate,
+        min_child_weight=min_child_weight,
+        subsample=subsample,
+        colsample_bytree=colsample_bytree,
+        gamma=gamma,
+        reg_alpha=reg_alpha,
+        reg_lambda=reg_lambda,
+    )
+    if sample_weight is None:
+        model.fit(rows, targets)
+    else:
+        model.fit(rows, targets, sample_weight=sample_weight)
+    return model, scale_pos_weight
+
+
+def require_cuda_build() -> None:
+    """
+    WHAT: Raises unless the installed XGBoost was built with CUDA support.
+
+    WHY: A run that records device "cuda" must really have trained on a GPU, so the build is checked
+    up front and refused rather than relying on whatever a CPU-only build would do with the request.
+
+    Raises:
+        ValueError: If xgboost.build_info() does not report USE_CUDA as true.
+    """
+    if xgboost.build_info().get("USE_CUDA") is not True:
+        raise ValueError(
+            'device="cuda" needs an XGBoost build with CUDA support, but xgboost.build_info() '
+            "does not report USE_CUDA as true; use device 'cpu'"
+        )
+
+
+def _weighted_class_ratio(
+    targets: list[int] | numpy.ndarray,
+    sample_weight: Sequence[float] | numpy.ndarray,
+) -> float:
+    """
+    WHAT: Returns the summed weight of the target-0 rows divided by the summed weight of the target-1 rows.
+
+    WHY: With trust weights the positives still weigh 1.0 but the negatives weigh less, so balancing
+    the classes by row count would overstate the negatives; the weighted ratio keeps the same balance
+    the weighted loss sees.
+
+    Raises:
+        ValueError: If either class has a zero total weight.
+    """
+    target_array = numpy.asarray(targets)
+    weight_array = numpy.asarray(sample_weight, dtype=numpy.float64)
+    negative_total = float(weight_array[target_array == 0].sum())
+    positive_total = float(weight_array[target_array == 1].sum())
+    if negative_total <= 0.0:
+        raise ValueError("The target-0 rows have a zero total sample weight")
+    if positive_total <= 0.0:
+        raise ValueError("The target-1 rows have a zero total sample weight")
+    return negative_total / positive_total
+
+
+def predict_account_days(
+    model: "xgboost.XGBClassifier | PUBaggedAccountModel",
+    day_rows: list[dict[str, Any]] | numpy.ndarray,
+) -> list[float]:
+    """
+    WHAT: Returns the model's fraud probability for every supplied account-day row, in row order.
+
+    WHY: Evaluation keeps the same row order as one_row_per_account_day, so callers can attach a
+    probability to each ScoredDay without a separate join key. A PU bagging ensemble is scored as
+    the logistic probability of its mean margin, so both model types answer the same question.
+
+    Args:
+        model: Fitted XGBoost account model or PUBaggedAccountModel ensemble.
+        day_rows: Account-day rows carrying the canonical features, or an already built matrix in
+            account_model_feature_names() order with a missing value stored as NaN. The compact data
+            path passes the matrix so it never rebuilds row dictionaries; XGBoost converts both
+            inputs to float32, so the probabilities are the same.
+
+    Returns:
+        One probability per input row, in the same order.
+
+    Raises:
+        ValueError: If a feature value is not numeric, the matrix has the wrong shape, or the rows
+            cannot be scored.
+    """
+    feature_names = account_model_feature_names()
+    matrix: list[list[float]] | numpy.ndarray
+    if isinstance(day_rows, numpy.ndarray):
+        if day_rows.ndim != 2 or day_rows.shape[1] != len(feature_names):
+            raise ValueError(
+                f"predict_account_days needs a 2-D matrix with {len(feature_names)} columns; got shape {day_rows.shape}"
+            )
+        matrix = day_rows
+    else:
+        matrix = [[_feature_value(row.get(name), name) for name in feature_names] for row in day_rows]
+    if len(matrix) == 0:
+        raise ValueError("predict_account_days requires at least one account-day row")
+
+    # Imported here because pu_learning imports train_account_model from this module; a module-level
+    # import would make the two modules import each other during start-up.
+    from decisions.pu_learning import PUBaggedAccountModel as BaggedModel
+
+    if isinstance(model, BaggedModel):
+        return model.predict_probabilities(matrix)
+    probabilities = model.predict_proba(matrix)[:, 1]
+    return [float(probability) for probability in probabilities]
+
+
+def _sidecar_path(path: Path) -> Path:
+    """
+    WHAT: Returns the JSON sidecar path for a native XGBoost model file.
+    """
+    return Path(str(path) + ".json")
+
+
+def save_model(model: xgboost.XGBClassifier, path: Path, metadata: dict[str, Any]) -> None:
+    """
+    WHAT: Saves the native XGBoost model and a JSON sidecar describing the matrix it expects.
+
+    WHY: A model file alone does not say which feature order produced it, so loading must compare
+    the sidecar against the current canonical feature order.
+
+    Args:
+        model: Fitted XGBoost account model.
+        path: Destination for the native .ubj model file.
+        metadata: At least seed, scale_pos_weight and training_dataset_ids.
+
+    Raises:
+        ValueError: If a required metadata key is missing.
+    """
+    required = {"seed", "scale_pos_weight", "training_dataset_ids"}
+    missing = sorted(required - set(metadata))
+    if missing:
+        raise ValueError(f"save_model metadata is missing required keys: {missing}")
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    model.save_model(str(path))
+    sidecar = dict(metadata)
+    sidecar["feature_names"] = list(account_model_feature_names())
+    sidecar["xgboost_version"] = xgboost.__version__
+    _sidecar_path(path).write_text(
+        json.dumps(sidecar, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def load_model(path: Path) -> xgboost.XGBClassifier:
+    """
+    WHAT: Loads a native XGBoost model after proving its sidecar feature order still matches.
+
+    WHY: A feature-order mismatch would silently score the wrong columns, so loading refuses it.
+
+    Args:
+        path: Native .ubj model file written by save_model.
+
+    Returns:
+        The loaded XGBoost classifier.
+
+    Raises:
+        ValueError: If the sidecar is missing, malformed, or disagrees with the canonical order.
+    """
+    path = Path(path)
+    sidecar_path = _sidecar_path(path)
+    if not sidecar_path.is_file():
+        raise ValueError(f"Model sidecar is missing: {sidecar_path}")
+    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    if not isinstance(sidecar, dict):
+        raise ValueError(f"Model sidecar {sidecar_path} must hold a mapping")
+    recorded = sidecar.get("feature_names")
+    expected = list(account_model_feature_names())
+    if recorded != expected:
+        raise ValueError(
+            f"Model sidecar {sidecar_path} feature order does not match account_model_feature_names()"
+        )
+
+    model = xgboost.XGBClassifier()
+    model.load_model(str(path))
+    return model

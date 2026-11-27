@@ -199,14 +199,18 @@ def build_gang_device_events(
     linked_number_switch: bool,
     emulator: bool,
     remote_access: bool,
+    *,
+    bind_control_device: bool = False,
 ) -> list[GangDeviceEvent]:
     """
     WHAT: Generates client-side synthetic GangDeviceEvent telemetry records for device takeover operations.
     For each device, it emits one device_acquired event; then for each controlled account, it emits
     one event for each configured compromise flag that evaluates to True at the take_control minute.
+    When bind_control_device is true, it also emits one control_binding event per controlled account.
 
     WHY: Decision E4 models observable device telemetry to simulate client event feeds for downstream
-    detection systems, ensuring telemetry contains no truth labels, roles, or gang identifiers.
+    detection systems, ensuring telemetry contains no truth labels, roles, or gang identifiers. A
+    control_binding event marks the account moving onto the gang's phone without revealing why.
 
     Args:
         devices: Sequence of external gang devices provisioned by the syndicate.
@@ -216,6 +220,7 @@ def build_gang_device_events(
         linked_number_switch: Boolean indicating registered telephone change.
         emulator: Boolean indicating virtual emulator execution.
         remote_access: Boolean indicating remote control session.
+        bind_control_device: When true, emit one control_binding event per controlled account.
 
     Returns:
         List of immutable GangDeviceEvent records chronologically positioned at the take_control minute.
@@ -241,6 +246,16 @@ def build_gang_device_events(
         for is_active, kind in flags:
             if is_active:
                 events.append(GangDeviceEvent(take_control_minute, device.device_id, account_id, kind, device.platform, device.os_generation, device.fingerprint))
+
+    # 3. Emit one control_binding event per controlled account when the switch is on.
+    if bind_control_device:
+        for account_id, device in account_to_device.items():
+            events.append(
+                GangDeviceEvent(
+                    take_control_minute, device.device_id, account_id, "control_binding",
+                    device.platform, device.os_generation, device.fingerprint,
+                )
+            )
 
     return events
 
@@ -331,11 +346,14 @@ def build_rotation_events(
     linked_number_switch: bool,
     emulator: bool,
     remote_access: bool,
+    *,
+    bind_control_device: bool = False,
 ) -> list[GangDeviceEvent]:
     """
     WHAT: Generates client-side telemetry events for scheduled device replacements across rotation generations.
     At each generation start, emits a device_acquired event for every provisioned handset alongside active compromise
-    flag signals for its assigned mule account.
+    flag signals for its assigned mule account. When bind_control_device is true, it also emits one control_binding
+    event per account at each generation where that account's device changes.
 
     WHY: Level 12g device_rotation generates staggered telemetry streams reflecting periodic hardware acquisition
     and account binding events across simulation time, mirroring operational security rotation in syndicates.
@@ -350,6 +368,7 @@ def build_rotation_events(
         linked_number_switch: Boolean indicating registered telephone alteration.
         emulator: Boolean indicating virtual emulator execution.
         remote_access: Boolean indicating remote control session.
+        bind_control_device: When true, emit one control_binding event per account per device change.
 
     Returns:
         List of GangDeviceEvent telemetry records ordered chronologically by generation minute.
@@ -415,5 +434,25 @@ def build_rotation_events(
                             fingerprint=device.fingerprint,
                         )
                     )
+
+        # 3. Emit one control_binding event per account whose device changed this generation.
+        if bind_control_device:
+            for j, account_id in enumerate(accounts):
+                device = gen_devices[j]
+                if g > 0:
+                    previous_device = devices[(g - 1) * num_accounts + j]
+                    if previous_device.fingerprint == device.fingerprint:
+                        continue
+                events.append(
+                    GangDeviceEvent(
+                        minute=gen_start,
+                        device_id=device.device_id,
+                        account_id=account_id,
+                        kind="control_binding",
+                        platform=device.platform,
+                        os_generation=device.os_generation,
+                        fingerprint=device.fingerprint,
+                    )
+                )
 
     return events

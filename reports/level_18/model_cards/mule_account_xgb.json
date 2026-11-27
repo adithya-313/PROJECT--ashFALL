@@ -1,0 +1,408 @@
+{
+  "data": {
+    "calibration": {
+      "calibrated": {
+        "brier": 0.009745198042330058,
+        "ece": 0.0018426116879839516,
+        "positives": 40751,
+        "rows": 1395478
+      },
+      "calibrator": {
+        "application": "linear interpolation between the thresholds, clipped to [y_min, y_max]",
+        "file": "account_isotonic.json",
+        "sha256": "0d287917a2c68e089f2375d6d85c2600db69b5b3b01aea57d3fa11f648afa33d"
+      },
+      "raw": {
+        "brier": 0.05834658687838746,
+        "ece": 0.12713701651550158,
+        "positives": 40751,
+        "rows": 1395478
+      }
+    },
+    "fallback_model": {
+      "decision_cut": {
+        "key": "xgboost_cut",
+        "source": "runs/full/run_b320/final/45c496799170/checkpoint/thresholds.json",
+        "value": 0.9772312809606538
+      },
+      "headline_capacity_pct": 0.25,
+      "leakage": [
+        {
+          "check": "truth_leak",
+          "numbers": {},
+          "source": "runs/full/run_b320/final/45c496799170/leakage_checks.json",
+          "status": "pass"
+        },
+        {
+          "check": "split_leak",
+          "numbers": {},
+          "source": "runs/full/run_b320/final/45c496799170/leakage_checks.json",
+          "status": "pass"
+        },
+        {
+          "check": "trivial_world",
+          "numbers": {
+            "best_direction_ap": 0.028269987287482604,
+            "best_feature": "account_age_days",
+            "fail_threshold": 0.9
+          },
+          "source": "runs/full/run_b320/final/45c496799170/leakage_checks.json",
+          "status": "pass"
+        },
+        {
+          "check": "check_5a",
+          "numbers": {
+            "hit_count": 0
+          },
+          "source": "runs/full/run_b320/leakage_checks_5_6.json",
+          "status": "pass"
+        },
+        {
+          "check": "check_5b",
+          "numbers": {
+            "missing_model_feature_count": 0,
+            "model_feature_count": 39,
+            "simulator_only_violation_count": 0
+          },
+          "source": "runs/full/run_b320/leakage_checks_5_6.json",
+          "status": "pass"
+        },
+        {
+          "check": "check_6a",
+          "numbers": {
+            "hit_count": 0
+          },
+          "source": "runs/full/run_b320/leakage_checks_5_6.json",
+          "status": "pass"
+        },
+        {
+          "check": "check_6b",
+          "numbers": {
+            "average_precision_over_base_rate": 10.415125553116175,
+            "max_ap_over_base_rate": 2.0,
+            "validation_average_precision": 0.6377814058283728,
+            "validation_base_rate": 0.06123607464698787
+          },
+          "shown_as": "FINDING — documented limitation (A-051)",
+          "source": "runs/full/run_b320/leakage_checks_5_6.json",
+          "status": "fail"
+        },
+        {
+          "check": "section_23_check_7",
+          "numbers": {},
+          "source": "runs/full/run_b320/final/45c496799170/leakage_checks.json",
+          "status": "not run"
+        }
+      ],
+      "role": "fallback model for banks with no complaint history",
+      "serving": {
+        "amendment": "A-071",
+        "capacity_pct": 0.5,
+        "served": "run_a",
+        "validation": {
+          "run_a": {
+            "defined_worlds": 120,
+            "median_recall_at_capacity": 0.6363636363636364
+          },
+          "run_b": {
+            "defined_worlds": 120,
+            "median_recall_at_capacity": 0.5954545454545455
+          }
+        }
+      },
+      "success_criterion_status": "not_judgeable",
+      "test": {
+        "run_a": {
+          "genuine_restriction_rate": {
+            "median": 0.0058823529411764705,
+            "p10": 0.0,
+            "p90": 0.008957905085351686,
+            "unit": "fraction",
+            "world_count": 120
+          },
+          "median_time_to_detection_hours": {
+            "median": 11.675,
+            "p10": 1.1675,
+            "p90": 33.78083333333334,
+            "unit": "hours",
+            "world_count": 120
+          },
+          "recall_at_capacity": {
+            "median": 0.6428571428571429,
+            "p10": 0.47704545454545455,
+            "p90": 0.8333333333333334,
+            "unit": "fraction",
+            "world_count": 120
+          },
+          "yield_measured": {
+            "median": 0.9230769230769231,
+            "p10": 0.8,
+            "p90": 1.0,
+            "unit": "fraction",
+            "world_count": 120
+          },
+          "yield_reweighted": {
+            "median": 0.27295545576391117,
+            "p10": 0.08667283114373164,
+            "p90": 1.0,
+            "unit": "fraction",
+            "world_count": 118,
+            "worlds_defined": 118,
+            "worlds_undefined": 2
+          }
+        },
+        "run_b": {
+          "genuine_restriction_rate": {
+            "median": 0.0058823529411764705,
+            "p10": 0.0,
+            "p90": 0.008852175734408546,
+            "unit": "fraction",
+            "world_count": 120
+          },
+          "median_time_to_detection_hours": {
+            "median": 12.579166666666666,
+            "p10": 0.7966666666666669,
+            "p90": 36.87166666666668,
+            "unit": "hours",
+            "world_count": 120
+          },
+          "recall_at_capacity": {
+            "median": 0.625,
+            "p10": 0.45454545454545453,
+            "p90": 0.7905263157894737,
+            "unit": "fraction",
+            "world_count": 120
+          },
+          "yield_measured": {
+            "median": 0.9166666666666666,
+            "p10": 0.7777777777777778,
+            "p90": 1.0,
+            "unit": "fraction",
+            "world_count": 120
+          },
+          "yield_reweighted": {
+            "median": 0.28064627492482774,
+            "p10": 0.08612677656285833,
+            "p90": 1.0,
+            "unit": "fraction",
+            "world_count": 118,
+            "worlds_defined": 118,
+            "worlds_undefined": 2
+          }
+        }
+      },
+      "test_world_count": 120
+    },
+    "intended_use": "Rank account-days for human review within a bank's daily review capacity, using the frozen Run A xgboost ensemble with the committed decision cut 0.9631869778454679 (comparison.json decision_cut).",
+    "known_limitations": [
+      "Simulator new-account cleanness: the simulator opens accounts itself and records the opening minute (world/bank_connectors.py:344-369), so a new account here has no prior history; a mule's fresh account opened with a borrowed identity is not modelled, so new-account detection is cleaner than reality.",
+      "Capacity rounds to one per bank-day: recall at capacity uses max(1, ceil(active_accounts * capacity_pct / 100)) per bank-day (evaluation/level17_scoring.py:527), so on a bank-day with few active accounts a single review decision is the whole capacity.",
+      "Leakage check 6b is recorded as failed in leakage.json: the account model's validation ranking exceeds the A-057 average-precision-over-base-rate limit, so these results are not production evidence."
+    ],
+    "leakage": {
+      "checks": [
+        {
+          "check": "truth_leak",
+          "status": "pass"
+        },
+        {
+          "check": "split_leak",
+          "status": "pass"
+        },
+        {
+          "check": "check_5a",
+          "status": "pass"
+        },
+        {
+          "check": "check_5b",
+          "status": "pass"
+        },
+        {
+          "check": "check_6a",
+          "status": "pass"
+        },
+        {
+          "check": "check_6b",
+          "status": "fail"
+        },
+        {
+          "check": "section_23_check_7",
+          "status": "pass"
+        }
+      ],
+      "trivial_world": {
+        "status": "pass"
+      }
+    },
+    "metrics": {
+      "genuine_restriction_rate": {
+        "median": 0.0058823529411764705,
+        "p10": 0.0,
+        "p90": 0.008957905085351686,
+        "worlds": 120
+      },
+      "held_out_families": {
+        "device_rotation": {
+          "accounts_total": 448,
+          "recall_at_capacity": {
+            "median": 0.6666666666666666,
+            "p10": 0.3984615384615385,
+            "p90": 1.0,
+            "worlds": 60
+          },
+          "recall_at_cut": {
+            "median": 0.9302884615384616,
+            "p10": 0.6666666666666666,
+            "p90": 1.0,
+            "worlds": 60
+          },
+          "worlds_absent": 60,
+          "worlds_used": 60
+        },
+        "slow_drip": {
+          "accounts_total": 446,
+          "recall_at_capacity": {
+            "median": 0.8,
+            "p10": 0.5,
+            "p90": 1.0,
+            "worlds": 59
+          },
+          "recall_at_cut": {
+            "median": 0.9090909090909091,
+            "p10": 0.6606060606060606,
+            "p90": 1.0,
+            "worlds": 59
+          },
+          "worlds_absent": 61,
+          "worlds_used": 59
+        }
+      },
+      "median_time_to_detection_hours": {
+        "median": 11.675,
+        "p10": 1.1675,
+        "p90": 33.78083333333334,
+        "worlds": 120
+      },
+      "recall_at_capacity": {
+        "median": 0.6428571428571429,
+        "p10": 0.47704545454545455,
+        "p90": 0.8333333333333334,
+        "worlds": 120
+      },
+      "recall_by_depth": {
+        "1": {
+          "accounts_median": 6.0,
+          "accounts_total": 704,
+          "median": 1.0,
+          "p10": 0.8300000000000001,
+          "p90": 1.0,
+          "worlds": 120
+        },
+        "2": {
+          "accounts_median": 6.0,
+          "accounts_total": 687,
+          "median": 0.9444444444444444,
+          "p10": 0.6666666666666666,
+          "p90": 1.0,
+          "worlds": 120
+        },
+        "3": {
+          "accounts_median": 6.0,
+          "accounts_total": 526,
+          "median": 1.0,
+          "p10": 0.6,
+          "p90": 1.0,
+          "worlds": 90
+        },
+        "4": {
+          "accounts_median": 6.0,
+          "accounts_total": 353,
+          "median": 0.8571428571428571,
+          "p10": 0.5971428571428571,
+          "p90": 1.0,
+          "worlds": 60
+        },
+        "5": {
+          "accounts_median": 5.0,
+          "accounts_total": 171,
+          "median": 1.0,
+          "p10": 0.5955555555555555,
+          "p90": 1.0,
+          "worlds": 30
+        }
+      },
+      "yield_measured": {
+        "median": 0.9230769230769231,
+        "p10": 0.8,
+        "p90": 1.0,
+        "worlds": 120
+      },
+      "yield_reweighted": {
+        "median": 0.27295545576391117,
+        "p10": 0.08667283114373164,
+        "p90": 1.0,
+        "worlds": 118,
+        "worlds_defined": 118,
+        "worlds_undefined": 2
+      }
+    },
+    "model": "mule_account_xgb",
+    "not_intended_for": [
+      "Any automatic block, restriction or cash-out without a human reviewer",
+      "Production evidence while leakage check 6b is recorded as failed",
+      "Accounts or behaviours outside the ashFALL simulator's generation rules",
+      "Scoring without the frozen Run A feature order"
+    ],
+    "onnx": {
+      "file": "mule_account_xgb.onnx",
+      "merge_proof": {
+        "decision_cut": 0.9631869778454679,
+        "decision_flips": 0,
+        "margin_max_abs_diff": 0.000013103485107635038,
+        "margin_mean_abs_diff": 2.957019532760149e-6,
+        "nan_rows": 20000,
+        "probability_max_abs_diff": 7.059898836092593e-7,
+        "probability_mean_abs_diff": 8.631150705059898e-8,
+        "rows": 20000,
+        "spearman": 0.9999999998845,
+        "top_rows": 200,
+        "top_set_identical": true
+      },
+      "parity": {
+        "test": {
+          "max_abs_diff": 1.6789018467133765e-7,
+          "mean_abs_diff": 3.299944884183842e-8,
+          "nan_rows": 20000,
+          "rows": 20000,
+          "rows_over_tolerance": 0
+        },
+        "validation": {
+          "max_abs_diff": 1.7884182645921953e-7,
+          "mean_abs_diff": 3.294305767656536e-8,
+          "nan_rows": 20000,
+          "rows": 20000,
+          "rows_over_tolerance": 0
+        }
+      },
+      "sha256": "44b8f80efb01dad468b806b008eb4c7ec6111d0fd10128787fca3903e27d973a"
+    },
+    "training_data": {
+      "description": "Account-day rows generated by the ashFALL interactive simulator with the simulator's hidden roles as labels, not real complaints. The frozen Run A ensemble is scored without re-training.",
+      "label": "SIMULATED"
+    }
+  },
+  "manifest": {
+    "generator": "scripts/level18_model_cards.py",
+    "git_hash": "3c6287196837a247342c27e14dc4480b9088fcfe",
+    "sources": {
+      "reports/level_18/console/calibration.json": "1585c12286973c7932f3c037f2c195e654ea2dfda4c9c5e313a0ae560489127a",
+      "reports/level_18/console/comparison.json": "b498394baf5029d5ae92a52ef2438994391b8cb883f7cccaebeea788871f4126",
+      "reports/level_18/console/fallback_account.json": "ceeb794195e3c0a163e2751502652c61fd5df75dc4ffced798d2ac0178b3c9f9",
+      "reports/level_18/console/held_out_families.json": "b102485163e8b60b1306dc1a4a17dcceebec05b1c03820ba2aaa270080c7a581",
+      "reports/level_18/console/hidden_depth.json": "f0b788088f2043a7effd7fc703d51bfab15c4135348c47cad9c2f16e77ff72e5",
+      "reports/level_18/console/leakage.json": "8664ee8691ab9da289b967687bd127cecd5dde74af9f10c316fe5e95cc946703",
+      "reports/level_18/console/onnx_parity.json": "1361494277196e398a4c854c60a9cebce3f735d7fa88b7defacc17b8777ddddc"
+    }
+  },
+  "simulated": true
+}

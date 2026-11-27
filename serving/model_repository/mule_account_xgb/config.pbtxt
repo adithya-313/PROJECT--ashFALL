@@ -1,0 +1,63 @@
+# File: serving/model_repository/mule_account_xgb/config.pbtxt
+# Purpose: Tells Triton Inference Server how to serve the Level 18 merged account model exported to ONNX.
+#
+# The model file lives next to this file at mule_account_xgb/1/model.onnx ("1" is the model version). It is the
+# merged 50-bag booster from runs/full/level18b/onnx/mule_account_xgb.onnx (sha256
+# e1823d5d35b930e16344ca2fe792f04ae726a10207459c6015ee95f0db2bb4ef); *.onnx is gitignored, so the file is copied
+# into place, not committed.
+
+# The name clients use to ask for this model. It must match the folder name (mule_account_xgb).
+name: "mule_account_xgb"
+
+# Triton's ONNX backend runs the tree ensemble on the CPU.
+backend: "onnxruntime"
+
+# Same per-request limit as the served fraud model (TRITON_MAX_BATCH=128 in .env.example and MAX_BATCH in
+# serving/fraud_client.py), so one client limit covers every model in this repository. The ONNX input is
+# [None, 42], so the file itself accepts any batch size.
+max_batch_size: 128
+
+# The dynamic-batching settings copied from fraud_xgboost's config. They were tuned for that model only and were
+# not re-tuned for this one.
+dynamic_batching {
+  preferred_batch_size: [ 8, 32 ]
+  max_queue_delay_microseconds: 1000
+}
+
+# What goes in: one row = 42 float32 account features, in the frozen Run A order returned by
+# decisions.mule_account_model.account_model_feature_names. The name must match the ONNX input name exactly.
+input [
+  {
+    name: "input"
+    data_type: TYPE_FP32
+    dims: [ 42 ]
+  }
+]
+
+# What comes out.
+#   label         - the predicted class per row (0 or 1), a 64-bit integer.
+#   probabilities - [P(0), P(1)]; column 1 is the RAW merged-booster probability. The Level 18 isotonic calibrator
+#                   (runs/full/level18b/calibration/account_isotonic.json) is applied afterwards, in the client,
+#                   not by Triton.
+output [
+  {
+    name: "label"
+    data_type: TYPE_INT64
+    dims: [ 1 ]
+    # The ONNX model returns the label as one number per row with no extra dimension; with batching Triton wants
+    # every per-row output to have at least one dimension, so the model's own per-row shape is declared scalar.
+    reshape { shape: [ ] }
+  },
+  {
+    name: "probabilities"
+    data_type: TYPE_FP32
+    dims: [ 2 ]
+  }
+]
+
+instance_group [
+  {
+    count: 1
+    kind: KIND_CPU
+  }
+]

@@ -18,7 +18,7 @@ from evaluation.level17_evaluation import (
     first_illicit_credit,
     require_tuned,
 )
-from evaluation.level17_scoring import ScoredDay
+from evaluation.level17_scoring import ScoredDay, account_key
 
 DAY_ONE = date(2025, 1, 1)
 DAY_TWO = date(2025, 1, 2)
@@ -35,6 +35,7 @@ def _scored_day(account_id: str, day: date, restricted: bool) -> ScoredDay:
     else:
         role, depth = "genuine", None
     return ScoredDay(
+        world_id="world_a",
         bank_id="bank_a",
         account_id=account_id,
         day=day,
@@ -134,7 +135,7 @@ def test_evaluate_world_reports_hand_computed_metrics_for_every_scorer(scorer: s
         "mule_b": datetime(2025, 1, 2, 0, 0, tzinfo=IST),
     }
     snapshot_times = {
-        (scored_day.account_id, scored_day.day): datetime(
+        (account_key(scored_day), scored_day.day): datetime(
             scored_day.day.year, scored_day.day.month, scored_day.day.day, 21, 0, tzinfo=IST
         )
         for scored_day in scored
@@ -169,12 +170,13 @@ def test_first_flag_times_uses_the_snapshot_time_of_the_escalated_day() -> None:
     credit = datetime(2025, 1, 1, 10, 0, tzinfo=IST)
     snapshot = datetime(2025, 1, 1, 21, 0, tzinfo=IST)
 
+    mule_a = ("world_a", "bank_a", "mule_a")
     first_flag = first_flag_times(
-        {DAY_ONE: ["mule_a"]},
+        {DAY_ONE: [mule_a]},
         _two_day_world(),
-        {("mule_a", DAY_ONE): snapshot},
+        {(mule_a, DAY_ONE): snapshot},
     )
 
-    assert first_flag == {"mule_a": snapshot}
-    hours = (first_flag["mule_a"] - credit).total_seconds() / 3600.0
+    assert first_flag == {mule_a: snapshot}
+    hours = (first_flag[mule_a] - credit).total_seconds() / 3600.0
     assert hours == 11.0

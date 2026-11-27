@@ -1,0 +1,1295 @@
+{
+  "data": {
+    "config": "config/evaluation.yaml#base_rate_reweighting",
+    "inflation_factor": {
+      "median_defined": 39.31669124438908,
+      "worlds_defined": 118,
+      "worlds_zero_factor": 2
+    },
+    "metric": "yield_rate",
+    "scorers": {
+      "anomaly": {
+        "yield_measured": {
+          "median": 0.0,
+          "p10": 0.0,
+          "p90": 0.516666666666668,
+          "unit": "fraction",
+          "world_count": 100
+        },
+        "yield_reweighted": {
+          "median": 0.0,
+          "p10": 0.0,
+          "p90": 0.0789964390188511,
+          "unit": "fraction",
+          "world_count": 98,
+          "worlds_defined": 98,
+          "worlds_undefined": 2
+        }
+      },
+      "rules": {
+        "yield_measured": {
+          "median": 0.5,
+          "p10": 0.26666666666666666,
+          "p90": 0.7014285714285715,
+          "unit": "fraction",
+          "world_count": 120
+        },
+        "yield_reweighted": {
+          "median": 0.026073802315070824,
+          "p10": 0.012054024228715727,
+          "p90": 0.0678615869314447,
+          "unit": "fraction",
+          "world_count": 118,
+          "worlds_defined": 118,
+          "worlds_undefined": 2
+        }
+      },
+      "rules_and_anomaly": {
+        "yield_measured": {
+          "median": 0.45454545454545453,
+          "p10": 0.23484162895927602,
+          "p90": 0.6551282051282052,
+          "unit": "fraction",
+          "world_count": 120
+        },
+        "yield_reweighted": {
+          "median": 0.022743312061449042,
+          "p10": 0.010462467492732757,
+          "p90": 0.061899906505682716,
+          "unit": "fraction",
+          "world_count": 118,
+          "worlds_defined": 118,
+          "worlds_undefined": 2
+        }
+      },
+      "xgboost": {
+        "yield_measured": {
+          "median": 0.9230769230769231,
+          "p10": 0.8,
+          "p90": 1.0,
+          "unit": "fraction",
+          "world_count": 120
+        },
+        "yield_reweighted": {
+          "median": 0.27295545576391117,
+          "p10": 0.08667283114373164,
+          "p90": 1.0,
+          "unit": "fraction",
+          "world_count": 118,
+          "worlds_defined": 118,
+          "worlds_undefined": 2
+        }
+      }
+    },
+    "worlds": [
+      {
+        "complaints": 7,
+        "complaints_per_100000": 47.49626815035961,
+        "fraud_inflation_factor": 45.23454109558058,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "15792a8efdfb2e87",
+        "world_key": "test-0000"
+      },
+      {
+        "complaints": 3,
+        "complaints_per_100000": 19.703139366872456,
+        "fraud_inflation_factor": 18.764894635116622,
+        "measured": 0.9230769230769231,
+        "reweighted": 0.3900549682462616,
+        "run_id": "a95de0ecd3f03947",
+        "world_key": "test-0001"
+      },
+      {
+        "complaints": 7,
+        "complaints_per_100000": 45.58181936576154,
+        "fraud_inflation_factor": 43.41125653882051,
+        "measured": 0.8571428571428571,
+        "reweighted": 0.12142982025332696,
+        "run_id": "6aef5d4412a95841",
+        "world_key": "test-0002"
+      },
+      {
+        "complaints": 14,
+        "complaints_per_100000": 93.14084225933071,
+        "fraud_inflation_factor": 88.70556405650544,
+        "measured": 0.9166666666666666,
+        "reweighted": 0.1103248359717021,
+        "run_id": "2978959d9e159680",
+        "world_key": "test-0003"
+      },
+      {
+        "complaints": 10,
+        "complaints_per_100000": 67.88866259334691,
+        "fraud_inflation_factor": 64.65586913652086,
+        "measured": 0.8571428571428571,
+        "reweighted": 0.08491863554047908,
+        "run_id": "1763259dda42a245",
+        "world_key": "test-0004"
+      },
+      {
+        "complaints": 4,
+        "complaints_per_100000": 27.0947639368692,
+        "fraud_inflation_factor": 25.80453708273257,
+        "measured": 0.8888888888888888,
+        "reweighted": 0.236654623621112,
+        "run_id": "443b9c8b49852a46",
+        "world_key": "test-0005"
+      },
+      {
+        "complaints": 3,
+        "complaints_per_100000": 20.18842530282638,
+        "fraud_inflation_factor": 19.227071716977505,
+        "measured": 0.9375,
+        "reweighted": 0.43824958570906947,
+        "run_id": "66164cf6ce727e71",
+        "world_key": "test-0006"
+      },
+      {
+        "complaints": 10,
+        "complaints_per_100000": 68.21282401091405,
+        "fraud_inflation_factor": 64.96459429610861,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "a6ca176fe49dcc64",
+        "world_key": "test-0007"
+      },
+      {
+        "complaints": 5,
+        "complaints_per_100000": 34.542314335060446,
+        "fraud_inflation_factor": 32.89744222386709,
+        "measured": 0.96,
+        "reweighted": 0.4218115799576767,
+        "run_id": "ff30b89222e79a5c",
+        "world_key": "test-0008"
+      },
+      {
+        "complaints": 4,
+        "complaints_per_100000": 26.588673225206065,
+        "fraud_inflation_factor": 25.32254592876768,
+        "measured": 0.84,
+        "reweighted": 0.1717226956574767,
+        "run_id": "9360e15be242c577",
+        "world_key": "test-0009"
+      },
+      {
+        "complaints": 6,
+        "complaints_per_100000": 41.30808950086059,
+        "fraud_inflation_factor": 39.34103761986723,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "bc088a638cf03372",
+        "world_key": "test-0010"
+      },
+      {
+        "complaints": 6,
+        "complaints_per_100000": 41.48803761582077,
+        "fraud_inflation_factor": 39.51241677697216,
+        "measured": 0.8571428571428571,
+        "reweighted": 0.13183215537426282,
+        "run_id": "2013520865e05b79",
+        "world_key": "test-0011"
+      },
+      {
+        "complaints": 2,
+        "complaints_per_100000": 12.874983906270117,
+        "fraud_inflation_factor": 12.261889434542969,
+        "measured": 0.8,
+        "reweighted": 0.24597387751901278,
+        "run_id": "5de11ecbbfb7de80",
+        "world_key": "test-0012"
+      },
+      {
+        "complaints": 3,
+        "complaints_per_100000": 20.682523267838675,
+        "fraud_inflation_factor": 19.697641207465406,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "354fb4ad7c69b329",
+        "world_key": "test-0013"
+      },
+      {
+        "complaints": 6,
+        "complaints_per_100000": 42.040358744394624,
+        "fraud_inflation_factor": 40.03843689942345,
+        "measured": 0.9230769230769231,
+        "reweighted": 0.23059877880638172,
+        "run_id": "483c1d35bda3c4a9",
+        "world_key": "test-0014"
+      },
+      {
+        "complaints": 1,
+        "complaints_per_100000": 7.054176072234762,
+        "fraud_inflation_factor": 6.718262925937869,
+        "measured": 0.8823529411764706,
+        "reweighted": 0.5274905970628815,
+        "run_id": "dd6ddfb8e9940441",
+        "world_key": "test-0015"
+      },
+      {
+        "complaints": 8,
+        "complaints_per_100000": 56.49717514124294,
+        "fraud_inflation_factor": 53.80683346785042,
+        "measured": 0.9473684210526315,
+        "reweighted": 0.2506725214120327,
+        "run_id": "50996b7966bdb079",
+        "world_key": "test-0016"
+      },
+      {
+        "complaints": 12,
+        "complaints_per_100000": 79.06700929037359,
+        "fraud_inflation_factor": 75.3019136098796,
+        "measured": 0.9545454545454546,
+        "reweighted": 0.21806420259800127,
+        "run_id": "d804c6be80a31cae",
+        "world_key": "test-0017"
+      },
+      {
+        "complaints": 9,
+        "complaints_per_100000": 60.87662337662338,
+        "fraud_inflation_factor": 57.97773654916512,
+        "measured": 0.7857142857142857,
+        "reweighted": 0.05948093379748994,
+        "run_id": "82a45964386231f8",
+        "world_key": "test-0018"
+      },
+      {
+        "complaints": 1,
+        "complaints_per_100000": 7.14643035803616,
+        "fraud_inflation_factor": 6.8061241505106285,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "53a0cd9dcfaa1b42",
+        "world_key": "test-0019"
+      },
+      {
+        "complaints": 5,
+        "complaints_per_100000": 33.43810606567244,
+        "fraud_inflation_factor": 31.84581530064042,
+        "measured": 0.8888888888888888,
+        "reweighted": 0.20077390661075067,
+        "run_id": "5bfb1ae140c4e356",
+        "world_key": "test-0020"
+      },
+      {
+        "complaints": 11,
+        "complaints_per_100000": 67.96416434970651,
+        "fraud_inflation_factor": 64.72777557114905,
+        "measured": 0.9,
+        "reweighted": 0.12207068408451827,
+        "run_id": "f22c83d4a719c40a",
+        "world_key": "test-0021"
+      },
+      {
+        "complaints": 9,
+        "complaints_per_100000": 63.188934915397034,
+        "fraud_inflation_factor": 60.17993801466384,
+        "measured": 0.9473684210526315,
+        "reweighted": 0.23023809505481857,
+        "run_id": "2ef7e0c667c95638",
+        "world_key": "test-0022"
+      },
+      {
+        "complaints": 9,
+        "complaints_per_100000": 56.96563073612254,
+        "fraud_inflation_factor": 54.252981653450036,
+        "measured": 0.8,
+        "reweighted": 0.06866601307717096,
+        "run_id": "8ea5c4021edf88f9",
+        "world_key": "test-0023"
+      },
+      {
+        "complaints": 1,
+        "complaints_per_100000": 6.797172376291462,
+        "fraud_inflation_factor": 6.473497501229963,
+        "measured": 0.8333333333333334,
+        "reweighted": 0.4357869079994133,
+        "run_id": "6481f835ef5d8d54",
+        "world_key": "test-0024"
+      },
+      {
+        "complaints": 8,
+        "complaints_per_100000": 52.78785879247773,
+        "fraud_inflation_factor": 50.27415123093117,
+        "measured": 0.8571428571428571,
+        "reweighted": 0.10662088843202476,
+        "run_id": "c84e41c45ed5364a",
+        "world_key": "test-0025"
+      },
+      {
+        "complaints": 3,
+        "complaints_per_100000": 20.64977973568282,
+        "fraud_inflation_factor": 19.666456891126494,
+        "measured": 0.9444444444444444,
+        "reweighted": 0.46363901618522907,
+        "run_id": "432eef1f854b6f79",
+        "world_key": "test-0026"
+      },
+      {
+        "complaints": 5,
+        "complaints_per_100000": 34.46136880556896,
+        "fraud_inflation_factor": 32.82035124339901,
+        "measured": 0.9333333333333333,
+        "reweighted": 0.2990152706719345,
+        "run_id": "61cb34b83add097a",
+        "world_key": "test-0027"
+      },
+      {
+        "complaints": 0,
+        "complaints_per_100000": 0.0,
+        "fraud_inflation_factor": 0.0,
+        "measured": 0.8636363636363636,
+        "reweighted": null,
+        "run_id": "d26bfb0aa35637e0",
+        "world_key": "test-0028"
+      },
+      {
+        "complaints": 1,
+        "complaints_per_100000": 6.850722751250257,
+        "fraud_inflation_factor": 6.524497858333578,
+        "measured": 0.9166666666666666,
+        "reweighted": 0.6276927355592716,
+        "run_id": "b7b22e8d9790cead",
+        "world_key": "test-0029"
+      },
+      {
+        "complaints": 12,
+        "complaints_per_100000": 84.3585237258348,
+        "fraud_inflation_factor": 80.34145116746171,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "44688248a8effa77",
+        "world_key": "test-0030"
+      },
+      {
+        "complaints": 2,
+        "complaints_per_100000": 13.827433628318584,
+        "fraud_inflation_factor": 13.16898440792246,
+        "measured": 0.9090909090909091,
+        "reweighted": 0.43161149508912333,
+        "run_id": "43997f45d3e02360",
+        "world_key": "test-0031"
+      },
+      {
+        "complaints": 6,
+        "complaints_per_100000": 41.70141784820684,
+        "fraud_inflation_factor": 39.715636045911275,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "83562ddce14329d5",
+        "world_key": "test-0032"
+      },
+      {
+        "complaints": 7,
+        "complaints_per_100000": 44.654248532788976,
+        "fraud_inflation_factor": 42.52785574551331,
+        "measured": 0.9411764705882353,
+        "reweighted": 0.27337410189038996,
+        "run_id": "54d10a924e992f0d",
+        "world_key": "test-0033"
+      },
+      {
+        "complaints": 11,
+        "complaints_per_100000": 78.09726659566915,
+        "fraud_inflation_factor": 74.37834913873253,
+        "measured": 0.9090909090909091,
+        "reweighted": 0.11851381429089444,
+        "run_id": "5735182d47af35a1",
+        "world_key": "test-0034"
+      },
+      {
+        "complaints": 18,
+        "complaints_per_100000": 115.10423327791277,
+        "fraud_inflation_factor": 109.62307931229788,
+        "measured": 0.9629629629629629,
+        "reweighted": 0.1917077840426412,
+        "run_id": "77a4476c505b4e0b",
+        "world_key": "test-0035"
+      },
+      {
+        "complaints": 2,
+        "complaints_per_100000": 14.604936468526361,
+        "fraud_inflation_factor": 13.90946330335844,
+        "measured": 0.7692307692307693,
+        "reweighted": 0.19331744168693457,
+        "run_id": "a1da8a985bc4cc78",
+        "world_key": "test-0036"
+      },
+      {
+        "complaints": 5,
+        "complaints_per_100000": 33.04474258145529,
+        "fraud_inflation_factor": 31.4711834109098,
+        "measured": 0.8181818181818182,
+        "reweighted": 0.12510013775735782,
+        "run_id": "5a427ae82b4af9a6",
+        "world_key": "test-0037"
+      },
+      {
+        "complaints": 20,
+        "complaints_per_100000": 129.0072889118235,
+        "fraud_inflation_factor": 122.86408467792714,
+        "measured": 0.9473684210526315,
+        "reweighted": 0.12778274917382493,
+        "run_id": "4537ae7e20af8161",
+        "world_key": "test-0038"
+      },
+      {
+        "complaints": 6,
+        "complaints_per_100000": 40.49676025917927,
+        "fraud_inflation_factor": 38.568343103980254,
+        "measured": 0.9230769230769231,
+        "reweighted": 0.23730261391648158,
+        "run_id": "9a98fbfce70cd36d",
+        "world_key": "test-0039"
+      },
+      {
+        "complaints": 7,
+        "complaints_per_100000": 46.2871123454341,
+        "fraud_inflation_factor": 44.082964138508665,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "84f55f9a80ebe450",
+        "world_key": "test-b01-0000"
+      },
+      {
+        "complaints": 3,
+        "complaints_per_100000": 20.62564455139223,
+        "fraud_inflation_factor": 19.643471001325935,
+        "measured": 0.8888888888888888,
+        "reweighted": 0.2893992581328255,
+        "run_id": "44eda4cb60451cab",
+        "world_key": "test-b01-0001"
+      },
+      {
+        "complaints": 3,
+        "complaints_per_100000": 19.884668920262477,
+        "fraud_inflation_factor": 18.9377799240595,
+        "measured": 0.6666666666666666,
+        "reweighted": 0.09552111098950895,
+        "run_id": "e1e5ba742af2fb8c",
+        "world_key": "test-b01-0002"
+      },
+      {
+        "complaints": 10,
+        "complaints_per_100000": 67.70939129257228,
+        "fraud_inflation_factor": 64.48513456435455,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "eb1984a9705d15dd",
+        "world_key": "test-b01-0003"
+      },
+      {
+        "complaints": 5,
+        "complaints_per_100000": 33.375609104866165,
+        "fraud_inflation_factor": 31.78629438558682,
+        "measured": 0.9090909090909091,
+        "reweighted": 0.2393129169991503,
+        "run_id": "46cd07d130535553",
+        "world_key": "test-b01-0004"
+      },
+      {
+        "complaints": 3,
+        "complaints_per_100000": 19.859658413875284,
+        "fraud_inflation_factor": 18.913960394166935,
+        "measured": 0.8333333333333334,
+        "reweighted": 0.2090828920674969,
+        "run_id": "af2c703c71ecf997",
+        "world_key": "test-b01-0005"
+      },
+      {
+        "complaints": 8,
+        "complaints_per_100000": 55.19525320822409,
+        "fraud_inflation_factor": 52.566907817356274,
+        "measured": 0.8571428571428571,
+        "reweighted": 0.10244693161386102,
+        "run_id": "d64309f5b0db8e5b",
+        "world_key": "test-b01-0006"
+      },
+      {
+        "complaints": 7,
+        "complaints_per_100000": 50.39959680322557,
+        "fraud_inflation_factor": 47.99961600307197,
+        "measured": 0.9230769230769231,
+        "reweighted": 0.200001279997952,
+        "run_id": "f3299ad8b43c579e",
+        "world_key": "test-b01-0007"
+      },
+      {
+        "complaints": 1,
+        "complaints_per_100000": 6.814774430966335,
+        "fraud_inflation_factor": 6.490261362825081,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "372bfbb37690c1e9",
+        "world_key": "test-b01-0008"
+      },
+      {
+        "complaints": 15,
+        "complaints_per_100000": 105.15247108307045,
+        "fraud_inflation_factor": 100.14521055530518,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "0d820e51508f16ff",
+        "world_key": "test-b01-0009"
+      },
+      {
+        "complaints": 13,
+        "complaints_per_100000": 82.67616382599847,
+        "fraud_inflation_factor": 78.73920364380807,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "2487bc1012a78acf",
+        "world_key": "test-b01-0010"
+      },
+      {
+        "complaints": 10,
+        "complaints_per_100000": 67.02412868632707,
+        "fraud_inflation_factor": 63.83250351078769,
+        "measured": 0.8,
+        "reweighted": 0.05896878034825684,
+        "run_id": "1b7a03eee878b2f1",
+        "world_key": "test-b01-0011"
+      },
+      {
+        "complaints": 1,
+        "complaints_per_100000": 6.658676255160474,
+        "fraud_inflation_factor": 6.341596433486165,
+        "measured": 0.9259259259259259,
+        "reweighted": 0.6634257369924565,
+        "run_id": "eb7296448ca0682c",
+        "world_key": "test-b01-0012"
+      },
+      {
+        "complaints": 8,
+        "complaints_per_100000": 53.774282449418564,
+        "fraud_inflation_factor": 51.21360233277958,
+        "measured": 0.7777777777777778,
+        "reweighted": 0.06396946738604903,
+        "run_id": "ccf26355921caced",
+        "world_key": "test-b01-0013"
+      },
+      {
+        "complaints": 3,
+        "complaints_per_100000": 19.460300985988585,
+        "fraud_inflation_factor": 18.533619986655793,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "6a8917e5f152852b",
+        "world_key": "test-b01-0014"
+      },
+      {
+        "complaints": 1,
+        "complaints_per_100000": 6.658676255160474,
+        "fraud_inflation_factor": 6.341596433486165,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "3dbc40fe6d59cb75",
+        "world_key": "test-b01-0015"
+      },
+      {
+        "complaints": 1,
+        "complaints_per_100000": 7.070635650144948,
+        "fraud_inflation_factor": 6.7339387144237595,
+        "measured": 0.9444444444444444,
+        "reweighted": 0.7162738643825957,
+        "run_id": "995530fd5c542662",
+        "world_key": "test-b01-0016"
+      },
+      {
+        "complaints": 6,
+        "complaints_per_100000": 41.48230088495575,
+        "fraud_inflation_factor": 39.506953223767376,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "893736aea953102d",
+        "world_key": "test-b01-0017"
+      },
+      {
+        "complaints": 10,
+        "complaints_per_100000": 62.503906494155885,
+        "fraud_inflation_factor": 59.527529994434175,
+        "measured": 0.8947368421052632,
+        "reweighted": 0.12494941387252259,
+        "run_id": "8900c6d25e38a3b7",
+        "world_key": "test-b01-0018"
+      },
+      {
+        "complaints": 1,
+        "complaints_per_100000": 6.909894969596462,
+        "fraud_inflation_factor": 6.58085235199663,
+        "measured": 0.875,
+        "reweighted": 0.5154315663383877,
+        "run_id": "e8031cb32db344c7",
+        "world_key": "test-b01-0019"
+      },
+      {
+        "complaints": 9,
+        "complaints_per_100000": 62.103229367927135,
+        "fraud_inflation_factor": 59.145932731359174,
+        "measured": 0.8666666666666667,
+        "reweighted": 0.09901603541227375,
+        "run_id": "e81d4de5fd554e99",
+        "world_key": "test-b01-0020"
+      },
+      {
+        "complaints": 0,
+        "complaints_per_100000": 0.0,
+        "fraud_inflation_factor": 0.0,
+        "measured": 0.8333333333333334,
+        "reweighted": null,
+        "run_id": "89663704634cf20a",
+        "world_key": "test-b01-0021"
+      },
+      {
+        "complaints": 4,
+        "complaints_per_100000": 27.631942525559545,
+        "fraud_inflation_factor": 26.316135738628137,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "c8975adf6cb4047c",
+        "world_key": "test-b01-0022"
+      },
+      {
+        "complaints": 7,
+        "complaints_per_100000": 45.90163934426229,
+        "fraud_inflation_factor": 43.71584699453552,
+        "measured": 0.8,
+        "reweighted": 0.08382959230416857,
+        "run_id": "4d8e41bbbfe20ee5",
+        "world_key": "test-b01-0023"
+      },
+      {
+        "complaints": 3,
+        "complaints_per_100000": 21.008403361344538,
+        "fraud_inflation_factor": 20.008003201280513,
+        "measured": 0.8571428571428571,
+        "reweighted": 0.23069821829707357,
+        "run_id": "209c013bebbe81fb",
+        "world_key": "test-b01-0024"
+      },
+      {
+        "complaints": 4,
+        "complaints_per_100000": 25.71520411443266,
+        "fraud_inflation_factor": 24.49067058517396,
+        "measured": 0.9545454545454546,
+        "reweighted": 0.4616331157546003,
+        "run_id": "233af19c9aace991",
+        "world_key": "test-b01-0025"
+      },
+      {
+        "complaints": 2,
+        "complaints_per_100000": 13.707079706668495,
+        "fraud_inflation_factor": 13.054361625398565,
+        "measured": 0.9473684210526315,
+        "reweighted": 0.5796287238852226,
+        "run_id": "387e3e84233b69ec",
+        "world_key": "test-b01-0026"
+      },
+      {
+        "complaints": 2,
+        "complaints_per_100000": 13.421017313112335,
+        "fraud_inflation_factor": 12.781921250583176,
+        "measured": 0.8666666666666667,
+        "reweighted": 0.33710333713780777,
+        "run_id": "a6cf085f2f3f4a8f",
+        "world_key": "test-b01-0027"
+      },
+      {
+        "complaints": 3,
+        "complaints_per_100000": 19.918996082597438,
+        "fraud_inflation_factor": 18.970472459616605,
+        "measured": 0.9545454545454546,
+        "reweighted": 0.5253878352630669,
+        "run_id": "a1f5e187a8430a46",
+        "world_key": "test-b01-0028"
+      },
+      {
+        "complaints": 7,
+        "complaints_per_100000": 48.04392587508579,
+        "fraud_inflation_factor": 45.75611988103408,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "35456c132d7b0d79",
+        "world_key": "test-b01-0029"
+      },
+      {
+        "complaints": 4,
+        "complaints_per_100000": 26.961445133459154,
+        "fraud_inflation_factor": 25.677566793770623,
+        "measured": 0.9333333333333333,
+        "reweighted": 0.352844217307146,
+        "run_id": "c4655230b3bd3950",
+        "world_key": "test-b01-0030"
+      },
+      {
+        "complaints": 14,
+        "complaints_per_100000": 92.4763854944184,
+        "fraud_inflation_factor": 88.07274808992227,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "93b65694c135fd9b",
+        "world_key": "test-b01-0031"
+      },
+      {
+        "complaints": 2,
+        "complaints_per_100000": 13.529968881071573,
+        "fraud_inflation_factor": 12.885684648639593,
+        "measured": 0.8,
+        "reweighted": 0.23688704859961146,
+        "run_id": "ffe7a8c928757e09",
+        "world_key": "test-b01-0032"
+      },
+      {
+        "complaints": 7,
+        "complaints_per_100000": 47.4447607428494,
+        "fraud_inflation_factor": 45.185486421761325,
+        "measured": 0.9375,
+        "reweighted": 0.2492295217967439,
+        "run_id": "49b4b82982739d3f",
+        "world_key": "test-b01-0033"
+      },
+      {
+        "complaints": 3,
+        "complaints_per_100000": 21.062978305132347,
+        "fraud_inflation_factor": 20.059979338221282,
+        "measured": 0.8823529411764706,
+        "reweighted": 0.2721337308696273,
+        "run_id": "3727ded0317a0041",
+        "world_key": "test-b01-0034"
+      },
+      {
+        "complaints": 4,
+        "complaints_per_100000": 30.131826741996232,
+        "fraud_inflation_factor": 28.69697784952022,
+        "measured": 0.8,
+        "reweighted": 0.1223354653267655,
+        "run_id": "4dfcb4bc7d5930e8",
+        "world_key": "test-b01-0035"
+      },
+      {
+        "complaints": 10,
+        "complaints_per_100000": 71.35721421435707,
+        "fraud_inflation_factor": 67.95925163272102,
+        "measured": 0.8333333333333334,
+        "reweighted": 0.0685314046965578,
+        "run_id": "f60e6544be2355c1",
+        "world_key": "test-b01-0036"
+      },
+      {
+        "complaints": 10,
+        "complaints_per_100000": 69.60879855213699,
+        "fraud_inflation_factor": 66.29409385917808,
+        "measured": 0.9,
+        "reweighted": 0.11953128776385337,
+        "run_id": "de7ace77883b14a8",
+        "world_key": "test-b01-0037"
+      },
+      {
+        "complaints": 9,
+        "complaints_per_100000": 58.673968316057106,
+        "fraud_inflation_factor": 55.87996982481629,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "f329ffbaa30f7365",
+        "world_key": "test-b01-0038"
+      },
+      {
+        "complaints": 6,
+        "complaints_per_100000": 41.25696211235646,
+        "fraud_inflation_factor": 39.29234486891092,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "037577265caf5b0e",
+        "world_key": "test-b01-0039"
+      },
+      {
+        "complaints": 15,
+        "complaints_per_100000": 91.09127345600292,
+        "fraud_inflation_factor": 86.75359376762182,
+        "measured": 0.8846153846153846,
+        "reweighted": 0.0811972624456195,
+        "run_id": "d7500517dbf4c13f",
+        "world_key": "test-b02-0000"
+      },
+      {
+        "complaints": 6,
+        "complaints_per_100000": 41.652204095800066,
+        "fraud_inflation_factor": 39.66876580552387,
+        "measured": 0.7,
+        "reweighted": 0.05555277905562363,
+        "run_id": "2913f1971c05accd",
+        "world_key": "test-b02-0001"
+      },
+      {
+        "complaints": 2,
+        "complaints_per_100000": 12.494533641531829,
+        "fraud_inflation_factor": 11.899555849077933,
+        "measured": 0.9,
+        "reweighted": 0.43063116101565724,
+        "run_id": "5efe571da9616acd",
+        "world_key": "test-b02-0002"
+      },
+      {
+        "complaints": 6,
+        "complaints_per_100000": 40.2441478301697,
+        "fraud_inflation_factor": 38.32775983825686,
+        "measured": 0.9333333333333333,
+        "reweighted": 0.26754441702212123,
+        "run_id": "7cd99737bf9f901d",
+        "world_key": "test-b02-0003"
+      },
+      {
+        "complaints": 1,
+        "complaints_per_100000": 6.430041152263375,
+        "fraud_inflation_factor": 6.12384871644131,
+        "measured": 0.9375,
+        "reweighted": 0.7100978709587643,
+        "run_id": "f264f15667bc6d18",
+        "world_key": "test-b02-0004"
+      },
+      {
+        "complaints": 7,
+        "complaints_per_100000": 46.53017814411061,
+        "fraud_inflation_factor": 44.314455375343435,
+        "measured": 0.7272727272727273,
+        "reweighted": 0.05676038695461886,
+        "run_id": "c7efc867b570caf8",
+        "world_key": "test-b02-0005"
+      },
+      {
+        "complaints": 8,
+        "complaints_per_100000": 53.113796308591155,
+        "fraud_inflation_factor": 50.58456791294395,
+        "measured": 0.9444444444444444,
+        "reweighted": 0.2515367120774937,
+        "run_id": "56be8a2657e83c53",
+        "world_key": "test-b02-0006"
+      },
+      {
+        "complaints": 2,
+        "complaints_per_100000": 13.821700069108502,
+        "fraud_inflation_factor": 13.16352387534143,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "7d2f6ca21e5a82e3",
+        "world_key": "test-b02-0007"
+      },
+      {
+        "complaints": 6,
+        "complaints_per_100000": 41.513872552411264,
+        "fraud_inflation_factor": 39.53702147848691,
+        "measured": 0.85,
+        "reweighted": 0.12535850279451605,
+        "run_id": "5eee7144406fcf24",
+        "world_key": "test-b02-0008"
+      },
+      {
+        "complaints": 5,
+        "complaints_per_100000": 33.5345405767941,
+        "fraud_inflation_factor": 31.937657692184857,
+        "measured": 0.9375,
+        "reweighted": 0.3195728278213062,
+        "run_id": "1665ead8cace6a9c",
+        "world_key": "test-b02-0009"
+      },
+      {
+        "complaints": 2,
+        "complaints_per_100000": 13.456233600215299,
+        "fraud_inflation_factor": 12.815460571633617,
+        "measured": 0.7777777777777778,
+        "reweighted": 0.21452045344556006,
+        "run_id": "3af64b42a2e38bc3",
+        "world_key": "test-b02-0010"
+      },
+      {
+        "complaints": 13,
+        "complaints_per_100000": 90.54185819752055,
+        "fraud_inflation_factor": 86.23034114049577,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "f17b2bff4c8493c1",
+        "world_key": "test-b02-0011"
+      },
+      {
+        "complaints": 6,
+        "complaints_per_100000": 37.826251418484425,
+        "fraud_inflation_factor": 36.02500135093754,
+        "measured": 0.9411764705882353,
+        "reweighted": 0.30754444179772544,
+        "run_id": "62e63f673eb67c05",
+        "world_key": "test-b02-0012"
+      },
+      {
+        "complaints": 23,
+        "complaints_per_100000": 163.8760242251514,
+        "fraud_inflation_factor": 156.0724040239537,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "c241a77b5b7e0852",
+        "world_key": "test-b02-0013"
+      },
+      {
+        "complaints": 3,
+        "complaints_per_100000": 19.60399921584003,
+        "fraud_inflation_factor": 18.67047544365717,
+        "measured": 0.9523809523809523,
+        "reweighted": 0.5171904345768898,
+        "run_id": "66d19e50a13fe411",
+        "world_key": "test-b02-0014"
+      },
+      {
+        "complaints": 2,
+        "complaints_per_100000": 12.759984688018374,
+        "fraud_inflation_factor": 12.152366369541308,
+        "measured": 0.8666666666666667,
+        "reweighted": 0.34848125279236863,
+        "run_id": "1f75861d7c85f1f5",
+        "world_key": "test-b02-0015"
+      },
+      {
+        "complaints": 7,
+        "complaints_per_100000": 46.62315172505661,
+        "fraud_inflation_factor": 44.40300164291105,
+        "measured": 0.9285714285714286,
+        "reweighted": 0.22646899339636586,
+        "run_id": "f27e5d040f5a5354",
+        "world_key": "test-b02-0016"
+      },
+      {
+        "complaints": 6,
+        "complaints_per_100000": 42.040358744394624,
+        "fraud_inflation_factor": 40.03843689942345,
+        "measured": 0.9375,
+        "reweighted": 0.2725368096374324,
+        "run_id": "6782e8aa99a07aab",
+        "world_key": "test-b02-0017"
+      },
+      {
+        "complaints": 9,
+        "complaints_per_100000": 61.38316737143637,
+        "fraud_inflation_factor": 58.46015940136797,
+        "measured": 0.9090909090909091,
+        "reweighted": 0.14607035810962749,
+        "run_id": "5e8bce0d43c7d13d",
+        "world_key": "test-b02-0018"
+      },
+      {
+        "complaints": 5,
+        "complaints_per_100000": 31.23828564288392,
+        "fraud_inflation_factor": 29.750748231318017,
+        "measured": 0.9545454545454546,
+        "reweighted": 0.41378700279025665,
+        "run_id": "ccb02a90a4724b03",
+        "world_key": "test-b02-0019"
+      },
+      {
+        "complaints": 15,
+        "complaints_per_100000": 97.65625,
+        "fraud_inflation_factor": 93.00595238095238,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "7bca234a5f85acbc",
+        "world_key": "test-b02-0020"
+      },
+      {
+        "complaints": 7,
+        "complaints_per_100000": 48.587492191295894,
+        "fraud_inflation_factor": 46.27380208694847,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "44f7d9f37e743a1e",
+        "world_key": "test-b02-0021"
+      },
+      {
+        "complaints": 10,
+        "complaints_per_100000": 62.93266205160479,
+        "fraud_inflation_factor": 59.93586862057599,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "13065c633aa1ff31",
+        "world_key": "test-b02-0022"
+      },
+      {
+        "complaints": 5,
+        "complaints_per_100000": 32.97065611605671,
+        "fraud_inflation_factor": 31.40062487243496,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "d00371b7a1f9b9c7",
+        "world_key": "test-b02-0023"
+      },
+      {
+        "complaints": 2,
+        "complaints_per_100000": 13.347570742124933,
+        "fraud_inflation_factor": 12.71197213535708,
+        "measured": 0.8181818181818182,
+        "reweighted": 0.26144592639422387,
+        "run_id": "879c3989531b8cc6",
+        "world_key": "test-b02-0024"
+      },
+      {
+        "complaints": 8,
+        "complaints_per_100000": 52.83666864804174,
+        "fraud_inflation_factor": 50.32063680765879,
+        "measured": 0.75,
+        "reweighted": 0.05626339405550929,
+        "run_id": "76a1293885140856",
+        "world_key": "test-b02-0025"
+      },
+      {
+        "complaints": 15,
+        "complaints_per_100000": 104.12328196584757,
+        "fraud_inflation_factor": 99.16503044366435,
+        "measured": 0.9047619047619048,
+        "reweighted": 0.08742462925941132,
+        "run_id": "13443627433730aa",
+        "world_key": "test-b02-0026"
+      },
+      {
+        "complaints": 3,
+        "complaints_per_100000": 19.423761735189384,
+        "fraud_inflation_factor": 18.498820700180364,
+        "measured": 0.9,
+        "reweighted": 0.32728676251709116,
+        "run_id": "b85d2ad74a71723c",
+        "world_key": "test-b02-0027"
+      },
+      {
+        "complaints": 7,
+        "complaints_per_100000": 48.53695742615449,
+        "fraud_inflation_factor": 46.22567373919475,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "7852563401304d70",
+        "world_key": "test-b02-0028"
+      },
+      {
+        "complaints": 2,
+        "complaints_per_100000": 13.949919787961221,
+        "fraud_inflation_factor": 13.2856378932964,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "cf695acc51fe3c9f",
+        "world_key": "test-b02-0029"
+      },
+      {
+        "complaints": 4,
+        "complaints_per_100000": 27.645310664178584,
+        "fraud_inflation_factor": 26.3288672992177,
+        "measured": 0.8461538461538461,
+        "reweighted": 0.1727991118344064,
+        "run_id": "d0d2e791d1f43c0b",
+        "world_key": "test-b02-0030"
+      },
+      {
+        "complaints": 6,
+        "complaints_per_100000": 41.42502071251035,
+        "fraud_inflation_factor": 39.452400678581284,
+        "measured": 0.9565217391304348,
+        "reweighted": 0.35800065997532154,
+        "run_id": "408f91027770fc5f",
+        "world_key": "test-b02-0031"
+      },
+      {
+        "complaints": 15,
+        "complaints_per_100000": 106.71599317017643,
+        "fraud_inflation_factor": 101.63427920969184,
+        "measured": 1.0,
+        "reweighted": 1.0,
+        "run_id": "39c614910048d528",
+        "world_key": "test-b02-0032"
+      },
+      {
+        "complaints": 3,
+        "complaints_per_100000": 19.602718243596446,
+        "fraud_inflation_factor": 18.66925547009185,
+        "measured": 0.8571428571428571,
+        "reweighted": 0.2432177171813795,
+        "run_id": "27c5924721e8cbdc",
+        "world_key": "test-b02-0033"
+      },
+      {
+        "complaints": 1,
+        "complaints_per_100000": 6.997410957945561,
+        "fraud_inflation_factor": 6.664200912329105,
+        "measured": 0.5714285714285714,
+        "reweighted": 0.16671805238676948,
+        "run_id": "0f7166ad57efda5a",
+        "world_key": "test-b02-0034"
+      },
+      {
+        "complaints": 5,
+        "complaints_per_100000": 35.17658646404953,
+        "fraud_inflation_factor": 33.50151091814241,
+        "measured": 0.8,
+        "reweighted": 0.1066623691171037,
+        "run_id": "52ac48f11421e67f",
+        "world_key": "test-b02-0035"
+      },
+      {
+        "complaints": 15,
+        "complaints_per_100000": 101.03051121438675,
+        "fraud_inflation_factor": 96.21953448989214,
+        "measured": 0.8,
+        "reweighted": 0.039912378563317204,
+        "run_id": "4a0edb26a66746cd",
+        "world_key": "test-b02-0036"
+      },
+      {
+        "complaints": 6,
+        "complaints_per_100000": 39.34942287513117,
+        "fraud_inflation_factor": 37.47564083345825,
+        "measured": 0.8947368421052632,
+        "reweighted": 0.18488051163420047,
+        "run_id": "602ae2c28f3f85bc",
+        "world_key": "test-b02-0037"
+      },
+      {
+        "complaints": 2,
+        "complaints_per_100000": 13.444474321054047,
+        "fraud_inflation_factor": 12.804261258146711,
+        "measured": 0.8947368421052632,
+        "reweighted": 0.3989812130542483,
+        "run_id": "14db5a8e2a826233",
+        "world_key": "test-b02-0038"
+      },
+      {
+        "complaints": 12,
+        "complaints_per_100000": 82.14676889375684,
+        "fraud_inflation_factor": 78.23501799405413,
+        "measured": 0.9285714285714286,
+        "reweighted": 0.14248914820017047,
+        "run_id": "145962edc77c4196",
+        "world_key": "test-b02-0039"
+      }
+    ]
+  },
+  "manifest": {
+    "generator": "scripts/level18_console.py",
+    "git_hash": "3c6287196837a247342c27e14dc4480b9088fcfe",
+    "sources": {
+      "runs/full/run_a320_stage5c/final/45c496799170/result.json": "38c0c8b6a729116d9446e94a78e5950861742dc384bb72404f4a71354caa46a9",
+      "runs/full/world_cards/037577265caf5b0e/base_rate.json": "23e2c1046889347cc740f7c99aed9f86b74181b1a11799695a5bdf332e6e8ff5",
+      "runs/full/world_cards/0d820e51508f16ff/base_rate.json": "347fc239e1aadaf25c66d0dbca5dba7289f10218c2a45742defc70d44a673cdc",
+      "runs/full/world_cards/0f7166ad57efda5a/base_rate.json": "d6380a875c12a37f7203e109281cec0b663d25514cf7d9052ec44a1d3eacaea8",
+      "runs/full/world_cards/13065c633aa1ff31/base_rate.json": "308b443f9471f57e1eda85b8dc4b004ed9bd77043da10bac82dd6fa193f919d5",
+      "runs/full/world_cards/13443627433730aa/base_rate.json": "4af4b42842a690938e0638e065a3b84cd99c0d04f377733a73b19458c5d4fba2",
+      "runs/full/world_cards/145962edc77c4196/base_rate.json": "4605ac1a5c051481443a848e26a44624e5f0e0ec21cfb6648a698a4514f13bc6",
+      "runs/full/world_cards/14db5a8e2a826233/base_rate.json": "d553a51a4f7a8457a19a7c33493e630d6f6126a0df9398f6035fa726ed7f7a7e",
+      "runs/full/world_cards/15792a8efdfb2e87/base_rate.json": "78af8bb308451a252342f1b2c270b4c4ce286549c8808373d5786585f1e99950",
+      "runs/full/world_cards/1665ead8cace6a9c/base_rate.json": "0d610230702043f19586356def4eb7af04d033798dd544de6a15a38ef0f7af7b",
+      "runs/full/world_cards/1763259dda42a245/base_rate.json": "1fcc958a05abe7fd883e36ce488e30e05e23f09ea82464a410bec7eca60c63e7",
+      "runs/full/world_cards/1b7a03eee878b2f1/base_rate.json": "41c3356297076c4338c19b29d7adac92192194b9acbee9cc30862e2afec27008",
+      "runs/full/world_cards/1f75861d7c85f1f5/base_rate.json": "fda0a07a7446475b42eca636c0494ab8a514bc07932c9d11e1381ce7036c572d",
+      "runs/full/world_cards/2013520865e05b79/base_rate.json": "b11db95e6aca5dab35800703aaf1487b0fc0ea4643d0e84a253895a4c0cf8a98",
+      "runs/full/world_cards/209c013bebbe81fb/base_rate.json": "0a8708c4225c14ad5a47e872737773da9841f0b1866b5a7444b382e7836bf973",
+      "runs/full/world_cards/233af19c9aace991/base_rate.json": "a842342f6acd7d028334fa40a857964e166f499b73f27ae4bc1aaea2661cd623",
+      "runs/full/world_cards/2487bc1012a78acf/base_rate.json": "2978af855e63b0395cc43a7355755aa306ad79607218a739e1f12d0278513e4e",
+      "runs/full/world_cards/27c5924721e8cbdc/base_rate.json": "1fe1e7514a465fb4738be2817d33e51778fcca26ccac66d5087ac7265262af5f",
+      "runs/full/world_cards/2913f1971c05accd/base_rate.json": "8e198decd0e921e972afadf379c80a38ea5bd25f9ee3e1d0bcd9f0329bed3e7a",
+      "runs/full/world_cards/2978959d9e159680/base_rate.json": "65af6ddc45ebe7600b090ec204bd1713d8036fe17b52905bb36f6866256d23d3",
+      "runs/full/world_cards/2ef7e0c667c95638/base_rate.json": "edd08c4cd517e42a3a5a2dbf275ac008692801eabc06c4528964767f9cbe95ef",
+      "runs/full/world_cards/35456c132d7b0d79/base_rate.json": "0805437d73b1d6e78ea980ea9e814e14b79560bed4d5c694e824606cc716f75a",
+      "runs/full/world_cards/354fb4ad7c69b329/base_rate.json": "744b88b8ab9413b2f151cb1a2b42684ebe14b40c25a13a14fc529b2552e45360",
+      "runs/full/world_cards/3727ded0317a0041/base_rate.json": "c45f0ed1fbc75752a48157e091d1a200ff9aa6d7d04e2f1b95f9c3b526cf7133",
+      "runs/full/world_cards/372bfbb37690c1e9/base_rate.json": "a2fcdcbefc193456d6f0ef900e9b2c066bb9bad7af8a9983a26323a9ad373105",
+      "runs/full/world_cards/387e3e84233b69ec/base_rate.json": "631c1e695f47cb8deecd5630e5d430576a1414881a97e1d32f0b691af6d5639f",
+      "runs/full/world_cards/39c614910048d528/base_rate.json": "b583ac579fa51e49fc126f2b75076538968b5c8dfa444e1dc5a7376ef770c7f7",
+      "runs/full/world_cards/3af64b42a2e38bc3/base_rate.json": "3a08fd53aef42f92963e5c363e35be70f10b007854dfbbb41346a6a5e3890f82",
+      "runs/full/world_cards/3dbc40fe6d59cb75/base_rate.json": "2d2d92094c9dd6438d659dd5b1af2cd887b4667f2b81aa8476b6b151ba381268",
+      "runs/full/world_cards/408f91027770fc5f/base_rate.json": "6aa9e77e6c6030b3c000c91015a98e05465bb0967c218166a57d41fecfc10f9b",
+      "runs/full/world_cards/432eef1f854b6f79/base_rate.json": "9fafe16bd0f767cdfb189d1f836f0fc9497c8d147990853df8f18dff7ca5fc9f",
+      "runs/full/world_cards/43997f45d3e02360/base_rate.json": "ee78ca0f0ac4b9d058bfb19f1faa778f0b23c8a82adbed3555f9754bb731c086",
+      "runs/full/world_cards/443b9c8b49852a46/base_rate.json": "c1b2650045774f50834828652c21d4458bc3bbf8491d9bb7b2e85081bd43895c",
+      "runs/full/world_cards/44688248a8effa77/base_rate.json": "d440d932db9fa475ffbf10df3289af8dc25dd4aabac4b1337cba60d9b723f7f2",
+      "runs/full/world_cards/44eda4cb60451cab/base_rate.json": "b66fc9787b1ab5b2c385b8b263f173a3071309f2cd5b570277ad25d0f31520ec",
+      "runs/full/world_cards/44f7d9f37e743a1e/base_rate.json": "891d969dbd9d85300ceb01754cf11a73b6db3398e6f468e89e4b960a7100dfe0",
+      "runs/full/world_cards/4537ae7e20af8161/base_rate.json": "c2c5601b708999358e0a258b2c11a9037aba34ba267268df7efbd236a371a545",
+      "runs/full/world_cards/46cd07d130535553/base_rate.json": "33603d7d3621ed3d5d28742924be8529d9cc399a84dbc17532d7707c2b80d53f",
+      "runs/full/world_cards/483c1d35bda3c4a9/base_rate.json": "bd28c4569968e3df76d082bcb52f1e79d519552e41e138b243a5ba8ac64b6cc6",
+      "runs/full/world_cards/49b4b82982739d3f/base_rate.json": "c6784b233088fa5f071fbd911faa4b5700b9a81574e75349a0d5359cd0802263",
+      "runs/full/world_cards/4a0edb26a66746cd/base_rate.json": "c631564f971441a92272958bc5adb58bcfe025dd3c6ea84ed72ac74d98e8d0ab",
+      "runs/full/world_cards/4d8e41bbbfe20ee5/base_rate.json": "11dcaf570c1f24f27ead6302a92a3087227c048a19ed453a241655234c8ba9e7",
+      "runs/full/world_cards/4dfcb4bc7d5930e8/base_rate.json": "186542b04674c0107fcef3b1d0effd88f86e8724076b6a0ecd0366e834443a38",
+      "runs/full/world_cards/50996b7966bdb079/base_rate.json": "5608a2ff8f001f84312d8ff31920448f7b833771e1addf894282756079b79cd7",
+      "runs/full/world_cards/52ac48f11421e67f/base_rate.json": "a620315c9092cf9a5985f2a2f8bc1204fc2f4d7ff68c22c64092b688d16979cf",
+      "runs/full/world_cards/53a0cd9dcfaa1b42/base_rate.json": "a3e11bbafd005641ff0437f827920f945927661bbc677ab9f6cc6fe957c01012",
+      "runs/full/world_cards/54d10a924e992f0d/base_rate.json": "57520e258168a21968d44560dbc1a0ba005853aee9c5a00e68a227a8bd79da29",
+      "runs/full/world_cards/56be8a2657e83c53/base_rate.json": "f43e17214aded11fd2effe63c4f88b739c3952a67fc011a3cf4a42977ad1ab73",
+      "runs/full/world_cards/5735182d47af35a1/base_rate.json": "deabd53a54f21628b17e9ca72619518c3f9c9e936b3d615b8938857b316ce9cd",
+      "runs/full/world_cards/5a427ae82b4af9a6/base_rate.json": "b326f5e1c9a4c103970efadfcf942f4dbcb6b899efe49c222d305664652431e0",
+      "runs/full/world_cards/5bfb1ae140c4e356/base_rate.json": "07f09a1012e173945db86d2a02b96f2bc0ddcb2ebcd4af52a87fc7344a8fb6c6",
+      "runs/full/world_cards/5de11ecbbfb7de80/base_rate.json": "572cdb4eed9069cf24f959eaf5284c6175fa460e1e2f02356b7c41abdceb4942",
+      "runs/full/world_cards/5e8bce0d43c7d13d/base_rate.json": "31b8ffc3389606abf2b1832c7fe74613268046f0c02b77073712b6d2c9e250f0",
+      "runs/full/world_cards/5eee7144406fcf24/base_rate.json": "76d89cdd4666e421067b308e69c414ea6385330d468ac218b6b4acd9e68aad54",
+      "runs/full/world_cards/5efe571da9616acd/base_rate.json": "b5e43cc8593d2552f958ec29601b505542d7ae0380e4ccaf48e667bc4fcafaf3",
+      "runs/full/world_cards/602ae2c28f3f85bc/base_rate.json": "13f03afbf9c7d488cf87611185738ecd9f988fd25a6e077050fb069d12d12cf7",
+      "runs/full/world_cards/61cb34b83add097a/base_rate.json": "2f008c3fc23c0d846ba47b88e35771d597ed60a8e9e3ded7aa283548ca96fb83",
+      "runs/full/world_cards/62e63f673eb67c05/base_rate.json": "946b9d4809e12acdc6d8f905f2d15965e85b173c6e35592f86921778ec5767ad",
+      "runs/full/world_cards/6481f835ef5d8d54/base_rate.json": "7c168b2809e44a7bec43a2b3275f946aab20256c923b12e95d5595d310d00fc6",
+      "runs/full/world_cards/66164cf6ce727e71/base_rate.json": "a42656f9709083ae15b87a85b570473462d5b391532e642060eb017a1dbdf8ee",
+      "runs/full/world_cards/66d19e50a13fe411/base_rate.json": "b3afd80a1862936530ac4cc4fe5ea9add2d488f78303aa4843954498da9758c3",
+      "runs/full/world_cards/6782e8aa99a07aab/base_rate.json": "17ebb1380971e126811f49da28000709ff1112ed3c95dad08fcbe8af1ad1e789",
+      "runs/full/world_cards/6a8917e5f152852b/base_rate.json": "cfacf20c9e50829aab77dc2eb7580aedbb06976b228216e6f1979360f77e210c",
+      "runs/full/world_cards/6aef5d4412a95841/base_rate.json": "e6aa2c1197fa8d60a17f64b8d6ade43d335715bcf7488c851ec284dba3a57521",
+      "runs/full/world_cards/76a1293885140856/base_rate.json": "c67b18838a2126caaa71f4b05e6ef73c139a6bbc338af0ed3b2551bc60791db4",
+      "runs/full/world_cards/77a4476c505b4e0b/base_rate.json": "b5d6482ef858510d910ae692732ac5e6d187076426360768db093115619dc927",
+      "runs/full/world_cards/7852563401304d70/base_rate.json": "509ac30cc556a056409760d17287f44b5575d69f6874da150e5c2afa99f428eb",
+      "runs/full/world_cards/7bca234a5f85acbc/base_rate.json": "81eba25f730c36af239142a4b69ce8cc99025d63a9a7c1a4f849fd524905f2fc",
+      "runs/full/world_cards/7cd99737bf9f901d/base_rate.json": "33f15f7891c689719fdb5a1121b6b0a6357eb5f01010566797e2b31232defbe6",
+      "runs/full/world_cards/7d2f6ca21e5a82e3/base_rate.json": "094fa44fb7703ec8c6bd9a9ba518d417a966d7176a50bb1b8b0404a44d39dbd6",
+      "runs/full/world_cards/82a45964386231f8/base_rate.json": "9f80d7d1c4b1bd2117ba11d2eed4a7a3178e31e765cc6b853e88202b93231af6",
+      "runs/full/world_cards/83562ddce14329d5/base_rate.json": "9760d76cd68c8cd03899698df9ee5e2c81714d93dfd4d8af03f0a556fa484666",
+      "runs/full/world_cards/84f55f9a80ebe450/base_rate.json": "38059c18f61cc30c24dbb43475fa5f67dc96472c40d75b349f91233d92ef94fe",
+      "runs/full/world_cards/879c3989531b8cc6/base_rate.json": "c9b8911e0fa05f8fb785a6dd1307fadd305b5b24ee3ba026402f671bfb504b69",
+      "runs/full/world_cards/8900c6d25e38a3b7/base_rate.json": "874a35a22fe4107caa6113737cd1e471e5e922a976223c4e640abdc85e21ec7b",
+      "runs/full/world_cards/893736aea953102d/base_rate.json": "00d35c612453c3d63090dcee6ba78085b4df7b1018679ec17995d5e3e30ca18a",
+      "runs/full/world_cards/89663704634cf20a/base_rate.json": "9de4331c8bd63efcba18c1f0b6b855415ce5994d688e2b60457e9833a1e60364",
+      "runs/full/world_cards/8ea5c4021edf88f9/base_rate.json": "762a36faf7f11b4dc87f4fb6a9a532ee2d71e793023efe3b24a63fc9b9691a06",
+      "runs/full/world_cards/9360e15be242c577/base_rate.json": "60ddead08a4c07fcce2c21cfeb92b9163054f1ef44746b58b0a8b1a7dc8fcbf1",
+      "runs/full/world_cards/93b65694c135fd9b/base_rate.json": "955d27d65861557dff5711175308403711ca48fce5dc5df58f6b426c5c7625d8",
+      "runs/full/world_cards/995530fd5c542662/base_rate.json": "bfed9ed0097ae85fe7a676636fc3679663d2f36e676765a93a6880f41569e8cc",
+      "runs/full/world_cards/9a98fbfce70cd36d/base_rate.json": "5f9800d8ebf9927e7a74120496f3dff41972feb2ca78044a9c7bdbecad955070",
+      "runs/full/world_cards/a1da8a985bc4cc78/base_rate.json": "72ea7810b79b938fdca7dab1604f8068f969815b44430ab5d00259e7d0dbd955",
+      "runs/full/world_cards/a1f5e187a8430a46/base_rate.json": "82cbdd43a6481652a21a0a5e1ba96b167f547a1dcb3254480ef0ff9376d598b7",
+      "runs/full/world_cards/a6ca176fe49dcc64/base_rate.json": "fafae3af8db41fb5cc87100302775bbb82297eff4b694ae9f531217f20275ab8",
+      "runs/full/world_cards/a6cf085f2f3f4a8f/base_rate.json": "c150ed04bae7c94aacd9de8836b07424c0970357494df90589271e400fe1ffcd",
+      "runs/full/world_cards/a95de0ecd3f03947/base_rate.json": "1fb1c1d71cb9a51b02dfbdc4d46c6cdebd7f8c812d32a59901fca7466b6a9509",
+      "runs/full/world_cards/af2c703c71ecf997/base_rate.json": "fee7529a388f5f05106c6f457f6c8325aabdb5f862677947c4b36357eff7c920",
+      "runs/full/world_cards/b7b22e8d9790cead/base_rate.json": "1e0c30916a7aefbbb3f907109c4f990134be78bc4b765999149ff658a049b30a",
+      "runs/full/world_cards/b85d2ad74a71723c/base_rate.json": "63a1abbe226f8b3710f97f14729402b0709f8bb6bf4c660d8d152ff7035ea3c9",
+      "runs/full/world_cards/bc088a638cf03372/base_rate.json": "3581780f4d9394c401180fec17e744e9c1c4650367b33e8f8257e268625f9edd",
+      "runs/full/world_cards/c241a77b5b7e0852/base_rate.json": "596f6d28c81448abd2467745f834ee2e80b6a6f7e2059db53827391d2f5d156c",
+      "runs/full/world_cards/c4655230b3bd3950/base_rate.json": "768722f6a8acdd6df162e102aad434cb4ef7c3b9fbf929e343336a0ac40cb6a0",
+      "runs/full/world_cards/c7efc867b570caf8/base_rate.json": "56eb3e4a2ac1f68288a5734ac0a10fdaf8d592fcaa7f6df306f9f02c28954230",
+      "runs/full/world_cards/c84e41c45ed5364a/base_rate.json": "dfba18aaae925372e37c1affe65bae77312397e16a4548c833480e54db9c2578",
+      "runs/full/world_cards/c8975adf6cb4047c/base_rate.json": "8d4bcee20c111684010081cc3d2e5cca5281029f39fc904ce248b7d0f4ee9ccb",
+      "runs/full/world_cards/ccb02a90a4724b03/base_rate.json": "f3469f752a23e5042c88cccedb42f565f63ed0a826a59149662ab95aa889f9d6",
+      "runs/full/world_cards/ccf26355921caced/base_rate.json": "70de639a104303fc351e1bd6b397530f940d671d48d48872042a06050d38defc",
+      "runs/full/world_cards/cf695acc51fe3c9f/base_rate.json": "1e569244b2dc281033cb3148df5ce63e6d958bf6243f89ce0a2f354069029892",
+      "runs/full/world_cards/d00371b7a1f9b9c7/base_rate.json": "0d2156063e740ef0eb58b44a217998c083345cc53fe96c6820849fbd21454685",
+      "runs/full/world_cards/d0d2e791d1f43c0b/base_rate.json": "7ecd14c8f94fb84dbf9a2d68bea05079193def9a3fa34c3efc009483fd4b266d",
+      "runs/full/world_cards/d26bfb0aa35637e0/base_rate.json": "97152a998883cbb74060d7630f342adfa59e2270e5f00926c8646a5e4998107e",
+      "runs/full/world_cards/d64309f5b0db8e5b/base_rate.json": "2d2d20c5ee3b1d5c66e7b728789ec77ca224d4ca52dcb7f782369da2e728d1c4",
+      "runs/full/world_cards/d7500517dbf4c13f/base_rate.json": "291f19f3d830b618125b94f73b6415974b798b195723a0a5eb29b72cbad82a44",
+      "runs/full/world_cards/d804c6be80a31cae/base_rate.json": "7cb9091951330d9fbe5d445479d318f8788dfc361da8be682562dfc7793f1108",
+      "runs/full/world_cards/dd6ddfb8e9940441/base_rate.json": "d446b4bb87d3b954bd94156bb3bb6a299d1bf35ca1628b5fd54602a932384fae",
+      "runs/full/world_cards/de7ace77883b14a8/base_rate.json": "bc48031f1aef36bed061cca103dfe539d8376728d7d32d95b9aaaf1678c26064",
+      "runs/full/world_cards/e1e5ba742af2fb8c/base_rate.json": "2b33afa08a34523c8fe8cc9f77b741324d7798fae4c56caa06a8ac585b476207",
+      "runs/full/world_cards/e8031cb32db344c7/base_rate.json": "9e6e426940c89f7c6a9c0d66a1167fb16e6d0aac9484a76ac00721fa41ecca5a",
+      "runs/full/world_cards/e81d4de5fd554e99/base_rate.json": "4ddcaa9d3d24d591fc3f3431bb9d3f7ad9652ee554d696cee157615b2b8e267c",
+      "runs/full/world_cards/eb1984a9705d15dd/base_rate.json": "d347508a83dfd632bcf1d12eb69d8863db1ef7fb38d05d1ef3c658d98aec4fee",
+      "runs/full/world_cards/eb7296448ca0682c/base_rate.json": "7121899cd24a8dd357239f96fe68546f12812df318c53bbc7b2b7e3e49b0d079",
+      "runs/full/world_cards/f17b2bff4c8493c1/base_rate.json": "45d9dc833f42bc0aff961be4e0e8539374ca80f6fe414293de7bcffdca22558c",
+      "runs/full/world_cards/f22c83d4a719c40a/base_rate.json": "87ab94bd4a727f22d59e03f9da4862cbecf466ba3c3da210033fb6d6e944dca1",
+      "runs/full/world_cards/f264f15667bc6d18/base_rate.json": "66ed39fc0d290ee8ad5cb834f74b4c3ceff32c6a7250eb73740c521f1981ad69",
+      "runs/full/world_cards/f27e5d040f5a5354/base_rate.json": "f8d4071e96f4a3ce93386a1b86976aad2f6cb7f578499d22bd47a996bc750edd",
+      "runs/full/world_cards/f3299ad8b43c579e/base_rate.json": "032fac3e9c6f664348bba100fa4601765b0704e6750192bfd10ec69f4b88359e",
+      "runs/full/world_cards/f329ffbaa30f7365/base_rate.json": "8e4e6d32e5516d81bd748695278203313567e8efff1d932b2cf526ee36054284",
+      "runs/full/world_cards/f60e6544be2355c1/base_rate.json": "ace09da0cdcb462547d3fe404dbabf99713bdd38cfcf26e240e90536c39bf348",
+      "runs/full/world_cards/ff30b89222e79a5c/base_rate.json": "d4662513b78df64e59e35aa22f8e387ab1f32b21d9aef5e19770525c9efd435e",
+      "runs/full/world_cards/ffe7a8c928757e09/base_rate.json": "008fb266c5815a63094220186e2bb957f9aecd214eaa8cff5e4697d6a1da3bc3"
+    }
+  },
+  "simulated": true
+}
