@@ -1,0 +1,19 @@
+derived_from: Level 18 Run B checkpoint, rules tuned on validation worlds only (closes
+  17-5)
+sources:
+  thresholds:
+    path: runs/full/run_b320/final/45c496799170/checkpoint/thresholds.json
+    sha256: c9f7605007d9d65e95a41cf7956b778f2f1becf9288a119cd7bdbfaf836911cd
+  result:
+    path: runs/full/run_b320/final/45c496799170/result.json
+    sha256: b184003db2391777f2b02c84fd695bb4cdb60b20d43e522ce930bb34ad0572d5
+validation_dataset_ids:
+- validation-20261031T1830-5a6d507bde9c
+- validation-20261031T1830-99fed7ecb1d1
+thresholds:
+  large_credit_amount_paise: 5000000
+  near_zero_balance_paise: 10000
+  new_account_age_days: 30
+  outflow_share: 0.9
+  payer_count: 40
+  time_window_seconds: 7200

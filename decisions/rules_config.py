@@ -30,6 +30,7 @@ __all__ = [
     "all_thresholds_tuned",
     "load_rules_config",
     "load_rules_config_with_labels",
+    "load_serving_rules_config",
     "with_thresholds",
 ]
 
@@ -488,4 +489,91 @@ def load_rules_config_with_labels(
         thresholds=merged_thresholds,
         rules=tuple(merged_rules),
     )
+
+
+def load_serving_rules_config(
+    serving_rules_path: Path | str | None = None,
+    baseline_path: Path | str | None = None,
+) -> RulesConfig:
+    """
+    PURPOSE:
+        Loads the baseline heuristic rules table, replaces threshold parameters with the
+        frozen tuned values from config/rules_tuned.yaml, and validates full tuning coverage.
+
+    INPUTS:
+        serving_rules_path: Optional filesystem path to tuned serving rules YAML.
+            Defaults to config/rules_tuned.yaml.
+        baseline_path: Optional filesystem path to baseline rules YAML.
+            Defaults to config/rules_baseline.yaml.
+
+    KEY LOGIC:
+        1. Resolves paths relative to the project root when not explicitly provided.
+        2. Loads baseline configuration using load_rules_config.
+        3. Reads tuned threshold values and source metadata from the serving rules YAML.
+        4. Validates that every baseline threshold is present and no unknown threshold is given.
+        5. Calls with_thresholds to apply tuned thresholds onto the baseline config.
+        6. Confirms all_thresholds_tuned(config) is True; raises ValueError otherwise.
+
+    RETURNS:
+        RulesConfig: Fully tuned rules configuration ready for production decision serving.
+
+    SIDE EFFECTS / ERRORS:
+        Raises FileNotFoundError if serving rules YAML or baseline YAML does not exist.
+        Raises ValueError if any threshold is missing, unknown, or not tuned.
+
+    CONSTRAINTS:
+        Never falls back silently to untuned start values.
+    """
+    root_dir = Path(__file__).resolve().parent.parent
+    if baseline_path is None:
+        resolved_baseline_path = root_dir / "config" / "rules_baseline.yaml"
+    else:
+        resolved_baseline_path = Path(baseline_path)
+
+    baseline = load_rules_config(resolved_baseline_path)
+
+    if serving_rules_path is None:
+        resolved_serving_path = root_dir / "config" / "rules_tuned.yaml"
+    else:
+        resolved_serving_path = Path(serving_rules_path)
+
+    if not resolved_serving_path.is_file():
+        raise FileNotFoundError(f"Serving rules configuration file not found: {resolved_serving_path}")
+
+    raw_text = resolved_serving_path.read_text(encoding="utf-8")
+    data = yaml.safe_load(raw_text)
+    if not isinstance(data, dict):
+        raise ValueError(f"Serving rules configuration in {resolved_serving_path} must be a dictionary")
+
+    source: str
+    raw_thresholds: dict[str, Any]
+    if "thresholds" in data and isinstance(data["thresholds"], dict):
+        raw_thresholds = data["thresholds"]
+        source = str(data.get("derived_from", "serving rules config"))
+    else:
+        raw_thresholds = data
+        source = "serving rules config"
+
+    expected_keys = set(baseline.thresholds.keys())
+    provided_keys = set(raw_thresholds.keys())
+
+    unknown_keys = provided_keys - expected_keys
+    if unknown_keys:
+        raise ValueError(f"Unknown threshold names in serving rules config: {sorted(unknown_keys)}")
+
+    missing_keys = expected_keys - provided_keys
+    if missing_keys:
+        raise ValueError(f"Missing threshold names in serving rules config: {sorted(missing_keys)}")
+
+    new_values: dict[str, float | int] = {}
+    for key, val in raw_thresholds.items():
+        if not isinstance(val, (int, float)) or isinstance(val, bool):
+            raise ValueError(f"Threshold '{key}' value must be numeric, got {type(val).__name__}")
+        new_values[key] = val
+
+    tuned_config = with_thresholds(baseline, new_values, source=source)
+    if not all_thresholds_tuned(tuned_config):
+        raise ValueError("Not all thresholds in serving rules config are tuned")
+
+    return tuned_config
 
