@@ -1303,3 +1303,16 @@ Sealed Run B outputs, recorded before opening: `runs/full/run_b320/stages/final_
 | Why | Run B's check 6b result is identical to Run A's: validation average precision 0.6378, 10.415 times the base rate, limit 2.0. Check 6b depends only on the datasets and a fixed seed, not on either account model. Check 6a passes for Run B. |
 | Disclosure | Written on the owner's ruling after Run B's checks 5 and 6 had run (`runs/full/run_b320/leakage_checks_5_6.json`) and after Run B's test result was read. The recorded status stays `fail`; no threshold, model or result changes. All results are SIMULATED. |
 | Results exist? | Yes: Run B checks 5a, 5b and 6a pass, 6b fails; check 4 recorded `pass` by the pilot. |
+
+## A-073
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-27 |
+| Issue IDs | None |
+| Issue IDs v2 | None |
+| Files | `docs/research/amendments.md`, `scripts/level18_console.py`, `scripts/level18_handoff.py`, their tests, `reports/level_18/`, `docs/handoff/level_18.md` |
+| What changed | Corrects a reporting error: Run A's account model WAS scored on 120 stress worlds. The comparison console file now reads `result.json` key `stress.across_worlds` instead of `across_worlds.stress`, and the handoff reports those numbers. |
+| Why | The console copied `across_worlds.stress`, which reads "not run: no stress worlds supplied", and not the separate `stress` block. XGBoost, median (p10 to p90): recall at capacity 0.636 (0.454 to 0.859), genuine restriction rate 0.0059 (0.0000 to 0.0118), time to detection 12.47 hours (0.51 to 33.23), measured yield 0.923 (0.763 to 1.000), re-weighted yield 0.216 (0.075 to 1.000). |
+| Disclosure | Found after Run A's and Run B's results existed, while writing the pull request to `main`. Reporting only: no model, threshold, score, quality-gate threshold or serving decision changes. Run B was not scored on stress worlds (A-070), and that stays true. All results are SIMULATED. |
+| Results exist? | Yes: `runs/full/run_a320_stage5c/final/45c496799170/result.json`, read only. |
