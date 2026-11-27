@@ -13,6 +13,7 @@ Key amendments in `docs/research/amendments.md`, each with its own 'What changed
 - **A-070a:** Amends A-070 rulings 7 and 8 before launch: stage 5 may score test in the same run, with the test outputs sealed until the serving decision is committed and pushed; and the validation recall at capacity of both models is computed after the run by one new read-only script.
 - **A-071:** Records the serving decision of issue #154: Run A's account model (behaviour and label-network features) is served; Run B's behaviour-only model stays the documented fallback for a bank with no complaint history.
 - **A-072:** Records that Run B's leakage check 6b failure is the known A-051 simulator finding. Run B's card shows it as "FINDING — documented limitation (A-051)" with its numbers, never as a pass. Run B is then added to the console files and the account model card as the fallback model for banks with no complaint history.
+- **A-073:** Corrects a reporting error: Run A's account model WAS scored on 120 stress worlds. The comparison console file now reads `result.json` key `stress.across_worlds` instead of `across_worlds.stress`, and the handoff reports those numbers.
 
 ## Served models and fallback
 
@@ -50,7 +51,8 @@ Payment model:
 
 - **Leakage check 6b (A-051):** account identifiers alone reach average precision 10.415 times the base rate, limit 2.0. Recorded as `fail` for Run A and Run B.
 - **Payment stress ranking:** stress truth AP 0.1220 (0.0233 to 0.3831).
-- **Account models under stress:** not run: no stress worlds supplied.
+- **Run A under stress** (A-073), 120 stress worlds, from `runs/full/run_a320_stage5c/final/45c496799170/result.json` key `stress.across_worlds`: recall_at_capacity 0.6364 (0.4535 to 0.8589); genuine_restriction_rate 0.0059 (0.0000 to 0.0118); median_time_to_detection_hours 12.4667 (0.5092 to 33.2300); yield_measured 0.9231 (0.7632 to 1.0000); yield_reweighted 0.2157 (0.0751 to 1.0000).
+- **Run B under stress:** not run; no stress dataset was passed to it (A-070).
 - **Payees at another bank:** no payee score; 1115957 test payments have a NaN payee risk for that reason.
 - **Learning curve still rising** (Run A, training worlds: validation truth AP): 40: 0.2414, 80: 0.3763, 160: 0.4506, 320: 0.5647. more_training_worlds_needed is true.
 - **Capacity:** In these worlds both 0.25% and 0.5% capacity mean exactly 1 review per bank-day (max 172 active accounts per bank-day on test, 168 on validation); a real capacity curve needs larger worlds.
@@ -100,12 +102,12 @@ py -3.12 -m pytest -q -p no:cacheprovider tests/unit/scripts tests/unit/showcase
 
 | source | sha256 |
 | --- | --- |
-| `reports/level_18/console/comparison.json` | `04f68e211a8639b80a18188895d7c797e39f5c19e9b37972dfe753b5e9d7f252` |
-| `reports/level_18/console/fallback_account.json` | `f7c7801056b0649fddfb798ce2343e0ac3cfa1ec2f349176947d23bf950047fe` |
-| `reports/level_18/console/payment_results.json` | `adb2193977d2d40fbb270575cd50f4167dece4ad15bedb0089268f66920466ac` |
-| `reports/level_18/console/calibration.json` | `349b945436752b02ffd1e87f3f5c5fde061fd89f4b1346d3874a05dbe505a8e2` |
-| `reports/level_18/console/onnx_parity.json` | `6a516583fe23ed0ef67c430ea8c5af1e5b864b2342f8af69eb3f7a505cec678e` |
-| `reports/level_18/console/reason_codes.json` | `fda7b5bbb305f5c3a11fc6f46a1c873503fef9f467d055368f5f8a7b3bff759c` |
-| `reports/level_18/console/leakage.json` | `036286038b28e61d7a247f217a3f25e4f9a155a18a977f91948b845bbd03ca10` |
-| `docs/research/amendments.md` | `c55cc4900413ac59985c6ee16e85ec7ebc3f80b1b245a32280d3183558cb8bf8` |
+| `reports/level_18/console/comparison.json` | `b498394baf5029d5ae92a52ef2438994391b8cb883f7cccaebeea788871f4126` |
+| `reports/level_18/console/fallback_account.json` | `ceeb794195e3c0a163e2751502652c61fd5df75dc4ffced798d2ac0178b3c9f9` |
+| `reports/level_18/console/payment_results.json` | `e7088f8198e014e2a7eb7041741a947cf808bc5bf01421ec7205e97da4f5f804` |
+| `reports/level_18/console/calibration.json` | `1585c12286973c7932f3c037f2c195e654ea2dfda4c9c5e313a0ae560489127a` |
+| `reports/level_18/console/onnx_parity.json` | `1361494277196e398a4c854c60a9cebce3f735d7fa88b7defacc17b8777ddddc` |
+| `reports/level_18/console/reason_codes.json` | `7e269a8eae60a629ada3fc1a74bc497f8fce597cc774b5013defd079b43d5fd5` |
+| `reports/level_18/console/leakage.json` | `8664ee8691ab9da289b967687bd127cecd5dde74af9f10c316fe5e95cc946703` |
+| `docs/research/amendments.md` | `6f61c36322343c7e7ab6afbcbb64309bf641fa2a89aa6b2d392368d04fc1f8e8` |
 | `runs/full/run_a320/stages/learning_curve.json` | `b88669b614d78f427d66ed9b90cf0cc69389a7f7a7768e1751ab54f2cf3b298a` |
