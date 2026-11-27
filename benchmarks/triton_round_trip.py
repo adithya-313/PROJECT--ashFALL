@@ -15,15 +15,13 @@ import hashlib
 import importlib
 import json
 import os
-from pathlib import Path
 import subprocess
-import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any, Sequence
 
 import numpy as np
-import tritonclient.grpc as grpc_client
 
 from benchmarks.decision_latency import (
     compute_percentiles,
@@ -288,7 +286,7 @@ def prepare_rows_on_host(repo_root: Path) -> tuple[Path, Path, str]:
 
 
 def run_single_in_flight_call(
-    client: grpc_client.InferenceServerClient,
+    client: Any,
     row: np.ndarray,
     model_name: str = MODEL_NAME,
 ) -> float:
@@ -297,6 +295,10 @@ def run_single_in_flight_call(
         Issues a single inference call against Triton over gRPC and measures
         elapsed round-trip duration with time.perf_counter().
     """
+    # WHY: the shared requirements.txt cannot hold tritonclient (protobuf conflict),
+    # so CI must be able to import this module and its unit tests without it.
+    import tritonclient.grpc as grpc_client
+
     input_tensor = np.expand_dims(row, axis=0)
     request = grpc_client.InferInput(INPUT_NAME, input_tensor.shape, "FP32")
     request.set_data_from_numpy(input_tensor)
@@ -320,6 +322,10 @@ def run_concurrency_batch(
     PURPOSE:
         Maintains exactly N concurrent in-flight single-row inference requests over gRPC.
     """
+    # WHY: the shared requirements.txt cannot hold tritonclient (protobuf conflict),
+    # so CI must be able to import this module and its unit tests without it.
+    import tritonclient.grpc as grpc_client
+
     num_rows = len(rows)
     latencies: list[float] = []
     latencies_lock = threading.Lock()
