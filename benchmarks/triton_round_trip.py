@@ -1,9 +1,11 @@
 """
 WHAT: Triton Inference Server round-trip benchmark measuring single-row latency and
-concurrency sweeps for the mule_payment_xgb ONNX model over gRPC.
+concurrency sweeps for the mule_payment_xgb ONNX model over gRPC. Supports execution
+both natively on the host and inside the compose bench container.
 
 WHY: Level 19 requires measured inference latency on this host to determine Triton device
-selection (CPU vs GPU), decision timeouts, and maximum in-flight overload limits.
+selection (CPU vs GPU), decision timeouts, and maximum in-flight overload limits. Running
+inside the Linux container eliminates host virtualization networking overhead.
 """
 
 from __future__ import annotations
@@ -12,10 +14,12 @@ import argparse
 import hashlib
 import importlib
 import json
+import os
+from pathlib import Path
 import subprocess
+import sys
 import threading
 import time
-from pathlib import Path
 from typing import Any, Sequence
 
 import numpy as np
@@ -35,6 +39,10 @@ DEFAULT_TRITON_IMAGE_TAG: str = "nvcr.io/nvidia/tritonserver:24.01-py3"
 SWEEP_LEVELS: tuple[int, ...] = (1, 2, 4, 8, 16)
 REQUIRED_VALIDATION_ROW_COUNT: int = 1100
 
+CONTAINER_OUTPUT_DIR: str = "/out"
+CONTAINER_ROWS_NPY_PATH: Path = Path("/repo/runs/level19/triton_bench_rows.npy")
+CONTAINER_ROWS_SHA_PATH: Path = Path("/repo/runs/level19/triton_bench_rows.sha256")
+
 
 def _get_payment_model() -> Any:
     """
@@ -43,6 +51,20 @@ def _get_payment_model() -> Any:
     """
     target = ".".join(["evaluation", "payment_model"])
     return importlib.import_module(target)
+
+
+def default_triton_url(where: str) -> str:
+    """
+    PURPOSE:
+        Returns default Triton gRPC server endpoint URL based on execution environment.
+
+    INPUTS:
+        where: 'here' or 'container'.
+
+    RETURNS:
+        str: 'triton:8001' for container, 'localhost:8001' for host.
+    """
+    return "triton:8001" if where == "container" else "localhost:8001"
 
 
 def compute_file_sha256(path: Path) -> str:
@@ -64,6 +86,72 @@ def compute_file_sha256(path: Path) -> str:
     return hasher.hexdigest()
 
 
+def verify_rows_sha256(npy_path: Path, expected_sha256: str) -> str:
+    """
+    PURPOSE:
+        Computes SHA-256 of the prepared rows .npy file and verifies it matches the expected hash.
+
+    INPUTS:
+        npy_path: Path to the numpy array file.
+        expected_sha256: 64-character hexadecimal SHA-256 digest string.
+
+    RETURNS:
+        str: Verified SHA-256 digest.
+
+    ERRORS:
+        Raises FileNotFoundError if npy_path does not exist.
+        Raises ValueError if actual SHA-256 does not match expected_sha256.
+    """
+    if not npy_path.is_file():
+        raise FileNotFoundError(f"Prepared rows file not found: {npy_path}")
+
+    actual_sha = compute_file_sha256(npy_path)
+    if actual_sha != expected_sha256:
+        raise ValueError(
+            f"Prepared rows SHA-256 mismatch for {npy_path}: expected {expected_sha256}, got {actual_sha}"
+        )
+    return actual_sha
+
+
+def load_prepared_rows(npy_path: Path, sha_path: Path) -> tuple[np.ndarray, dict[str, Any]]:
+    """
+    PURPOSE:
+        Reads the expected sha256 from sha_path, verifies npy_path against it,
+        and loads the numpy array matrix.
+
+    INPUTS:
+        npy_path: Path to triton_bench_rows.npy.
+        sha_path: Path to triton_bench_rows.sha256.
+
+    RETURNS:
+        tuple[np.ndarray, dict[str, Any]]:
+            - Float32 numpy array of shape (1100, 54).
+            - Metadata dictionary recording source path, row count, and verified sha256.
+
+    ERRORS:
+        Raises FileNotFoundError if npy_path or sha_path is missing.
+        Raises ValueError if SHA-256 check fails or matrix shape/dtype is invalid.
+    """
+    if not sha_path.is_file():
+        raise FileNotFoundError(f"Prepared rows SHA-256 file not found: {sha_path}")
+
+    expected_sha = sha_path.read_text(encoding="utf-8").strip()
+    verified_sha = verify_rows_sha256(npy_path, expected_sha)
+
+    matrix = np.load(npy_path)
+    if matrix.shape != (REQUIRED_VALIDATION_ROW_COUNT, 54) or matrix.dtype != np.float32:
+        raise ValueError(
+            f"Invalid prepared rows matrix shape or dtype: shape={matrix.shape}, dtype={matrix.dtype}"
+        )
+
+    metadata: dict[str, Any] = {
+        "count": int(matrix.shape[0]),
+        "path": str(npy_path),
+        "sha256": verified_sha,
+    }
+    return matrix, metadata
+
+
 def get_git_commit(repo_root: Path) -> str:
     """
     PURPOSE:
@@ -75,6 +163,10 @@ def get_git_commit(repo_root: Path) -> str:
     RETURNS:
         str: Commit hash string.
     """
+    commit_env = os.environ.get("BENCH_COMMIT")
+    if commit_env:
+        return commit_env
+
     try:
         out = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=repo_root, text=True
@@ -164,6 +256,37 @@ def load_validation_payment_rows(
     return matrix, metadata
 
 
+def prepare_rows_on_host(repo_root: Path) -> tuple[Path, Path, str]:
+    """
+    PURPOSE:
+        Builds the 1,100 validation rows on host and saves triton_bench_rows.npy
+        and triton_bench_rows.sha256 under runs/level19/.
+
+    INPUTS:
+        repo_root: Root path of the repository.
+
+    RETURNS:
+        tuple[Path, Path, str]:
+            - Path to saved .npy file.
+            - Path to saved .sha256 file.
+            - SHA-256 digest string of the .npy file.
+    """
+    print("Preparing 1,100 validation payment rows on host...")
+    matrix, _ = load_validation_payment_rows(repo_root, count=REQUIRED_VALIDATION_ROW_COUNT)
+    out_dir = repo_root / "runs" / "level19"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    npy_path = out_dir / "triton_bench_rows.npy"
+    sha_path = out_dir / "triton_bench_rows.sha256"
+
+    np.save(npy_path, matrix)
+    file_sha = compute_file_sha256(npy_path)
+    sha_path.write_text(file_sha, encoding="utf-8")
+
+    print(f"Saved prepared rows: {npy_path} (sha256: {file_sha})")
+    return npy_path, sha_path, file_sha
+
+
 def run_single_in_flight_call(
     client: grpc_client.InferenceServerClient,
     row: np.ndarray,
@@ -171,25 +294,18 @@ def run_single_in_flight_call(
 ) -> float:
     """
     PURPOSE:
-        Executes one single-row gRPC inference request against Triton and times
-        the client.infer call exclusively.
-
-    INPUTS:
-        client: Active Triton gRPC inference server client.
-        row: Single feature vector of shape (54,) or (1, 54), float32.
-        model_name: Name of the served model.
-
-    RETURNS:
-        float: Inference call latency in milliseconds.
+        Issues a single inference call against Triton over gRPC and measures
+        elapsed round-trip duration with time.perf_counter().
     """
-    table = np.atleast_2d(row).astype(np.float32)
-    request = grpc_client.InferInput(INPUT_NAME, list(table.shape), "FP32")
-    request.set_data_from_numpy(table)
+    input_tensor = np.expand_dims(row, axis=0)
+    request = grpc_client.InferInput(INPUT_NAME, input_tensor.shape, "FP32")
+    request.set_data_from_numpy(input_tensor)
 
-    start_time = time.perf_counter()
+    start = time.perf_counter()
     client.infer(model_name, [request], outputs=[grpc_client.InferRequestedOutput(OUTPUT_NAME)])
-    elapsed_ms = (time.perf_counter() - start_time) * 1000.0
-    return elapsed_ms
+    end = time.perf_counter()
+
+    return (end - start) * 1000.0
 
 
 def run_concurrency_batch(
@@ -197,88 +313,64 @@ def run_concurrency_batch(
     rows: np.ndarray,
     concurrency: int,
     total_calls: int,
-    record_latencies: bool,
     model_name: str = MODEL_NAME,
+    record_latencies: bool = True,
 ) -> list[float]:
     """
     PURPOSE:
-        Executes a closed-loop batch of inference requests maintaining a fixed number
-        of concurrent in-flight requests.
-
-    INPUTS:
-        url: Triton gRPC server address (e.g. 'localhost:8001').
-        rows: Array of prepared validation feature rows.
-        concurrency: Number of parallel requests maintained in-flight.
-        total_calls: Total requests to execute across all workers in this batch.
-        record_latencies: Whether to collect and return individual request durations.
-        model_name: Name of the target Triton model.
-
-    RETURNS:
-        list[float]: List of measured latencies in milliseconds if record_latencies is True,
-        or an empty list if False.
+        Maintains exactly N concurrent in-flight single-row inference requests over gRPC.
     """
+    num_rows = len(rows)
     latencies: list[float] = []
-    lock = threading.Lock()
-    next_index: int = 0
+    latencies_lock = threading.Lock()
+    call_index_lock = threading.Lock()
+    completed_calls = 0
 
     def worker() -> None:
-        nonlocal next_index
-        client = grpc_client.InferenceServerClient(url=url)
-        try:
+        nonlocal completed_calls
+        with grpc_client.InferenceServerClient(url=url, verbose=False) as client:
             while True:
-                with lock:
-                    if next_index >= total_calls:
+                with call_index_lock:
+                    if completed_calls >= total_calls:
                         return
-                    current_idx = next_index
-                    next_index += 1
+                    current_idx = completed_calls
+                    completed_calls += 1
 
-                row = rows[current_idx % len(rows)]
+                row = rows[current_idx % num_rows]
                 elapsed_ms = run_single_in_flight_call(client, row, model_name=model_name)
 
                 if record_latencies:
-                    with lock:
+                    with latencies_lock:
                         latencies.append(elapsed_ms)
-        finally:
-            client.close()
 
-    if concurrency <= 1:
-        # Sequential execution on single client
-        client = grpc_client.InferenceServerClient(url=url)
-        try:
+    if concurrency == 1:
+        with grpc_client.InferenceServerClient(url=url, verbose=False) as client:
             for idx in range(total_calls):
-                row = rows[idx % len(rows)]
+                row = rows[idx % num_rows]
                 elapsed_ms = run_single_in_flight_call(client, row, model_name=model_name)
                 if record_latencies:
                     latencies.append(elapsed_ms)
-        finally:
-            client.close()
-    else:
-        threads: list[threading.Thread] = []
-        for _ in range(concurrency):
-            thread = threading.Thread(target=worker)
-            threads.append(thread)
-            thread.start()
+        return latencies
 
-        for thread in threads:
-            thread.join()
+    threads: list[threading.Thread] = []
+    for _ in range(concurrency):
+        t = threading.Thread(target=worker)
+        threads.append(t)
+        t.start()
+
+    for t in threads:
+        t.join()
 
     return latencies
 
 
 def summarize_level(
     in_flight: int,
-    run_latencies: Sequence[Sequence[float]],
+    run_latencies: list[list[float]],
 ) -> dict[str, Any]:
     """
     PURPOSE:
-        Calculates p50 and p99 statistics across measurement runs for one concurrency level.
-
-    INPUTS:
-        in_flight: Concurrency level.
-        run_latencies: List of per-run latency lists (one list per run).
-
-    RETURNS:
-        dict[str, Any]: Dictionary holding in_flight, p50, p99, and per_run arrays.
+        Computes per-run and median-of-run p50 and p99 statistics for a concurrency level.
     """
     if not run_latencies:
         raise ValueError("Cannot summarize level with zero runs")
@@ -310,27 +402,19 @@ def build_report_payload(
     sweep_summary: list[dict[str, Any]],
     git_commit: str,
     triton_image_tag: str = DEFAULT_TRITON_IMAGE_TAG,
+    where: str = "here",
 ) -> dict[str, Any]:
     """
     PURPOSE:
-        Assembles the comprehensive latency report document matching Level 19 specifications.
-
-    INPUTS:
-        device_label: 'cpu' or 'gpu'.
-        method: Method parameters dictionary from evaluation config.
-        rows_meta: Metadata describing the validation rows source and hash.
-        sweep_summary: List of per-level summary dictionaries.
-        git_commit: HEAD commit hash.
-        triton_image_tag: Docker image tag for Triton server.
-
-    RETURNS:
-        dict[str, Any]: Formatted report structure.
+        Constructs the standardized JSON report dictionary for Triton round-trip latency.
     """
     level_1 = next((item for item in sweep_summary if item["in_flight"] == 1), None)
     if level_1 is None:
         raise ValueError("Sweep summary lacks in_flight level 1 results")
 
-    payload: dict[str, Any] = {
+    return {
+        "where": where,
+        "runtime": where,
         "device_label": device_label,
         "method": method,
         "rows": rows_meta,
@@ -340,10 +424,9 @@ def build_report_payload(
         "triton_image_tag": triton_image_tag,
         "git_commit": git_commit,
     }
-    return payload
 
 
-def run_benchmark(
+def run_benchmark_here(
     url: str,
     device_label: str,
     output_path: Path,
@@ -352,25 +435,11 @@ def run_benchmark(
     warm_up_override: int | None = None,
     measured_override: int | None = None,
     runs_override: int | None = None,
+    where: str = "here",
 ) -> dict[str, Any]:
     """
     PURPOSE:
-        Orchestrates the entire Triton round-trip benchmark: loads validation rows,
-        executes warm-up and timed runs across in-flight concurrency levels,
-        and saves the JSON report.
-
-    INPUTS:
-        url: Triton gRPC URL.
-        device_label: 'cpu' or 'gpu'.
-        output_path: Path to write the JSON report.
-        repo_root: Root path of the PROJECT-ashFALL repository.
-        levels: Sequence of in-flight concurrency levels to sweep.
-        warm_up_override: Optional override for warm-up call count (testing only).
-        measured_override: Optional override for measured call count (testing only).
-        runs_override: Optional override for number of runs (testing only).
-
-    RETURNS:
-        dict[str, Any]: Generated report payload.
+        Orchestrates in-process benchmark execution (either on host or inside container).
     """
     method = load_latency_method()
     warm_up_calls = warm_up_override if warm_up_override is not None else method["warm_up_calls"]
@@ -378,19 +447,30 @@ def run_benchmark(
     runs = runs_override if runs_override is not None else method["runs"]
 
     print(
-        f"Starting Triton round-trip benchmark for device '{device_label}' at {url}\n"
+        f"Starting Triton round-trip benchmark for device '{device_label}' at {url} (where={where})\n"
         f"Method: {warm_up_calls} warm-up, {measured_calls} measured, {runs} runs per level\n"
         f"Sweep levels: {list(levels)}"
     )
 
-    rows, rows_meta = load_validation_payment_rows(repo_root)
-    git_commit = get_git_commit(repo_root)
+    # Determine rows location based on execution environment
+    if where == "container" or os.environ.get("ASHFALL_BENCH_RUNTIME") == "container":
+        npy_path = CONTAINER_ROWS_NPY_PATH
+        sha_path = CONTAINER_ROWS_SHA_PATH
+        rows, rows_meta = load_prepared_rows(npy_path, sha_path)
+    else:
+        host_npy = repo_root / "runs" / "level19" / "triton_bench_rows.npy"
+        host_sha = repo_root / "runs" / "level19" / "triton_bench_rows.sha256"
+        if host_npy.is_file() and host_sha.is_file():
+            rows, rows_meta = load_prepared_rows(host_npy, host_sha)
+        else:
+            rows, rows_meta = load_validation_payment_rows(repo_root)
+            rows_meta["sha256"] = rows_meta.get("matrix_sha256", "")
 
+    git_commit = get_git_commit(repo_root)
     sweep_summary: list[dict[str, Any]] = []
 
     for level in levels:
         print(f"\n--- Measuring in-flight concurrency level: {level} ---")
-        # Warm-up phase
         if warm_up_calls > 0:
             run_concurrency_batch(
                 url=url,
@@ -429,12 +509,85 @@ def run_benchmark(
         rows_meta=rows_meta,
         sweep_summary=sweep_summary,
         git_commit=git_commit,
+        where=where,
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report_payload, indent=2), encoding="utf-8")
     print(f"\nWrote benchmark report to {output_path}")
     return report_payload
+
+
+def run_method_in_container(
+    device_label: str,
+    triton_url: str,
+    output_path: Path,
+    repo_root: Path,
+    warmup: int | None = None,
+    timed: int | None = None,
+    runs: int | None = None,
+) -> dict[str, Any]:
+    """
+    PURPOSE:
+        Executes triton_round_trip benchmark inside the Docker Compose 'bench' service.
+        Following benchmarks/decision_latency.py::run_method_in_container pattern.
+    """
+    # Ensure prepared rows exist on host before container launch
+    host_npy = repo_root / "runs" / "level19" / "triton_bench_rows.npy"
+    host_sha = repo_root / "runs" / "level19" / "triton_bench_rows.sha256"
+    if not host_npy.is_file() or not host_sha.is_file():
+        prepare_rows_on_host(repo_root)
+
+    env = os.environ.copy()
+    try:
+        env["BENCH_COMMIT"] = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=repo_root, text=True
+        ).strip()
+    except Exception:
+        env["BENCH_COMMIT"] = "unknown"
+
+    compose = ["docker", "compose", "--profile", "benchmark"]
+    out_name = output_path.name
+    container_out_file = f"{CONTAINER_OUTPUT_DIR}/{out_name}"
+
+    command = [
+        *compose,
+        "run",
+        "--rm",
+        "bench",
+        "python",
+        "-m",
+        "benchmarks.triton_round_trip",
+        "--where",
+        "here",
+        "--device-label",
+        device_label,
+        "--triton-url",
+        triton_url,
+        "--output",
+        container_out_file,
+    ]
+    if warmup is not None:
+        command += ["--warmup", str(warmup)]
+    if timed is not None:
+        command += ["--timed", str(timed)]
+    if runs is not None:
+        command += ["--runs", str(runs)]
+
+    print(f"Launching in-container Triton benchmark: {' '.join(command)}")
+    subprocess.run(command, env=env, check=True, cwd=repo_root)
+
+    # Read output written to host volume mount (./reports/latency -> /out)
+    host_result_file = repo_root / "reports" / "latency" / out_name
+    if not host_result_file.is_file():
+        raise FileNotFoundError(f"In-container benchmark did not produce expected file: {host_result_file}")
+
+    report = json.loads(host_result_file.read_text(encoding="utf-8"))
+    # Ensure top-level where is tagged container
+    report["where"] = "container"
+    report["runtime"] = "container"
+    host_result_file.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return report
 
 
 def parse_args() -> argparse.Namespace:
@@ -448,13 +601,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--device-label",
         choices=["cpu", "gpu"],
-        required=True,
+        default=None,
         help="Label denoting device under test ('cpu' or 'gpu')",
     )
     parser.add_argument(
+        "--where",
+        choices=["here", "container"],
+        default="here",
+        help="Execution target: 'here' (local host process) or 'container' (Docker Compose bench service)",
+    )
+    parser.add_argument(
+        "--triton-url",
         "--url",
-        default="localhost:8001",
-        help="Triton gRPC server endpoint URL (default: localhost:8001)",
+        default=None,
+        help="Triton gRPC server endpoint URL (default: localhost:8001 for here, triton:8001 for container)",
     )
     parser.add_argument(
         "--output",
@@ -462,7 +622,19 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Destination JSON report file path",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--prepare-rows",
+        action="store_true",
+        help="Build 1,100 validation payment rows on host and save to runs/level19/triton_bench_rows.npy with sha256",
+    )
+    parser.add_argument("--warmup", type=int, default=None, help="Warm-up calls override")
+    parser.add_argument("--timed", "-n", type=int, default=None, help="Measured calls override")
+    parser.add_argument("--runs", type=int, default=None, help="Number of runs override")
+
+    args = parser.parse_args()
+    if not args.prepare_rows and not args.device_label:
+        parser.error("--device-label is required unless --prepare-rows is specified")
+    return args
 
 
 def main() -> None:
@@ -473,16 +645,44 @@ def main() -> None:
     args = parse_args()
     repo_root = Path(__file__).resolve().parent.parent
 
+    # 1. Handle host-side rows preparation step
+    if args.prepare_rows:
+        prepare_rows_on_host(repo_root)
+        return
+
+    # 2. Determine target Triton URL based on environment
+    where = "container" if os.environ.get("ASHFALL_BENCH_RUNTIME") == "container" else args.where
+    triton_url = args.triton_url if args.triton_url is not None else default_triton_url(where)
+
+    # 3. Determine output destination path
     if args.output is None:
         output_path = repo_root / "reports" / "latency" / f"level_19_triton_round_trip_{args.device_label}.json"
     else:
         output_path = Path(args.output)
 
-    run_benchmark(
-        url=args.url,
+    # 4. If --where container is requested from host, delegate to Docker Compose
+    if args.where == "container" and os.environ.get("ASHFALL_BENCH_RUNTIME") != "container":
+        run_method_in_container(
+            device_label=args.device_label,
+            triton_url=triton_url,
+            output_path=output_path,
+            repo_root=repo_root,
+            warmup=args.warmup,
+            timed=args.timed,
+            runs=args.runs,
+        )
+        return
+
+    # 5. Otherwise execute the benchmark directly
+    run_benchmark_here(
+        url=triton_url,
         device_label=args.device_label,
         output_path=output_path,
         repo_root=repo_root,
+        warm_up_override=args.warmup,
+        measured_override=args.timed,
+        runs_override=args.runs,
+        where=where,
     )
 
 

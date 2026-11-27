@@ -89,3 +89,6 @@ pyarrow==23.0.1
 
 # Level 17b: isolation forest for the cold-start anomaly detector; same pin as requirements-ml.txt
 scikit-learn==1.8.0
+
+# needed by the Level 19 decision path and the in-container Triton benchmark.
+tritonclient[grpc]==2.68.0
