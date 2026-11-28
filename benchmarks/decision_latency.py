@@ -38,7 +38,6 @@ from unittest.mock import patch
 
 import asyncpg
 import httpx
-import numpy as np
 import orjson
 import redis
 import uvicorn
@@ -48,6 +47,11 @@ from prometheus_client import REGISTRY
 import api.v1.bank_service as bank_service
 from api.v1.bank_service import record_decision
 from api.v1.models import DecisionRequest
+from benchmarks.latency_stats import (
+    compute_percentiles,
+    load_latency_method,
+    median_of_run_values,
+)
 from core.config_validator import load_yaml
 from core.event_clock import IST, ManualClock
 from features.ingest_watermark import get_bank_watermark
@@ -101,56 +105,6 @@ def load_latency_budget(config_file: Path | None = None) -> dict[str, Any]:
         "warm_up_required": bool(lat["warm_up_required"]),
     }
 
-
-def load_latency_method(config_file: Path | None = None) -> dict[str, Any]:
-    """
-    WHAT: Reads the pre-registered measurement method (latency_method block) from config/evaluation.yaml:
-    warm-up calls, measured calls per run, number of runs, and what the verdict is judged on.
-
-    WHY: The method was fixed before any new measurement (amendment A-035); the numbers must come from the file.
-    """
-    path = config_file or CONFIG_PATH
-    with open(path, encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    if not isinstance(data, dict) or "latency_method" not in data:
-        raise ValueError(f"Missing 'latency_method' section in evaluation config: {path}")
-    method = data["latency_method"]
-    if method["judged_on"] != "median_of_run_p99":
-        raise ValueError(f"Unsupported latency_method.judged_on {method['judged_on']!r}; expected 'median_of_run_p99'")
-    return {
-        "warm_up_calls": int(method["warm_up_calls"]),
-        "measured_calls": int(method["measured_calls"]),
-        "runs": int(method["runs"]),
-        "judged_on": str(method["judged_on"]),
-        "slowest_calls_reported": int(method["slowest_calls_reported"]),
-    }
-
-
-def median_of_run_values(values: Sequence[float]) -> float:
-    """The median of the per-run p99 values (the verdict statistic of the latency method)."""
-    if not values:
-        raise ValueError("median_of_run_values needs at least one run")
-    return float(np.median(np.asarray(values, dtype=float)))
-
-
-def compute_percentiles(values: Sequence[float]) -> dict[str, float]:
-    """
-    WHAT: Computes count, min, p50, p95, p99, and max for a sequence of floating-point timings.
-
-    WHY: Evaluates latency tail percentiles matching evaluation budget requirements.
-    """
-    if not values:
-        raise ValueError("Cannot compute percentiles on an empty sequence")
-
-    arr = np.array(values, dtype=float)
-    return {
-        "count": float(len(arr)),
-        "min": float(np.min(arr)),
-        "p50": float(np.percentile(arr, 50)),
-        "p95": float(np.percentile(arr, 95)),
-        "p99": float(np.percentile(arr, 99)),
-        "max": float(np.max(arr)),
-    }
 
 
 def build_histogram(

@@ -23,7 +23,7 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from benchmarks.decision_latency import (
+from benchmarks.latency_stats import (
     compute_percentiles,
     load_latency_method,
     median_of_run_values,
@@ -524,6 +524,87 @@ def run_benchmark_here(
     return report_payload
 
 
+def find_ashfall_network_name() -> str:
+    """
+    PURPOSE:
+        Finds the Docker network for project 'ashfall' using docker network ls.
+
+    INPUTS:
+        None.
+
+    OUTPUTS:
+        str: Name of the active docker network matching 'ashfall' (e.g. 'project-ashfall_default').
+
+    ERRORS RAISED:
+        ValueError: If no network containing 'ashfall' is found in docker network ls.
+    """
+    result = subprocess.run(
+        ["docker", "network", "ls", "--format", "{{.Name}}"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    for line in result.stdout.splitlines():
+        name = line.strip()
+        if "ashfall" in name.lower():
+            return name
+    raise ValueError(
+        f"No Docker network matching 'ashfall' found in docker network ls:\n{result.stdout}"
+    )
+
+
+def find_dockerfile_base_image(repo_root: Path) -> str:
+    """
+    PURPOSE:
+        Reads the base Python container image from the FROM line of Dockerfile.
+
+    INPUTS:
+        repo_root: Repository root path.
+
+    OUTPUTS:
+        str: Image name and tag (e.g. 'python:3.11-slim').
+
+    ERRORS RAISED:
+        FileNotFoundError: If Dockerfile is missing.
+        ValueError: If no FROM line is found in Dockerfile.
+    """
+    dockerfile_path = repo_root / "Dockerfile"
+    if not dockerfile_path.is_file():
+        raise FileNotFoundError(f"Dockerfile not found at {dockerfile_path}")
+    for line in dockerfile_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line.startswith("FROM "):
+            parts = line.split()
+            if len(parts) >= 2:
+                return parts[1]
+    raise ValueError(f"Could not find FROM line in {dockerfile_path}")
+
+
+def find_tritonclient_requirement(repo_root: Path) -> str:
+    """
+    PURPOSE:
+        Extracts the exact tritonclient package requirement from requirements-ml.txt.
+
+    INPUTS:
+        repo_root: Repository root path.
+
+    OUTPUTS:
+        str: The exact dependency string (e.g. 'tritonclient[grpc]==2.68.0').
+
+    ERRORS RAISED:
+        FileNotFoundError: If requirements-ml.txt is missing.
+        ValueError: If no line starts with 'tritonclient'.
+    """
+    req_file = repo_root / "requirements-ml.txt"
+    if not req_file.is_file():
+        raise FileNotFoundError(f"requirements-ml.txt not found at {req_file}")
+    for line in req_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line.startswith("tritonclient"):
+            return line
+    raise ValueError(f"No tritonclient requirement line found in {req_file}")
+
+
 def run_method_in_container(
     device_label: str,
     triton_url: str,
@@ -535,8 +616,26 @@ def run_method_in_container(
 ) -> dict[str, Any]:
     """
     PURPOSE:
-        Executes triton_round_trip benchmark inside the Docker Compose 'bench' service.
-        Following benchmarks/decision_latency.py::run_method_in_container pattern.
+        Executes triton_round_trip benchmark inside a clean throwaway Docker container
+        (docker run --rm) attached to the compose network. Installs only numpy, pyyaml,
+        and the exact tritonclient line from requirements-ml.txt, isolating the benchmark
+        from protobuf/OpenTelemetry conflicts in the shared API image.
+
+    INPUTS:
+        device_label: Device under test ('cpu' or 'gpu').
+        triton_url: Triton endpoint reachable on the docker network (e.g. 'triton:8001').
+        output_path: Destination report path on host.
+        repo_root: Repository root path.
+        warmup: Optional warm-up iterations override.
+        timed: Optional measured iterations override.
+        runs: Optional run count override.
+
+    OUTPUTS:
+        dict[str, Any]: The loaded benchmark report payload with where='container'.
+
+    ERRORS RAISED:
+        CalledProcessError: If docker run fails.
+        FileNotFoundError: If the output report was not generated.
     """
     # Ensure prepared rows exist on host before container launch
     host_npy = repo_root / "runs" / "level19" / "triton_bench_rows.npy"
@@ -544,23 +643,17 @@ def run_method_in_container(
     if not host_npy.is_file() or not host_sha.is_file():
         prepare_rows_on_host(repo_root)
 
-    env = os.environ.copy()
-    try:
-        env["BENCH_COMMIT"] = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=repo_root, text=True
-        ).strip()
-    except Exception:
-        env["BENCH_COMMIT"] = "unknown"
+    network_name = find_ashfall_network_name()
+    base_image = find_dockerfile_base_image(repo_root)
+    triton_req = find_tritonclient_requirement(repo_root)
 
-    compose = ["docker", "compose", "--profile", "benchmark"]
+    host_latency_dir = repo_root / "reports" / "latency"
+    host_latency_dir.mkdir(parents=True, exist_ok=True)
+
     out_name = output_path.name
     container_out_file = f"{CONTAINER_OUTPUT_DIR}/{out_name}"
 
-    command = [
-        *compose,
-        "run",
-        "--rm",
-        "bench",
+    bench_flags = [
         "python",
         "-m",
         "benchmarks.triton_round_trip",
@@ -574,22 +667,46 @@ def run_method_in_container(
         container_out_file,
     ]
     if warmup is not None:
-        command += ["--warmup", str(warmup)]
+        bench_flags += ["--warmup", str(warmup)]
     if timed is not None:
-        command += ["--timed", str(timed)]
+        bench_flags += ["--timed", str(timed)]
     if runs is not None:
-        command += ["--runs", str(runs)]
+        bench_flags += ["--runs", str(runs)]
 
-    print(f"Launching in-container Triton benchmark: {' '.join(command)}")
-    subprocess.run(command, env=env, check=True, cwd=repo_root)
+    bench_cmd_str = " ".join(bench_flags)
+    shell_command = (
+        f'pip install --no-cache-dir numpy pyyaml "{triton_req}" && {bench_cmd_str}'
+    )
+
+    docker_command = [
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        network_name,
+        "-v",
+        f"{repo_root.resolve().as_posix()}:/repo:ro",
+        "-v",
+        f"{host_latency_dir.resolve().as_posix()}:{CONTAINER_OUTPUT_DIR}",
+        "-w",
+        "/repo",
+        "-e",
+        "PYTHONPATH=/repo",
+        base_image,
+        "sh",
+        "-c",
+        shell_command,
+    ]
+
+    print(f"Launching clean container Triton benchmark: {' '.join(docker_command)}")
+    subprocess.run(docker_command, check=True)
 
     # Read output written to host volume mount (./reports/latency -> /out)
-    host_result_file = repo_root / "reports" / "latency" / out_name
+    host_result_file = host_latency_dir / out_name
     if not host_result_file.is_file():
         raise FileNotFoundError(f"In-container benchmark did not produce expected file: {host_result_file}")
 
     report = json.loads(host_result_file.read_text(encoding="utf-8"))
-    # Ensure top-level where is tagged container
     report["where"] = "container"
     report["runtime"] = "container"
     host_result_file.write_text(json.dumps(report, indent=2), encoding="utf-8")

@@ -72,6 +72,60 @@ def load_max_latency_budget(evaluation_config_path: Path) -> float:
     return float(latency_block["max_ms"])
 
 
+def verify_container_reports(
+    non_scoring_data: dict[str, Any],
+    cpu_data: dict[str, Any],
+    gpu_data: dict[str, Any],
+) -> None:
+    """
+    PURPOSE:
+        Verifies that all three measured latency reports were produced inside the Linux
+        container environment. Pre-registered latency judgments must be evaluated inside
+        the container to avoid host virtualization overhead.
+
+    INPUTS:
+        non_scoring_data: Parsed JSON content of non-scoring stages latency report.
+        cpu_data: Parsed JSON content of Triton CPU benchmark report.
+        gpu_data: Parsed JSON content of Triton GPU benchmark report.
+
+    OUTPUTS:
+        None.
+
+    KEY STEPS:
+        1. Check that non_scoring_data has top-level 'runtime' equal to 'container'.
+        2. Check that cpu_data has top-level 'where' equal to 'container'.
+        3. Check that gpu_data has top-level 'where' equal to 'container'.
+        4. If any condition is violated, raise ValueError explaining that host runs ('here')
+           are harness checks only and cannot be used for serving limits derivation.
+
+    ERRORS RAISED:
+        ValueError: If any report indicates execution outside the container.
+
+    LIMITS:
+        Validates metadata fields only; does not re-compute numerical latencies.
+    """
+    non_scoring_runtime = non_scoring_data.get("runtime")
+    if non_scoring_runtime != "container":
+        raise ValueError(
+            f"Non-scoring latency report must have runtime == 'container', got {non_scoring_runtime!r}. "
+            "Host runs ('here') are harness checks only and cannot be used for serving limits derivation."
+        )
+
+    cpu_where = cpu_data.get("where")
+    if cpu_where != "container":
+        raise ValueError(
+            f"Triton CPU report must have where == 'container', got {cpu_where!r}. "
+            "Host runs ('here') are harness checks only and cannot be used for serving limits derivation."
+        )
+
+    gpu_where = gpu_data.get("where")
+    if gpu_where != "container":
+        raise ValueError(
+            f"Triton GPU report must have where == 'container', got {gpu_where!r}. "
+            "Host runs ('here') are harness checks only and cannot be used for serving limits derivation."
+        )
+
+
 def derive_serving_limits(
     non_scoring_data: dict[str, Any],
     cpu_data: dict[str, Any],
@@ -286,7 +340,19 @@ def main(argv: list[str] | None = None) -> int:
     cpu_source = args.cpu_report.relative_to(REPO_ROOT).as_posix()
     gpu_source = args.gpu_report.relative_to(REPO_ROOT).as_posix()
 
-    # 4. Perform derivation and check STOP conditions.
+    # 4. Verify that all benchmark reports were measured inside the Linux container.
+    try:
+        verify_container_reports(
+            non_scoring_data=non_scoring_data,
+            cpu_data=cpu_data,
+            gpu_data=gpu_data,
+        )
+    except ValueError as guard_err:
+        print(f"GUARD STOPPED: {guard_err}", file=sys.stderr)
+        print("Per project rules, exiting non-zero and writing nothing to config/serving_limits.yaml.")
+        return 1
+
+    # 5. Perform derivation and check STOP conditions.
     try:
         serving_limits = derive_serving_limits(
             non_scoring_data=non_scoring_data,

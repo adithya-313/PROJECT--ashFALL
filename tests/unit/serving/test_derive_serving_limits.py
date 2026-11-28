@@ -10,7 +10,10 @@ from typing import Any
 
 import pytest
 
-from scripts.derive_level19_serving_limits import derive_serving_limits
+from scripts.derive_level19_serving_limits import (
+    derive_serving_limits,
+    verify_container_reports,
+)
 
 
 def _create_sample_reports(
@@ -150,3 +153,60 @@ def test_derive_serving_limits_stop_condition_no_level_fits() -> None:
             cpu_sha="sha_cpu",
             gpu_sha="sha_gpu",
         )
+
+
+def test_verify_container_reports_accepts_container_data() -> None:
+    """
+    WHAT: Tests that verify_container_reports succeeds when all three reports specify container runtime.
+
+    WHY: Pre-registered judged latency method requires all benchmark components to run inside the
+    Linux container environment.
+    """
+    non_scoring = {"runtime": "container"}
+    cpu_report = {"where": "container"}
+    gpu_report = {"where": "container"}
+
+    # Should not raise any error
+    verify_container_reports(non_scoring, cpu_report, gpu_report)
+
+
+def test_verify_container_reports_rejects_host_non_scoring() -> None:
+    """
+    WHAT: Tests that verify_container_reports raises ValueError when non-scoring report ran on host.
+
+    WHY: Host runs include Windows/WSL virtualization latency and cannot be used for serving limits.
+    """
+    non_scoring = {"runtime": "here"}
+    cpu_report = {"where": "container"}
+    gpu_report = {"where": "container"}
+
+    with pytest.raises(ValueError, match="Non-scoring latency report must have runtime == 'container'"):
+        verify_container_reports(non_scoring, cpu_report, gpu_report)
+
+
+def test_verify_container_reports_rejects_host_cpu() -> None:
+    """
+    WHAT: Tests that verify_container_reports raises ValueError when CPU Triton report ran on host.
+
+    WHY: Ensures Triton CPU benchmark was executed inside the compose network container.
+    """
+    non_scoring = {"runtime": "container"}
+    cpu_report = {"where": "here"}
+    gpu_report = {"where": "container"}
+
+    with pytest.raises(ValueError, match="Triton CPU report must have where == 'container'"):
+        verify_container_reports(non_scoring, cpu_report, gpu_report)
+
+
+def test_verify_container_reports_rejects_host_gpu() -> None:
+    """
+    WHAT: Tests that verify_container_reports raises ValueError when GPU Triton report ran on host.
+
+    WHY: Ensures Triton GPU benchmark was executed inside the compose network container.
+    """
+    non_scoring = {"runtime": "container"}
+    cpu_report = {"where": "container"}
+    gpu_report = {"where": "here"}
+
+    with pytest.raises(ValueError, match="Triton GPU report must have where == 'container'"):
+        verify_container_reports(non_scoring, cpu_report, gpu_report)

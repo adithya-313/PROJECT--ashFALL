@@ -17,6 +17,9 @@ from benchmarks.triton_round_trip import (
     build_report_payload,
     compute_file_sha256,
     default_triton_url,
+    find_ashfall_network_name,
+    find_dockerfile_base_image,
+    find_tritonclient_requirement,
     load_prepared_rows,
     summarize_level,
     verify_rows_sha256,
@@ -188,3 +191,61 @@ def test_build_report_payload_missing_level_1_raises() -> None:
             sweep_summary=sweep_summary,
             git_commit="deadbeef",
         )
+
+
+def test_find_dockerfile_base_image(tmp_path: Path) -> None:
+    """
+    WHAT: Tests extracting the FROM line base image from Dockerfile.
+
+    WHY: Ensures the clean throwaway container uses the exact same base Python image.
+    """
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text("FROM python:3.11-slim\nWORKDIR /app\n", encoding="utf-8")
+    assert find_dockerfile_base_image(tmp_path) == "python:3.11-slim"
+
+    # Missing FROM raises ValueError
+    bad_dockerfile = tmp_path / "bad"
+    bad_dockerfile.mkdir()
+    (bad_dockerfile / "Dockerfile").write_text("RUN echo hello\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="Could not find FROM line"):
+        find_dockerfile_base_image(bad_dockerfile)
+
+
+def test_find_tritonclient_requirement(tmp_path: Path) -> None:
+    """
+    WHAT: Tests parsing the exact tritonclient requirement line from requirements-ml.txt.
+
+    WHY: Guarantees dynamic reading of pinned dependency without hardcoded version strings.
+    """
+    req_file = tmp_path / "requirements-ml.txt"
+    req_file.write_text("numpy==2.4.6\ntritonclient[grpc]==2.68.0\nxgboost==3.2.0\n", encoding="utf-8")
+    assert find_tritonclient_requirement(tmp_path) == "tritonclient[grpc]==2.68.0"
+
+    # Missing requirement raises ValueError
+    bad_req_dir = tmp_path / "bad"
+    bad_req_dir.mkdir(exist_ok=True)
+    (bad_req_dir / "requirements-ml.txt").write_text("numpy==2.4.6\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="No tritonclient requirement line found"):
+        find_tritonclient_requirement(bad_req_dir)
+
+
+def test_find_ashfall_network_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    WHAT: Tests locating the Docker network matching 'ashfall'.
+
+    WHY: Container runs must attach to the active compose network.
+    """
+    class MockCompletedProcess:
+        stdout = "bridge\nproject-ashfall_default\nhost\n"
+        returncode = 0
+
+    monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: MockCompletedProcess())
+    assert find_ashfall_network_name() == "project-ashfall_default"
+
+    class MockEmptyProcess:
+        stdout = "bridge\nhost\n"
+        returncode = 0
+
+    monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: MockEmptyProcess())
+    with pytest.raises(ValueError, match="No Docker network matching 'ashfall' found"):
+        find_ashfall_network_name()
