@@ -1,0 +1,43 @@
+{
+  "validation_rows": 1834135,
+  "actions": {
+    "allow": {
+      "count": 1832666,
+      "share": 0.9991990774942957
+    },
+    "warn": {
+      "count": 1463,
+      "share": 0.0007976512088804804
+    },
+    "hold": {
+      "count": 6,
+      "share": 3.271296823843392e-06
+    }
+  },
+  "breakdown": {
+    "visible_payee_rows": {
+      "count": 700583,
+      "share": 0.3819691571231125
+    },
+    "fallback_no_payee_view": {
+      "total": {
+        "count": 1133552,
+        "share": 0.6180308428768875
+      },
+      "another_bank": {
+        "count": 1107596,
+        "share": 0.6038792128169409
+      },
+      "no_prior_account_day": {
+        "count": 25956,
+        "share": 0.014151630059946515
+      }
+    }
+  },
+  "rules_fired_distribution": {
+    "0": 699114,
+    "1": 1463,
+    "2": 6,
+    "3+": 0
+  }
+}
