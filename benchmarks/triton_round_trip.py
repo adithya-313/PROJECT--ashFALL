@@ -505,7 +505,8 @@ def run_benchmark_here(
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(report_payload, indent=2), encoding="utf-8")
+    with open(output_path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(report_payload, indent=2))
     print(f"\nWrote benchmark report to {output_path}")
     return report_payload
 
@@ -691,7 +692,8 @@ def run_method_in_container(
     report = json.loads(host_result_file.read_text(encoding="utf-8"))
     report["where"] = "container"
     report["runtime"] = "container"
-    host_result_file.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    with open(host_result_file, "w", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(report, indent=2))
     return report
 
 
