@@ -1316,3 +1316,17 @@ Sealed Run B outputs, recorded before opening: `runs/full/run_b320/stages/final_
 | Why | The console copied `across_worlds.stress`, which reads "not run: no stress worlds supplied", and not the separate `stress` block. XGBoost, median (p10 to p90): recall at capacity 0.636 (0.454 to 0.859), genuine restriction rate 0.0059 (0.0000 to 0.0118), time to detection 12.47 hours (0.51 to 33.23), measured yield 0.923 (0.763 to 1.000), re-weighted yield 0.216 (0.075 to 1.000). |
 | Disclosure | Found after Run A's and Run B's results existed, while writing the pull request to `main`. Reporting only: no model, threshold, score, quality-gate threshold or serving decision changes. Run B was not scored on stress worlds (A-070), and that stays true. All results are SIMULATED. |
 | Results exist? | Yes: `runs/full/run_a320_stage5c/final/45c496799170/result.json`, read only. |
+
+## A-074
+
+| Field | Value |
+| --- | --- |
+| Date | 2026-11-28 |
+| Issue IDs | None |
+| Issue IDs v2 | None |
+| Files | `docs/research/amendments.md` |
+| What changed | Decision policy for Level 19 serving: (a) Hold = frozen 0.1304200652241741 on the raw v2 score (hold share 0.005); unchanged. (b) Warn policy: warn = raw score >= the (1 - 0.02) linear quantile of frozen-v2 raw scores on the SAME validation rows as A-067; derived_from: policy (4x the hold share, written policy, not tuned). Must be strictly below the hold threshold, else stop. Never re-derived on test. (c) The account capacity sweep is an evaluation metric only; it sets no cutoff. (d) Rules fallback answers the same question as the model ("is the payee a mule?"): Level 17 rules with the frozen tuned thresholds (config/rules_tuned.yaml) evaluated on the payee's latest account-day strictly before decision_time, same bank only — the exact visibility rule of evaluation/payment_oof_risk.py::payee_risk. Action: >=2 rules fire -> hold; exactly 1 -> warn; 0 -> allow. When the payee is not visible (any of payee_risk's three NaN reasons), the fallback answers allow with reason code fallback_no_payee_view and the NaN reason. Never the payer's row. The resulting shares are reported as measured and never forced to match 0.5% / 2.0%. (e) The API's runner treats warn as allow (payment executes, warning counted); hold stops the payment. (f) Triton client: tritonclient HTTP, one client per process reused across decisions, binary tensor data; gRPC comparison moves to Level 42b; OpenTelemetry pins unchanged. |
+| Why | Fixed operational decision policy for Level 19 payment serving: establishes deterministic warn and hold decision boundaries, rules fallback behavior on payee accounts, and client transport before computing serving thresholds. |
+| Disclosure | Written before any warn threshold or rules fallback number is computed. |
+| Results exist? | No results computed at the time of writing. |
+
