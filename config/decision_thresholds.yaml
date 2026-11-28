@@ -1,0 +1,15 @@
+score_scale: raw
+validation_rows: 1834135
+hold:
+  value: 0.1304200652241741
+  policy_share: 0.005
+  measured_validation_share: 0.005000177195244625
+  measured_validation_count: 9171
+  derived_from: 'A-067: frozen v2 hold threshold from runs/full/payment_model_v2/test_score/result.json
+    [sha256:c48645d3fb7c0ff0c3c8fb5a2a1d5b74bd35406b3a136603688ca5a49fa95898]'
+warn:
+  value: 0.027447503581643107
+  policy_share: 0.02
+  measured_validation_share: 0.020000163564841193
+  measured_validation_count: 36683
+  derived_from: 'policy A-074: 0.02 validation share across 1834135 rows; model sha256:d4bc66ce7fcc6c664e3ed67fba09c555f187cc11a1397cb0c5df951132f03bec'
