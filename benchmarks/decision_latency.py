@@ -106,7 +106,6 @@ def load_latency_budget(config_file: Path | None = None) -> dict[str, Any]:
     }
 
 
-
 def build_histogram(
     values: Sequence[float],
     bucket_edges: Sequence[float] = FIXED_BUCKET_EDGES,
@@ -1023,6 +1022,9 @@ def main() -> None:
 
     if args.where == "container":
         result_dict = run_method_in_container(args.registry, args.registry_delay, warmup=warmup, timed=timed, runs=runs)
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_bytes(orjson.dumps(result_dict, option=orjson.OPT_INDENT_2))
         medians = result_dict["medians_of_run_p99_ms"]
         print(
             f"Container result ({result_dict['conditions']['platform']}): decision median p99 "

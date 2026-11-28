@@ -105,9 +105,7 @@ def verify_rows_sha256(npy_path: Path, expected_sha256: str) -> str:
 
     actual_sha = compute_file_sha256(npy_path)
     if actual_sha != expected_sha256:
-        raise ValueError(
-            f"Prepared rows SHA-256 mismatch for {npy_path}: expected {expected_sha256}, got {actual_sha}"
-        )
+        raise ValueError(f"Prepared rows SHA-256 mismatch for {npy_path}: expected {expected_sha256}, got {actual_sha}")
     return actual_sha
 
 
@@ -138,9 +136,7 @@ def load_prepared_rows(npy_path: Path, sha_path: Path) -> tuple[np.ndarray, dict
 
     matrix = np.load(npy_path)
     if matrix.shape != (REQUIRED_VALIDATION_ROW_COUNT, 54) or matrix.dtype != np.float32:
-        raise ValueError(
-            f"Invalid prepared rows matrix shape or dtype: shape={matrix.shape}, dtype={matrix.dtype}"
-        )
+        raise ValueError(f"Invalid prepared rows matrix shape or dtype: shape={matrix.shape}, dtype={matrix.dtype}")
 
     metadata: dict[str, Any] = {
         "count": int(matrix.shape[0]),
@@ -166,9 +162,7 @@ def get_git_commit(repo_root: Path) -> str:
         return commit_env
 
     try:
-        out = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=repo_root, text=True
-        ).strip()
+        out = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_root, text=True).strip()
         return out
     except Exception:
         return "UNKNOWN"
@@ -204,9 +198,7 @@ def load_validation_payment_rows(
     feature_order = pm.load_feature_order(feature_order_path)
     feature_sha = feature_order.get("feature_sha256")
     if feature_sha != EXPECTED_FEATURE_SHA256:
-        raise ValueError(
-            f"Feature order SHA-256 mismatch: expected {EXPECTED_FEATURE_SHA256}, got {feature_sha}"
-        )
+        raise ValueError(f"Feature order SHA-256 mismatch: expected {EXPECTED_FEATURE_SHA256}, got {feature_sha}")
 
     features: list[str] = feature_order["features"]
     encodings: dict[str, Sequence[str]] = feature_order["categorical_encodings"]
@@ -216,9 +208,7 @@ def load_validation_payment_rows(
     oof_root = repo_root / "runs" / "full" / "payment_oof"
 
     if not val_dir_1.is_dir() or not val_dir_2.is_dir():
-        raise FileNotFoundError(
-            f"Validation datasets not found under runs/full/datasets/: {val_dir_1}, {val_dir_2}"
-        )
+        raise FileNotFoundError(f"Validation datasets not found under runs/full/datasets/: {val_dir_1}, {val_dir_2}")
     if not oof_root.is_dir():
         raise FileNotFoundError(f"Payment OOF root not found: {oof_root}")
 
@@ -231,16 +221,12 @@ def load_validation_payment_rows(
 
     table = pm.load_split_rows([val_dir_1, val_dir_2], "validation", features, oof_root)
     if table.num_rows < count:
-        raise ValueError(
-            f"Insufficient validation payment rows: table holds {table.num_rows}, need {count}"
-        )
+        raise ValueError(f"Insufficient validation payment rows: table holds {table.num_rows}, need {count}")
 
     sliced_table = table.slice(0, count)
     matrix = pm.build_matrix(sliced_table, features, encodings)
     if matrix.shape != (count, 54) or matrix.dtype != np.float32:
-        raise ValueError(
-            f"Unexpected matrix shape or dtype: shape={matrix.shape}, dtype={matrix.dtype}"
-        )
+        raise ValueError(f"Unexpected matrix shape or dtype: shape={matrix.shape}, dtype={matrix.dtype}")
 
     matrix_sha = hashlib.sha256(matrix.tobytes()).hexdigest()
     metadata: dict[str, Any] = {
@@ -548,9 +534,7 @@ def find_ashfall_network_name() -> str:
         name = line.strip()
         if "ashfall" in name.lower():
             return name
-    raise ValueError(
-        f"No Docker network matching 'ashfall' found in docker network ls:\n{result.stdout}"
-    )
+    raise ValueError(f"No Docker network matching 'ashfall' found in docker network ls:\n{result.stdout}")
 
 
 def find_dockerfile_base_image(repo_root: Path) -> str:
@@ -674,9 +658,7 @@ def run_method_in_container(
         bench_flags += ["--runs", str(runs)]
 
     bench_cmd_str = " ".join(bench_flags)
-    shell_command = (
-        f'pip install --no-cache-dir numpy pyyaml "{triton_req}" && {bench_cmd_str}'
-    )
+    shell_command = f'pip install --no-cache-dir numpy pyyaml "{triton_req}" && {bench_cmd_str}'
 
     docker_command = [
         "docker",
@@ -718,9 +700,7 @@ def parse_args() -> argparse.Namespace:
     PURPOSE:
         Parses command line arguments for the benchmark runner.
     """
-    parser = argparse.ArgumentParser(
-        description="Benchmark Triton round-trip payment model inference latency"
-    )
+    parser = argparse.ArgumentParser(description="Benchmark Triton round-trip payment model inference latency")
     parser.add_argument(
         "--device-label",
         choices=["cpu", "gpu"],

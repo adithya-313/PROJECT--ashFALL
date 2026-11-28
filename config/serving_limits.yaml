@@ -1,0 +1,24 @@
+triton_device:
+  value: cpu
+  label: derived
+  derived_from: 'lower median_of_run_p99 at in-flight 1: cpu (5.326 ms) vs other (8.151
+    ms); CPU [reports/latency/level_19_triton_round_trip_cpu.json sha256:71416f2565a0fa4d1571dd6bb2b51b18b56df4f126b7b8e6441f8b0fb495fc50],
+    GPU [reports/latency/level_19_triton_round_trip_gpu.json sha256:2423bdc4bcf3618470dda5fb22f214e97a8e503e07a628500a671c1d6c28ebf8]'
+margin_ms:
+  value: 19.755
+  label: derived
+  derived_from: 'run-to-run spread (max - min) of 3 whole-decision p99s: 83.554 -
+    63.800 = 19.755 ms; source: reports/latency/level_19_non_scoring_stages.json sha256:f02577ad1462049152d96c5aeb40b9a01552d09ffc9d6d818304c00840cc69bc'
+decision_timeout_ms:
+  value: 14.638
+  label: derived
+  derived_from: 'budget max_ms (100.0) - non_scoring_median_p99 (65.607) - margin_ms
+    (19.755) = 14.638 ms; non-scoring source: reports/latency/level_19_non_scoring_stages.json
+    sha256:f02577ad1462049152d96c5aeb40b9a01552d09ffc9d6d818304c00840cc69bc, budget:
+    config/evaluation.yaml'
+overload_max_in_flight:
+  value: 16
+  label: derived
+  derived_from: 'largest swept in-flight level on cpu with p99 <= decision_timeout_ms
+    (14.638 ms); report source: reports/latency/level_19_triton_round_trip_cpu.json
+    sha256:71416f2565a0fa4d1571dd6bb2b51b18b56df4f126b7b8e6441f8b0fb495fc50'

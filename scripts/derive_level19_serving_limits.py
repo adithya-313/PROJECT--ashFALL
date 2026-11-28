@@ -184,9 +184,7 @@ def derive_serving_limits(
     # 2. Run-to-run spread margin: (max - min) of the three per-run whole-decision p99s.
     run_p99_decision: list[float] = [float(val) for val in non_scoring_data["run_p99_ms"]["decision"]]
     if len(run_p99_decision) != 3:
-        raise ValueError(
-            f"Expected exactly 3 per-run decision p99 values, found {len(run_p99_decision)}"
-        )
+        raise ValueError(f"Expected exactly 3 per-run decision p99 values, found {len(run_p99_decision)}")
     margin_ms: float = max(run_p99_decision) - min(run_p99_decision)
 
     # 3. Decision timeout: budget_max_ms - non_scoring_median_p99 - margin_ms.
@@ -241,8 +239,7 @@ def derive_serving_limits(
             "value": chosen_device,
             "label": "derived",
             "derived_from": (
-                f"{device_formula}; CPU [{cpu_source} sha256:{cpu_sha}], "
-                f"GPU [{gpu_source} sha256:{gpu_sha}]"
+                f"{device_formula}; CPU [{cpu_source} sha256:{cpu_sha}], GPU [{gpu_source} sha256:{gpu_sha}]"
             ),
         },
         "margin_ms": {
